@@ -2066,9 +2066,8 @@ void WS2812FX::loadCustomPalettes() {
 //load custom mapping table from JSON file (called from finalizeInit() or deserializeState())
 bool WS2812FX::deserializeMap(uint8_t n) {
   // 2D support creates its own ledmap (on the fly) if a ledmap.json exists it will overwrite built one.
+  
   if (n == 1 && ledmap1) {
-
-    if (!requestJSONBufferLock(7)) return false;
 
     if (customMappingTable != nullptr) {
       panel.clear();
@@ -2092,13 +2091,9 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     Segment::maxHeight = ledmap1h;
     resetSegments(true); //WLEDMM not makeAutoSegments() as we only want to change bounds
 
-    releaseJSONBufferLock();
-
     return true;
 
   } else if (n == 2 && ledmap2) {
-
-    if (!requestJSONBufferLock(7)) return false;
 
     if (customMappingTable != nullptr) {
       panel.clear();
@@ -2122,11 +2117,10 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     Segment::maxHeight = ledmap2h;
     resetSegments(true); //WLEDMM not makeAutoSegments() as we only want to change bounds
 
-    releaseJSONBufferLock();
-
     return true;
 
   }
+
   char fileName[32];
   //WLEDMM: als support segment name ledmaps
   bool isFile = false;;
