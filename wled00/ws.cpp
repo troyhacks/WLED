@@ -10,7 +10,7 @@ static volatile unsigned long wsLastLiveTime = 0;   // WLEDMM
 //uint8_t* wsFrameBuffer = nullptr;
 
 #ifdef WLEDMM_FASTPATH
-#define WS_LIVE_INTERVAL 40 // 120   // WLEDMM reduced update interval, to have more time for LEDs
+#define WS_LIVE_INTERVAL 120   // WLEDMM reduced update interval, to have more time for LEDs
 #else
 #define WS_LIVE_INTERVAL 40
 #endif
