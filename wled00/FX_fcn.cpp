@@ -2067,87 +2067,71 @@ void WS2812FX::loadCustomPalettes() {
 bool WS2812FX::deserializeMap(uint8_t n) {
   // 2D support creates its own ledmap (on the fly) if a ledmap.json exists it will overwrite built one.
   
-  DEBUG_PRINTLN("*** Hello from deserializeMap");
-  
   if (n == 1) {
 
     if (customMappingTable != nullptr) {
-      DEBUG_PRINTLN("*** Hello from deserializeMap = NOT NULLPTR");
       panel.clear();
-      DEBUG_PRINTLN("*** Hello from deserializeMap = DID CLEAR");
       customMappingSize = 0;
-      DEBUG_PRINTLN("*** Hello from deserializeMap - DOING DELETE");
-      free(customMappingTable);
-      DEBUG_PRINTLN("*** Hello from deserializeMap - DID DELETE");
-      customMappingTable = nullptr;
-      DEBUG_PRINTLN("*** Hello from deserializeMap = now nulptr");
+      // free(customMappingTable);
+      //customMappingTable = nullptr;
       loadedLedmap = 0;
     }
 
     customMappingSize = ledmap1s;
-    DEBUG_PRINTLN("*** Hello from deserializeMap - making new");
-    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
-    DEBUG_PRINTLN("*** Hello from deserializeMap - made new");
 
-    DEBUG_PRINTLN("*** Hello from deserializeMap - copying map");
+    // customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t)); // Only doing this once for the biggest map now.
+
+    if (customMappingTable == nullptr) {
+      USER_PRINTLN(F("*** Something has gone seriously wrong in deserializeMap!"));
+      return true;
+    }
 
     for (uint16_t i=0; i<customMappingSize; i++) {
       customMappingTable[i] = ledmap1[i];
-      // DEBUG_PRINT(".");
     }
-    DEBUG_PRINTLN();
-    DEBUG_PRINTLN("*** Hello from deserializeMap - copied map");
+
     loadedLedmap = 1;
 
-    DEBUG_PRINTLN("*** Hello from deserializeMap - Setting segments");
     Segment::maxWidth = ledmap2w;
     Segment::maxHeight = ledmap2h;
-    DEBUG_PRINTLN("*** Hello from deserializeMap - Set segments, resetting");
+
     resetSegments(true); //WLEDMM not makeAutoSegments() as we only want to change bounds
-    DEBUG_PRINTLN("*** Hello from deserializeMap - did reset. returning true map 1");
+
     return true;
 
   } else if (n == 2) {
 
     if (customMappingTable != nullptr) {
-      DEBUG_PRINTLN("*** Hello from deserializeMap = NOT NULLPTR");
       panel.clear();
-      DEBUG_PRINTLN("*** Hello from deserializeMap = DID CLEAR");
       customMappingSize = 0;
-      DEBUG_PRINTLN("*** Hello from deserializeMap - DOING DELETE");
-      free(customMappingTable);
-      DEBUG_PRINTLN("*** Hello from deserializeMap - DID DELETE");
-      customMappingTable = nullptr;
-      DEBUG_PRINTLN("*** Hello from deserializeMap = now nulptr");
+      // free(customMappingTable);
+      // customMappingTable = nullptr;
       loadedLedmap = 0;
     }
 
     customMappingSize = ledmap2s;
-    DEBUG_PRINTLN("*** Hello from deserializeMap - making new");
-    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
-    DEBUG_PRINTLN("*** Hello from deserializeMap - made new");
 
-    DEBUG_PRINTLN("*** Hello from deserializeMap - copying map");
+    // customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t)); // Only doing this once for the biggest map now.
+
+    if (customMappingTable == nullptr) {
+      USER_PRINTLN(F("*** Something has gone seriously wrong in deserializeMap!"));
+      return true;
+    }
 
     for (uint16_t i=0; i<customMappingSize; i++) {
       customMappingTable[i] = ledmap2[i];
-      // DEBUG_PRINT(".");
     }
-    DEBUG_PRINTLN();
-    DEBUG_PRINTLN("*** Hello from deserializeMap - copied map");
+
     loadedLedmap = 2;
 
-    DEBUG_PRINTLN("*** Hello from deserializeMap - Setting segments");
     Segment::maxWidth = ledmap2w;
     Segment::maxHeight = ledmap2h;
-    DEBUG_PRINTLN("*** Hello from deserializeMap - Set segments, resetting");
+
     resetSegments(true); //WLEDMM not makeAutoSegments() as we only want to change bounds
-    DEBUG_PRINTLN("*** Hello from deserializeMap - did reset. returning true map 2");
+
     return true;
 
   }
-
-  DEBUG_PRINTLN("*** HelloX from deserializeMap - original behaviour...");
 
   char fileName[32];
   //WLEDMM: als support segment name ledmaps
@@ -2174,8 +2158,8 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     //WLEDM: doubt this is necessary as return false causes setupMatrix to deal with this
     if (!isMatrix && !n && customMappingTable != nullptr) {
       customMappingSize = 0;
-      free(customMappingTable);
-      customMappingTable = nullptr;
+      // free(customMappingTable);
+      // customMappingTable = nullptr;
       loadedLedmap = 0; //WLEDMM
     }
     return false;
@@ -2194,8 +2178,8 @@ bool WS2812FX::deserializeMap(uint8_t n) {
   // erase old custom ledmap
   if (customMappingTable != nullptr) {
     customMappingSize = 0;
-    free(customMappingTable);
-    customMappingTable = nullptr;
+    // free(customMappingTable);
+    // customMappingTable = nullptr;
     loadedLedmap = 0;
   }
 
@@ -2210,7 +2194,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     }
 
     customMappingSize  = map.size();
-    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
+    // customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
 
     for (uint16_t i=0; i<customMappingSize; i++) 
       customMappingTable[i] = (uint16_t) (map[i]<0 ? 0xFFFFU : map[i]);

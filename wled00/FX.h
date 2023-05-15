@@ -710,7 +710,7 @@ class WS2812FX {  // 96 bytes
       _triggered(false),
       _modeCount(MODE_COUNT),
       _callback(nullptr),
-      customMappingTable(nullptr),
+      // customMappingTable(nullptr),
       customMappingSize(0),
       _lastShow(0),
       _segment_index(0),
@@ -724,7 +724,7 @@ class WS2812FX {  // 96 bytes
     }
 
     ~WS2812FX() {
-      if (customMappingTable) delete[] customMappingTable;
+      // if (customMappingTable) delete[] customMappingTable;
       _mode.clear();
       _modeData.clear();
       _segments.clear();
@@ -941,7 +941,8 @@ class WS2812FX {  // 96 bytes
 
     show_callback _callback;
 
-    uint16_t* customMappingTable;
+    // uint16_t* customMappingTable;
+    uint16_t* customMappingTable = (uint16_t*)calloc(3600, sizeof(uint16_t)); // making this a consistent size and never removing it.
     uint16_t  customMappingSize;
 
     /*uint32_t*/ unsigned long _lastShow; // WLEDMM avoid losing precision
