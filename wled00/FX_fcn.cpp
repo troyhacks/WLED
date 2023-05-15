@@ -2077,7 +2077,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
       DEBUG_PRINTLN("*** Hello from deserializeMap = DID CLEAR");
       customMappingSize = 0;
       DEBUG_PRINTLN("*** Hello from deserializeMap - DOING DELETE");
-      delete[] customMappingTable;
+      free(customMappingTable);
       DEBUG_PRINTLN("*** Hello from deserializeMap - DID DELETE");
       customMappingTable = nullptr;
       DEBUG_PRINTLN("*** Hello from deserializeMap = now nulptr");
@@ -2086,7 +2086,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
     customMappingSize = ledmap1s;
     DEBUG_PRINTLN("*** Hello from deserializeMap - making new");
-    customMappingTable = new uint16_t[customMappingSize];
+    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
     DEBUG_PRINTLN("*** Hello from deserializeMap - made new");
 
     DEBUG_PRINTLN("*** Hello from deserializeMap - copying map");
@@ -2115,7 +2115,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
       DEBUG_PRINTLN("*** Hello from deserializeMap = DID CLEAR");
       customMappingSize = 0;
       DEBUG_PRINTLN("*** Hello from deserializeMap - DOING DELETE");
-      delete[] customMappingTable;
+      free(customMappingTable);
       DEBUG_PRINTLN("*** Hello from deserializeMap - DID DELETE");
       customMappingTable = nullptr;
       DEBUG_PRINTLN("*** Hello from deserializeMap = now nulptr");
@@ -2124,7 +2124,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
     customMappingSize = ledmap2s;
     DEBUG_PRINTLN("*** Hello from deserializeMap - making new");
-    customMappingTable = new uint16_t[customMappingSize];
+    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
     DEBUG_PRINTLN("*** Hello from deserializeMap - made new");
 
     DEBUG_PRINTLN("*** Hello from deserializeMap - copying map");
@@ -2174,7 +2174,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     //WLEDM: doubt this is necessary as return false causes setupMatrix to deal with this
     if (!isMatrix && !n && customMappingTable != nullptr) {
       customMappingSize = 0;
-      delete[] customMappingTable;
+      free(customMappingTable);
       customMappingTable = nullptr;
       loadedLedmap = 0; //WLEDMM
     }
@@ -2194,7 +2194,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
   // erase old custom ledmap
   if (customMappingTable != nullptr) {
     customMappingSize = 0;
-    delete[] customMappingTable;
+    free(customMappingTable);
     customMappingTable = nullptr;
     loadedLedmap = 0;
   }
@@ -2210,7 +2210,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     }
 
     customMappingSize  = map.size();
-    customMappingTable = new uint16_t[customMappingSize];
+    customMappingTable = (uint16_t*)calloc(customMappingSize, sizeof(uint16_t));
 
     for (uint16_t i=0; i<customMappingSize; i++) 
       customMappingTable[i] = (uint16_t) (map[i]<0 ? 0xFFFFU : map[i]);
