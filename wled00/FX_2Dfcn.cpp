@@ -35,6 +35,7 @@
 // but ledmap takes care of that. ledmap is constructed upon initialization
 // so matrix should disable regular ledmap processing
 void WS2812FX::setUpMatrix() {
+  isMatrix = true;
 #ifndef WLED_DISABLE_2D
   // erase old ledmap, just in case.
   // if (customMappingTable != nullptr) delete[] customMappingTable;
@@ -56,6 +57,8 @@ void WS2812FX::setUpMatrix() {
       }
     }
 
+    
+    
     // safety check
     if (Segment::maxWidth * Segment::maxHeight > MAX_LEDS || Segment::maxWidth <= 1 || Segment::maxHeight <= 1) {
       DEBUG_PRINTF("2D Bounds error. %d x %d\n", Segment::maxWidth, Segment::maxHeight);
@@ -115,6 +118,7 @@ void WS2812FX::setUpMatrix() {
       uint16_t x, y, pix=0; //pixel
       for (size_t pan = 0; pan < panel.size(); pan++) {
         Panel &p = panel[pan];
+        p.vertical = 1; // TROY SAYS FUCK YOU GOING HORIZONTAL ALL THE FUCKING TIME
         uint16_t h = p.vertical ? p.height : p.width;
         uint16_t v = p.vertical ? p.width  : p.height;
         for (size_t j = 0; j < v; j++){
