@@ -36,6 +36,12 @@
 #ifndef TFT_BL
     #define TFT_BL -1
 #endif
+#ifndef TFT_FONTSIZE
+    #define TFT_FONTSIZE 2
+#endif
+#ifndef TFT_ROTATE
+    #define TFT_ROTATE 2
+#endif
 
 #define USERMOD_ID_ST7789_DISPLAY 97
 
@@ -71,6 +77,12 @@ class St7789DisplayUsermod : public Usermod {
     uint8_t knownEffectIntensity = 0;
     uint8_t knownMinute = 99;
     uint8_t knownHour = 99;
+    uint8_t knownbatterylevel = 0;
+    float knownbatteryvolt = 0.00;
+
+    #ifdef USERMOD_BATTERY
+        UsermodBattery* battery;
+    #endif
 
     const uint8_t tftcharwidth = 19;  // Number of chars that fit on screen with text size set to 2
     long lastUpdate = 0;
@@ -100,8 +112,7 @@ class St7789DisplayUsermod : public Usermod {
         byte currentMonth = month(localTime);
         sprintf_P(lineBuffer, PSTR("%s %2d "), monthShortStr(currentMonth), day(localTime));
         tft.setTextColor(TFT_SILVER);
-        tft.setCursor(84, 0);
-        tft.setTextSize(2);
+        tft.setTextSize(TFT_FONTSIZE);
         tft.print(lineBuffer);
 
         byte showHour = hourCurrent;
@@ -120,15 +131,11 @@ class St7789DisplayUsermod : public Usermod {
 
         sprintf_P(lineBuffer, PSTR("%2d:%02d"), (useAMPM ? showHour : hourCurrent), minuteCurrent);
         tft.setTextColor(TFT_WHITE);
-        tft.setTextSize(4);
-        tft.setCursor(60, 24);
         tft.print(lineBuffer);
-
-        tft.setTextSize(2);
-        tft.setCursor(186, 24);
         //sprintf_P(lineBuffer, PSTR("%02d"), secondCurrent);
         if (useAMPM) tft.print(isAM ? "AM" : "PM");
         //else         tft.print(lineBuffer);
+        tft.println();
     }
 
   public:
@@ -140,17 +147,23 @@ class St7789DisplayUsermod : public Usermod {
      */
     void setup()
     {
+
+        #ifdef USERMOD_BATTERY
+            battery = (UsermodBattery*) usermods.lookup(USERMOD_ID_BATTERY);
+        #endif
+
         PinManagerPinType pins[] = { { TFT_MOSI, true }, { TFT_MISO, false}, { TFT_SCLK, true }, { TFT_CS, true}, { TFT_DC, true}, { TFT_RST, true }, { TFT_BL, true } };
         if (!pinManager.allocateMultiplePins(pins, 7, PinOwner::UM_FourLineDisplay)) { enabled = false; return; }
 
         tft.init();
-        tft.setRotation(0);  //Rotation here is set up for the text to be readable with the port on the left. Use 1 to flip.
+
+        tft.setRotation(TFT_ROTATE);  //Rotation here is set up for the text to be readable with the port on the left. Use 1 to flip.
         tft.fillScreen(TFT_BLACK);
         tft.setTextColor(TFT_RED);
-        tft.setCursor(60, 100);
+        tft.setCursor(0,0);
         tft.setTextDatum(MC_DATUM);
-        tft.setTextSize(2);
-        tft.print("Loading...");
+        tft.setTextSize(TFT_FONTSIZE);
+        tft.print("WLED Loading...");
         if (TFT_BL >= 0) 
         {
             pinMode(TFT_BL, OUTPUT); // Set backlight pin to output mode
@@ -195,6 +208,10 @@ class St7789DisplayUsermod : public Usermod {
 
         // Check if values which are shown on display changed from the last time.
         if ((((apActive) ? String(apSSID) : WiFi.SSID()) != knownSsid) ||
+            #ifdef USERMOD_BATTERY
+            (knownbatterylevel != battery->getBatteryLevel()) ||
+            (knownbatteryvolt != battery->getVoltage()) ||
+            #endif
             (knownIp != (apActive ? IPAddress(4, 3, 2, 1) : Network.localIP())) ||
             (knownBrightness != bri) ||
             (knownEffectSpeed != strip.getMainSegment().speed) ||
@@ -230,47 +247,34 @@ class St7789DisplayUsermod : public Usermod {
         knownPalette = strip.getMainSegment().palette;
         knownEffectSpeed = strip.getMainSegment().speed;
         knownEffectIntensity = strip.getMainSegment().intensity;
-
+        #ifdef USERMOD_BATTERY
+        knownbatterylevel = battery->getBatteryLevel();
+        knownbatteryvolt = battery->getVoltage();
+        #endif
         tft.fillScreen(TFT_BLACK);
+        tft.setTextSize(TFT_FONTSIZE);
+        tft.setCursor(0,0);
 
         showTime();
-
-        tft.setTextSize(2);
-
-        // Wifi name
-        tft.setTextColor(TFT_GREEN);
-        tft.setCursor(0, 60);
-        String line = knownSsid.substring(0, tftcharwidth-1);
-        // Print `~` char to indicate that SSID is longer, than our display
-        if (knownSsid.length() > tftcharwidth) line = line.substring(0, tftcharwidth-1) + '~';
-        center(line, tftcharwidth);
-        tft.print(line.c_str());
 
         // Print AP IP and password in AP mode or knownIP if AP not active.
         if (apActive)
         {
-            tft.setCursor(0, 84);
             tft.print("AP IP: ");
-            tft.print(knownIp);
-            tft.setCursor(0,108);
+            tft.println(knownIp);
             tft.print("AP Pass:");
-            tft.print(apPass);
+            tft.println(apPass);
         }
         else
         {
-            tft.setCursor(0, 84);
-            line = knownIp.toString();
-            center(line, tftcharwidth);
+            // Wifi name
+            tft.setTextColor(TFT_GREEN);
+            String line = knownSsid.substring(0, 15-1);
+            // Print `~` char to indicate that SSID is longer, than our display
+            if (knownSsid.length() > 15) line = line.substring(0, tftcharwidth-1) + '~';
+            // center(line, tftcharwidth);
             tft.print(line.c_str());
-            // percent brightness
-            tft.setCursor(0, 120);
-            tft.setTextColor(TFT_WHITE);
-            tft.print("Bri: ");
-            tft.print((((int)bri*100)/255));
-            tft.print("%");
-            // signal quality
-            tft.setCursor(124,120);
-            tft.print("Sig: ");
+            tft.print(" - ");
             if (getSignalQuality(WiFi.RSSI()) < 10) {
                 tft.setTextColor(TFT_RED);
             } else if (getSignalQuality(WiFi.RSSI()) < 25) {
@@ -280,35 +284,52 @@ class St7789DisplayUsermod : public Usermod {
             }
             tft.print(getSignalQuality(WiFi.RSSI()));
             tft.setTextColor(TFT_WHITE);
-            tft.print("%");
+            tft.println("%");
+            line = knownIp.toString();
+            // center(line, tftcharwidth);
+            tft.println(line.c_str());
+            // percent brightness
+            tft.setTextColor(TFT_WHITE);
+            tft.print("Bri: ");
+            tft.print((((int)bri*100)/255));
+            tft.println("%");
         }
 
         // mode name
         tft.setTextColor(TFT_CYAN);
-        tft.setCursor(0, 144);
         char lineBuffer[tftcharwidth+1];
         extractModeName(knownMode, JSON_mode_names, lineBuffer, tftcharwidth);
-        tft.print(lineBuffer);
+        tft.print("Pattern: ");
+        tft.println(lineBuffer);
 
         // palette name
         tft.setTextColor(TFT_YELLOW);
-        tft.setCursor(0, 168);
         extractModeName(knownPalette, JSON_palette_names, lineBuffer, tftcharwidth);
-        tft.print(lineBuffer);
+        tft.print("Palette: ");
+        tft.println(lineBuffer);
 
-        tft.setCursor(0, 192);
         tft.setTextColor(TFT_SILVER);
-        sprintf_P(buff, PSTR("FX  Spd:%3d Int:%3d"), effectSpeed, effectIntensity);
-        tft.print(buff);
+        sprintf_P(buff, PSTR("FX Spd:%3d Int:%3d"), effectSpeed, effectIntensity);
+        tft.println(buff);
 
         // Fifth row with estimated mA usage
         tft.setTextColor(TFT_SILVER);
-        tft.setCursor(0, 216);
         // Print estimated milliamp usage (must specify the LED type in LED prefs for this to be a reasonable estimate).
         tft.print("Current: ");
         tft.setTextColor(TFT_ORANGE);
         tft.print(strip.currentMilliamps);
-        tft.print("mA");
+        tft.println("mA");
+
+        #ifdef USERMOD_BATTERY
+            if (battery != nullptr) {
+                tft.print("Bat: ");
+                tft.print(knownbatterylevel);
+                tft.print("% ");
+                tft.print(knownbatteryvolt);
+                tft.print(" volts");
+            }
+        #endif
+
     }
 
     /*
