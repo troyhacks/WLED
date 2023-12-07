@@ -856,14 +856,14 @@ void WLED::initAP(bool resetAP)
   apActive = true;
 }
 
+static bool successfullyConfiguredEthernet = false;
+
 bool WLED::initEthernet()
 {
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
 
-  static bool successfullyConfiguredEthernet = false;
-
   if (successfullyConfiguredEthernet) {
-    // DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
+    DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
     return false;
   }
   if (ethernetType == WLED_ETH_NONE) {
@@ -876,6 +876,7 @@ bool WLED::initEthernet()
 
   DEBUG_PRINT(F("initE: Attempting ETH config: ")); DEBUG_PRINTLN(ethernetType);
 
+  #ifndef ARDUINO_ARCH_ESP32S3
   // Ethernet initialization should only succeed once -- else reboot required
   ethernet_settings es = ethernetBoards[ethernetType];
   managed_pin_type pinsToAllocate[10] = {
@@ -932,7 +933,6 @@ bool WLED::initEthernet()
     digitalWrite(es.eth_power, 1);
     delayMicroseconds(10);
   }
-  #endif
 
   if (!ETH.begin(
                 (uint8_t) es.eth_address,
@@ -949,6 +949,38 @@ bool WLED::initEthernet()
     }
     return false;
   }
+
+  #endif
+
+  #elif defined (ARDUINO_ARCH_ESP32S3)
+
+  #define ETH_MISO_PIN                    11
+  #define ETH_MOSI_PIN                    12
+  #define ETH_SCLK_PIN                    10
+  #define ETH_CS_PIN                      9
+  #define ETH_INT_PIN                     13
+  #define ETH_RST_PIN                     14
+  #define ETH_ADDR                        1
+
+  managed_pin_type pinsToAllocate[12] = { ETH_MISO_PIN,true,ETH_MOSI_PIN,true,ETH_SCLK_PIN,true,ETH_CS_PIN,true,ETH_INT_PIN,true,ETH_RST_PIN,true };
+
+  if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
+    DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
+    return false;
+  }
+
+  if (!ETH.beginSPI(ETH_MISO_PIN, ETH_MOSI_PIN, ETH_SCLK_PIN, ETH_CS_PIN, ETH_RST_PIN, ETH_INT_PIN)) {
+    DEBUG_PRINTLN(F("initC: ETH.beginSPI() failed"));
+    // de-allocate the allocated pins
+    for (managed_pin_type mpt : pinsToAllocate) {
+      pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+    }
+    return false;
+  } else {
+    Serial.println("ETH initialized W5500!");
+  }
+
+  #endif
 
   successfullyConfiguredEthernet = true;
   USER_PRINTLN(F("initC: *** Ethernet successfully configured! ***"));  // WLEDMM
@@ -1046,7 +1078,7 @@ void WLED::initInterfaces()
         WiFi.hostByName(WLED_DEBUG_HOST, netDebugPrintIP, 750);
       #else
         #ifdef WLED_USE_ETHERNET
-          // ETH.hostByName(WLED_DEBUG_HOST, netDebugPrintIP); WLEDMM: ETH.hostByName does not exist, WiFi.hostByName seems to do the same, but must be tested.
+          // ETH.hostByName(WLED_DEBUG_HOST, netDebugPrintIP); // WLEDMM: ETH.hostByName does not exist, WiFi.hostByName seems to do the same, but must be tested.
           WiFi.hostByName(WLED_DEBUG_HOST, netDebugPrintIP);
         #else
           WiFi.hostByName(WLED_DEBUG_HOST, netDebugPrintIP);
@@ -1226,7 +1258,12 @@ void WLED::handleConnection()
   } else if (!interfacesInited) { //newly connected
     DEBUG_PRINTLN("");
     USER_PRINT(F("Connected! IP address: "));
-    USER_PRINTLN(Network.localIP());
+    USER_PRINT(Network.localIP());
+    if (successfullyConfiguredEthernet) {
+      USER_PRINTLN(" via Ethernet");
+    } else {
+      USER_PRINTLN(" via WiFi");
+    }
     if (improvActive) {
       if (improvError == 3) sendImprovStateResponse(0x00, true);
       sendImprovStateResponse(0x04);

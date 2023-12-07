@@ -103,7 +103,11 @@
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
   #include <WiFi.h>
-  #include <ETH.h>
+  #ifdef CONFIG_IDF_TARGET_ESP32S3
+    #include <ETHClass.h>
+  #else // ESP32
+    #include <ETH.h>
+  #endif
   #include "esp_wifi.h"
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>

@@ -1,5 +1,8 @@
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
+#elif CONFIG_IDF_TARGET_ESP32S3
+  #include <WiFi.h>
+  #include <ETHClass.h>
 #else // ESP32
   #include <WiFi.h>
   #include <ETH.h>
