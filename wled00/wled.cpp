@@ -1117,6 +1117,7 @@ void WLED::initInterfaces()
   }
   #endif                     // WLEDMM end
 
+  #ifndef WLED_DISABLE_MDNS   // WLEDMM
   // Set up mDNS responder:
   if (strlen(cmDNS) > 0) {
     // "end" must be called before "begin" is called a 2nd time
@@ -1129,6 +1130,8 @@ void WLED::initInterfaces()
     MDNS.addService("wled", "tcp", 80);
     MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
   }
+  #endif                     // WLEDMM end
+
   server.begin();
 
   if (udpPort > 0 && udpPort != ntpLocalPort) {

@@ -109,7 +109,9 @@
     #include <ETH.h>
   #endif
   #include "esp_wifi.h"
-  #include <ESPmDNS.h>
+  #ifndef WLED_DISABLE_MDNS 
+    #include <ESPmDNS.h>
+  #endif                     // WLEDMM end
   #include <AsyncTCP.h>
   #if LOROL_LITTLEFS
     #ifndef CONFIG_LITTLEFS_FOR_IDF_3_2
