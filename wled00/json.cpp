@@ -309,7 +309,7 @@ bool deserializeSegment(JsonObject elem, byte it, byte presetId)
   getVal(elem["c1"], &seg.custom1);
   getVal(elem["c2"], &seg.custom2);
   uint8_t cust3 = seg.custom3;
-  getVal(elem["c3"], &cust3); // we can't pass reference to bifield
+  getVal(elem["c3"], &cust3); // we can't pass reference to bitfield
   seg.custom3 = constrain(cust3, 0, 31);
 
   seg.check1 = elem["o1"] | seg.check1;
@@ -685,6 +685,27 @@ void serializeState(JsonObject root, bool forPreset, bool includeBri, bool segme
     // USER_PRINTF("serializeState %d\n", netDebugEnabled);
     #endif
 
+    // WLEDMM print error message to netDebug - esp32 only, as 8266 flash is very limited
+#if defined(ARDUINO_ARCH_ESP32) && !defined(WLEDMM_SAVE_FLASH)
+    String errPrefix = F("\nWLED error: ");
+    String warnPrefix = F("WLED warning: ");
+    switch(errorFlag) {
+      case ERR_NONE: break;
+      case ERR_DENIED:    USER_PRINTLN(errPrefix + F("Permission denied.")); break;
+      case ERR_NOBUF:     USER_PRINTLN(warnPrefix + F("JSON buffer was not released in time, request timeout.")); break;
+      case ERR_JSON:      USER_PRINTLN(errPrefix + F("JSON parsing failed (input too large?).")); break;
+      case ERR_FS_BEGIN:  USER_PRINTLN(errPrefix + F("Could not init filesystem (no partition?).")); break;
+      case ERR_FS_QUOTA:  USER_PRINTLN(errPrefix + F("FS is full or the maximum file size is reached.")); break;
+      case ERR_FS_PLOAD:  USER_PRINTLN(warnPrefix + F("Tried loading a preset that does not exist.")); break;
+      case ERR_FS_IRLOAD: USER_PRINTLN(warnPrefix + F("Tried loading an IR JSON cmd, but \"ir.json\" file does not exist.")); break;
+      case ERR_FS_RMLOAD: USER_PRINTLN(warnPrefix + F("Tried loading a remote JSON cmd, but \"remote.json\" file does not exist.")); break;
+      case ERR_FS_GENERAL: USER_PRINTLN(errPrefix + F("general unspecified filesystem error.")); break;
+      default: USER_PRINT(errPrefix + F("error code = ")); USER_PRINTLN(errorFlag); break;
+    }
+#else
+    if (errorFlag) { USER_PRINT(F("\nWLED error code = ")); USER_PRINTLN(errorFlag); }
+#endif
+
     if (errorFlag) {root[F("error")] = errorFlag; errorFlag = ERR_NONE;} //prevent error message to persist on screen
 
     root["ps"] = (currentPreset > 0) ? currentPreset : -1;
@@ -803,6 +824,7 @@ esp_reset_reason_t getRestartReason() {
 }
 String restartCode2InfoLong(esp_reset_reason_t reason) {
     switch (reason) {
+#if !defined(WLEDMM_SAVE_FLASH)
       case ESP_RST_UNKNOWN:  return(F("Reset reason can not be determined")); break;
       case ESP_RST_POWERON:  return(F("Restart due to power-on event")); break;
       case ESP_RST_EXT:      return(F("Reset by external pin (not applicable for ESP32)")); break;
@@ -814,11 +836,25 @@ String restartCode2InfoLong(esp_reset_reason_t reason) {
       case ESP_RST_DEEPSLEEP:return(F("Restart after exiting deep sleep mode")); break;
       case ESP_RST_BROWNOUT: return(F("Brownout Reset (software or hardware)")); break;
       case ESP_RST_SDIO:     return(F("Reset over SDIO")); break;
+#else
+      case ESP_RST_UNKNOWN:  return(F("ESP_RST_UNKNOWN")); break;
+      case ESP_RST_POWERON:  return(F("ESP_RST_POWERON")); break;
+      case ESP_RST_EXT:      return(F("ESP_RST_EXT")); break;
+      case ESP_RST_SW:       return(F("esp_restart()")); break;
+      case ESP_RST_PANIC:    return(F("SW Panic or Exception")); break;
+      case ESP_RST_INT_WDT:  return(F("ESP_RST_INT_WDT")); break;
+      case ESP_RST_TASK_WDT: return(F("ESP_RST_TASK_WDT")); break;
+      case ESP_RST_WDT:      return(F("ESP_RST_WDT")); break;
+      case ESP_RST_DEEPSLEEP:return(F("ESP_RST_DEEPSLEEP")); break;
+      case ESP_RST_BROWNOUT: return(F("Brownout Reset")); break;
+      case ESP_RST_SDIO:     return(F("ESP_RST_SDIO")); break;
+#endif
     }
   return(F("unknown"));
 }
 String restartCode2Info(esp_reset_reason_t reason) {
     switch (reason) {
+#if !defined(WLEDMM_SAVE_FLASH)
       case ESP_RST_UNKNOWN:  return(F("unknown reason")); break;
       case ESP_RST_POWERON:  return(F("power-on event")); break;
       case ESP_RST_EXT:      return(F("external pin reset")); break;
@@ -830,6 +866,19 @@ String restartCode2Info(esp_reset_reason_t reason) {
       case ESP_RST_DEEPSLEEP:return(F("exit from deep sleep")); break;
       case ESP_RST_BROWNOUT: return(F("Brownout Reset")); break;
       case ESP_RST_SDIO:     return(F("Reset over SDIO")); break;
+#else
+      case ESP_RST_UNKNOWN:  return(F("unknown")); break;
+      case ESP_RST_POWERON:  return(F("power-on")); break;
+      case ESP_RST_EXT:      return(F("ext. pin reset")); break;
+      case ESP_RST_SW:       return(F("SW restart")); break;
+      case ESP_RST_PANIC:    return(F("SW panic or exception")); break;
+      case ESP_RST_INT_WDT:  return(F("int. watchdog")); break;
+      case ESP_RST_TASK_WDT: return(F("task watchdog")); break;
+      case ESP_RST_WDT:      return(F("other watchdog")); break;
+      case ESP_RST_DEEPSLEEP:return(F("deep sleep")); break;
+      case ESP_RST_BROWNOUT: return(F("Brownout")); break;
+      case ESP_RST_SDIO:     return(F("SDIO reset")); break;
+#endif
     }
   return(F("unknown"));
 }
@@ -1051,7 +1100,7 @@ void serializeInfo(JsonObject root)
   }
   #endif
   #if defined(WLED_DEBUG) || defined(WLED_DEBUG_HOST) || defined(SR_DEBUG) || defined(SR_STATS)
-  // WLEDMM add status of Serial, incuding pin alloc
+  // WLEDMM add status of Serial, including pin alloc
   root[F("serialOnline")] = Serial ? (canUseSerial()?F("Serial ready ☾"):F("Serial in use ☾")) : F("Serial disconected ☾");  // "Disconnected" may happen on boards with USB CDC
   root[F("sRX")] = pinManager.isPinAllocated(hardwareRX) ? pinManager.getPinOwnerText(hardwareRX): F("free");
   root[F("sTX")] = pinManager.isPinAllocated(hardwareTX) ? pinManager.getPinOwnerText(hardwareTX): F("free");
@@ -1206,7 +1255,7 @@ void serializePalettes(JsonObject root, AsyncWebServerRequest* request)
         curPalette.add("c2");
         curPalette.add("c1");
         break;
-      case 5: //primary + secondary (+tert if not off), more distinct
+      case 5: //primary + secondary (+tertiary if not off), more distinct
         curPalette.add("c1");
         curPalette.add("c1");
         curPalette.add("c1");
@@ -1330,7 +1379,7 @@ void serializeModeData(JsonArray fxdata)
 }
 
 // deserializes mode names string into JsonArray
-// also removes effect data extensions (@...) from deserialised names
+// also removes effect data extensions (@...) from deserialized names
 void serializeModeNames(JsonArray arr) {
   char lineBuffer[128];
   for (size_t i = 0; i < strip.getModeCount(); i++) {
