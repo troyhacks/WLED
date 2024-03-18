@@ -852,7 +852,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
       const size_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
-      const size_t hardware_outputs = 4; // WLED as an Art-Net renderer would be considered "1 hardware output" with many universes
+      const size_t hardware_outputs = 1; // WLED as an Art-Net renderer would be considered "1 hardware output" with many universes
       const size_t channels_per_hardware_output = length/hardware_outputs * (isRGBW?4:3); 
 
       size_t bufferOffset = 0;
