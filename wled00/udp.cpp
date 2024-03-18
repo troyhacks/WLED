@@ -837,58 +837,80 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
 
     case 2: //ArtNet
     {
-      // calculate the number of UDP packets we need to send
-      const size_t channelCount = length * (isRGBW?4:3); // 1 channel for every R,G,B,(W?) value
-      const size_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
-      const size_t packetCount = ((channelCount-1)/ARTNET_CHANNELS_PER_PACKET)+1;
+      /* 
+      We don't really care about the number of universes - just how many hardware outputs we have.
 
-      uint32_t channel = 0; 
+      WLED rendering Art-Net data considers itself to be 1 hardware output with many universes - but
+      many Art-Net controllers like the H807SA can be manually set to "X universes per output."
+
+      We need to know the channels per output so we can break the pixel data across physically attached universes.
+
+      The H807SA obeys the "510 channels for RGB" rule like WLED and xLights - some other controllers do not care,
+      but we're not supporting those here. If you run into one of these, override ARTNET_CHANNELS_PER_PACKET to 512.
+
+      We're expecting equal numbers of channels per output, common for controllers like the H807SA - at some point
+      we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
+      */
+      const size_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
+      const size_t hardware_outputs = 4; // WLED as an Art-Net renderer would be considered "1 hardware output" with many universes
+      const size_t channels_per_hardware_output = length/hardware_outputs * (isRGBW?4:3); 
+
       size_t bufferOffset = 0;
+      size_t hardware_output_universe = 0;
 
       sequenceNumber++;
 
-      for (size_t currentPacket = 0; currentPacket < packetCount; currentPacket++) {
+      for (size_t hardware_output = 0; hardware_output < hardware_outputs; hardware_output++){
 
-        if (sequenceNumber > 255) sequenceNumber = 0;
+        size_t channels_remaining = channels_per_hardware_output;
 
-        if (!ddpUdp.beginPacket(client, ARTNET_DEFAULT_PORT)) {
-          DEBUG_PRINTLN(F("Art-Net WiFiUDP.beginPacket returned an error"));
-          return 1; // borked
-        }
+        while (channels_remaining > 0) {
 
-        size_t packetSize = ARTNET_CHANNELS_PER_PACKET;
+          if (sequenceNumber > 255) sequenceNumber = 0;
 
-        if (currentPacket == (packetCount - 1U)) {
-          // last packet
-          if (channelCount % ARTNET_CHANNELS_PER_PACKET) {
-            packetSize = channelCount % ARTNET_CHANNELS_PER_PACKET;
+          if (!ddpUdp.beginPacket(client, ARTNET_DEFAULT_PORT)) {
+            DEBUG_PRINTLN(F("Art-Net WiFiUDP.beginPacket returned an error"));
+            return 1; // borked
           }
-        }
 
-        byte header_buffer[ART_NET_HEADER_SIZE];
-        memcpy_P(header_buffer, ART_NET_HEADER, ART_NET_HEADER_SIZE);
-        ddpUdp.write(header_buffer, ART_NET_HEADER_SIZE); // This doesn't change. Hard coded ID, OpCode, and protocol version.
-        ddpUdp.write(sequenceNumber & 0xFF); // sequence number. 1..255
-        ddpUdp.write(0x00); // physical - more an FYI, not really used for anything. 0..3
-        ddpUdp.write((currentPacket) & 0xFF); // Universe LSB. 1 full packet == 1 full universe, so just use current packet number.
-        ddpUdp.write(0x00); // Universe MSB, unused.
-        ddpUdp.write(0xFF & (packetSize >> 8)); // 16-bit length of channel data, MSB
-        ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
+          size_t packetSize = ARTNET_CHANNELS_PER_PACKET;
 
-        for (size_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
-          ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // R
-          ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // G
-          ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // B
-          if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
-        }
+          if (channels_remaining < ARTNET_CHANNELS_PER_PACKET) {
+            packetSize = channels_remaining;
+            channels_remaining = 0;
+          } else {
+            channels_remaining -= packetSize;
+          }
 
-        if (!ddpUdp.endPacket()) {
-          DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
-          return 1; // borked
+          byte header_buffer[ART_NET_HEADER_SIZE];
+          memcpy_P(header_buffer, ART_NET_HEADER, ART_NET_HEADER_SIZE);
+          ddpUdp.write(header_buffer, ART_NET_HEADER_SIZE); // This doesn't change. Hard coded ID, OpCode, and protocol version.
+          ddpUdp.write(sequenceNumber & 0xFF); // sequence number. 1..255
+          ddpUdp.write(0x00); // physical - more an FYI, not really used for anything. 0..3
+          ddpUdp.write(hardware_output_universe & 0xFF); // Universe LSB. 1 full packet == 1 full universe.
+          ddpUdp.write(0x00); // Universe MSB, unused.
+          ddpUdp.write(0xFF & (packetSize >> 8)); // 16-bit length of channel data, MSB
+          ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
+
+          for (size_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
+            // TODO: TroyHacks - some controllers do not have onboard color order remapping. Add something to do this.
+            // Currently remapped manually for GRB, but WLED rendering Art-Net expects RGB.
+            // Color order override maps would be useful here, but doesn't seem to work for "busNetwork" (yet).
+            ddpUdp.write(scale8(buffer[bufferOffset+0], bri)); // G
+            ddpUdp.write(scale8(buffer[bufferOffset+1], bri)); // R
+            ddpUdp.write(scale8(buffer[bufferOffset+2], bri)); // B
+            if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset+3], bri)); // W
+            bufferOffset += isRGBW?4:3;
+          }
+
+          if (!ddpUdp.endPacket()) {
+            DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
+            return 1; // borked
+          }
+          hardware_output_universe++;
         }
-        channel += packetSize;
-      }
-    } break;
+      } break;
+    }
   }
   return 0;
 }

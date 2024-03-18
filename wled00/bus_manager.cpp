@@ -394,7 +394,7 @@ uint8_t BusOnOff::getPins(uint8_t* pinArray) {
 }
 
 
-BusNetwork::BusNetwork(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWhite) {
+BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, bc.start, bc.autoWhite), _colorOrderMap(com) {
   _valid = false;
   switch (bc.type) {
     case TYPE_NET_ARTNET_RGB:
@@ -418,6 +418,7 @@ BusNetwork::BusNetwork(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWhite) {
   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
   _broadcastLock = false;
   _valid = true;
+  _colorOrder = bc.colorOrder;
 }
 
 void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
@@ -425,16 +426,56 @@ void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   if (hasWhite()) c = autoWhiteCalc(c);
   if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
   uint16_t offset = pix * _UDPchannels;
-  _data[offset]   = R(c);
-  _data[offset+1] = G(c);
-  _data[offset+2] = B(c);
-  if (_rgbw) _data[offset+3] = W(c);
+  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+  if (_colorOrder != co) {
+    if (co == COL_ORDER_GRB) {
+      _data[offset]   = G(c);
+      _data[offset+1] = R(c);
+      _data[offset+2] = B(c);     
+    } else if (co == COL_ORDER_RGB) {
+      _data[offset]   = R(c);
+      _data[offset+1] = G(c);
+      _data[offset+2] = B(c);
+    } else if (co == COL_ORDER_BRG) {
+      _data[offset]   = B(c);
+      _data[offset+1] = R(c);
+      _data[offset+2] = G(c);
+    } else if (co == COL_ORDER_RBG) {
+      _data[offset]   = R(c);
+      _data[offset+1] = B(c);
+      _data[offset+2] = G(c);
+    } else if (co == COL_ORDER_GBR) {
+      _data[offset]   = G(c);
+      _data[offset+1] = B(c);
+      _data[offset+2] = R(c);
+    }
+    if (_rgbw) _data[offset+3] = W(c);
+  } else {
+    _data[offset]   = R(c);
+    _data[offset+1] = G(c);
+    _data[offset+2] = B(c);
+    if (_rgbw) _data[offset+3] = W(c);
+  }
 }
 
 uint32_t BusNetwork::getPixelColor(uint16_t pix) {
   if (!_valid || pix >= _len) return 0;
   uint16_t offset = pix * _UDPchannels;
-  return RGBW32(_data[offset], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+  if (_colorOrder != co) {
+    if (co == COL_ORDER_GRB) {
+      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+    } else if (co == COL_ORDER_RGB) {
+      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+    } else if (co == COL_ORDER_BRG) {
+      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+    } else if (co == COL_ORDER_RBG) {
+      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+    } else if (co == COL_ORDER_GBR) {
+      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+    }
+  }
+  return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
 }
 
 void BusNetwork::show() {
@@ -711,7 +752,7 @@ int BusManager::add(BusConfig &bc) {
   if (getNumBusses() - getNumVirtualBusses() >= WLED_MAX_BUSSES) return -1;
   USER_PRINTF("BusManager::add(bc.type=%u)\n", bc.type);
   if (bc.type >= TYPE_NET_DDP_RGB && bc.type < 96) {
-    busses[numBusses] = new BusNetwork(bc);
+    busses[numBusses] = new BusNetwork(bc,colorOrderMap);
 #ifdef WLED_ENABLE_HUB75MATRIX
   } else if (bc.type >= TYPE_HUB75MATRIX && bc.type <= (TYPE_HUB75MATRIX + 10)) {
     USER_PRINTLN("BusManager::add - Adding BusHub75Matrix");
