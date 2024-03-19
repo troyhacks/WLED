@@ -860,13 +860,13 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
 
       sequenceNumber++;
 
-      for (size_t hardware_output = 0; hardware_output < hardware_outputs; hardware_output++){
+      if (sequenceNumber > 255) sequenceNumber = 0;
+
+      for (size_t hardware_output = 0; hardware_output < hardware_outputs; hardware_output++) {
 
         size_t channels_remaining = channels_per_hardware_output;
 
         while (channels_remaining > 0) {
-
-          if (sequenceNumber > 255) sequenceNumber = 0;
 
           if (!ddpUdp.beginPacket(client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.beginPacket returned an error"));
