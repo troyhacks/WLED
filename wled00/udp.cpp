@@ -893,14 +893,11 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
           ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
 
           for (size_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
-            // TODO: TroyHacks - some controllers do not have onboard color order remapping. Add something to do this.
-            // Currently remapped manually for GRB, but WLED rendering Art-Net expects RGB.
-            // Color order override maps would be useful here, but doesn't seem to work for "busNetwork" (yet).
-            ddpUdp.write(scale8(buffer[bufferOffset+0], bri)); // G
-            ddpUdp.write(scale8(buffer[bufferOffset+1], bri)); // R
-            ddpUdp.write(scale8(buffer[bufferOffset+2], bri)); // B
-            if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset+3], bri)); // W
-            bufferOffset += isRGBW?4:3;
+            // "Color Order Override" works on top of this if you need to change the color order before sending.
+            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // R
+            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // G
+            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // B 
+            if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
           }
 
           if (!ddpUdp.endPacket()) {
