@@ -393,7 +393,6 @@ uint8_t BusOnOff::getPins(uint8_t* pinArray) {
   return 1;
 }
 
-
 BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, bc.start, bc.autoWhite), _colorOrderMap(com) {
   _valid = false;
   switch (bc.type) {
@@ -418,7 +417,6 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
   _broadcastLock = false;
   _valid = true;
-  _colorOrder = bc.colorOrder;
 }
 
 void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
@@ -448,6 +446,10 @@ void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
       _data[offset]   = G(c);
       _data[offset+1] = B(c);
       _data[offset+2] = R(c);
+    } else if (co == COL_ORDER_BGR) {
+      _data[offset]   = B(c);
+      _data[offset+1] = G(c);
+      _data[offset+2] = R(c);
     }
     if (_rgbw) _data[offset+3] = W(c);
   } else {
@@ -473,6 +475,8 @@ uint32_t BusNetwork::getPixelColor(uint16_t pix) {
       return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
     } else if (co == COL_ORDER_GBR) {
       return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+    } else if (co == COL_ORDER_BGR) {
+      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
     }
   }
   return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
