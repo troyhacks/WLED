@@ -769,6 +769,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
   switch (type) {
     case 0: // DDP
     {
+      ddpUdp.begin(Network.localIP(), DDP_DEFAULT_PORT); // in case we have Ethernet, this forces that source IP/routing.
+
       // calculate the number of UDP packets we need to send
       size_t channelCount = length * (isRGBW? 4:3); // 1 channel for every R,G,B value
       size_t packetCount = ((channelCount-1) / DDP_CHANNELS_PER_PACKET) +1;
@@ -837,6 +839,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
 
     case 2: //ArtNet
     {
+      ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet, this forces that source IP/routing.
+
       /* 
       We don't really care about the number of universes - just how many hardware outputs we have.
 
