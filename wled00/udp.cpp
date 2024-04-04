@@ -852,19 +852,33 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
       const size_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
-      const size_t hardware_outputs = 1; // WLED as an Art-Net renderer would be considered "1 hardware output" with many universes
-      const size_t channels_per_hardware_output = length/hardware_outputs * (isRGBW?4:3); 
+
+      // Default WLED-to-WLED Art-Net output
+      //
+      const size_t hardware_outputs[1] = { length }; // specified in LED counts. "length" = all LEDs
+      const size_t hardware_outputs_universe_start[1] = { 0 }; // universe start # per output
+
+      // Example of more than 1 output, currently you can only hard-code this kind of setup here.
+      // You get 170 RGB LEDs per universe (128 RGBW) so the receiving hardware needs to be configured correctly.
+      // The H807SA, for example, only allows one global setting of Art-Net universes-per-output.
+      //
+      // const size_t hardware_outputs[4] = { 256,256,256,256 }; // specified in LED counts
+      // const size_t hardware_outputs_universe_start[4] = { 0,2,4,6 }; // universe start # per output
 
       size_t bufferOffset = 0;
       size_t hardware_output_universe = 0;
-
+      
       sequenceNumber++;
 
       if (sequenceNumber > 255) sequenceNumber = 0;
 
-      for (size_t hardware_output = 0; hardware_output < hardware_outputs; hardware_output++) {
+      for (size_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
+        
+        if (bufferOffset > length * (isRGBW?4:3)) return 1; // stop when we hit end of LEDs
 
-        size_t channels_remaining = channels_per_hardware_output;
+        hardware_output_universe = hardware_outputs_universe_start[hardware_output];
+
+        size_t channels_remaining = hardware_outputs[hardware_output] * (isRGBW?4:3);
 
         while (channels_remaining > 0) {
 
