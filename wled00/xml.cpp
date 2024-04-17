@@ -265,16 +265,10 @@ void appendGPIOinfo() {
 
   // add info about max. # of pins
   oappend(SET_F("d.max_gpio="));
-  #if defined(CONFIG_IDF_TARGET_ESP32S2)
-  oappendi(46);
-  #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-  oappendi(48);
-  #elif defined(CONFIG_IDF_TARGET_ESP32C3)
-  oappendi(21);
-  #elif defined(ESP32)
-  oappendi(39);
+  #if defined(ESP32)
+    oappendi(NUM_DIGITAL_PINS - 1);
   #else //8266
-  oappendi(NUM_DIGITAL_PINS); //WLEDMM include pin 17 for Analog
+    oappendi(NUM_DIGITAL_PINS); //WLEDMM include pin 17 for Analog
   #endif
   oappend(SET_F(";"));
 
@@ -411,7 +405,6 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     oappend(SET_F("bLimits("));
     oappend(itoa(WLED_MAX_BUSSES,nS,10));  oappend(",");
     oappend(itoa(WLED_MIN_VIRTUAL_BUSSES,nS,10));  oappend(",");
-    oappend(itoa(MAX_LEDS_PER_BUS,nS,10)); oappend(",");
     oappend(itoa(MAX_LED_MEMORY,nS,10));   oappend(",");
     oappend(itoa(MAX_LEDS,nS,10));
     oappend(SET_F(");"));
@@ -475,6 +468,11 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
         }
       }
       sappend('v',sp,speed);
+
+      oappend(SET_F("setPixelLimit("));
+      oappendi(s); oappend(SET_F(","));
+      oappendi(bus->getMaxPixels()); oappend(SET_F(");"));
+
     }
     sappend('v',SET_F("MA"),strip.ablMilliampsMax);
     sappend('v',SET_F("LA"),strip.milliampsPerLed);
@@ -534,6 +532,10 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     #if !defined(WLED_DISABLE_INFRARED)
     oappend(SET_F("hideNoIR();"));  // WLEDMM hide "not compiled in" message
     #endif
+    #ifndef WLED_ENABLE_HUB75MATRIX
+    oappend(SET_F("hideHub75();"));  // WLEDMM hide HUB75 LED types
+    #endif    
+
   }
 
   if (subPage == 3)
@@ -581,9 +583,10 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     oappend(SET_F("hideDMXInput();"));  // WLEDMM hide "dmx input" settings
 #else
     oappend(SET_F("hideNoDMXInput();"));  // WLEDMM hide "not compiled in" message
-    sappend('v',SET_F("DMT"),dmxTransmitPin);
-    sappend('v',SET_F("DMR"),dmxReceivePin);
-    sappend('v',SET_F("DME"),dmxEnablePin);
+    sappend('v',SET_F("IDMT"),dmxInputTransmitPin);
+    sappend('v',SET_F("IDMR"),dmxInputReceivePin);
+    sappend('v',SET_F("IDME"),dmxInputEnablePin);
+    sappend('v',SET_F("IDMP"),dmxInputPort);
 #endif    
     sappend('v',SET_F("DA"),DMXAddress);
     sappend('v',SET_F("XX"),DMXSegmentSpacing);

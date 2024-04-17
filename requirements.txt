@@ -34,7 +34,7 @@ marshmallow==3.19.0
     # via platformio
 packaging==23.1
     # via marshmallow
-platformio==6.1.6
+platformio==6.1.14
     # via -r requirements.in
 pyelftools==0.29
     # via platformio
@@ -50,7 +50,7 @@ starlette==0.23.1
     # via platformio
 tabulate==0.9.0
     # via platformio
-urllib3==1.26.15
+urllib3==1.26.18
     # via requests
 uvicorn==0.20.0
     # via platformio
