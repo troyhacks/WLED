@@ -115,7 +115,7 @@ Segment::Segment(const Segment &orig) {
 
 //WLEDMM: recreate ledsrgb if more space needed (will not free ledsrgb!)
 void Segment::allocLeds() {
-  size_t size = sizeof(CRGB)*max((size_t) length(), ledmapMaxSize); //TroyHack
+  size_t size = sizeof(CRGB)*max((size_t) length(), ledmapMaxSize); // TroyHacks
   if ((size < sizeof(CRGB)) || (size > 164000)) {                   //softhack too small (<3) or too large (>160Kb)
     DEBUG_PRINTF("allocLeds warning: size == %u !!\n", size);
     if (ledsrgb && (ledsrgbSize == 0)) {
@@ -128,10 +128,13 @@ void Segment::allocLeds() {
     if (ledsrgb) free(ledsrgb);   // we need a bigger buffer, so free the old one first
     ledsrgb = (CRGB*)calloc(size, 1);
     ledsrgbSize = ledsrgb?size:0;
-    if (ledsrgb == nullptr) USER_PRINTLN("allocLeds failed!!");
+    if (ledsrgb == nullptr) {
+      USER_PRINTLN("allocLeds failed!!");
+      errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
+    }
   }
   else {
-    USER_PRINTF("reuse Leds %u from %u\n", size, ledsrgb?ledsrgbSize:0);
+    //USER_PRINTF("reuse Leds %u from %u\n", size, ledsrgb?ledsrgbSize:0);
   }
 }
 
@@ -212,7 +215,11 @@ bool Segment::allocateData(size_t len) {
   //DEBUG_PRINTF("allocateData(%u) start %d, stop %d, vlen %d\n", len, start, stop, virtualLength());
   deallocateData();
   if (len == 0) return false; // nothing to do
-  if (Segment::getUsedSegmentData() + len > MAX_SEGMENT_DATA) return false; //not enough memory
+  if (Segment::getUsedSegmentData() + len > MAX_SEGMENT_DATA) {
+    //USER_PRINTF("Segment::allocateData: Segment data quota exceeded! used:%u request:%u max:%d\n", Segment::getUsedSegmentData(), len, MAX_SEGMENT_DATA);
+    if (len > 0) errorFlag = ERR_LOW_SEG_MEM;  // WLEDMM raise errorflag
+    return false; //not enough memory
+  }
   // do not use SPI RAM on ESP32 since it is slow
   //#if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
   //if (psramFound())
@@ -220,10 +227,17 @@ bool Segment::allocateData(size_t len) {
   //else
   //#endif
     data = (byte*) malloc(len);
-  if (!data) { _dataLen = 0; return false;} //allocation failed // WLEDMM reset dataLen
+  if (!data) {
+      _dataLen = 0; // WLEDMM reset dataLen
+      errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
+      USER_PRINT(F("Segment::allocateData: FAILED to allocate ")); 
+      USER_PRINT(len); USER_PRINTLN(F(" bytes."));
+      return false;
+  } //allocation failed
   Segment::addUsedSegmentData(len);
   _dataLen = len;
   memset(data, 0, len);
+  if (errorFlag == ERR_LOW_SEG_MEM) errorFlag = ERR_NONE; // WLEDMM reset errorflag on success
   return true;
 }
 
@@ -231,7 +245,7 @@ void Segment::deallocateData() {
   if (!data) {_dataLen = 0; return;}  // WLEDMM reset dataLen
   free(data);
   data = nullptr;
-  //DEBUG_PRINTLN("deallocateData() called free().");
+  //USER_PRINTF("Segment::deallocateData: free'd   %d bytes.\n", _dataLen);
   Segment::addUsedSegmentData(-_dataLen);
   _dataLen = 0;
 }
@@ -416,22 +430,25 @@ void Segment::startTransition(uint16_t dur) {
 }
 
 // transition progression between 0-65535
-uint16_t Segment::progress() {
+uint16_t IRAM_ATTR_YN Segment::progress() {
   if (!transitional || !_t) return 0xFFFFU;
   unsigned long timeNow = millis();
   if (timeNow - _t->_start > _t->_dur || _t->_dur == 0) return 0xFFFFU;
   return (timeNow - _t->_start) * 0xFFFFU / _t->_dur;
 }
 
-uint8_t Segment::currentBri(uint8_t briNew, bool useCct) {
-  uint32_t prog = progress();
+// WLEDMM Segment::currentBri() is declared inline, see FX.h
+#if 0
+uint8_t IRAM_ATTR_YN Segment::currentBri(uint8_t briNew, bool useCct) {
+  uint32_t prog = (transitional && _t) ? progress() : 0xFFFFU;
   if (transitional && _t && prog < 0xFFFFU) {
     if (useCct) return ((briNew * prog) + _t->_cctT * (0xFFFFU - prog)) >> 16;
     else        return ((briNew * prog) + _t->_briT * (0xFFFFU - prog)) >> 16;
   } else {
-    return briNew;
+    return (useCct ? briNew : (on ? briNew : 0));  // WLEDMM aligned with upstream
   }
 }
+#endif
 
 uint8_t Segment::currentMode(uint8_t newMode) {
   return (progress()>32767U) ? newMode : _t->_modeP; // change effect in the middle of transition
@@ -478,6 +495,8 @@ void Segment::setUp(uint16_t i1, uint16_t i2, uint8_t grp, uint8_t spc, uint16_t
   if (boundsUnchanged
       && (!grp || (grouping == grp && spacing == spc))
       && (ofs == UINT16_MAX || ofs == offset)) return;
+
+  stateChanged = true; // send UDP/WS broadcast
 
   if (stop>start) fill(BLACK); //turn old segment range off // WLEDMM stop > start
   if (i2 <= i1) { //disable segment
@@ -773,6 +792,16 @@ void Segment::deletejMap() {
   }
 }
 
+
+// WLEDMM constants for mapping mode "Pinwheel"
+constexpr int Pinwheel_Steps_Medium = 208;     // no holes up to 32x32;  60fps
+constexpr int Pinwheel_Size_Medium = 32;       // larger than this -> use "Big"
+constexpr int Pinwheel_Steps_Big = 360;        // no holes expected up to  58x58; 40fps
+constexpr float Int_to_Rad_Med = (DEG_TO_RAD * 360) / Pinwheel_Steps_Medium;   // conversion: from 0...208 to Radians
+constexpr float Int_to_Rad_Big = (DEG_TO_RAD * 360) / Pinwheel_Steps_Big;      // conversion: from 0...360 to Radians
+// WLEDMM end
+
+
 // 1D strip
 uint16_t Segment::virtualLength() const {
 #ifndef WLED_DISABLE_2D
@@ -801,6 +830,13 @@ uint16_t Segment::virtualLength() const {
           vLen = max(vW,vH) * 4;//0.5; // get the longest dimension
         else 
           vLen = max(vW,vH) * 0.5; // get the longest dimension
+        break;
+      case M12_sPinWheel: //WLEDMM
+        //vLen = full circle
+        if (max(vW,vH) <= Pinwheel_Size_Medium) 
+          vLen = Pinwheel_Steps_Medium;
+        else 
+          vLen = Pinwheel_Steps_Big;
         break;
     }
     return vLen;
@@ -869,13 +905,26 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
         else {
           //WLEDMM: drawArc(0, 0, i, col); could work as alternative
 
-          float step = HALF_PI / (2.85f*i);
-          for (float rad = 0.0f; rad <= HALF_PI+step/2; rad += step) {
+          //WLEDMM: some optimizations for the drawing loop
+          //  pre-calculate loop limits, exploit symmetry at 45deg
+          float radius = float(i);
+          // float step = HALF_PI / (2.85f * radius);  // upstream uses this
+          float step = HALF_PI / (M_PI * radius);      // WLEDMM we use the correct circumference
+          bool useSymmetry = (max(vH, vW) > 20);       // for segments wider than 20 pixels, we exploit symmetry
+          unsigned numSteps;
+          if (useSymmetry) numSteps = 1 + ((HALF_PI/2.0f + step/2.0f) / step); // with symmetry
+          else             numSteps = 1 + ((HALF_PI      + step/2.0f) / step); // without symmetry
+
+          float rad = 0.0f;
+          for (unsigned count = 0; count < numSteps; count++) {
             // may want to try float version as well (with or without antialiasing)
-            int x = roundf(sin_t(rad) * i);
-            int y = roundf(cos_t(rad) * i);
+            int x = roundf(sinf(rad) * radius);
+            int y = roundf(cosf(rad) * radius);
             setPixelColorXY(x, y, col);
+            if(useSymmetry) setPixelColorXY(y, x, col);// WLEDMM
+            rad += step;
           }
+
           // Bresenham’s Algorithm (may not fill every pixel)
           //int d = 3 - (2*i);
           //int y = i, x = 0;
@@ -903,8 +952,8 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
       case M12_sCircle: //WLEDMM
         if (vStrip > 0)
         {
-          int x = roundf(sin_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
-          int y = roundf(cos_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int x = roundf(sinf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int y = roundf(cosf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
           setPixelColorXY(x + vW/2, y + vH/2, col);
         }
         else // pArc -> circle
@@ -929,6 +978,38 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           }
         }
         break;
+      case M12_sPinWheel: { // WLEDMM
+        // i = angle --> 0 through 359 (Big), OR 0 through 208 (Medium)
+        float centerX = roundf((vW-1) / 2.0f);
+        float centerY = roundf((vH-1) / 2.0f);
+        // int maxDistance = sqrt(centerX * centerX + centerY * centerY) + 1;
+        float angleRad = (max(vW,vH) > Pinwheel_Size_Medium) ? float(i) * Int_to_Rad_Big : float(i) * Int_to_Rad_Med; // angle in radians
+        float cosVal = cosf(angleRad);
+        float sinVal = sinf(angleRad);
+
+        // draw line at angle, starting at center and ending at the segment edge
+        // we use fixed point math for better speed. Starting distance is 0.5 for better rounding
+        constexpr int_fast32_t Fixed_Scale = 512;  // fixpoint scaling factor
+        int_fast32_t posx = (centerX + 0.5f * cosVal) * Fixed_Scale; // X starting position in fixed point
+        int_fast32_t posy = (centerY + 0.5f * sinVal) * Fixed_Scale; // Y starting position in fixed point
+        int_fast16_t inc_x = cosVal * Fixed_Scale; // X increment per step (fixed point)
+        int_fast16_t inc_y = sinVal * Fixed_Scale; // Y increment per step (fixed point)
+
+        int32_t maxX = vW * Fixed_Scale; // X edge in fixedpoint
+        int32_t maxY = vH * Fixed_Scale; // Y edge in fixedpoint
+        // draw until we hit any edge
+        while ((posx > 0) && (posy > 0) && (posx < maxX)  && (posy < maxY))  {
+          // scale down to integer (compiler will replace division with appropriate bitshift)
+          int x = posx / Fixed_Scale;
+          int y = posy / Fixed_Scale;
+          // set pixel
+          setPixelColorXY(x, y, col);
+          // advance to next position
+          posx += inc_x;
+          posy += inc_y;
+        }
+        break;
+      }
     }
     return;
   } else if (Segment::maxHeight!=1 && (width()==1 || height()==1)) {
@@ -1049,8 +1130,8 @@ uint32_t Segment::getPixelColor(int i)
       case M12_sCircle: //WLEDMM
         if (vStrip > 0)
         {
-          int x = roundf(sin_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
-          int y = roundf(cos_t(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int x = roundf(sinf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
+          int y = roundf(cosf(360*i/SEGLEN*DEG_TO_RAD) * vW * (vStrip+1)/nrOfVStrips());
           return getPixelColorXY(x + vW/2, y + vH/2);
         }
         else
@@ -1066,6 +1147,15 @@ uint32_t Segment::getPixelColor(int i)
         else
           return getPixelColorXY(vW / 2, vH / 2 - i - 1);
         break;
+      case M12_sPinWheel: //WLEDMM
+      // not 100% accurate, returns outer edge of circle
+        float distance = max(1.0f, min(vH-1, vW-1) / 2.0f);
+        float centerX = (vW - 1) / 2.0f;
+        float centerY = (vH - 1) / 2.0f;
+        float angleRad = (max(vW,vH) > Pinwheel_Size_Medium) ? float(i) * Int_to_Rad_Big : float(i) * Int_to_Rad_Med; // angle in radians
+        int x = roundf(centerX + distance * cosf(angleRad));
+        int y = roundf(centerY + distance * sinf(angleRad));
+        return getPixelColorXY(x, y);
     }
     return 0;
   }
@@ -1421,7 +1511,7 @@ void WS2812FX::enumerateLedmaps() {
   ledmapMaxSize = 0;
   ledMaps = 1;
   for (int i=1; i<10; i++) {
-    char fileName[33];
+    char fileName[33] = {'\0'};       // WLEDMM ensure termination
     snprintf_P(fileName, sizeof(fileName), PSTR("/ledmap%d.json"), i);
     bool isFile = WLED_FS.exists(fileName);
 
@@ -1462,7 +1552,7 @@ void WS2812FX::enumerateLedmaps() {
 
           USER_PRINTF("enumerateLedmaps %s \"%s\"", fileName, name);
           if (isMatrix) {
-            //WLEDMM calc ledmapMaxSize (TroyHack)
+            //WLEDMM calc ledmapMaxSize (TroyHacks)
             char dim[34] = { '\0' };
             f.find("\"width\":");
             f.readBytesUntil('\n', dim, sizeof(dim)-1); //hack: use fileName as we have this allocated already
@@ -1580,6 +1670,7 @@ void WS2812FX::finalizeInit(void)
     //#endif
       if (arrSize > 0) Segment::_globalLeds = (CRGB*) malloc(arrSize); // WLEDMM avoid malloc(0)
     if ((Segment::_globalLeds != nullptr) && (arrSize > 0)) memset(Segment::_globalLeds, 0, arrSize); // WLEDMM avoid dereferencing nullptr
+    if ((Segment::_globalLeds == nullptr) && (arrSize > 0)) errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
   }
 
   //segments are created in makeAutoSegments();
@@ -1612,6 +1703,8 @@ void WS2812FX::waitUntilIdle(void) {
 
 void WS2812FX::service() {
   unsigned long nowUp = millis(); // Be aware, millis() rolls over every 49 days // WLEDMM avoid losing precision
+  if (OTAisRunning) return; // WLEDMM avoid flickering during OTA
+
   now = nowUp + timebase;
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FASTPATH)
     if ((_frametime > 2) && (_frametime < 32) && (nowUp - _lastShow) < (_frametime/2)) return;  // WLEDMM experimental - stabilizes frametimes but increases CPU load
@@ -1773,6 +1866,8 @@ void WS2812FX::estimateCurrentAndLimitBri() {
 }
 
 void WS2812FX::show(void) {
+  if (OTAisRunning) return; // WLEDMM avoid flickering during OTA
+
   // avoid race condition, capture _callback value
   show_callback callback = _callback;
   if (callback) callback();
@@ -2195,16 +2290,16 @@ void WS2812FX::loadCustomPalettes() {
 
       if (readObjectFromFile(fileName, nullptr, &pDoc)) {
         JsonArray pal = pDoc[F("palette")];
-        if (!pal.isNull() && pal.size()>4) { // not an empty palette (at least 2 entries)
+        if (!pal.isNull() && pal.size()>3) { // not an empty palette (at least 2 entries)
           if (pal[0].is<int>() && pal[1].is<const char *>()) {
             // we have an array of index & hex strings
             size_t palSize = min(pal.size(), (size_t)36);  // WLEDMM use native min/max
             palSize -= palSize % 2; // make sure size is multiple of 2
-            for (size_t i=0, j=0; i<palSize && pal[i].as<int>()<256; i+=2, j+=4) {
+            for (unsigned i=0, j=0; i<palSize && pal[i].as<int>()<256; i+=2, j+=4) {
               uint8_t rgbw[] = {0,0,0,0};
               tcp[ j ] = (uint8_t) pal[ i ].as<int>(); // index
               colorFromHexString(rgbw, pal[i+1].as<const char *>()); // will catch non-string entires
-              for (size_t c=0; c<3; c++) tcp[j+1+c] = rgbw[c]; // only use RGB component
+              for (unsigned c=0; c<3; c++) tcp[j+1+c] = gamma8(rgbw[c]); // only use RGB component
               DEBUG_PRINTF("%d(%d) : %d %d %d\n", i, int(tcp[j]), int(tcp[j+1]), int(tcp[j+2]), int(tcp[j+3]));
             }
           } else {
@@ -2212,13 +2307,15 @@ void WS2812FX::loadCustomPalettes() {
             palSize -= palSize % 4; // make sure size is multiple of 4
             for (size_t i=0; i<palSize && pal[i].as<int>()<256; i+=4) {
               tcp[ i ] = (uint8_t) pal[ i ].as<int>(); // index
-              tcp[i+1] = (uint8_t) pal[i+1].as<int>(); // R
-              tcp[i+2] = (uint8_t) pal[i+2].as<int>(); // G
-              tcp[i+3] = (uint8_t) pal[i+3].as<int>(); // B
+              tcp[i+1] = gamma8((uint8_t) pal[i+1].as<int>()); // R
+              tcp[i+2] = gamma8((uint8_t) pal[i+2].as<int>()); // G
+              tcp[i+3] = gamma8((uint8_t) pal[i+3].as<int>()); // B
               DEBUG_PRINTF("%d(%d) : %d %d %d\n", i, int(tcp[i]), int(tcp[i+1]), int(tcp[i+2]), int(tcp[i+3]));
             }
           }
           customPalettes.push_back(targetPalette.loadDynamicGradientPalette(tcp));
+        } else {
+          DEBUG_PRINTLN(F("Wrong palette format."));
         }
       }
     } else {
@@ -2231,7 +2328,7 @@ void WS2812FX::loadCustomPalettes() {
 bool WS2812FX::deserializeMap(uint8_t n) {
   // 2D support creates its own ledmap (on the fly) if a ledmap.json exists it will overwrite built one.
 
-  char fileName[32];
+  char fileName[32] = {'\0'};
   //WLEDMM: als support segment name ledmaps
   bool isFile = false;;
   if (n<10) {
@@ -2283,13 +2380,17 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
   if (isMatrix) {
     //WLEDMM: read width and height
+    memset(fileName, 0, sizeof(fileName));              // clear old buffer - readBytesUntil() does not terminate strings !!!
     f.find("\"width\":");
     f.readBytesUntil('\n', fileName, sizeof(fileName)); //hack: use fileName as we have this allocated already
-    uint16_t maxWidth = atoi(fileName);
+    uint16_t maxWidth = atoi(cleanUpName(fileName));
+    //DEBUG_PRINTF(" (\"width\": %s) ", fileName)
 
+    memset(fileName, 0, sizeof(fileName));              // clear old buffer
     f.find("\"height\":");
     f.readBytesUntil('\n', fileName, sizeof(fileName));
-    uint16_t maxHeight = atoi(fileName);
+    uint16_t maxHeight = atoi(cleanUpName(fileName));
+    //DEBUG_PRINTF(" (\"height\": %s) \n", fileName)
 
     //WLEDMM: support ledmap file properties width and height: if found change segment
     if (maxWidth * maxHeight > 0) {
@@ -2305,7 +2406,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
   //WLEDMM recreate customMappingTable if more space needed
   if (Segment::maxWidth * Segment::maxHeight > customMappingTableSize) {
-    size_t size = max(ledmapMaxSize, size_t(Segment::maxWidth * Segment::maxHeight));//TroyHack
+    size_t size = max(ledmapMaxSize, size_t(Segment::maxWidth * Segment::maxHeight)); // TroyHacks
     USER_PRINTF("deserializemap customMappingTable alloc %u from %u\n", size, customMappingTableSize);
     //if (customMappingTable != nullptr) delete[] customMappingTable;
     //customMappingTable = new uint16_t[size];
@@ -2317,27 +2418,33 @@ bool WS2812FX::deserializeMap(uint8_t n) {
     if ((size > 0) && (customMappingTable == nullptr)) { // second try
       DEBUG_PRINTLN("deserializeMap: trying to get fresh memory block.");
       customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
-      if (customMappingTable == nullptr) DEBUG_PRINTLN("deserializeMap: alloc failed!");
+      if (customMappingTable == nullptr) { 
+        DEBUG_PRINTLN("deserializeMap: alloc failed!");
+        errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
+      }
     }
     if (customMappingTable != nullptr) customMappingTableSize = size;
   }
 
   if (customMappingTable != nullptr) {
     customMappingSize  = Segment::maxWidth * Segment::maxHeight;
+    // WLEDMM reset mapping table before loading
+    //memset(customMappingTable, 0xFF, customMappingTableSize * sizeof(uint16_t)); // FFFF = no pixel
+    for (unsigned i=0; i<customMappingTableSize; i++) customMappingTable[i]=i;     // "neutral" 1:1 mapping
 
     //WLEDMM: find the map values
     f.find("\"map\":[");
     uint16_t i=0;
     do { //for each element in the array
       int mapi = f.readStringUntil(',').toInt();
-      // USER_PRINTF(", %d", mapi);
-      customMappingTable[i++] = (uint16_t) (mapi<0 ? 0xFFFFU : mapi);
+      // USER_PRINTF(", %d(%d)", mapi, i);
+      if (i < customMappingSize) customMappingTable[i++] = (uint16_t) (mapi<0 ? 0xFFFFU : mapi);  // WLEDMM do not write past array bounds
     } while (f.available());
 
     loadedLedmap = n;
     f.close();
 
-    USER_PRINTF("Custom ledmap: %d\n", loadedLedmap);
+    USER_PRINTF("Custom ledmap: %d size=%d\n", loadedLedmap, customMappingSize);
     #ifdef WLED_DEBUG_MAPS
       for (uint16_t j=0; j<customMappingSize; j++) { // fixing a minor warning: declaration of 'i' shadows a previous local
         if (!(j%Segment::maxWidth)) DEBUG_PRINTLN();

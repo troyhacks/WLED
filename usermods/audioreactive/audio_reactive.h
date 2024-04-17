@@ -7,6 +7,7 @@
 #include <driver/i2s.h>
 #include <driver/adc.h>
 
+#include <math.h>
 #endif
 
 #if defined(ARDUINO_ARCH_ESP32) && (defined(WLED_DEBUG) || defined(SR_DEBUG))
@@ -141,11 +142,17 @@ static uint8_t fftResult[NUM_GEQ_CHANNELS]= {0};   // Our calculated freq. chann
 static float   fftCalc[NUM_GEQ_CHANNELS] = {0.0f}; // Try and normalize fftBin values to a max of 4096, so that 4096/16 = 256. (also used by dynamics limiter)
 static float   fftAvg[NUM_GEQ_CHANNELS] = {0.0f};  // Calculated frequency channel results, with smoothing (used if dynamics limiter is ON)
 
+static uint16_t zeroCrossingCount = 0; // number of zero crossings in the current batch of 512 samples
+
 // TODO: probably best not used by receive nodes
 static float agcSensitivity = 128;            // AGC sensitivity estimation, based on agc gain (multAgc). calculated by getSensitivity(). range 0..255
 
 // user settable parameters for limitSoundDynamics()
-static bool limiterOn = true;                 // bool: enable / disable dynamics limiter
+#ifdef UM_AUDIOREACTIVE_DYNAMICS_LIMITER_OFF
+static bool limiterOn = false;                 // bool: enable / disable dynamics limiter
+#else
+static bool limiterOn = true;
+#endif
 static uint16_t attackTime = 50;              // int: attack time in milliseconds. Default 0.08sec
 static uint16_t decayTime = 300;              // int: decay time in milliseconds.  New default 300ms. Old default was 1.40sec
 
@@ -539,15 +546,27 @@ void FFTcode(void * parameter)
       }
     }
 
-    // find highest sample in the batch
+    // set imaginary parts to 0
+    memset(vImag, 0, sizeof(vImag));
+
+    // find highest sample in the batch, and count zero crossings
     float maxSample = 0.0f;                         // max sample from FFT batch
+    uint_fast16_t newZeroCrossingCount = 0;
     for (int i=0; i < samplesFFT; i++) {
-	    // set imaginary parts to 0
-      vImag[i] = 0;
 	    // pick our  our current mic sample - we take the max value from all samples that go into FFT
 	    if ((vReal[i] <= (INT16_MAX - 1024)) && (vReal[i] >= (INT16_MIN + 1024)))  //skip extreme values - normally these are artefacts
         if (fabsf((float)vReal[i]) > maxSample) maxSample = fabsf((float)vReal[i]);
+
+      // WLED-MM/TroyHacks: Calculate zero crossings
+      //
+      if (i < (samplesFFT-1)) {
+        if (__builtin_signbit(vReal[i]) != __builtin_signbit(vReal[i+1]))  // test sign bit: sign changed -> zero crossing
+            newZeroCrossingCount++;
+      }
     }
+    newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typicially stays below 256
+    zeroCrossingCount = newZeroCrossingCount; // update only once, to avoid that effects pick up an intermediate value
+
     // release highest sample to volume reactive effects early - not strictly necessary here - could also be done at the end of the function
     // early release allows the filters (getSample() and agcAvg()) to work with fresh values - we will have matching gain and noise gate values when we want to process the FFT results.
     micDataReal = maxSample;
@@ -766,8 +785,7 @@ void FFTcode(void * parameter)
     // run peak detection
     autoResetPeak();
     detectSamplePeak();
-    
-    // we have new results - notify UDP sound send
+
     haveNewFFTResult = true;
     
     #if !defined(I2S_GRAB_ADC1_COMPLETELY)    
@@ -994,19 +1012,21 @@ class AudioReactive : public Usermod {
     int8_t mclkPin = MCLK_PIN;
     #endif
 #endif
-    // new "V2" audiosync struct - 40 Bytes
-    struct audioSyncPacket {
-      char    header[6];      //  06 Bytes
-      float   sampleRaw;      //  04 Bytes  - either "sampleRaw" or "rawSampleAgc" depending on soundAgc setting
-      float   sampleSmth;     //  04 Bytes  - either "sampleAvg" or "sampleAgc" depending on soundAgc setting
-      uint8_t samplePeak;     //  01 Bytes  - 0 no peak; >=1 peak detected. In future, this will also provide peak Magnitude
-      uint8_t frameCounter;   //  01 Bytes  - track duplicate/out of order packets
-      uint8_t fftResult[16];  //  16 Bytes
-      float  FFT_Magnitude;   //  04 Bytes
-      float  FFT_MajorPeak;   //  04 Bytes
+    // new "V2" audiosync struct - 44 Bytes
+    struct __attribute__ ((packed)) audioSyncPacket {  // WLEDMM "packed" ensures that there are no additional gaps
+      char    header[6];      //  06 Bytes  offset 0
+      uint8_t gap1[2];        // gap added by compiler: 02 Bytes, offset 6
+      float   sampleRaw;      //  04 Bytes  offset 8  - either "sampleRaw" or "rawSampleAgc" depending on soundAgc setting
+      float   sampleSmth;     //  04 Bytes  offset 12 - either "sampleAvg" or "sampleAgc" depending on soundAgc setting
+      uint8_t samplePeak;     //  01 Bytes  offset 16 - 0 no peak; >=1 peak detected. In future, this will also provide peak Magnitude
+      uint8_t frameCounter;   //  01 Bytes  offset 17 - track duplicate/out of order packets
+      uint8_t fftResult[16];  //  16 Bytes  offset 18
+      uint16_t zeroCrossingCount; // 02 Bytes, offset 34
+      float  FFT_Magnitude;   //  04 Bytes  offset 36
+      float  FFT_MajorPeak;   //  04 Bytes  offset 40
     };
 
-    // old "V1" audiosync struct - 83 Bytes - for backwards compatibility
+    // old "V1" audiosync struct - 83 Bytes payload, 88 bytes total - for backwards compatibility
     struct audioSyncPacket_v1 {
       char header[6];         //  06 Bytes
       uint8_t myVals[32];     //  32 Bytes
@@ -1022,7 +1042,7 @@ class AudioReactive : public Usermod {
     #define UDPSOUND_MAX_PACKET 96 // max packet size for audiosync, with a bit of "headroom"
 
     // set your config variables to their boot default value (this can also be done in readFromConfig() or a constructor if you prefer)
-  #ifdef SR_ENABLE_DEFAULT
+  #if defined(SR_ENABLE_DEFAULT) || defined(UM_AUDIOREACTIVE_ENABLE)
     bool     enabled = true;        // WLEDMM
   #else
     bool     enabled = false;
@@ -1541,6 +1561,7 @@ class AudioReactive : public Usermod {
       transmitData.samplePeak  = udpSamplePeak ? 1:0;
       udpSamplePeak            = false;           // Reset udpSamplePeak after we've transmitted it
       transmitData.frameCounter = frameCounter;
+      transmitData.zeroCrossingCount = zeroCrossingCount;
 
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
         transmitData.fftResult[i] = (uint8_t)constrain(fftResult[i], 0, 254);
@@ -1611,6 +1632,10 @@ class AudioReactive : public Usermod {
       my_magnitude  = fmaxf(receivedPacket->FFT_Magnitude, 0.0f);
       FFT_Magnitude = my_magnitude;
       FFT_MajorPeak = constrain(receivedPacket->FFT_MajorPeak, 1.0f, 11025.0f);  // restrict value to range expected by effects
+      soundPressure = volumeSmth; // substitute - V2 format does not (yet) include this value
+      agcSensitivity = 128.0f; // substitute - V2 format does not (yet) include this value
+      zeroCrossingCount = receivedPacket->zeroCrossingCount;
+
       return true;
     }
 
@@ -1640,6 +1665,8 @@ class AudioReactive : public Usermod {
       my_magnitude  = fmaxf(receivedPacket->FFT_Magnitude, 0.0);
       FFT_Magnitude = my_magnitude;
       FFT_MajorPeak = constrain(receivedPacket->FFT_MajorPeak, 1.0, 11025.0);  // restrict value to range expected by effects
+      soundPressure = volumeSmth; // substitute - V1 format does not include this value
+      agcSensitivity = 128.0f; // substitute - V1 format does not include this value
     }
 
     bool receiveAudioData()   // check & process new data. return TRUE in case that new audio data was received. 
@@ -1709,7 +1736,7 @@ class AudioReactive : public Usermod {
         // usermod exchangeable data
         // we will assign all usermod exportable data here as pointers to original variables or arrays and allocate memory for pointers
         um_data = new um_data_t;
-        um_data->u_size = 11;
+        um_data->u_size = 12;
         um_data->u_type = new um_types_t[um_data->u_size];
         um_data->u_data = new void*[um_data->u_size];
         um_data->u_data[0] = &volumeSmth;      //*used (New)
@@ -1735,6 +1762,8 @@ class AudioReactive : public Usermod {
         um_data->u_type[9]  = UMT_FLOAT;
         um_data->u_data[10] = &agcSensitivity; // used (New)
         um_data->u_type[10] = UMT_FLOAT;
+        um_data->u_data[11] = &zeroCrossingCount;
+        um_data->u_type[11] = UMT_UINT16;
 #else
        // ESP8266 
         // See https://github.com/MoonModules/WLED/pull/60#issuecomment-1666972133 for explanation of these alternative sources of data
@@ -1749,6 +1778,8 @@ class AudioReactive : public Usermod {
         um_data->u_type[9]  = UMT_FLOAT;
         um_data->u_data[10] = &agcSensitivity; // used (New) - dummy value (128 => 50%)
         um_data->u_type[10] = UMT_FLOAT;
+        um_data->u_data[11] = &zeroCrossingCount;
+        um_data->u_type[11] = UMT_UINT16;
 #endif
       }
 
@@ -1897,6 +1928,26 @@ class AudioReactive : public Usermod {
       DEBUGSR_PRINTLN(enabled ? F("true.") : F("false."));
       USER_FLUSH();
 
+      // dump audiosync data layout
+      #if defined(SR_DEBUG)
+      {
+        audioSyncPacket data;
+        USER_PRINTF("\naudioSyncPacket_v1 size = %d\n", sizeof(audioSyncPacket_v1));                                                         // size 88
+        USER_PRINTF("audioSyncPacket size = %d\n", sizeof(audioSyncPacket));                                                               // size 44
+        USER_PRINTF("|  char    header[6]     offset = %2d   size = %2d\n", offsetof(audioSyncPacket, header[0]), sizeof(data.header));           // offset  0 size 6
+        USER_PRINTF("|  uint8_t gap1[2]       offset = %2d   size = %2d\n", offsetof(audioSyncPacket, gap1[0]), sizeof(data.gap1));               // offset  6 size 2
+        USER_PRINTF("|  float   sampleRaw     offset = %2d   size = %2d\n", offsetof(audioSyncPacket, sampleRaw), sizeof(data.sampleRaw));        // offset  8 size 4
+        USER_PRINTF("|  float   sampleSmth    offset = %2d   size = %2d\n", offsetof(audioSyncPacket, sampleSmth), sizeof(data.sampleSmth));      // offset 12 size 4
+        USER_PRINTF("|  uint8_t samplePeak    offset = %2d   size = %2d\n", offsetof(audioSyncPacket, samplePeak), sizeof(data.samplePeak));      // offset 16 size 1
+        USER_PRINTF("|  uint8_t frameCounter  offset = %2d   size = %2d\n", offsetof(audioSyncPacket, frameCounter), sizeof(data.frameCounter));  // offset 17 size 1
+        USER_PRINTF("|  uint8_t fftResult[16] offset = %2d   size = %2d\n", offsetof(audioSyncPacket, fftResult[0]), sizeof(data.fftResult));     // offset 18 size 16
+        USER_PRINTF("|  uint16_t zeroCrossingCount offset = %2d   size = %2d\n", offsetof(audioSyncPacket, zeroCrossingCount), sizeof(data.zeroCrossingCount)); // offset 34 size 2
+        USER_PRINTF("|  float   FFT_Magnitude offset = %2d   size = %2d\n", offsetof(audioSyncPacket, FFT_Magnitude), sizeof(data.FFT_Magnitude));// offset 36 size 4
+        USER_PRINTF("|  float   FFT_MajorPeak offset = %2d   size = %2d\n", offsetof(audioSyncPacket, FFT_MajorPeak), sizeof(data.FFT_MajorPeak));// offset 40 size 4
+        USER_PRINTLN(); USER_FLUSH();
+      }
+      #endif
+
       #if defined(ARDUINO_ARCH_ESP32) && defined(SR_DEBUG)
       DEBUGSR_PRINTF("|| %-9s min free stack %d\n", pcTaskGetTaskName(NULL), uxTaskGetStackHighWaterMark(NULL)); //WLEDMM
       #endif
@@ -1993,12 +2044,12 @@ class AudioReactive : public Usermod {
           DEBUG_PRINTF( "               RealtimeMode = %d; RealtimeOverride = %d\n", int(realtimeMode), int(realtimeOverride));
         }
         #endif
-        if ((disableSoundProcessing == true) && (audioSyncEnabled < AUDIOSYNC_REC)) lastUMRun = millis();  // just left "realtime mode" - update timekeeping
+        if ((disableSoundProcessing == true) && (audioSyncEnabled != AUDIOSYNC_REC)) lastUMRun = millis();  // just left "realtime mode" - update timekeeping
         disableSoundProcessing = false;
       }
 
       if (audioSyncEnabled == AUDIOSYNC_REC) disableSoundProcessing = true;   // make sure everything is disabled IF in audio Receive mode
-      if (audioSyncEnabled & AUDIOSYNC_SEND) disableSoundProcessing = false;  // keep running audio IF we're in audio Transmit mode
+      if (audioSyncEnabled == AUDIOSYNC_SEND) disableSoundProcessing = false;  // keep running audio IF we're in audio Transmit mode
 #ifdef ARDUINO_ARCH_ESP32
       if (!audioSource->isInitialized()) {                                                               // no audio source
         disableSoundProcessing = true;
@@ -2110,6 +2161,8 @@ class AudioReactive : public Usermod {
         volumeSmth =0.0f;
         volumeRaw =0;
         my_magnitude = 0.1; FFT_Magnitude = 0.01; FFT_MajorPeak = 2;
+	soundPressure = 1.0f;
+        agcSensitivity = 64.0f;
 #ifdef ARDUINO_ARCH_ESP32
         multAgc = 1;
 #endif

@@ -41,7 +41,10 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         }
 
         bool verboseResponse = false;
-        if (!requestJSONBufferLock(11)) return;
+        if (!requestJSONBufferLock(11)) {
+          client->text(F("{\"error\":3}")); // ERR_NOBUF
+          return;
+        }
 
         DeserializationError error = deserializeJson(doc, data, len);
         JsonObject root = doc.as<JsonObject>();
@@ -59,14 +62,15 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         }
         releaseJSONBufferLock(); // will clean fileDoc
 
-        // force broadcast in 500ms after updating client
-        if (verboseResponse) {
-          sendDataWs(client);
-          lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500);
-        } else {
-          // we have to send something back otherwise WS connection closes
-          client->text(F("{\"success\":true}"));
-          lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500);
+        if (!interfaceUpdateCallMode) { // individual client response only needed if no WS broadcast soon
+          if (verboseResponse) {
+            sendDataWs(client);
+          } else {
+            // we have to send something back otherwise WS connection closes
+            client->text(F("{\"success\":true}"));
+          }
+          // force broadcast in 500ms after updating client
+          //lastInterfaceUpdate = millis() - (INTERFACE_UPDATE_COOLDOWN -500); // ESP8266 does not like this
         }
       }
     } else {
@@ -106,7 +110,14 @@ void sendDataWs(AsyncWebSocketClient * client)
   if (!ws.count()) return;
   AsyncWebSocketMessageBuffer * buffer;
 
-  if (!requestJSONBufferLock(12)) return;
+  if (!requestJSONBufferLock(12)) {
+    if (client) {
+      client->text(F("{\"error\":3}")); // ERR_NOBUF
+    } else {
+      ws.textAll(F("{\"error\":3}")); // ERR_NOBUF
+    }
+    return;
+  }
 
   JsonObject state = doc.createNestedObject("state");
   serializeState(state);
@@ -151,6 +162,7 @@ void sendDataWs(AsyncWebSocketClient * client)
     ws.closeAll(1013); //code 1013 = temporary overload, try again later
     ws.cleanupClients(0); //disconnect all clients to release memory
     ws._cleanBuffers();
+    errorFlag = ERR_LOW_WS_MEM;
     return; //out of memory
   }
 

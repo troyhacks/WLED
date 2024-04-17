@@ -1280,7 +1280,7 @@ uint16_t mode_fireworks(void) { return mode_fireworks_core(false); }
 static const char _data_FX_MODE_FIREWORKS[] PROGMEM = "Fireworks@,Frequency;!,!;!;12;ix=192,pal=11";
 
 uint16_t mode_fireworks_audio(void) { return mode_fireworks_core(true); }
-static const char _data_FX_MODE_FIREWORKS_AR[] PROGMEM = "🎉 audio Fireworks@,Frequency;!,!;!;12;ix=192,pal=11";
+static const char _data_FX_MODE_FIREWORKS_AR[] PROGMEM = "Fireworks audio ☾@,Frequency;!,!;!;1v,12;ix=192,pal=11";
 
 //Twinkling LEDs running. Inspired by https://github.com/kitesurfer1404/WS2812FX/blob/master/src/custom/Rain.h
 uint16_t mode_rain() {
@@ -3194,7 +3194,13 @@ static uint16_t mode_popcorn_core(bool useaudio) {
   if (SEGLEN == 1) return mode_static();
   //allocate segment data
   uint16_t strips = SEGMENT.nrOfVStrips();
-  uint16_t dataSize = sizeof(spark) * maxNumPopcorn;
+  size_t dataSize = sizeof(spark) * maxNumPopcorn;
+  uint8_t neededPopcorn = maxNumPopcorn; // WLEDMM
+  if (strips > 8) {  // WLEDMM more than 8 virtual strips --> reduce memory requirements to minimum necessary
+    neededPopcorn = (SEGMENT.intensity*maxNumPopcorn)/255;
+    neededPopcorn = min(max(neededPopcorn, uint8_t(2)), uint8_t(maxNumPopcorn));
+    dataSize = sizeof(spark) * neededPopcorn;
+  }
   if (!SEGENV.allocateData(dataSize * strips)) return mode_static(); //allocation failed
 
   Spark* popcorn = reinterpret_cast<Spark*>(SEGENV.data);
@@ -3212,7 +3218,7 @@ static uint16_t mode_popcorn_core(bool useaudio) {
 
   struct virtualStrip {
     static void runStrip(uint16_t stripNr, Spark* popcorn, bool useaudio, um_data_t *um_data) {  // WLEDMM added useaudio and um_data
-      float gravity = -0.0001 - (SEGMENT.speed/200000.0); // m/s/s
+      float gravity = -0.0001f - (SEGMENT.speed/200000.0f); // m/s/s
       gravity *= SEGLEN;
 
       uint8_t numPopcorn = SEGMENT.intensity*maxNumPopcorn/255;
@@ -3267,7 +3273,7 @@ static uint16_t mode_popcorn_core(bool useaudio) {
   };
 
   for (int stripNr=0; stripNr<strips; stripNr++)
-    virtualStrip::runStrip(stripNr, &popcorn[stripNr * maxNumPopcorn], useaudio, um_data); // WLEDMM added useaudio and um_data
+    virtualStrip::runStrip(stripNr, &popcorn[stripNr * neededPopcorn], useaudio, um_data); // WLEDMM added useaudio and um_data
 
   return FRAMETIME;
 }
@@ -3276,7 +3282,7 @@ uint16_t mode_popcorn(void) { return mode_popcorn_core(false); }
 static const char _data_FX_MODE_POPCORN[] PROGMEM = "Popcorn@!,!,,,,,Overlay;!,!,!;!;1.5d;m12=1"; //bar WLEDMM 1.5d
 
 uint16_t mode_popcorn_audio(void) { return mode_popcorn_core(true); }
-static const char _data_FX_MODE_POPCORN_AR[] PROGMEM = "🎉 audio Popcorn@!,!,,,,,Overlay;!,!,!;!;1.5d;m12=1"; //bar WLEDMM 1.5d
+static const char _data_FX_MODE_POPCORN_AR[] PROGMEM = "Popcorn audio ☾@!,!,,,,,Overlay;!,!,!;!;1v,1.5d;m12=1"; //bar WLEDMM 1.5d
 
 //values close to 100 produce 5Hz flicker, which looks very candle-y
 //Inspired by https://github.com/avanhanegem/ArduinoCandleEffectNeoPixel
@@ -3534,7 +3540,7 @@ uint16_t mode_starburst(void) { return mode_starburst_core(false); }
 static const char _data_FX_MODE_STARBURST[] PROGMEM = "Fireworks Starburst@Chance,Fragments,,,,,Overlay;,!;!;;pal=11,m12=0";
 
 uint16_t mode_starburst_audio(void) { return mode_starburst_core(true); }
-static const char _data_FX_MODE_STARBURST_AR[] PROGMEM = "🔨 audio Fw Starburst@Chance,Fragments,,,,,Overlay;,!;!;;pal=11,m12=0";
+static const char _data_FX_MODE_STARBURST_AR[] PROGMEM = "Fw Starburst audio ☾@Chance,Fragments,,,,,Overlay;,!;!;1v;pal=11,m12=0";
 
 /*
  * Exploding fireworks effect
@@ -4998,7 +5004,7 @@ static const char _data_FX_MODE_2DDNA[] PROGMEM = "DNA@Scroll speed,Blur;;!;2";
 /////////////////////////
 //     2D DNA Spiral   //
 /////////////////////////
-uint16_t mode_2DDNASpiral() {               // By: ldirko  https://editor.soulmatelights.com/gallery/810 , modified by: Andrew Tuline
+uint16_t mode_2DDNASpiral() {               // By: ldirko  https://editor.soulmatelights.com/gallery/512-dna-spiral-variation , modified by: Andrew Tuline
   if (!strip.isMatrix) return mode_static(); // not a 2D set-up
 
   const uint16_t cols = SEGMENT.virtualWidth();
@@ -5009,7 +5015,7 @@ uint16_t mode_2DDNASpiral() {               // By: ldirko  https://editor.soulma
     SEGMENT.fill(BLACK);
   }
 
-  uint8_t speeds = SEGMENT.speed/2 + 1;
+  uint8_t speeds = SEGMENT.speed/2 + 7;
   uint8_t freq = SEGMENT.intensity/8;
 
   uint32_t ms = strip.now / 20;
@@ -5062,8 +5068,8 @@ uint16_t mode_2DDrift() {              // By: Stepko   https://editor.soulmateli
   unsigned long t_20 = t/20; // softhack007: pre-calculating this gives about 10% speedup
   for (float i = 1; i < maxDim; i += 0.25) {
     float angle = radians(t * (maxDim - i));
-    uint16_t myX = (cols>>1) + (uint16_t)(sin_t(angle) * i) + (cols%2);
-    uint16_t myY = (rows>>1) + (uint16_t)(cos_t(angle) * i) + (rows%2);
+    uint16_t myX = (cols>>1) + (uint16_t)(sinf(angle) * i) + (cols%2);
+    uint16_t myY = (rows>>1) + (uint16_t)(cosf(angle) * i) + (rows%2);
     SEGMENT.setPixelColorXY(myX, myY, ColorFromPalette(SEGPALETTE, (i * 20) + t_20, 255, LINEARBLEND));
   }
   SEGMENT.blur(SEGMENT.intensity>>3);
@@ -5338,8 +5344,8 @@ uint16_t mode_2DJulia(void) {                           // An animated Julia set
   reAl = -0.94299f;               // PixelBlaze example
   imAg = 0.3162f;
 
-  reAl += sin_t((float)strip.now/305.f)/20.f;
-  imAg += sin_t((float)strip.now/405.f)/20.f;
+  reAl += sinf((float)strip.now/305.f)/20.f;
+  imAg += sinf((float)strip.now/405.f)/20.f;
 
   dx = (xmax - xmin) / (cols);     // Scale the delta x and y values to our matrix size.
   dy = (ymax - ymin) / (rows);
@@ -6067,8 +6073,8 @@ uint16_t mode_2Dghostrider(void) {
     CRGB color = CRGB::White;
     SEGMENT.wu_pixel(lighter->gPosX * 256 / 10, lighter->gPosY * 256 / 10, color);
 
-    lighter->gPosX += lighter->Vspeed * sin_t(radians(lighter->gAngle));
-    lighter->gPosY += lighter->Vspeed * cos_t(radians(lighter->gAngle));
+    lighter->gPosX += lighter->Vspeed * sinf(radians(lighter->gAngle));
+    lighter->gPosY += lighter->Vspeed * cosf(radians(lighter->gAngle));
     lighter->gAngle += lighter->angleSpeed;
     if (lighter->gPosX < 0)               lighter->gPosX = (cols - 1) * 10;
     if (lighter->gPosX > (cols - 1) * 10) lighter->gPosX = 0;
@@ -6090,8 +6096,8 @@ uint16_t mode_2Dghostrider(void) {
         lighter->time[i] = 0;
         lighter->reg[i] = false;
       } else {
-        lighter->lightersPosX[i] += -7 * sin_t(radians(lighter->Angle[i]));
-        lighter->lightersPosY[i] += -7 * cos_t(radians(lighter->Angle[i]));
+        lighter->lightersPosX[i] += -7 * sinf(radians(lighter->Angle[i]));
+        lighter->lightersPosY[i] += -7 * cosf(radians(lighter->Angle[i]));
       }
       SEGMENT.wu_pixel(lighter->lightersPosX[i] * 256 / 10, lighter->lightersPosY[i] * 256 / 10, ColorFromPalette(SEGPALETTE, (256 - lighter->time[i])));
     }
@@ -6303,8 +6309,8 @@ uint16_t mode_2Ddriftrose(void) {
 
   SEGMENT.fadeToBlackBy(32+(SEGMENT.speed>>3));
   for (size_t i = 1; i < 37; i++) {
-    uint32_t x = (CX + (sin_t(radians(i * 10)) * (beatsin8(i, 0, L*2)-L))) * 255.f;
-    uint32_t y = (CY + (cos_t(radians(i * 10)) * (beatsin8(i, 0, L*2)-L))) * 255.f;
+    uint32_t x = (CX + (sinf(radians(i * 10)) * (beatsin8(i, 0, L*2)-L))) * 255.f;
+    uint32_t y = (CY + (cosf(radians(i * 10)) * (beatsin8(i, 0, L*2)-L))) * 255.f;
     SEGMENT.wu_pixel(x, y, CHSV(i * 10, 255, 255));
   }
   SEGMENT.blur((SEGMENT.intensity>>4)+1);

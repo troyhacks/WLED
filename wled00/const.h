@@ -103,7 +103,7 @@
 #define USERMOD_ID_ROTARY_ENC_UI          8     //Usermod "usermod_v2_rotary_encoder_ui.h"
 #define USERMOD_ID_AUTO_SAVE              9     //Usermod "usermod_v2_auto_save.h"
 #define USERMOD_ID_DHT                   10     //Usermod "usermod_dht.h"
-#define USERMOD_ID_MODE_SORT             11     //Usermod "usermod_v2_mode_sort.h"
+// #define USERMOD_ID_MODE_SORT             11     //Usermod "usermod_v2_mode_sort.h"
 #define USERMOD_ID_VL53L0X               12     //Usermod "usermod_vl53l0x_gestures.h"
 #define USERMOD_ID_MULTI_RELAY           13     //Usermod "usermod_multi_relay.h"
 #define USERMOD_ID_ANIMATED_STAIRCASE    14     //Usermod "Animated_Staircase.h"
@@ -142,6 +142,7 @@
 #define USERMOD_ID_WEATHER               91     //Usermod "usermod_v2_weather.h"
 #define USERMOD_ID_GAMES                 92     //Usermod "usermod_v2_games.h"
 #define USERMOD_ID_ANIMARTRIX               93     //Usermod "usermod_v2_animartrix.h"
+#define USERMOD_ID_AUTOPLAYLIST          94     // Usermod usermod_v2_auto_playlist.h
 
 //Access point behavior
 #define AP_BEHAVIOR_BOOT_NO_CONN          0     //Open AP when no connection after boot
@@ -243,6 +244,9 @@
 #define TYPE_LPD8806             52
 #define TYPE_P9813               53
 #define TYPE_LPD6803             54
+
+#define TYPE_HUB75MATRIX         100 // 100 - 110
+
 //Network types (master broadcast) (80-95)
 #define TYPE_NET_DDP_RGB         80            //network DDP RGB bus (master broadcast bus)
 #define TYPE_NET_E131_RGB        81            //network E131 RGB bus (master broadcast bus, unused)
@@ -344,6 +348,9 @@
 #define ERR_OVERTEMP    30  // An attached temperature sensor has measured above threshold temperature (not implemented)
 #define ERR_OVERCURRENT 31  // An attached current sensor has measured a current above the threshold (not implemented)
 #define ERR_UNDERVOLT   32  // An attached voltmeter has measured a voltage below the threshold (not implemented)
+#define ERR_LOW_MEM     33  // WLEDMM: low memory (RAM)
+#define ERR_LOW_SEG_MEM 34  // WLEDMM: low memory (segment data RAM)
+#define ERR_LOW_WS_MEM  35  // WLEDMM: low memory (ws)
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness
@@ -404,7 +411,7 @@
   #if !defined(USERMOD_AUDIOREACTIVE)
     #define SETTINGS_STACK_BUF_SIZE 3834   // WLEDMM added 696+32 bytes of margin (was 3096)
   #else
-    #define SETTINGS_STACK_BUF_SIZE 3904   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #define SETTINGS_STACK_BUF_SIZE 4000   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
   #endif
 #endif
 
@@ -490,7 +497,10 @@
   #define DEFAULT_LED_COUNT 30
 #endif
 
-#define INTERFACE_UPDATE_COOLDOWN 2000 //time in ms to wait between websockets, alexa, and MQTT updates
+#define INTERFACE_UPDATE_COOLDOWN 1200 // time in ms to wait between websockets, alexa, and MQTT updates
+
+#define PIN_RETRY_COOLDOWN   3000 // time in ms after an incorrect attempt PIN and OTA pass will be rejected even if correct
+#define PIN_TIMEOUT        900000 // time in ms after which the PIN will be required again, 15 minutes
 
 // HW_PIN_SCL & HW_PIN_SDA are used for information in usermods settings page and usermods themselves
 // which GPIO pins are actually used in a hardware layout (controller board)

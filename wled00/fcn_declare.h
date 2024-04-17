@@ -69,9 +69,12 @@ uint8_t __attribute__((pure)) gamma8(uint8_t b);                                
 uint32_t __attribute__((pure)) gamma32(uint32_t);                                             // WLEDMM: added attribute pure
 uint8_t unGamma8(uint8_t value);                                                              // WLEDMM revert gamma correction
 
-//dmx.cpp
-void initDMX();
-void handleDMX();
+//dmx_output.cpp
+void initDMXOutput();
+void handleDMXOutput();
+
+//dmx_input.cpp
+void initDMXInput();
 void handleDMXInput();
 
 //e131.cpp
@@ -205,6 +208,7 @@ void _overlayAnalogCountdown();
 void _overlayAnalogClock();
 
 //playlist.cpp
+void suspendPlaylist(); // WLEDMM support function for auto playlist usermod
 void shufflePlaylist();
 void unloadPlaylist();
 int16_t loadPlaylist(JsonObject playlistObject, byte presetId = 0);
@@ -367,11 +371,29 @@ void releaseJSONBufferLock();
 uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLen);
 uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxLen, uint8_t *var = nullptr);
 int16_t extractModeDefaults(uint8_t mode, const char *segVar);
+void checkSettingsPIN(const char *pin);
 uint16_t  __attribute__((pure)) crc16(const unsigned char* data_p, size_t length);   // WLEDMM: added attribute pure
 um_data_t* simulateSound(uint8_t simulationId);
 // WLEDMM enumerateLedmaps(); moved to FX.h
+uint8_t get_random_wheel_index(uint8_t pos);
 CRGB getCRGBForBand(int x, uint8_t *fftResult, int pal); //WLEDMM netmindz ar palette
 char *cleanUpName(char *in); // to clean up a name that was read from file
+
+// RAII guard class for the JSON Buffer lock
+// Modeled after std::lock_guard
+class JSONBufferGuard {
+  bool holding_lock;
+  public:
+    inline JSONBufferGuard(uint8_t module=255) : holding_lock(requestJSONBufferLock(module)) {};
+    inline ~JSONBufferGuard() { if (holding_lock) releaseJSONBufferLock(); };
+    inline JSONBufferGuard(const JSONBufferGuard&) = delete; // Noncopyable
+    inline JSONBufferGuard& operator=(const JSONBufferGuard&) = delete;
+    inline JSONBufferGuard(JSONBufferGuard&& r) : holding_lock(r.holding_lock) { r.holding_lock = false; };  // but movable
+    inline JSONBufferGuard& operator=(JSONBufferGuard&& r) { holding_lock |= r.holding_lock; r.holding_lock = false; return *this; };
+    inline bool owns_lock() const { return holding_lock; }
+    explicit inline operator bool() const { return owns_lock(); };
+    inline void release() { if (holding_lock) releaseJSONBufferLock(); holding_lock = false; }
+};
 
 #ifdef WLED_ADD_EEPROM_SUPPORT
 //wled_eeprom.cpp

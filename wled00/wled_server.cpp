@@ -220,6 +220,8 @@ void initServer()
 
     if (verboseResponse) {
       if (!isConfig) {
+        lastInterfaceUpdate = millis(); // prevent WS update until cooldown
+        interfaceUpdateCallMode = CALL_MODE_WS_SEND; // schedule WS update
         serveJson(request); return; //if JSON contains "v"
       } else {
         doSerializeConfig = true; //serializeConfig(); //Save new settings to FS
@@ -336,6 +338,8 @@ void initServer()
     if(!index){
       DEBUG_PRINTLN(F("OTA Update Start"));
       WLED::instance().disableWatchdog();
+      OTAisRunning = true; // WLEDMM flicker fixer
+      strip.fill(BLACK);
       usermods.onUpdateBegin(true); // notify usermods that update is about to begin (some may require task de-init)
       lastEditTime = millis(); // make sure PIN does not lock during update
       #ifdef ESP8266
@@ -352,6 +356,7 @@ void initServer()
         usermods.onUpdateBegin(false); // notify usermods that update has failed (some may require task init)
         WLED::instance().enableWatchdog();
       }
+      OTAisRunning = false; // WLEDMM flicker fixer
     }
   });
 #else
