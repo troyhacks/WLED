@@ -28,7 +28,11 @@
 
 #ifdef ESP32
 #include <WiFi.h>
+#ifdef ARDUINO_ARCH_ESP32S3
+#include <TroyHacksAsyncUDP.h>
+#else
 #include <AsyncUDP.h>
+#endif
 #elif defined (ESP8266)
 #include <ESPAsyncUDP.h>
 #include <ESP8266WiFi.h>
