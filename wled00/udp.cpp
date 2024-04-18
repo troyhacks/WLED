@@ -876,10 +876,6 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       size_t bufferOffset = 0;
       size_t hardware_output_universe = 0;
       
-      sequenceNumber++;
-
-      if (sequenceNumber > 255) sequenceNumber = 0;
-
       for (size_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
         if (bufferOffset > length * (isRGBW?4:3)) return 1; // stop when we hit end of LEDs
@@ -893,6 +889,16 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
           if (!ddpUdp.beginPacket(client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.beginPacket returned an error"));
             return 1; // borked
+          } else {
+            // https://art-net.org.uk/how-it-works/streaming-packets/artnzs-packet-definition/
+            // Art-Net spec says:
+            // "The generating device increments this number for every packet sent to a 
+            // specific Port-Address. The number increments from 1 to 255 and then rolls 
+            // over to 1 and repeats. This is because the value 0 is reserved to show that 
+            // Sequence is not implemented."
+            sequenceNumber++;
+            if (sequenceNumber == 0) sequenceNumber = 1; // 0 is reserved in Art-Net for "we're not using sequence numbers"
+            if (sequenceNumber > 255) sequenceNumber = 1;
           }
 
           size_t packetSize = ARTNET_CHANNELS_PER_PACKET;
