@@ -863,15 +863,15 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
 
       // Default WLED-to-WLED Art-Net output
       //
-      const size_t hardware_outputs[1] = { length }; // specified in LED counts. "length" = all LEDs
-      const size_t hardware_outputs_universe_start[1] = { 0 }; // universe start # per output
+      // const size_t hardware_outputs[1] = { length }; // specified in LED counts. "length" = all LEDs
+      // const size_t hardware_outputs_universe_start[1] = { 0 }; // universe start # per output
 
       // Example of more than 1 output, currently you can only hard-code this kind of setup here.
       // You get 170 RGB LEDs per universe (128 RGBW) so the receiving hardware needs to be configured correctly.
       // The H807SA, for example, only allows one global setting of Art-Net universes-per-output.
       //
-      // const size_t hardware_outputs[4] = { 256,256,256,256 }; // specified in LED counts
-      // const size_t hardware_outputs_universe_start[4] = { 0,2,4,6 }; // universe start # per output
+      const size_t hardware_outputs[4] = { 256,256,256,256 }; // specified in LED counts
+      const size_t hardware_outputs_universe_start[4] = { 0,2,4,6 }; // universe start # per output
 
       size_t bufferOffset = 0;
       size_t hardware_output_universe = 0;
