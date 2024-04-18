@@ -20,7 +20,7 @@ const ethernet_settings ethernetBoards[] = {
   // None
   {
   },
-
+  #ifndef CONFIG_IDF_TARGET_ESP32S3
   // WT32-EHT01
   // Please note, from my testing only these pins work for LED outputs:
   //   IO2, IO4, IO12, IO14, IO15
@@ -134,7 +134,7 @@ const ethernet_settings ethernetBoards[] = {
     ETH_PHY_LAN8720,      // eth_type,
     ETH_CLOCK_GPIO17_OUT	// eth_clk_mode
   }
-
+  #endif
 };
 #endif
 

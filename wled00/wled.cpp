@@ -1039,8 +1039,8 @@ bool WLED::initEthernet()
     return false;
   }
 
-  if (!ETH.beginSPI(ETH_MISO_PIN, ETH_MOSI_PIN, ETH_SCLK_PIN, ETH_CS_PIN, ETH_RST_PIN, ETH_INT_PIN)) {
-    DEBUG_PRINTLN(F("initC: ETH.beginSPI() failed"));
+  if (!ETH.begin(ETH_PHY_W5500, 1, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
+    DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
     // de-allocate the allocated pins
     for (managed_pin_type mpt : pinsToAllocate) {
       pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
