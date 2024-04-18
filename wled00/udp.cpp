@@ -771,7 +771,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
     case 0: // DDP
     {
       #if defined WLED_USE_ETHERNET && !defined ESP8266
-      ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
+      ddpUdp.begin(Network.localIP(),DDP_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
       #endif
 
       // calculate the number of UDP packets we need to send
