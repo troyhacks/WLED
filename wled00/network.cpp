@@ -225,6 +225,7 @@ void WiFiEvent(WiFiEvent_t event) {
       }
       break;
 
+    #ifdef WLED_USE_ETHERNET
     case ARDUINO_EVENT_ETH_GOT_IP:
       if (!apActive) {
         DEBUG_PRINTLN(F("ETH is up. Disabling WIFi"));
@@ -257,7 +258,7 @@ void WiFiEvent(WiFiEvent_t event) {
       // alternative access to the device.
       forceReconnect = true;
       break;
-
+    #endif
     default:
       DEBUG_PRINTLN(F("No action"));
       break;
