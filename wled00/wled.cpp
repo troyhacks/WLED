@@ -1325,10 +1325,10 @@ void WLED::handleConnection()
   }
   if (forceReconnect) {
     USER_PRINTLN(F("Forcing reconnect."));
-    initConnection();
     interfacesInited = false;
     forceReconnect = false;
     wasConnected = false;
+    initConnection();    
     return;
   }
   if (!Network.isConnected()) {
@@ -1355,7 +1355,7 @@ void WLED::handleConnection()
     DEBUG_PRINTLN("");
     USER_PRINT(F("Connected! IP address: "));
     USER_PRINT(Network.localIP());
-    if (successfullyConfiguredEthernet) {
+    if (Network.isEthernet()) {
       USER_PRINTLN(" via Ethernet");
     } else {
       USER_PRINTLN(" via WiFi");

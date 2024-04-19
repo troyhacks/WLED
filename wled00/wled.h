@@ -877,7 +877,7 @@ WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
   WLED_GLOBAL unsigned long loops _INIT(0);
 #endif
 
-#ifdef ARDUINO_ARCH_ESP32
+#if defined ARDUINO_ARCH_ESP32 || defined ARDUINO_ARCH_ESP32S3
   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED || ETH.localIP()[0] != 0)
 #else
   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED)
