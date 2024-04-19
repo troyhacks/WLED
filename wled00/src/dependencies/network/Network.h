@@ -1,6 +1,6 @@
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
-#elif CONFIG_IDF_TARGET_ESP32S3
+#elif defined (CONFIG_IDF_TARGET_ESP32S3) && defined (WLED_USE_ETHERNET)
   #include <WiFi.h>
   #include <ETHClass2.h>
   #define ETH ETH2
