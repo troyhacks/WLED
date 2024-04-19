@@ -211,7 +211,7 @@ void WiFiEvent(WiFiEvent_t event) {
   DEBUG_PRINT(F(" = "));
 
   switch (event) {
-    #ifdef ESP32WIFIGENERIC_H_
+    #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       if (Network.isEthernet()) {
         if (!apActive) {
