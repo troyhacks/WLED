@@ -225,6 +225,7 @@ void WiFiEvent(WiFiEvent_t event) {
         DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
       }
       break;
+
     #ifdef WLED_USE_ETHERNET
     case ARDUINO_EVENT_ETH_GOT_IP:
       if (!apActive) {
