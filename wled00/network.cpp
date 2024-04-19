@@ -211,7 +211,7 @@ void WiFiEvent(WiFiEvent_t event) {
   DEBUG_PRINT(F(" = "));
 
   switch (event) {
-
+    #ifdef ARDUINO_EVENT_WIFI_STA_GOT_IP
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       if (Network.isEthernet()) {
         if (!apActive) {
@@ -258,6 +258,7 @@ void WiFiEvent(WiFiEvent_t event) {
       // alternative access to the device.
       forceReconnect = true;
       break;
+    #endif
     #endif
     default:
       DEBUG_PRINTLN(F("No action"));
