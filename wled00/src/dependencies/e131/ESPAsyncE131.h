@@ -28,7 +28,7 @@
 
 #ifdef ESP32
 #include <WiFi.h>
-#ifdef ARDUINO_ARCH_ESP32S3
+#if defined (ARDUINO_ARCH_ESP32S3) && defined (WLED_USE_ETHERNET)
 #include <TroyHacksAsyncUDP.h> // backport some fixes from 5.1 to 4.4
 #else
 #include <AsyncUDP.h>
