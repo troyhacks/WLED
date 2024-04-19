@@ -211,7 +211,8 @@ void WiFiEvent(WiFiEvent_t event) {
   DEBUG_PRINT(F(" = "));
 
   switch (event) {
-    #if !defined (ESP8266) &&  ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
+    #ifndef ESP8266
+    #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       if (Network.isEthernet()) {
         if (!apActive) {
@@ -258,6 +259,7 @@ void WiFiEvent(WiFiEvent_t event) {
       // alternative access to the device.
       forceReconnect = true;
       break;
+    #endif
     #endif
     #endif
     default:
