@@ -106,9 +106,15 @@
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
   #include <WiFi.h>
-  #include <ETH.h>
+  #if defined (CONFIG_IDF_TARGET_ESP32S3) && defined (WLED_USE_ETHERNET)
+    #include <ETHClass2.h>
+  #else // ESP32
+    #include <ETH.h>
+  #endif
   #include "esp_wifi.h"
-  #include <ESPmDNS.h>
+  #ifndef WLED_DISABLE_MDNS 
+    #include <ESPmDNS.h>
+  #endif                     // WLEDMM end
   #include <AsyncTCP.h>
   #if LOROL_LITTLEFS
     #ifndef CONFIG_LITTLEFS_FOR_IDF_3_2
@@ -871,7 +877,7 @@ WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
   WLED_GLOBAL unsigned long loops _INIT(0);
 #endif
 
-#ifdef ARDUINO_ARCH_ESP32
+#if defined ARDUINO_ARCH_ESP32 || defined ARDUINO_ARCH_ESP32S3
   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED || ETH.localIP()[0] != 0)
 #else
   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED)

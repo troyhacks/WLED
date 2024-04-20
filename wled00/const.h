@@ -280,7 +280,7 @@
 #define BTN_TYPE_ANALOG_INVERTED  8
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       12 //WLEDMM +1 for Olimex ESP32-Gateway
+#define WLED_NUM_ETH_TYPES       13 //WLEDMM +1 for Olimex ESP32-Gateway +1 for W5500
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
@@ -294,6 +294,7 @@
 #define WLED_ETH_ABCWLEDV43ETH    9
 #define WLED_ETH_SERG74          10
 #define WLED_ETH_OLIMEX_GTW      11
+#define WLED_ETH_W5500           12
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0
