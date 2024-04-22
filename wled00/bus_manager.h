@@ -297,7 +297,7 @@ class BusNetwork : public Bus {
   public:
     BusNetwork(BusConfig &bc, const ColorOrderMap &com);
 
-    uint16_t getMaxPixels() override { return 4096; };
+    uint16_t getMaxPixels() override { return MAX_LEDS_PER_BUS; };
     bool hasRGB() { return true; }
     bool hasWhite() { return _rgbw; }
 
