@@ -770,9 +770,9 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
   switch (type) {
     case 0: // DDP
     {
-      #if defined WLED_USE_ETHERNET && !defined ESP8266
-      ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
-      #endif
+      // #if defined WLED_USE_ETHERNET && !defined ESP8266
+      // ddpUdp.begin(Network.localIP(),DDP_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
+      // #endif
 
       // calculate the number of UDP packets we need to send
       size_t channelCount = length * (isRGBW? 4:3); // 1 channel for every R,G,B value
@@ -842,9 +842,9 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
 
     case 2: //ArtNet
     {
-      #if defined WLED_USE_ETHERNET && !defined ESP8266
-      ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
-      #endif
+      // #if defined WLED_USE_ETHERNET && !defined ESP8266
+      // ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
+      // #endif
       /* 
       We don't really care about the number of universes - just how many hardware outputs we have.
 
