@@ -202,7 +202,7 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
   #ifdef ESP8266
     constexpr size_t MAX_LIVE_LEDS_WS = 256U;
   #else
-    constexpr size_t MAX_LIVE_LEDS_WS = 4096U;  //WLEDMM use 4096 as max matrix size
+    constexpr size_t MAX_LIVE_LEDS_WS = 8192U;  //WLEDMM use 4096 as max matrix size
   #endif
   size_t used;// = strip.getLengthTotal();
   size_t n;// = ((used -1)/MAX_LIVE_LEDS_WS) +1; //only serve every n'th LED if count over MAX_LIVE_LEDS_WS
