@@ -1247,7 +1247,7 @@ void WLED::handleConnection()
 #if defined(ARDUINO_ARCH_ESP32S2)
     uint32_t heap = ESP.getFreeHeap(); // WLEDMM works better on -S2
 #else
-    uint32_t heap = heap_caps_get_largest_free_block(0x1800); // WLEDMM: This is a better metric for free heap.
+    uint32_t heap = ESP.getFreeHeap(); // heap_caps_get_largest_free_block(0x1800); // WLEDMM: This is a better metric for free heap.
 #endif
     if (heap < MIN_HEAP_SIZE && lastHeap < MIN_HEAP_SIZE) {
       if (retryCount < 5) {  // WLEDMM avoid repeated disconnects
