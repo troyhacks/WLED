@@ -1,6 +1,6 @@
 #ifndef BusManager_h
 #define BusManager_h
-
+#include "FastLED.h"
 #ifdef WLED_ENABLE_HUB75MATRIX
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <ESP32-VirtualMatrixPanel-I2S-DMA.h>
@@ -305,6 +305,8 @@ class BusNetwork : public Bus {
 
     uint32_t __attribute__((pure)) getPixelColor(uint16_t pix);  // WLEDMM attribute added
 
+    void setBrightness(uint8_t b, bool immediate);
+
     void show();
 
     bool canShow() {
@@ -334,7 +336,7 @@ class BusNetwork : public Bus {
     uint8_t   _UDPchannels;
     bool      _rgbw;
     bool      _broadcastLock;
-    byte     *_data;
+    CRGB      _data[1024];
     uint8_t   _colorOrder = COL_ORDER_RGB;
     const ColorOrderMap &_colorOrderMap;
 };
