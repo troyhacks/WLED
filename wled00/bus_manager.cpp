@@ -8,6 +8,7 @@
 #include "pin_manager.h"
 #include "bus_wrapper.h"
 #include "bus_manager.h"
+#include "FastLED.h"
 
 //WLEDMM: #define DEBUGOUT(x) netDebugEnabled?NetDebug.print(x):Serial.print(x) not supported in this file as netDebugEnabled not in scope
 #if 0
@@ -393,100 +394,51 @@ uint8_t BusOnOff::getPins(uint8_t* pinArray) {
   return 1;
 }
 
+/* START Hacked BusNetwork for FastLED Output */
+
 BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, bc.start, bc.autoWhite), _colorOrderMap(com) {
-  _valid = false;
-  switch (bc.type) {
-    case TYPE_NET_ARTNET_RGB:
-      _rgbw = false;
-      _UDPtype = 2;
-      break;
-    case TYPE_NET_E131_RGB:
-      _rgbw = false;
-      _UDPtype = 1;
-      break;
-    default: // TYPE_NET_DDP_RGB / TYPE_NET_DDP_RGBW
-      _rgbw = bc.type == TYPE_NET_DDP_RGBW;
-      _UDPtype = 0;
-      break;
-  }
-  _UDPchannels = _rgbw ? 4 : 3;
-  _data = (byte *)malloc(bc.count * _UDPchannels);
-  if (_data == nullptr) return;
-  memset(_data, 0, bc.count * _UDPchannels);
   _len = bc.count;
-  _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
-  _broadcastLock = false;
+  // CRGB _data[_len];
+  if (_data == nullptr) return;
+  // _UDPchannels = _rgbw ? 4 : 3;
   _valid = true;
+  pinManager.allocatePin(40, true, PinOwner::UM_Unspecified);
+  pinManager.allocatePin(41, true, PinOwner::UM_Unspecified);
+
+  FastLED.addLeds<NEOPIXEL,40>(_data, 0, 512);
+  FastLED.addLeds<NEOPIXEL,41>(_data, 512, 512);
+  DEBUG_PRINTLN("*** FastLED Init");
+}
+
+void BusNetwork::setBrightness(uint8_t b, bool immediate) {
+  if (b != _bright) {
+    FastLED.setBrightness(b);
+    _bright = b;
+  }
 }
 
 void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   if (!_valid || pix >= _len) return;
-  if (hasWhite()) c = autoWhiteCalc(c);
-  if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
-  uint16_t offset = pix * _UDPchannels;
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co) {
-    if (co == COL_ORDER_GRB) {
-      _data[offset]   = G(c);
-      _data[offset+1] = R(c);
-      _data[offset+2] = B(c);     
-    } else if (co == COL_ORDER_RGB) {
-      _data[offset]   = R(c);
-      _data[offset+1] = G(c);
-      _data[offset+2] = B(c);
-    } else if (co == COL_ORDER_BRG) {
-      _data[offset]   = B(c);
-      _data[offset+1] = R(c);
-      _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_RBG) {
-      _data[offset]   = R(c);
-      _data[offset+1] = B(c);
-      _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_GBR) {
-      _data[offset]   = G(c);
-      _data[offset+1] = B(c);
-      _data[offset+2] = R(c);
-    } else if (co == COL_ORDER_BGR) {
-      _data[offset]   = B(c);
-      _data[offset+1] = G(c);
-      _data[offset+2] = R(c);
-    }
-    if (_rgbw) _data[offset+3] = W(c);
-  } else {
-    _data[offset]   = R(c);
-    _data[offset+1] = G(c);
-    _data[offset+2] = B(c);
-    if (_rgbw) _data[offset+3] = W(c);
-  }
+  // if (hasWhite()) c = autoWhiteCalc(c);
+  // if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
+  // uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+
+  _data[pix] = c;
+  // _data[pix].r = R(c);
+  // _data[pix].g = G(c);
+  // _data[pix].b = B(c);
+  
 }
 
 uint32_t BusNetwork::getPixelColor(uint16_t pix) {
   if (!_valid || pix >= _len) return 0;
-  uint16_t offset = pix * _UDPchannels;
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co) {
-    if (co == COL_ORDER_GRB) {
-      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_RGB) {
-      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_BRG) {
-      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_RBG) {
-      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_GBR) {
-      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_BGR) {
-      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
-    }
-  }
-  return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+  // uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+  return RGBW32(_data[pix].r,_data[pix].g,_data[pix].b,0);
 }
 
 void BusNetwork::show() {
   if (!_valid || !canShow()) return;
-  _broadcastLock = true;
-  realtimeBroadcast(_UDPtype, _client, _len, _data, _bri, _rgbw);
-  _broadcastLock = false;
+  FastLED.show();
 }
 
 uint8_t BusNetwork::getPins(uint8_t* pinArray) {
@@ -499,9 +451,121 @@ uint8_t BusNetwork::getPins(uint8_t* pinArray) {
 void BusNetwork::cleanup() {
   _type = I_NONE;
   _valid = false;
-  if (_data != nullptr) free(_data);
-  _data = nullptr;
+  // if (_data != nullptr) free(_data);
+  // _data = nullptr;
 }
+
+/* END Hacked BusNetwork for FastLED Output */
+
+// BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, bc.start, bc.autoWhite), _colorOrderMap(com) {
+//   _valid = false;
+//   switch (bc.type) {
+//     case TYPE_NET_ARTNET_RGB:
+//       _rgbw = false;
+//       _UDPtype = 2;
+//       break;
+//     case TYPE_NET_E131_RGB:
+//       _rgbw = false;
+//       _UDPtype = 1;
+//       break;
+//     default: // TYPE_NET_DDP_RGB / TYPE_NET_DDP_RGBW
+//       _rgbw = bc.type == TYPE_NET_DDP_RGBW;
+//       _UDPtype = 0;
+//       break;
+//   }
+//   _UDPchannels = _rgbw ? 4 : 3;
+//   _data = (byte *)malloc(bc.count * _UDPchannels);
+//   if (_data == nullptr) return;
+//   memset(_data, 0, bc.count * _UDPchannels);
+//   _len = bc.count;
+//   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
+//   _broadcastLock = false;
+//   _valid = true;
+// }
+
+// void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
+//   if (!_valid || pix >= _len) return;
+//   if (hasWhite()) c = autoWhiteCalc(c);
+//   if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
+//   uint16_t offset = pix * _UDPchannels;
+//   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+//   if (_colorOrder != co) {
+//     if (co == COL_ORDER_GRB) {
+//       _data[offset]   = G(c);
+//       _data[offset+1] = R(c);
+//       _data[offset+2] = B(c);     
+//     } else if (co == COL_ORDER_RGB) {
+//       _data[offset]   = R(c);
+//       _data[offset+1] = G(c);
+//       _data[offset+2] = B(c);
+//     } else if (co == COL_ORDER_BRG) {
+//       _data[offset]   = B(c);
+//       _data[offset+1] = R(c);
+//       _data[offset+2] = G(c);
+//     } else if (co == COL_ORDER_RBG) {
+//       _data[offset]   = R(c);
+//       _data[offset+1] = B(c);
+//       _data[offset+2] = G(c);
+//     } else if (co == COL_ORDER_GBR) {
+//       _data[offset]   = G(c);
+//       _data[offset+1] = B(c);
+//       _data[offset+2] = R(c);
+//     } else if (co == COL_ORDER_BGR) {
+//       _data[offset]   = B(c);
+//       _data[offset+1] = G(c);
+//       _data[offset+2] = R(c);
+//     }
+//     if (_rgbw) _data[offset+3] = W(c);
+//   } else {
+//     _data[offset]   = R(c);
+//     _data[offset+1] = G(c);
+//     _data[offset+2] = B(c);
+//     if (_rgbw) _data[offset+3] = W(c);
+//   }
+// }
+
+// uint32_t BusNetwork::getPixelColor(uint16_t pix) {
+//   if (!_valid || pix >= _len) return 0;
+//   uint16_t offset = pix * _UDPchannels;
+//   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+//   if (_colorOrder != co) {
+//     if (co == COL_ORDER_GRB) {
+//       return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+//     } else if (co == COL_ORDER_RGB) {
+//       return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+//     } else if (co == COL_ORDER_BRG) {
+//       return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+//     } else if (co == COL_ORDER_RBG) {
+//       return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+//     } else if (co == COL_ORDER_GBR) {
+//       return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+//     } else if (co == COL_ORDER_BGR) {
+//       return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+//     }
+//   }
+//   return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+// }
+
+// void BusNetwork::show() {
+//   if (!_valid || !canShow()) return;
+//   _broadcastLock = true;
+//   realtimeBroadcast(_UDPtype, _client, _len, _data, _bri, _rgbw);
+//   _broadcastLock = false;
+// }
+
+// uint8_t BusNetwork::getPins(uint8_t* pinArray) {
+//   for (uint8_t i = 0; i < 4; i++) {
+//     pinArray[i] = _client[i];
+//   }
+//   return 4;
+// }
+
+// void BusNetwork::cleanup() {
+//   _type = I_NONE;
+//   _valid = false;
+//   if (_data != nullptr) free(_data);
+//   _data = nullptr;
+// }
 
 // ***************************************************************************
 
