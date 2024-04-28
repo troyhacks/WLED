@@ -400,7 +400,7 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   _len = bc.count;
   // CRGB _data[_len];
   if (_data == nullptr) return;
-  _UDPchannels = _rgbw ? 4 : 3;
+  // _UDPchannels = _rgbw ? 4 : 3;
   _valid = true;
   pinManager.allocatePin(40, true, PinOwner::UM_Unspecified);
   pinManager.allocatePin(41, true, PinOwner::UM_Unspecified);
@@ -411,24 +411,28 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
 }
 
 void BusNetwork::setBrightness(uint8_t b, bool immediate) {
-  FastLED.setBrightness(b);
+  if (b != _bright) {
+    FastLED.setBrightness(b);
+    _bright = b;
+  }
 }
 
 void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   if (!_valid || pix >= _len) return;
-  if (hasWhite()) c = autoWhiteCalc(c);
-  if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+  // if (hasWhite()) c = autoWhiteCalc(c);
+  // if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
+  // uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
 
-  _data[pix].r = R(c);
-  _data[pix].g = G(c);
-  _data[pix].b = B(c);
-
+  _data[pix] = c;
+  // _data[pix].r = R(c);
+  // _data[pix].g = G(c);
+  // _data[pix].b = B(c);
+  
 }
 
 uint32_t BusNetwork::getPixelColor(uint16_t pix) {
   if (!_valid || pix >= _len) return 0;
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
+  // uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
   return RGBW32(_data[pix].r,_data[pix].g,_data[pix].b,0);
 }
 

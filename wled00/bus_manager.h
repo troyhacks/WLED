@@ -331,6 +331,7 @@ class BusNetwork : public Bus {
     }
 
   private:
+    uint_fast8_t  _bright = 0;
     IPAddress _client;
     uint8_t   _UDPtype;
     uint8_t   _UDPchannels;
