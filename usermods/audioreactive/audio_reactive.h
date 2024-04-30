@@ -478,6 +478,14 @@ void FFTcode(void * parameter)
   __attribute__((aligned(16))) float window[samplesFFT];
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
+  float coeffs_lpf[5];
+  float w_lpf[5] = {0, 0};
+  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 100);
+  if (myerr  != ESP_OK) {
+      DEBUG_PRINTF("Operation error = %i\n", myerr);
+      return;
+  }
+
   TickType_t xLastWakeTime = xTaskGetTickCount();
   for(;;) {
     delay(1);           // DO NOT DELETE THIS LINE! It is needed to give the IDLE(0) task enough time and to keep the watchdog happy.
@@ -604,9 +612,21 @@ void FFTcode(void * parameter)
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
         #if 1 // defined(UM_AUDIOREACTIVE_USE_ESPDSP)
+          dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf);
+          memcpy(vReal, vImag, samplesFFT);
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
+          vReal[1] = vReal[0];
+          // int x=0;
+          // for (int i=0; i<samplesFFT;i+=2) {
+          //   vReal[x] = vReal[i];
+          //   x++;
+          // }
+          // for (int i = 0 ; i < samplesFFT/2 ; i++) {
+          //   vReal[i] = ((vReal[i * 2 + 0] * vReal[i * 2 + 0] + vReal[i * 2 + 1] * vReal[i * 2 + 1])/samplesFFT);
+          //   // vReal[i] = 10 * log10f((vReal[i * 2 + 0] * vReal[i * 2 + 0] + vReal[i * 2 + 1] * vReal[i * 2 + 1]) / samplesFFT);
+          // }
         #elif defined(UM_AUDIOREACTIVE_USE_NEW_FFT)
         // #ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
           FFT.dcRemoval();                                            // remove DC offset
@@ -731,7 +751,7 @@ void FFTcode(void * parameter)
         fftCalc[ 2] = fftAddAvg(3,4);               // 2   129 - 216  bass
         fftCalc[ 3] = fftAddAvg(5,6);               // 2   216 - 301  bass + midrange
         // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise) 
-        fftCalc[15] = fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,215); //  * 0.70f;   // 50 7106 - 9259 high             -- with some damping
       }
       fftCalc[ 4] = fftAddAvg(7,9);                // 3   301 - 430  midrange
       fftCalc[ 5] = fftAddAvg(10,12);               // 3   430 - 560  midrange
@@ -743,7 +763,7 @@ void FFTcode(void * parameter)
       fftCalc[11] = fftAddAvg(56,69);               // 14 2412 - 3015 high mid
       fftCalc[12] = fftAddAvg(70,85);               // 16 3015 - 3704 high mid
       fftCalc[13] = fftAddAvg(86,103);              // 18 3704 - 4479 high mid
-      fftCalc[14] = fftAddAvg(104,164) * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
+      fftCalc[14] = fftAddAvg(104,164); //  * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
   }
   else if (freqDist == 1) { //WLEDMM: Rightshift: note ewowi: frequencies in comments are not correct
       if (useInputFilter==1) {
