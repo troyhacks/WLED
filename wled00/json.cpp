@@ -597,6 +597,8 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
     }
   }
 
+  doAdvancePlaylist = root[F("np")] | doAdvancePlaylist; //advances to next preset in playlist when true
+  
   stateUpdated(callMode);
   if (presetToRestore) currentPreset = presetToRestore;
 
@@ -1032,6 +1034,14 @@ void serializeInfo(JsonObject root)
     if(ESP.getChipCores() > 1)    // WLEDMM
    	  root[F("resetReason1")] = (int)rtc_get_reset_reason(1);
   #endif
+
+  #if defined(ARDUINO_ARCH_ESP32)
+  unsigned long t_wait = millis();
+  while(strip.isUpdating() && (millis() - t_wait < 125)) delay(1); // WLEDMM try to catch a moment when strip is idle
+  while(strip.isUpdating() && (millis() - t_wait < 160)) yield();  //        try harder
+  //if (strip.isUpdating()) USER_PRINTLN("serializeInfo: strip still updating.");
+  #endif
+
   root[F("lwip")] = 0; //deprecated
   root[F("totalheap")] = ESP.getHeapSize(); //WLEDMM
   #else
@@ -1520,6 +1530,8 @@ void serveJson(AsyncWebServerRequest* request)
 
 #ifdef WLED_ENABLE_JSONLIVE
 #define MAX_LIVE_LEDS 180
+
+#warning "JSON Live enabled"
 
 bool serveLiveLeds(AsyncWebServerRequest* request, uint32_t wsClient)
 {
