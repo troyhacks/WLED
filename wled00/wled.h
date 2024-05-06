@@ -399,6 +399,9 @@ WLED_GLOBAL uint16_t transitionDelay _INIT(750);    // default crossfade duratio
 
 WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
+WLED_GLOBAL bool TROYHACKS_HPF _INIT(true); // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_LPF _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
+
 // User Interface CONFIG
 #ifndef SERVERNAME
 WLED_GLOBAL char serverDescription[33] _INIT("WLED");  // Name of module - use default

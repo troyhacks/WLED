@@ -119,6 +119,14 @@ void handleSerial()
 
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
+        } else if (next == 'l') {
+          TROYHACKS_LPF = !TROYHACKS_LPF;
+          USER_PRINTF("Low-pass  filter is now %s\n",TROYHACKS_LPF?"On":"Off");
+          USER_PRINTF("High-pass filter is now %s\n",TROYHACKS_HPF?"On":"Off");
+        } else if (next == 'h') {
+          TROYHACKS_HPF = !TROYHACKS_HPF;
+          USER_PRINTF("Low-pass  filter is now %s\n",TROYHACKS_LPF?"On":"Off");
+          USER_PRINTF("High-pass filter is now %s\n",TROYHACKS_HPF?"On":"Off");
         } else if (next == 0xB0) {updateBaudRate( 115200);
         } else if (next == 0xB1) {updateBaudRate( 230400);
         } else if (next == 0xB2) {updateBaudRate( 460800);

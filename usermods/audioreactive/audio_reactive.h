@@ -430,7 +430,7 @@ static void runDCBlocker(uint_fast16_t numSamples, float *sampleBuffer) {
   static float xm1 = 0.0f;
   static SR_HIRES_TYPE ym1 = 0.0f;
 
-  for (unsigned i=0; i < numSamples; i++) {
+  for (uint_fast16_t i=0; i < numSamples; i++) {
     float value = sampleBuffer[i];
     SR_HIRES_TYPE filtered = (SR_HIRES_TYPE)(value-xm1) + filterR*ym1;
     xm1 = value;
@@ -480,9 +480,17 @@ void FFTcode(void * parameter)
 
   float coeffs_lpf[5];
   float w_lpf[5] = {0, 0};
-  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 1000);
+  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10);
   if (myerr  != ESP_OK) {
       DEBUG_PRINTF("Not possible to initialize Low-Pass Filter. Error = %i\n", myerr);
+      return;
+  }
+
+  float coeffs_hpf[5];
+  float w_hpf[5] = {0, 0};
+  myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking 40hz 
+  if (myerr  != ESP_OK) {
+      DEBUG_PRINTF("Not possible to initialize High-Pass Filter. Error = %i\n", myerr);
       return;
   }
 
@@ -556,12 +564,12 @@ void FFTcode(void * parameter)
 
     // band pass filter - can reduce noise floor by a factor of 50
     // downside: frequencies below 100Hz will be ignored
-  //  if ((useInputFilter > 0) && (useInputFilter < 99)) {
-  //     switch(useInputFilter) {
-  //       case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
-  //       case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
-  //     }
-  //   }
+   if ((useInputFilter > 0) && (useInputFilter < 99)) {
+      switch(useInputFilter) {
+        case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
+        // case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
+      }
+    }
 
     // set imaginary parts to 0
     memset(vImag, 0, sizeof(vImag));
@@ -612,8 +620,14 @@ void FFTcode(void * parameter)
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
         #if 1 // defined(UM_AUDIOREACTIVE_USE_ESPDSP)
-          dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
-          memcpy(vReal, vImag, samplesFFT);
+          if (TROYHACKS_LPF) {
+            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
+            memcpy(vReal, vImag, samplesFFT);
+          }
+          if (TROYHACKS_HPF) {
+            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_hpf, w_hpf); // you can't dump this back into itself, needs a destination
+            memcpy(vReal, vImag, samplesFFT);
+          }
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
