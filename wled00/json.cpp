@@ -597,6 +597,8 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
     }
   }
 
+  doAdvancePlaylist = root[F("np")] | doAdvancePlaylist; //advances to next preset in playlist when true
+  
   stateUpdated(callMode);
   if (presetToRestore) currentPreset = presetToRestore;
 
@@ -1528,6 +1530,8 @@ void serveJson(AsyncWebServerRequest* request)
 
 #ifdef WLED_ENABLE_JSONLIVE
 #define MAX_LIVE_LEDS 180
+
+#warning "JSON Live enabled"
 
 bool serveLiveLeds(AsyncWebServerRequest* request, uint32_t wsClient)
 {
