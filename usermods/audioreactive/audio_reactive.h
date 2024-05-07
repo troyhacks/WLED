@@ -480,7 +480,7 @@ void FFTcode(void * parameter)
 
   float coeffs_lpf[5];
   float w_lpf[5] = {0, 0};
-  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10);
+  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10); // block everything above 1/2 samplerate
   if (myerr  != ESP_OK) {
       DEBUG_PRINTF("Not possible to initialize Low-Pass Filter. Error = %i\n", myerr);
       return;
@@ -488,9 +488,17 @@ void FFTcode(void * parameter)
 
   float coeffs_hpf[5];
   float w_hpf[5] = {0, 0};
-  myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking 40hz 
+  myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking below ~40hz. Better bass response
   if (myerr  != ESP_OK) {
       DEBUG_PRINTF("Not possible to initialize High-Pass Filter. Error = %i\n", myerr);
+      return;
+  }
+
+  float coeffs_notch[5];
+  float w_notch[5] = {0, 0};
+  myerr = dsps_biquad_gen_notch_f32(coeffs_notch, 0.05, 30, 4); 
+  if (myerr  != ESP_OK) {
+      DEBUG_PRINTF("Not possible to initialize Notch Filter. Error = %i\n", myerr);
       return;
   }
 
@@ -622,11 +630,15 @@ void FFTcode(void * parameter)
         #if 1 // defined(UM_AUDIOREACTIVE_USE_ESPDSP)
           if (TROYHACKS_LPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
-            memcpy(vReal, vImag, samplesFFT);
+            memcpy(vReal, vImag, samplesFFT); // dump it back
           }
           if (TROYHACKS_HPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_hpf, w_hpf); // you can't dump this back into itself, needs a destination
-            memcpy(vReal, vImag, samplesFFT);
+            memcpy(vReal, vImag, samplesFFT); // dump it back
+          }
+          if (TROYHACKS_NOTCH) {
+            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_notch, w_notch); // you can't dump this back into itself, needs a destination
+            memcpy(vReal, vImag, samplesFFT); // dump it back
           }
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
