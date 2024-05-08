@@ -497,12 +497,17 @@ void FFTcode(void * parameter)
   __attribute__((aligned(16))) float window[samplesFFT];
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
-  float coeffs_lpf[5] = { // 22050 Hz, 7000 Hz, 0.756 Q, gain ignored
-    0.44024364494479873,
-    0.8804872898895975,
-    0.44024364494479873,
-    0.5131954596604866,
-    0.24777912011870837
+  float coeffs_lpf[5] = { // 22050 Hz, 8000 Hz, 0.668 Q, gain ignored
+     0.23927410175759342,
+     0.2846244836061481,
+     0.1038144311317731,
+    -0.6105412766087658,
+     0.2382542931042803,
+    // 0.5263751642139737,
+    // 1.0527503284279474,
+    // 0.5263751642139737,
+    // 0.8301634793195515,
+    // 0.275337177536343
   };
   float w_lpf[5] = {0, 0};
   // myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10); // block everything above 1/2 samplerate
@@ -668,7 +673,7 @@ void FFTcode(void * parameter)
           if (TROYHACKS_LPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
             memcpy(vReal, vImag, samplesFFT); // dump it back
-          }
+          }          
           if (TROYHACKS_HPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_hpf, w_hpf); // you can't dump this back into itself, needs a destination
             memcpy(vReal, vImag, samplesFFT); // dump it back
@@ -677,6 +682,7 @@ void FFTcode(void * parameter)
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_notch, w_notch); // you can't dump this back into itself, needs a destination
             memcpy(vReal, vImag, samplesFFT); // dump it back
           }
+
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
@@ -809,7 +815,7 @@ void FFTcode(void * parameter)
         fftCalc[ 2] = fftAddAvg(3,4);               // 2   129 - 216  bass
         fftCalc[ 3] = fftAddAvg(5,6);               // 2   216 - 301  bass + midrange
         // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise) 
-        fftCalc[15] = fftAddAvg(165,215); //  * 0.70f;   // 50 7106 - 9259 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
       }
       fftCalc[ 4] = fftAddAvg(7,9);                // 3   301 - 430  midrange
       fftCalc[ 5] = fftAddAvg(10,12);               // 3   430 - 560  midrange
@@ -821,7 +827,7 @@ void FFTcode(void * parameter)
       fftCalc[11] = fftAddAvg(56,69);               // 14 2412 - 3015 high mid
       fftCalc[12] = fftAddAvg(70,85);               // 16 3015 - 3704 high mid
       fftCalc[13] = fftAddAvg(86,103);              // 18 3704 - 4479 high mid
-      fftCalc[14] = fftAddAvg(104,164); //  * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
+      fftCalc[14] = fftAddAvg(104,164) * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
   }
   else if (freqDist == 1) { //WLEDMM: Rightshift: note ewowi: frequencies in comments are not correct
       if (useInputFilter==69420) {
@@ -831,14 +837,14 @@ void FFTcode(void * parameter)
         fftCalc[ 2] = fftAddAvg(3,3);
         fftCalc[ 3] = fftAddAvg(4,4);
         // don't use the last bins from 206 to 255. 
-        fftCalc[15] = fftAddAvg(165,205); // * 0.75f;   // 40 7106 - 8828 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,205) * 0.75f;   // 40 7106 - 8828 high             -- with some damping
       } else {
         fftCalc[ 0] = fftAddAvg(1,1);               // 1    43 - 86   sub-bass
         fftCalc[ 1] = fftAddAvg(2,2);               // 1    86 - 129  bass
         fftCalc[ 2] = fftAddAvg(3,3);               // 2   129 - 216  bass
         fftCalc[ 3] = fftAddAvg(4,4);               // 2   216 - 301  bass + midrange
         // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise) 
-        fftCalc[15] = fftAddAvg(165,215); // * 0.70f;   // 50 7106 - 9259 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
       }
       fftCalc[ 4] = fftAddAvg(5,6);                // 3   301 - 430  midrange
       fftCalc[ 5] = fftAddAvg(7,8);               // 3   430 - 560  midrange
@@ -850,7 +856,7 @@ void FFTcode(void * parameter)
       fftCalc[11] = fftAddAvg(37,45);               // 14 2412 - 3015 high mid
       fftCalc[12] = fftAddAvg(46,66);               // 16 3015 - 3704 high mid
       fftCalc[13] = fftAddAvg(67,97);              // 18 3704 - 4479 high mid
-      fftCalc[14] = fftAddAvg(98,164); // * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
+      fftCalc[14] = fftAddAvg(98,164) * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
   }
 #endif
       } else {  // noise gate closed - just decay old values
