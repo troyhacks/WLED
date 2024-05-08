@@ -1020,7 +1020,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels) // p
         if (post_gain < 1.0f) post_gain = ((post_gain -1.0f) * 0.8f) +1.0f;
         currentResult *= post_gain;
       }
-      fftResult[i] = constrain((int)currentResult, 0, 255);
+      fftResult[i] = max(min((int)(currentResult+0.5f), 255), 0);  // +0.5 for proper rounding
     }
 }
 ////////////////////
@@ -1670,7 +1670,7 @@ class AudioReactive : public Usermod {
       transmitData.zeroCrossingCount = zeroCrossingCount;
 
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
-        transmitData.fftResult[i] = (uint8_t)constrain(fftResult[i], 0, 254);
+        transmitData.fftResult[i] = fftResult[i];
       }
 
       transmitData.FFT_Magnitude = my_magnitude;
