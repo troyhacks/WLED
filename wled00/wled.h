@@ -401,7 +401,7 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 
 WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true); // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
-WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(false); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
 // User Interface CONFIG
 #ifndef SERVERNAME
 WLED_GLOBAL char serverDescription[33] _INIT("WLED");  // Name of module - use default

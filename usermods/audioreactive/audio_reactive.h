@@ -478,29 +478,47 @@ void FFTcode(void * parameter)
   __attribute__((aligned(16))) float window[samplesFFT];
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
-  float coeffs_lpf[5];
+  float coeffs_lpf[5] = { 
+    0.870972533773408,
+    1.741945067546816,
+    0.870972533773408,
+    1.7240992434903637,
+    0.7597908916032681
+  };
   float w_lpf[5] = {0, 0};
-  myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10); // block everything above 1/2 samplerate
-  if (myerr  != ESP_OK) {
-      DEBUG_PRINTF("Not possible to initialize Low-Pass Filter. Error = %i\n", myerr);
-      return;
-  }
+  // myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10); // block everything above 1/2 samplerate
+  // if (myerr  != ESP_OK) {
+  //     DEBUG_PRINTF("Not possible to initialize Low-Pass Filter. Error = %i\n", myerr);
+  //     return;
+  // }
 
-  float coeffs_hpf[5];
+  float coeffs_hpf[5] = {
+     0.9886985119193028,
+    -1.9773970238386056,
+     0.9886985119193028,
+    -1.9773327985861133,
+     0.9774612490910976
+  };
   float w_hpf[5] = {0, 0};
-  myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking below ~40hz. Better bass response
-  if (myerr  != ESP_OK) {
-      DEBUG_PRINTF("Not possible to initialize High-Pass Filter. Error = %i\n", myerr);
-      return;
-  }
+  // myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking below ~40hz. Better bass response
+  // if (myerr  != ESP_OK) {
+  //     DEBUG_PRINTF("Not possible to initialize High-Pass Filter. Error = %i\n", myerr);
+  //     return;
+  // }
 
-  float coeffs_notch[5];
+  float coeffs_notch[5] = { // This is a peak, not a notch - but the actual filter function doesn't care.
+     1.4482542326624477,
+    -0.9671837045099194,
+     0.05872064599994294,
+    -0.9671837045099194,
+     0.5069748786623907
+  };
   float w_notch[5] = {0, 0};
-  myerr = dsps_biquad_gen_notch_f32(coeffs_notch, 0.05, 30, 4); 
-  if (myerr  != ESP_OK) {
-      DEBUG_PRINTF("Not possible to initialize Notch Filter. Error = %i\n", myerr);
-      return;
-  }
+  // myerr = dsps_biquad_gen_notch_f32(coeffs_notch, 0.05, 30, 4); 
+  // if (myerr  != ESP_OK) {
+  //     DEBUG_PRINTF("Not possible to initialize Notch Filter. Error = %i\n", myerr);
+  //     return;
+  // }
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
   for(;;) {
@@ -574,7 +592,7 @@ void FFTcode(void * parameter)
     // downside: frequencies below 100Hz will be ignored
    if ((useInputFilter > 0) && (useInputFilter < 99)) {
       switch(useInputFilter) {
-        case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
+        // case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
         // case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
       }
     }
