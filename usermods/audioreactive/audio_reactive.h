@@ -812,14 +812,14 @@ void FFTcode(void * parameter)
         fftCalc[ 2] = fftAddAvg(3,3);
         fftCalc[ 3] = fftAddAvg(4,4);
         // don't use the last bins from 206 to 255. 
-        fftCalc[15] = fftAddAvg(165,205) * 0.75f;   // 40 7106 - 8828 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,205); // * 0.75f;   // 40 7106 - 8828 high             -- with some damping
       } else {
         fftCalc[ 0] = fftAddAvg(1,1);               // 1    43 - 86   sub-bass
         fftCalc[ 1] = fftAddAvg(2,2);               // 1    86 - 129  bass
         fftCalc[ 2] = fftAddAvg(3,3);               // 2   129 - 216  bass
         fftCalc[ 3] = fftAddAvg(4,4);               // 2   216 - 301  bass + midrange
         // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise) 
-        fftCalc[15] = fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
+        fftCalc[15] = fftAddAvg(165,215); // * 0.70f;   // 50 7106 - 9259 high             -- with some damping
       }
       fftCalc[ 4] = fftAddAvg(5,6);                // 3   301 - 430  midrange
       fftCalc[ 5] = fftAddAvg(7,8);               // 3   430 - 560  midrange
@@ -831,7 +831,7 @@ void FFTcode(void * parameter)
       fftCalc[11] = fftAddAvg(37,45);               // 14 2412 - 3015 high mid
       fftCalc[12] = fftAddAvg(46,66);               // 16 3015 - 3704 high mid
       fftCalc[13] = fftAddAvg(67,97);              // 18 3704 - 4479 high mid
-      fftCalc[14] = fftAddAvg(98,164) * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
+      fftCalc[14] = fftAddAvg(98,164); // * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
   }
 #endif
       } else {  // noise gate closed - just decay old values
