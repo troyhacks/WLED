@@ -497,12 +497,12 @@ void FFTcode(void * parameter)
   __attribute__((aligned(16))) float window[samplesFFT];
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
-  float coeffs_lpf[5] = { 
-    0.870972533773408,
-    1.741945067546816,
-    0.870972533773408,
-    1.7240992434903637,
-    0.7597908916032681
+  float coeffs_lpf[5] = { // 22050 Hz, 7000 Hz, 0.756 Q, gain ignored
+    0.44024364494479873,
+    0.8804872898895975,
+    0.44024364494479873,
+    0.5131954596604866,
+    0.24777912011870837
   };
   float w_lpf[5] = {0, 0};
   // myerr = dsps_biquad_gen_lpf_f32(coeffs_lpf, 0.5, 10); // block everything above 1/2 samplerate
@@ -512,11 +512,11 @@ void FFTcode(void * parameter)
   // }
 
   float coeffs_hpf[5] = {
-     0.9886985119193028,
-    -1.9773970238386056,
-     0.9886985119193028,
-    -1.9773327985861133,
-     0.9774612490910976
+     0.9855267704686165,
+    -1.971053540937233,
+     0.9855267704686165,
+    -1.9707575888879587,
+     0.9713494929865072
   };
   float w_hpf[5] = {0, 0};
   // myerr = dsps_biquad_gen_hpf_f32(coeffs_hpf, 0.002, 10); // 22050 blocking below ~40hz. Better bass response
@@ -525,12 +525,12 @@ void FFTcode(void * parameter)
   //     return;
   // }
 
-  float coeffs_notch[5] = { // This is a peak, not a notch - but the actual filter function doesn't care.
-     1.4482542326624477,
-    -0.9671837045099194,
-     0.05872064599994294,
-    -0.9671837045099194,
-     0.5069748786623907
+  float coeffs_notch[5] = { // 22050 Hz, 2250 Hz, 1.719 Q, 6 Gain 
+     1.1474877525496072,
+    -1.3653045481124153,
+     0.5561325888792373,
+    -1.3653045481124153,
+     0.7036203414288446
   };
   float w_notch[5] = {0, 0};
   // myerr = dsps_biquad_gen_notch_f32(coeffs_notch, 0.05, 30, 4); 
@@ -824,7 +824,7 @@ void FFTcode(void * parameter)
       fftCalc[14] = fftAddAvg(104,164); //  * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
   }
   else if (freqDist == 1) { //WLEDMM: Rightshift: note ewowi: frequencies in comments are not correct
-      if (useInputFilter==1) {
+      if (useInputFilter==69420) {
         // skip frequencies below 100hz
         fftCalc[ 0] = 0.8f * fftAddAvg(1,1);
         fftCalc[ 1] = 0.9f * fftAddAvg(2,2);
