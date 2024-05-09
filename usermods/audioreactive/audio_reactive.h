@@ -952,11 +952,15 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels) // p
       if (noiseGateOpen) { // noise gate open
 
         if (TROYHACKS_PINKY) {
-          fftBinAverage[i] = fftCalc[i] * 0.999 + fftCalc[i] * 0.001;
+          fftBinAverage[i] = fftBinAverage[i] * 0.999 + (0.001 * fftCalc[i] * FFT_DOWNSCALE * (soundAgc ? multAgc : ((float)sampleGain/40.0f * (float)inputLevel/128.0f + 1.0f/16.0f)));
         }
         // Adjustment for frequency curves.
-        fftCalc[i] *= fftResultPink[pinkIndex][i];
-
+        if (fftBinAverage[0] != 0 && !TROYHACKS_PINKY) {
+          fftCalc[i] *= fftBinAverage[i];
+        } else {
+          fftCalc[i] *= fftResultPink[pinkIndex][i];
+        }
+        
         if (FFTScalingMode > 0) fftCalc[i] *= FFT_DOWNSCALE;  // adjustment related to FFT windowing function
         // Manual linear adjustment of gain using sampleGain adjustment for different input types.
         fftCalc[i] *= soundAgc ? multAgc : ((float)sampleGain/40.0f * (float)inputLevel/128.0f + 1.0f/16.0f); //apply gain, with inputLevel adjustment

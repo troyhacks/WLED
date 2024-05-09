@@ -135,18 +135,18 @@ void handleSerial()
           USER_PRINTF("HP (bass)  filter is now %s\n",TROYHACKS_HPF?"On":"Off");
           USER_PRINTF("Notch      filter is now %s\n",TROYHACKS_NOTCH?"On":"Off");
         } else if (next == 'p') {
-          USER_PRINTLN("Pink Noise Calibration Cleared!");
+          USER_PRINTLN("White Noise Calibration Cleared!");
           float max = 0;
           for (int i=0; i < 16; i++) {
             fftBinAverage[i] = 0.0f;
           }
         }else if (next == 'P') {
           TROYHACKS_PINKY = !TROYHACKS_PINKY;
-          USER_PRINTF("Pink Noise Calibration %s\n",TROYHACKS_PINKY?"Started":"Finished");
+          USER_PRINTF("White Noise Calibration %s\n",TROYHACKS_PINKY?"Started":"Finished");
           if (TROYHACKS_PINKY) {
             float max = 0;
             for (int i=0; i < 16; i++) {
-              fftBinAverage[i] = 0.0f;
+              fftBinAverage[i] = 1.0f;
             }
           } 
           if (!TROYHACKS_PINKY) {
