@@ -372,7 +372,7 @@ constexpr uint16_t samplesFFT_2 = 256;          // meaningfull part of FFT resul
 // These are the input and output vectors.  Input vectors receive computed results from FFT.
 __attribute__((aligned(16))) static float vReal[samplesFFT] = {0.0f};       // FFT sample inputs / freq output -  these are our raw result bins
 __attribute__((aligned(16))) static float vImag[samplesFFT] = {0.0f};       // imaginary parts
-#ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
+#if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
 static float windowWeighingFactors[samplesFFT] = {0.0f};
 #endif
 
@@ -384,7 +384,7 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 
 
 // Create FFT object
-#ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
+#if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
 // lib_deps += https://github.com/kosme/arduinoFFT#develop @ 1.9.2
 #if  !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
 // these options actually cause slow-down on -S2 (-S2 doesn't have floating point hardware)
@@ -399,7 +399,7 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 #endif
 #include <arduinoFFT.h>
 
-#ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
+#if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT) // Still using this for 1 function with ESP-DSP for now...
 static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, windowWeighingFactors);
 #else
 static arduinoFFT FFT = arduinoFFT(vReal, vImag, samplesFFT, SAMPLE_RATE);
@@ -618,8 +618,10 @@ void FFTcode(void * parameter)
     // downside: frequencies below 100Hz will be ignored
    if ((useInputFilter > 0) && (useInputFilter < 99)) {
       switch(useInputFilter) {
-        // case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
-        // case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
+        case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
+        #ifndef UM_AUDIOREACTIVE_USE_ESPDSP
+        case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
+        #endif
       }
     }
 
@@ -671,7 +673,7 @@ void FFTcode(void * parameter)
     if (fabsf(volumeSmth) > 0.25f) { // noise gate open
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
-        #if 1 // defined(UM_AUDIOREACTIVE_USE_ESPDSP)
+        #if defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
           if (TROYHACKS_LPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
             memcpy(vReal, vImag, samplesFFT); // dump it back
@@ -727,7 +729,8 @@ void FFTcode(void * parameter)
           vReal[binInd] *= pinkFactors[binInd];
         #endif
 
-        #ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
+        #if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
+        // Still using this with ESP-DSP - for now
         FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
         #else
         FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);              // let the effects know which freq was most dominant
