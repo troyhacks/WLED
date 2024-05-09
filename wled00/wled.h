@@ -401,7 +401,7 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 
 WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true); // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
-WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(false); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(false); // WLED-MM/TroyHacks: Turn other filter from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_PINKY _INIT(false); // WLED-MM/TroyHacks: Internally calibrate audio against white noise
 WLED_GLOBAL float fftBinAverage[16] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 
