@@ -18,7 +18,6 @@
      You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
 */
 
-
 #include "wled.h"
 #include "esp_dsp.h"
 #ifdef ARDUINO_ARCH_ESP32
@@ -274,7 +273,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels); // 
 static TaskHandle_t FFT_Task = nullptr;
 
 // Table of multiplication factors so that we can even out the frequency response.
-#define MAX_PINK 10  // 0 = standard, 1= line-in (pink noise only), 2..4 = IMNP441, 5..6 = ICS-43434, ,7=SPM1423, 8..9 = userdef, 10= flat (no pink noise adjustment)
+#define MAX_PINK 11  // 0 = standard, 1= line-in (pink noise only), 2..4 = IMNP441, 5..6 = ICS-43434, ,7=SPM1423, 8..9 = userdef, 10= flat (no pink noise adjustment)
 static const float fftResultPink[MAX_PINK+1][NUM_GEQ_CHANNELS] = { 
           { 1.70f, 1.71f, 1.73f, 1.78f, 1.68f, 1.56f, 1.55f, 1.63f, 1.79f, 1.62f, 1.80f, 2.06f, 2.47f, 3.35f, 6.83f, 9.55f },  //  0 default from SR WLED
       //  { 1.30f, 1.32f, 1.40f, 1.46f, 1.52f, 1.57f, 1.68f, 1.80f, 1.89f, 2.00f, 2.11f, 2.21f, 2.30f, 2.39f, 3.09f, 4.34f },  //  - Line-In Generic -> pink noise adjustment only
@@ -292,7 +291,8 @@ static const float fftResultPink[MAX_PINK+1][NUM_GEQ_CHANNELS] = {
           { 2.25f, 1.60f, 1.30f, 1.60f, 2.20f, 3.20f, 3.06f, 2.60f, 2.85f, 3.50f, 4.10f, 4.80f, 5.70f, 6.05f,10.50f,14.85f },  //  8 userdef #1 for ewowi (enhance median/high freqs)
           { 4.75f, 3.60f, 2.40f, 2.46f, 3.52f, 1.60f, 1.68f, 3.20f, 2.20f, 2.00f, 2.30f, 2.41f, 2.30f, 1.25f, 4.55f, 6.50f },  //  9 userdef #2 for softhack (mic hidden inside mini-shield)
 
-          { 2.38f, 2.18f, 2.07f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.95f, 1.70f, 2.13f, 2.47f }   // 10 almost FLAT (IMNP441 but no PINK noise adjustments)
+          { 2.38f, 2.18f, 2.07f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.95f, 1.70f, 2.13f, 2.47f },   // 10 almost FLAT (IMNP441 but no PINK noise adjustments)
+          { 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f }    // DEAD FLAT
 };
 
   /* how to make your own profile:
@@ -543,6 +543,8 @@ void FFTcode(void * parameter)
   //     DEBUG_PRINTF("Not possible to initialize Notch Filter. Error = %i\n", myerr);
   //     return;
   // }
+
+
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
   for(;;) {
@@ -948,8 +950,13 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels) // p
     for (int i=0; i < numberOfChannels; i++) {
 
       if (noiseGateOpen) { // noise gate open
+
+        if (TROYHACKS_PINKY) {
+          fftBinAverage[i] = fftCalc[i] * 0.999 + fftCalc[i] * 0.001;
+        }
         // Adjustment for frequency curves.
         fftCalc[i] *= fftResultPink[pinkIndex][i];
+
         if (FFTScalingMode > 0) fftCalc[i] *= FFT_DOWNSCALE;  // adjustment related to FFT windowing function
         // Manual linear adjustment of gain using sampleGain adjustment for different input types.
         fftCalc[i] *= soundAgc ? multAgc : ((float)sampleGain/40.0f * (float)inputLevel/128.0f + 1.0f/16.0f); //apply gain, with inputLevel adjustment
