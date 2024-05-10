@@ -119,6 +119,15 @@ void handleSerial()
 
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
+        } else if (next == '!') {
+          suspendStripService = true; // temporarily lock out strip updates
+          if (strip.isServicing()) {
+            USER_PRINTLN(F("deserializeSegment(): strip is still drawing effects."));
+            strip.waitUntilIdle();
+          }
+          heap_caps_dump_all();
+          delay(1000);
+          suspendStripService = false; 
         } else if (next == 'l') {
           TROYHACKS_LPF = !TROYHACKS_LPF;
           USER_PRINTF("LP (highs) filter is now %s\n",TROYHACKS_LPF?"On":"Off");
