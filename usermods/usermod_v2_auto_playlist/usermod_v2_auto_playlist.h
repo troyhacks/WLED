@@ -1,5 +1,25 @@
 #pragma once
 
+/* 
+   @title     MoonModules WLED - auto-playlist usermod
+   @file      usermod_v2_auto_playlist.h
+   @repo      https://github.com/MoonModules/WLED, submit changes to this file as PRs to MoonModules/WLED
+   @Authors   https://github.com/MoonModules/WLED/commits/mdev/
+   @Copyright © 2024 Github MoonModules Commit Authors (contact moonmodules@icloud.com for details)
+   @license   GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
+
+     This file is part of the MoonModules WLED fork also known as "WLED-MM".
+     WLED-MM is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License 
+     as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+     WLED-MM is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
+     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+     
+     You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
+
+*/
+
+
 #ifdef WLED_DEBUG
   #ifndef USERMOD_AUTO_PLAYLIST_DEBUG
     #define USERMOD_AUTO_PLAYLIST_DEBUG
@@ -85,7 +105,8 @@ class AutoPlaylistUsermod : public Usermod {
     // gets called once at boot. Do all initialization that doesn't depend on
     // network here
     void setup() {
-      USER_PRINTLN("AutoPlaylistUsermod");
+      USER_PRINT(F("AutoPlaylistUsermod startup; enabled = "));
+      USER_PRINT(enabled ? F("true"):F("false")); USER_PRINTLN(F("."));
       initDone = true;
     }
 

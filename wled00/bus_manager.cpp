@@ -175,7 +175,7 @@ void IRAM_ATTR BusDigital::setPixelColor(uint16_t pix, uint32_t c) {
   PolyBus::setPixelColor(_busPtr, _iType, pix, c, co);
 }
 
-uint32_t BusDigital::getPixelColor(uint16_t pix) {
+uint32_t IRAM_ATTR_YN BusDigital::getPixelColor(uint16_t pix) {
   if (reversed) pix = _len - pix -1;
   else pix += _skip;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
@@ -309,7 +309,27 @@ void BusPwm::setPixelColor(uint16_t pix, uint32_t c) {
 //does no index check
 uint32_t BusPwm::getPixelColor(uint16_t pix) {
   if (!_valid) return 0;
+#if 1
+  // WLEDMM stick with the old code - we don't have cctICused
   return RGBW32(_data[0], _data[1], _data[2], _data[3]);
+#else
+  // TODO getting the reverse from CCT is involved (a quick approximation when CCT blending is ste to 0 implemented)
+  switch (_type) {
+    case TYPE_ANALOG_1CH: //one channel (white), relies on auto white calculation
+      return RGBW32(0, 0, 0, _data[0]);
+    case TYPE_ANALOG_2CH: //warm white + cold white
+      if (cctICused) return RGBW32(0, 0, 0, _data[0]);
+      else           return RGBW32(0, 0, 0, _data[0] + _data[1]);
+    case TYPE_ANALOG_5CH: //RGB + warm white + cold white
+      if (cctICused) return RGBW32(_data[0], _data[1], _data[2], _data[3]);
+      else           return RGBW32(_data[0], _data[1], _data[2], _data[3] + _data[4]);
+    case TYPE_ANALOG_4CH: //RGBW
+      return RGBW32(_data[0], _data[1], _data[2], _data[3]);
+    case TYPE_ANALOG_3CH: //standard dumb RGB
+      return RGBW32(_data[0], _data[1], _data[2], 0);
+  }
+  return RGBW32(_data[0], _data[0], _data[0], _data[0]);
+#endif
 }
 
 void BusPwm::show() {
@@ -506,6 +526,7 @@ void BusNetwork::cleanup() {
 // ***************************************************************************
 
 #ifdef WLED_ENABLE_HUB75MATRIX
+#warning "HUB75 driver enabled (experimental)"
 
 BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWhite) {
 
@@ -754,12 +775,12 @@ uint32_t BusManager::memUsage(BusConfig &bc) {
 
 int BusManager::add(BusConfig &bc) {
   if (getNumBusses() - getNumVirtualBusses() >= WLED_MAX_BUSSES) return -1;
-  USER_PRINTF("BusManager::add(bc.type=%u)\n", bc.type);
+  DEBUG_PRINTF("BusManager::add(bc.type=%u)\n", bc.type);
   if (bc.type >= TYPE_NET_DDP_RGB && bc.type < 96) {
     busses[numBusses] = new BusNetwork(bc,colorOrderMap);
 #ifdef WLED_ENABLE_HUB75MATRIX
   } else if (bc.type >= TYPE_HUB75MATRIX && bc.type <= (TYPE_HUB75MATRIX + 10)) {
-    USER_PRINTLN("BusManager::add - Adding BusHub75Matrix");
+    DEBUG_PRINTLN("BusManager::add - Adding BusHub75Matrix");
     busses[numBusses] = new BusHub75Matrix(bc);
 #endif
   } else if (IS_DIGITAL(bc.type)) {
@@ -769,6 +790,10 @@ int BusManager::add(BusConfig &bc) {
   } else {
     busses[numBusses] = new BusPwm(bc);
   }
+  // WLEDMM clear cached Bus info
+  lastBus = nullptr;
+  laststart = 0;
+  lastend = 0;
   return numBusses++;
 }
 
@@ -779,6 +804,10 @@ void BusManager::removeAll() {
   while (!canAllShow()) yield();
   for (uint8_t i = 0; i < numBusses; i++) delete busses[i];
   numBusses = 0;
+  // WLEDMM clear cached Bus info
+  lastBus = nullptr;
+  laststart = 0;
+  lastend = 0;
 }
 
 void BusManager::show() {
@@ -794,11 +823,24 @@ void BusManager::setStatusPixel(uint32_t c) {
 }
 
 void IRAM_ATTR BusManager::setPixelColor(uint16_t pix, uint32_t c, int16_t cct) {
+  if ((pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
+    // WLEDMM same bus as last time - no need to search again
+    lastBus->setPixelColor(pix - laststart, c);
+    return;
+  }
+
   for (uint_fast8_t i = 0; i < numBusses; i++) {    // WLEDMM use fast native types
     Bus* b = busses[i];
     uint_fast16_t bstart = b->getStart();
     if (pix < bstart || pix >= bstart + b->getLength()) continue;
-    busses[i]->setPixelColor(pix - bstart, c);
+    else {
+      // WLEDMM remember last Bus we took
+      lastBus = b;
+      laststart = bstart; 
+      lastend = bstart + b->getLength();
+      b->setPixelColor(pix - bstart, c);
+      break; // WLEDMM found the right Bus -> so we can stop searching
+    }
   }
 }
 
@@ -817,12 +859,23 @@ void BusManager::setSegmentCCT(int16_t cct, bool allowWBCorrection) {
   Bus::setCCT(cct);
 }
 
-uint32_t BusManager::getPixelColor(uint_fast16_t pix) {     // WLEDMM use fast native types
+uint32_t IRAM_ATTR BusManager::getPixelColor(uint_fast16_t pix) {     // WLEDMM use fast native types, IRAM_ATTR
+  if ((pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
+    // WLEDMM same bus as last time - no need to search again
+    return lastBus->getPixelColor(pix - laststart);
+  }
+
   for (uint_fast8_t i = 0; i < numBusses; i++) {
     Bus* b = busses[i];
     uint_fast16_t bstart = b->getStart();
     if (pix < bstart || pix >= bstart + b->getLength()) continue;
-    return b->getPixelColor(pix - bstart);
+    else {
+      // WLEDMM remember last Bus we took
+      lastBus = b;
+      laststart = bstart; 
+      lastend = bstart + b->getLength();
+      return b->getPixelColor(pix - bstart);
+    }
   }
   return 0;
 }

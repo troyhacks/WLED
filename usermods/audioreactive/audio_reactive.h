@@ -1,5 +1,24 @@
 #pragma once
 
+/* 
+   @title     MoonModules WLED - audioreactive usermod
+   @file      audio_reactive.h
+   @repo      https://github.com/MoonModules/WLED, submit changes to this file as PRs to MoonModules/WLED
+   @Authors   https://github.com/MoonModules/WLED/commits/mdev/
+   @Copyright © 2024 Github MoonModules Commit Authors (contact moonmodules@icloud.com for details)
+   @license   GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
+
+     This file is part of the MoonModules WLED fork also known as "WLED-MM".
+     WLED-MM is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License 
+     as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+     WLED-MM is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
+     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+     
+     You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+
 #include "wled.h"
 
 #ifdef ARDUINO_ARCH_ESP32
@@ -617,6 +636,9 @@ void FFTcode(void * parameter)
         FFT.ComplexToMagnitude();                               // Compute magnitudes
         #endif
 
+        float last_majorpeak = FFT_MajorPeak;
+        float last_magnitude = FFT_Magnitude;
+
         #ifdef FFT_MAJORPEAK_HUMAN_EAR
         // scale FFT results
         for(uint_fast16_t binInd = 0; binInd < samplesFFT; binInd++)
@@ -628,6 +650,9 @@ void FFTcode(void * parameter)
         #else
         FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);              // let the effects know which freq was most dominant
         #endif
+
+        if (FFT_MajorPeak < (SAMPLE_RATE /  samplesFFT)) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                  // too low - use zero
+        if (FFT_MajorPeak > (0.42f * SAMPLE_RATE)) {FFT_MajorPeak = last_majorpeak; FFT_Magnitude = last_magnitude;} // too high - keep last peak
 
         #ifdef FFT_MAJORPEAK_HUMAN_EAR
         // undo scaling - we want unmodified values for FFTResult[] computations
@@ -915,7 +940,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels) // p
         if (post_gain < 1.0f) post_gain = ((post_gain -1.0f) * 0.8f) +1.0f;
         currentResult *= post_gain;
       }
-      fftResult[i] = constrain((int)currentResult, 0, 255);
+      fftResult[i] = max(min((int)(currentResult+0.5f), 255), 0);  // +0.5 for proper rounding
     }
 }
 ////////////////////
@@ -1565,7 +1590,7 @@ class AudioReactive : public Usermod {
       transmitData.zeroCrossingCount = zeroCrossingCount;
 
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
-        transmitData.fftResult[i] = (uint8_t)constrain(fftResult[i], 0, 254);
+        transmitData.fftResult[i] = fftResult[i];
       }
 
       transmitData.FFT_Magnitude = my_magnitude;
@@ -1793,6 +1818,11 @@ class AudioReactive : public Usermod {
         periph_module_reset(PERIPH_I2S0_MODULE);   // not possible on -C3
       #endif
       delay(100);         // Give that poor microphone some time to setup.
+
+      #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+        if ((i2sckPin == I2S_PIN_NO_CHANGE) && (i2ssdPin >= 0) && (i2swsPin >= 0) 
+            && ((dmType == 1) || (dmType == 4)) ) dmType = 51;   // dummy user support: SCK == -1 --means--> PDM microphone
+      #endif
 
       useInputFilter = 2; // default: DC blocker
       switch (dmType) {
