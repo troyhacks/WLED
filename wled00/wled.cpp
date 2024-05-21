@@ -611,10 +611,12 @@ void WLED::setup()
     DEBUG_PRINTLN(F("PSRAM not used."));
   #endif
 #endif
-#if defined(ARDUINO_ESP32_PICO)
-// special handling for PICO-D4: gpio16+17 are in use for onboard SPI FLASH (not PSRAM)
-managed_pin_type pins[] = { {16, true}, {17, true} };
-pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+#if defined(ARDUINO_ARCH_ESP32)
+  if (strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) { // WLEDMM detect pico board at runtime
+    // special handling for PICO-D4: gpio16+17 are in use for onboard SPI FLASH (not PSRAM)
+    managed_pin_type pins[] = { {16, true}, {17, true} };
+    pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+  }
 #endif
 
   //DEBUG_PRINT(F("LEDs inited. heap usage ~"));
@@ -899,7 +901,7 @@ void WLED::initAP(bool resetAP)
   USER_PRINT(F("Opening access point "));  // WLEDMM
   USER_PRINTLN(apSSID);                    // WLEDMM
   WiFi.softAPConfig(IPAddress(4, 3, 2, 1), IPAddress(4, 3, 2, 1), IPAddress(255, 255, 255, 0));
-  WiFi.softAP(apSSID, apPass, apChannel, apHide);
+  WiFi.softAP(apSSID, apPass, apChannel, apHide, 8); // WLED-MM allow up to 8 clients for ad-hoc "in the field" syncing.
   #if defined(LOLIN_WIFI_FIX) && (defined(ARDUINO_ARCH_ESP32C3) || defined(ARDUINO_ARCH_ESP32S2) || defined(ARDUINO_ARCH_ESP32S3))
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
   #endif

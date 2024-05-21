@@ -516,7 +516,7 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
       //bool didSet = false;
       for (size_t s = 0; s < strip.getSegmentsNum(); s++) {
         Segment &sg = strip.getSegment(s);
-        if (sg.isSelected()) {
+        if (sg.isActive() && sg.isSelected()) {
           inDeepCall = true;  // WLEDMM remember that we are going into recursion
           deserializeSegment(segVar, s, presetId);
           if (iAmGroot) inDeepCall = false;  // WLEDMM toplevel -> reset recursion flag
@@ -731,11 +731,7 @@ void serializeState(JsonObject root, bool forPreset, bool includeBri, bool segme
     nl["dur"] = nightlightDelayMins;
     nl["mode"] = nightlightMode;
     nl[F("tbri")] = nightlightTargetBri;
-    if (nightlightActive) {
-      nl[F("rem")] = (nightlightDelayMs - (millis() - nightlightStartTime)) / 1000; // seconds remaining
-    } else {
-      nl[F("rem")] = -1;
-    }
+    nl[F("rem")] = nightlightActive ? (int)(nightlightDelayMs - (millis() - nightlightStartTime)) / 1000 : -1; // seconds remaining
 
     JsonObject udpn = root.createNestedObject("udpn");
     udpn["send"] = notifyDirect;
@@ -1066,6 +1062,13 @@ void serializeInfo(JsonObject root)
     root[F("tpram")] = ESP.getPsramSize(); //WLEDMM
     root[F("psram")] = ESP.getFreePsram();
     root[F("psusedram")] = ESP.getMinFreePsram();
+    #if CONFIG_ESP32S3_SPIRAM_SUPPORT  // WLEDMM -S3 has "qspi" or "opi" PSRAM mode
+    #if CONFIG_SPIRAM_MODE_OCT
+      root[F("psrmode")]  = F("🚀 OPI");
+    #elif CONFIG_SPIRAM_MODE_QUAD
+      root[F("psrmode")]  = F("qspi 🛻");
+    #endif
+    #endif
   }
   #else
   // for testing
