@@ -611,7 +611,9 @@ void FFTcode(void * parameter)
 
 #if defined(WLEDMM_FASTPATH) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && defined(ARDUINO_ARCH_ESP32)
     // experimental - be nice to LED update task (trying to avoid flickering) - dual core only
-    // if (strip.isServicing()) delay(2);
+    #ifndef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
+    if (strip.isServicing()) delay(2);
+    #endif
 #endif
 
     // band pass filter - can reduce noise floor by a factor of 50
@@ -619,7 +621,7 @@ void FFTcode(void * parameter)
    if ((useInputFilter > 0) && (useInputFilter < 99)) {
       switch(useInputFilter) {
         case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
-        #ifndef UM_AUDIOREACTIVE_USE_ESPDSP
+        #ifndef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
         case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz cut-off)
         #endif
       }
