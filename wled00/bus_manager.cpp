@@ -303,8 +303,10 @@ void BusPwm::setPixelColor(uint16_t pix, uint32_t c) {
     case TYPE_ANALOG_5CH: //RGB + warm white + cold white
       _data[4] = cw;
       w = ww;
+      // falls through
     case TYPE_ANALOG_4CH: //RGBW
       _data[3] = w;
+      // falls through
     case TYPE_ANALOG_3CH: //standard dumb RGB
       _data[0] = r; _data[1] = g; _data[2] = b;
       break;
@@ -451,38 +453,46 @@ void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   uint16_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
   if (_colorOrder != co) {
-    if (co == COL_ORDER_GRB) {
+    switch (co) {
+    case COL_ORDER_GRB:
       _data[offset]   = G(c);
       _data[offset+1] = R(c);
       _data[offset+2] = B(c);     
-    } else if (co == COL_ORDER_RGB) {
-      _data[offset]   = R(c);
-      _data[offset+1] = G(c);
-      _data[offset+2] = B(c);
-    } else if (co == COL_ORDER_BRG) {
+      break;
+    case COL_ORDER_BRG:
       _data[offset]   = B(c);
       _data[offset+1] = R(c);
       _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_RBG) {
+      break;
+    case COL_ORDER_RBG:
       _data[offset]   = R(c);
       _data[offset+1] = B(c);
       _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_GBR) {
-      _data[offset]   = G(c);
-      _data[offset+1] = B(c);
-      _data[offset+2] = R(c);
-    } else if (co == COL_ORDER_BGR) {
+      break;
+    case COL_ORDER_BGR:
       _data[offset]   = B(c);
       _data[offset+1] = G(c);
       _data[offset+2] = R(c);
+      break;
+    case COL_ORDER_GBR:
+      _data[offset]   = G(c);
+      _data[offset+1] = B(c);
+      _data[offset+2] = R(c);
+    break;
+    case COL_ORDER_RGB:
+      /* falls through */
+    default:
+      _data[offset]   = R(c);
+      _data[offset+1] = G(c);
+      _data[offset+2] = B(c);
+      break;
     }
-    if (_rgbw) _data[offset+3] = W(c);
   } else {
     _data[offset]   = R(c);
     _data[offset+1] = G(c);
     _data[offset+2] = B(c);
-    if (_rgbw) _data[offset+3] = W(c);
   }
+  if (_rgbw) _data[offset+3] = W(c);
 }
 
 uint32_t BusNetwork::getPixelColor(uint16_t pix) {
@@ -490,18 +500,13 @@ uint32_t BusNetwork::getPixelColor(uint16_t pix) {
   uint16_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
   if (_colorOrder != co) {
-    if (co == COL_ORDER_GRB) {
-      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_RGB) {
-      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_BRG) {
-      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_RBG) {
-      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_GBR) {
-      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
-    } else if (co == COL_ORDER_BGR) {
-      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+    switch (co) {
+    case COL_ORDER_GRB: return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0); break;
+    case COL_ORDER_RGB: return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0); break;
+    case COL_ORDER_BRG: return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0); break;
+    case COL_ORDER_RBG: return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0); break;
+    case COL_ORDER_GBR: return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0); break;
+    case COL_ORDER_BGR: return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0); break;
     }
   }
   return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
