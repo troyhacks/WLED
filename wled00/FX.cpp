@@ -1333,12 +1333,12 @@ uint16_t mode_fire_flicker(void) {
   byte r = (SEGCOLOR(0) >> 16);
   byte g = (SEGCOLOR(0) >>  8);
   byte b = (SEGCOLOR(0)      );
-  byte lum = (SEGMENT.palette == 0) ? MAX(w, MAX(r, MAX(g, b))) : 255;
+  byte lum = (SEGMENT.palette == 0) ? max(w, max(r, max(g, b))) : 255;
   lum /= (((256-SEGMENT.intensity)/16)+1);
   for (int i = 0; i < SEGLEN; i++) {
     byte flicker = random8(lum);
     if (SEGMENT.palette == 0) {
-      SEGMENT.setPixelColor(i, MAX(r - flicker, 0), MAX(g - flicker, 0), MAX(b - flicker, 0), MAX(w - flicker, 0));
+      SEGMENT.setPixelColor(i, max(r - flicker, 0), max(g - flicker, 0), max(b - flicker, 0), max(w - flicker, 0));
     } else {
       SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(i, true, PALETTE_SOLID_WRAP, 0, 255 - flicker));
     }
@@ -1369,7 +1369,7 @@ uint16_t gradient_base(bool loading) {
     {
       val = abs(((i>pp) ? p2:pp) -i);
     } else {
-      val = MIN(abs(pp-i),MIN(abs(p1-i),abs(p2-i)));
+      val = min(abs(pp-i), min(abs(p1-i), abs(p2-i)));
     }
     val = (brd > val) ? val/brd * 255 : 255;
     SEGMENT.setPixelColor(i, color_blend(SEGCOLOR(0), SEGMENT.color_from_palette(i, true, PALETTE_SOLID_WRAP, 1), val));
@@ -2129,7 +2129,7 @@ uint16_t mode_fire_2012() {
 
       // Step 4.  Map from heat cells to LED colors
       for (int j = 0; j < SEGLEN; j++) {
-        SEGMENT.setPixelColor(indexToVStrip(j, stripNr), ColorFromPalette(SEGPALETTE, MIN(heat[j],240), 255, NOBLEND));
+        SEGMENT.setPixelColor(indexToVStrip(j, stripNr), ColorFromPalette(SEGPALETTE, min(heat[j],byte(240)), 255, NOBLEND));
       }
     }
   };
@@ -2971,7 +2971,7 @@ uint16_t mode_bouncing_balls(void) {
 
         uint32_t color = SEGCOLOR(0);
         if (SEGMENT.palette) {
-          color = SEGMENT.color_wheel(i*(256/MAX(numBalls, 8)));
+          color = SEGMENT.color_wheel(i*(256/max(numBalls, uint16_t(8))));
         } else if (hasCol2) {
           color = SEGCOLOR(i % NUM_COLORS);
         }
@@ -5175,7 +5175,7 @@ uint16_t mode_2Dgameoflife(void) { // Written by Ewoud Wijma, inspired by https:
 
   const uint16_t cols = SEGMENT.virtualWidth();
   const uint16_t rows = SEGMENT.virtualHeight();
-  const size_t dataSize = (SEGMENT.length() / 8) + ((SEGMENT.length() % 8 != 0) ? 1 : 0); // add one byte when extra bits needed (length not a multiple of 8)
+  const size_t dataSize = (SEGMENT.length() / 8) + (((SEGMENT.length() % 8) != 0) ? 1 : 0); // add one byte when extra bits needed (length not a multiple of 8)
   const size_t totalSize = dataSize*2 + sizeof(gameOfLife);
 
   if (!SEGENV.allocateData(totalSize)) return mode_static(); //allocation failed
@@ -6030,19 +6030,20 @@ static const char _data_FX_MODE_2DSPACESHIPS[] PROGMEM = "Spaceships@!,Blur;;!;2
 //     2D Crazy Bees   //
 /////////////////////////
 //// Crazy bees by stepko (c)12.02.21 [https://editor.soulmatelights.com/gallery/651-crazy-bees], adapted by Blaz Kristan (AKA blazoncek)
-#define MAX_BEES 5
+constexpr uint_fast16_t MAX_BEES = 5;
 uint16_t mode_2Dcrazybees(void) {
   if (!strip.isMatrix) return mode_static(); // not a 2D set-up
 
-  const uint16_t cols = SEGMENT.virtualWidth();
-  const uint16_t rows = SEGMENT.virtualHeight();
+  const uint_fast16_t cols = SEGMENT.virtualWidth();
+  const uint_fast16_t rows = SEGMENT.virtualHeight();
 
-  byte n = MIN(MAX_BEES, (rows * cols) / 256 + 1);
+  const byte n = min(MAX_BEES, (rows * cols) / 256 + 1);
 
   typedef struct Bee {
     uint8_t posX, posY, aimX, aimY, hue;
-    int8_t deltaX, deltaY, signX, signY, error;
-    void aimed(uint16_t w, uint16_t h) {
+    int8_t signX, signY;
+    int16_t deltaX, deltaY, error;
+    void aimed(uint_fast16_t w, uint_fast16_t h) {
       if (!true) //WLEDMM SuperSync
         random16_set_seed(strip.now);
       aimX = random8(0, w);
@@ -6083,7 +6084,7 @@ uint16_t mode_2Dcrazybees(void) {
       SEGMENT.addPixelColorXY(bee[i].aimX, bee[i].aimY - 1, CHSV(bee[i].hue, 255, 255));
       if (bee[i].posX != bee[i].aimX || bee[i].posY != bee[i].aimY) {
         SEGMENT.setPixelColorXY(bee[i].posX, bee[i].posY, CRGB(CHSV(bee[i].hue, 60, 255)));
-        int8_t error2 = bee[i].error * 2;
+        int_fast16_t error2 = bee[i].error * 2;
         if (error2 > -bee[i].deltaY) {
           bee[i].error -= bee[i].deltaY;
           bee[i].posX += bee[i].signX;
@@ -6244,7 +6245,7 @@ uint16_t mode_2Dfloatingblobs(void) {
     if (blob->grow[i]) {
       // enlarge radius until it is >= 4
       blob->r[i] += (fabsf(blob->sX[i]) > fabsf(blob->sY[i]) ? fabsf(blob->sX[i]) : fabsf(blob->sY[i])) * 0.05f;
-      if (blob->r[i] >= MIN(cols/4.f,2.f)) {
+      if (blob->r[i] >= min(cols/4.f,2.f)) {
         blob->grow[i] = false;
       }
     } else {
