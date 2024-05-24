@@ -119,6 +119,58 @@ void handleSerial()
 
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
+        } else if (next == '!') {
+          suspendStripService = true; // temporarily lock out strip updates
+          if (strip.isServicing()) {
+            USER_PRINTLN(F("deserializeSegment(): strip is still drawing effects."));
+            strip.waitUntilIdle();
+          }
+          heap_caps_dump_all();
+          delay(1000);
+          suspendStripService = false; 
+        } else if (next == 'l') {
+          TROYHACKS_LPF = !TROYHACKS_LPF;
+          USER_PRINTF("LP (highs) filter is now %s\n",TROYHACKS_LPF?"On":"Off");
+          USER_PRINTF("HP (bass)  filter is now %s\n",TROYHACKS_HPF?"On":"Off");
+          USER_PRINTF("Notch      filter is now %s\n",TROYHACKS_NOTCH?"On":"Off");
+        } else if (next == 'h') {
+          TROYHACKS_HPF = !TROYHACKS_HPF;
+          USER_PRINTF("LP (highs) filter is now %s\n",TROYHACKS_LPF?"On":"Off");
+          USER_PRINTF("HP (bass)  filter is now %s\n",TROYHACKS_HPF?"On":"Off");
+          USER_PRINTF("Notch      filter is now %s\n",TROYHACKS_NOTCH?"On":"Off");
+        } else if (next == 'n') {
+          TROYHACKS_NOTCH = !TROYHACKS_NOTCH;
+          USER_PRINTF("LP (highs) filter is now %s\n",TROYHACKS_LPF?"On":"Off");
+          USER_PRINTF("HP (bass)  filter is now %s\n",TROYHACKS_HPF?"On":"Off");
+          USER_PRINTF("Notch      filter is now %s\n",TROYHACKS_NOTCH?"On":"Off");
+        } else if (next == 'p') {
+          USER_PRINTLN("White Noise Calibration Cleared!");
+          float max = 0;
+          for (int i=0; i < 16; i++) {
+            fftBinAverage[i] = 0.0f;
+          }
+        }else if (next == 'P') {
+          TROYHACKS_PINKY = !TROYHACKS_PINKY;
+          USER_PRINTF("White Noise Calibration %s\n",TROYHACKS_PINKY?"Started":"Finished");
+          if (TROYHACKS_PINKY) {
+            float max = 0;
+            for (int i=0; i < 16; i++) {
+              fftBinAverage[i] = 1.0f;
+            }
+          } 
+          if (!TROYHACKS_PINKY) {
+            float max = 0;
+            for (int i=0; i < 16; i++) {
+                if (fftBinAverage[i] > max) {
+                    max = fftBinAverage[i];
+                }
+            }
+            for (int i=0; i < 16; i++) {
+              fftBinAverage[i] = max/fftBinAverage[i];
+              USER_PRINTF("%1.2f, ", fftBinAverage[i]);
+            }
+            USER_PRINTLN();
+          }
         } else if (next == 0xB0) {updateBaudRate( 115200);
         } else if (next == 0xB1) {updateBaudRate( 230400);
         } else if (next == 0xB2) {updateBaudRate( 460800);

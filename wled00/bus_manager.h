@@ -295,9 +295,9 @@ class BusOnOff : public Bus {
 
 class BusNetwork : public Bus {
   public:
-    BusNetwork(BusConfig &bc);
+    BusNetwork(BusConfig &bc, const ColorOrderMap &com);
 
-    uint16_t getMaxPixels() override { return 4096; };
+    uint16_t getMaxPixels() override { return MAX_LEDS_PER_BUS; };
     bool hasRGB() { return true; }
     bool hasWhite() { return _rgbw; }
 
@@ -318,6 +318,10 @@ class BusNetwork : public Bus {
       return _len;
     }
 
+    uint8_t getColorOrder() {
+      return _colorOrder;
+    }
+
     void cleanup();
 
     ~BusNetwork() {
@@ -331,6 +335,8 @@ class BusNetwork : public Bus {
     bool      _rgbw;
     bool      _broadcastLock;
     byte     *_data;
+    uint8_t   _colorOrder = COL_ORDER_RGB;
+    const ColorOrderMap &_colorOrderMap;
 };
 
 #ifdef WLED_ENABLE_HUB75MATRIX

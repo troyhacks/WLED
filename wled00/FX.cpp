@@ -7857,7 +7857,7 @@ uint16_t mode_2DGEQ(void) { // By Will Tatam. Code reduction by Ewoud Wijma.
       uint8_t nextband = (remaining < 1)? band +1: band;
       nextband = constrain(nextband, 0, 15);  // just to be sure
       frBand = ((NUM_BANDS < 16) && (NUM_BANDS > 1)) ? map(nextband, 0, NUM_BANDS - 1, 0, 15):nextband; // always use full range. comment out this line to get the previous behaviour.
-      uint16_t nextBandHeight = fftResult[frBand];
+      uint16_t nextBandHeight = fftResult[frBand]; 
       // smooth Band height
       bandHeight = (7*bandHeight + 3*lastBandHeight + 3*nextBandHeight) / 12;   // yeees, its 12 not 13 (10% amplification)
       bandHeight = constrain(bandHeight, 0, 255);   // remove potential over/underflows

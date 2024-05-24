@@ -1041,7 +1041,7 @@ bool WLED::initEthernet()
     return false;
   }
 
-  if (!ETH.begin(ETH_PHY_W5500, 1, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
+  if (!ETH.begin(ETH_PHY_W5500, ETH_ADDR, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
     DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
     // de-allocate the allocated pins
     for (managed_pin_type mpt : pinsToAllocate) {
@@ -1255,7 +1255,7 @@ void WLED::handleConnection()
 #if defined(ARDUINO_ARCH_ESP32S2)
     uint32_t heap = ESP.getFreeHeap(); // WLEDMM works better on -S2
 #else
-    uint32_t heap = heap_caps_get_largest_free_block(0x1800); // WLEDMM: This is a better metric for free heap.
+    uint32_t heap = ESP.getFreeHeap(); // heap_caps_get_largest_free_block(0x1800); // WLEDMM: This is a better metric for free heap.
 #endif
     if (heap < MIN_HEAP_SIZE && lastHeap < MIN_HEAP_SIZE) {
       if (retryCount < 5) {  // WLEDMM avoid repeated disconnects
