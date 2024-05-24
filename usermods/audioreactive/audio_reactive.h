@@ -399,8 +399,15 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 #endif
 #include <arduinoFFT.h>
 
-#if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT) // Still using this for 1 function with ESP-DSP for now...
-static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, windowWeighingFactors);
+#ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
+#if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
+  // arduinoFFT 2.x has a slightly different API
+  static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, true);
+#else
+  // recommended version optimized by @softhack007 (API version 1.9)
+  static float windowWeighingFactors[samplesFFT] = {0.0f}; // cache for FFT windowing factors
+  static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, windowWeighingFactors);
+#endif
 #else
 static arduinoFFT FFT = arduinoFFT(vReal, vImag, samplesFFT, SAMPLE_RATE);
 #endif
@@ -732,10 +739,14 @@ void FFTcode(void * parameter)
         #endif
 
         #if defined(UM_AUDIOREACTIVE_USE_NEW_FFT) || defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
-        // Still using this with ESP-DSP - for now
-        FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
+        #if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
+          // arduinoFFT 2.x has a slightly different API
+          FFT.majorPeak(&FFT_MajorPeak, &FFT_Magnitude);
         #else
-        FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);              // let the effects know which freq was most dominant
+          FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
+        #endif
+        #else
+          FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);
         #endif
 
         if (FFT_MajorPeak < (SAMPLE_RATE /  samplesFFT)) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                  // too low - use zero
