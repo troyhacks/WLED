@@ -508,6 +508,9 @@ void FFTcode(void * parameter)
   pinkFactors[0] *= 0.5;  // suppress 0-42hz bin
   #endif
 
+  #ifdef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+
   esp_err_t myerr = dsps_fft4r_init_fc32(NULL, samplesFFT >> 1);
   if (myerr  != ESP_OK) {
       USER_PRINTF("Not possible to initialize FFT. Error = %i", myerr);
@@ -573,6 +576,9 @@ void FFTcode(void * parameter)
 
   float coeffs_notch[5] = { a0, a1, a2, b1, b2 }; 
   float w_notch[5] = {0, 0};
+
+  #endif
+  #endif
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
   for(;;) {
