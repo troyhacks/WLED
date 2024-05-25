@@ -678,7 +678,11 @@ void FFTcode(void * parameter)
         if (__builtin_signbit(vReal[i]) != __builtin_signbit(vReal[i+1]))  // test sign bit: sign changed -> zero crossing
             newZeroCrossingCount++;
       }
-      vReal[i] *= window[i];
+      #ifdef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
+      #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+      vReal[i] *= window[i]; // FFT windowing for ESP-DSP
+      #endif
+      #endif
     }
     newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typically stays below 256
     zeroCrossingCount = newZeroCrossingCount; // update only once, to avoid that effects pick up an intermediate value
@@ -709,6 +713,8 @@ void FFTcode(void * parameter)
     if (fabsf(volumeSmth) > 0.25f) { // noise gate open
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
+        float last_majorpeak = FFT_MajorPeak;
+        float last_magnitude = FFT_Magnitude;
         #if defined(UM_AUDIOREACTIVE_USE_ESPDSP_FFT)
           if (TROYHACKS_LPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
@@ -727,8 +733,6 @@ void FFTcode(void * parameter)
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
           
-          float last_majorpeak = FFT_MajorPeak;
-          float last_magnitude = FFT_Magnitude;
           FFT_MajorPeak = 0;
           FFT_Magnitude = 0;
 
