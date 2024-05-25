@@ -119,15 +119,6 @@ void handleSerial()
 
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
-        } else if (next == '!') {
-          suspendStripService = true; // temporarily lock out strip updates
-          if (strip.isServicing()) {
-            USER_PRINTLN(F("deserializeSegment(): strip is still drawing effects."));
-            strip.waitUntilIdle();
-          }
-          heap_caps_dump_all();
-          delay(1000);
-          suspendStripService = false; 
         } else if (next == 'l') {
           TROYHACKS_LPF = !TROYHACKS_LPF;
           USER_PRINTF("LP (highs) filter is now %s\n",TROYHACKS_LPF?"On":"Off");
@@ -160,13 +151,22 @@ void handleSerial()
           } 
           if (!TROYHACKS_PINKY) {
             float max = 0;
+            float min = 1000000;
             for (int i=0; i < 16; i++) {
                 if (fftBinAverage[i] > max) {
                     max = fftBinAverage[i];
                 }
+                if (fftBinAverage[i] < min) {
+                    min = fftBinAverage[i];
+                }
             }
+            // 5.53, 8.10 = 1.70, 1.83, 1.82, 1.85, 1.78, 1.82, 1.76, 1.79, 1.79, 1.79, 1.79, 1.79, 1.79, 1.79, 1.89, 2.17
+            USER_PRINT(min);
+            USER_PRINT(",");
+            USER_PRINT(max);
+            USER_PRINT(" = ");
             for (int i=0; i < 16; i++) {
-              fftBinAverage[i] = max/fftBinAverage[i];
+              fftBinAverage[i] = (max/fftBinAverage[i]) + 0.7f;
               USER_PRINTF("%1.2f, ", fftBinAverage[i]);
             }
             USER_PRINTLN();
