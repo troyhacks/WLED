@@ -214,23 +214,36 @@ uint32_t WS2812FX::getPixelColorXY(uint16_t x, uint16_t y) {
 void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM: IRAM_ATTR conditionally
 {
   if (Segment::maxHeight==1) return; // not a matrix set-up
-  if (x >= virtualWidth() || y >= virtualHeight() || x<0 || y<0) return;  // if pixel would fall out of virtual segment just exit
+  if (x<0 || y<0 || x >= virtualWidth() || y >= virtualHeight()) return;  // if pixel would fall out of virtual segment just exit
 
-  if (ledsrgb) ledsrgb[XY(x,y)] = col;
-
+  unsigned i = UINT_MAX;
+  bool sameColor = false;
+  if (ledsrgb) { // WLEDMM small optimization
+    i = XY(x,y);
+    CRGB fastled_col = CRGB(col);
+    if (ledsrgb[i] == fastled_col) sameColor = true;
+    else ledsrgb[i] = fastled_col;
+  }
   uint8_t _bri_t = currentBri(on ? opacity : 0);
   if (!_bri_t && !transitional) return;
   if (_bri_t < 255) {
-    byte r = scale8(R(col), _bri_t);
-    byte g = scale8(G(col), _bri_t);
-    byte b = scale8(B(col), _bri_t);
-    byte w = scale8(W(col), _bri_t);
-    col = RGBW32(r, g, b, w);
+    col = color_fade(col, _bri_t);
   }
+
+#if 0 // this is a dangerous optimization
+  if ((i < UINT_MAX) && sameColor && (call > 0) && (ledsrgb[i] == CRGB(col)) && (_globalLeds == nullptr)) return; // WLEDMM looks like nothing to do (but we don't trust globalleds)
+#endif
 
   if (reverse  ) x = virtualWidth()  - x - 1;
   if (reverse_y) y = virtualHeight() - y - 1;
   if (transpose) { uint16_t t = x; x = y; y = t; } // swap X & Y if segment transposed
+
+  // WLEDMM shortcut when no grouping/spacing used
+  bool simpleSegment = !mirror && !mirror_y && (grouping == 1) && (spacing == 0);
+  if (simpleSegment) {
+    strip.setPixelColorXY(start + x, startY + y, col);
+    return;
+  }
 
   x *= groupLength(); // expand to physical pixels
   y *= groupLength(); // expand to physical pixels
@@ -310,10 +323,12 @@ void Segment::setPixelColorXY(float x, float y, uint32_t col, bool aa, bool fast
 }
 
 // returns RGBW values of pixel
-uint32_t Segment::getPixelColorXY(uint16_t x, uint16_t y) {
-  if (!isActive()) return 0; // not active
-  int i = XY(x,y);
-  if (ledsrgb) return RGBW32(ledsrgb[i].r, ledsrgb[i].g, ledsrgb[i].b, 0);
+uint32_t IRAM_ATTR_YN Segment::getPixelColorXY(int x, int y) {
+  if (x<0 || y<0 || !isActive()) return 0; // not active or out-of range
+  if (ledsrgb) {
+    int i = XY(x,y);
+    return RGBW32(ledsrgb[i].r, ledsrgb[i].g, ledsrgb[i].b, 0);
+  }
   if (reverse  ) x = virtualWidth()  - x - 1;
   if (reverse_y) y = virtualHeight() - y - 1;
   if (transpose) { uint16_t t = x; x = y; y = t; } // swap X & Y if segment transposed
@@ -329,23 +344,11 @@ void Segment::blendPixelColorXY(uint16_t x, uint16_t y, uint32_t color, uint8_t 
 }
 
 // Adds the specified color with the existing pixel color perserving color balance.
-void Segment::addPixelColorXY(int x, int y, uint32_t color, bool fast) {
+void IRAM_ATTR_YN Segment::addPixelColorXY(int x, int y, uint32_t color, bool fast) {
   if (!isActive()) return; // not active
   if (x >= virtualWidth() || y >= virtualHeight() || x<0 || y<0) return;  // if pixel would fall out of virtual segment just exit
   uint32_t col = getPixelColorXY(x,y);
-  uint8_t r = R(col);
-  uint8_t g = G(col);
-  uint8_t b = B(col);
-  uint8_t w = W(col);
-  if (fast) {
-    r = qadd8(r, R(color));
-    g = qadd8(g, G(color));
-    b = qadd8(b, B(color));
-    w = qadd8(w, W(color));
-    col = RGBW32(r,g,b,w);
-  } else {
-    col = color_add(col, color);
-  }
+  col = color_add(col, color, fast);
   setPixelColorXY(x, y, col);
 }
 
@@ -356,59 +359,71 @@ void Segment::fadePixelColorXY(uint16_t x, uint16_t y, uint8_t fade) {
 }
 
 // blurRow: perform a blur on a row of a rectangular matrix
-void Segment::blurRow(uint16_t row, fract8 blur_amount) {
+void Segment::blurRow(uint32_t row, fract8 blur_amount, bool smear){
   if (!isActive()) return; // not active
   const uint_fast16_t cols = virtualWidth();
   const uint_fast16_t rows = virtualHeight();
 
   if (row >= rows) return;
   // blur one row
-  uint8_t keep = 255 - blur_amount;
+  uint8_t keep = smear ? 255 : 255 - blur_amount;
   uint8_t seep = blur_amount >> 1;
-  CRGB carryover = CRGB::Black;
-  for (uint_fast16_t x = 0; x < cols; x++) {
-    CRGB cur = getPixelColorXY(x, row);
-    uint32_t before = uint32_t(cur);     // remember color before blur
-    CRGB part = cur;
-    part.nscale8(seep);
-    cur.nscale8(keep);
-    cur += carryover;
-    if (x>0) {
-      CRGB prev = CRGB(getPixelColorXY(x-1, row)) + part;
-      setPixelColorXY(x-1, row, prev);
+  uint32_t carryover = BLACK;
+  uint32_t lastnew;
+  uint32_t last;
+  uint32_t curnew = 0;
+  for (unsigned x = 0; x < cols; x++) {
+    uint32_t cur = getPixelColorXY(x, row);
+    uint32_t part = color_fade(cur, seep);
+    curnew = color_fade(cur, keep);
+    if (x > 0) {
+      if (carryover)
+        curnew = color_add(curnew, carryover, !smear); // WLEDMM don't use "fast" when smear==true (better handling of bright colors)
+      uint32_t prev = color_add(lastnew, part, !smear);// WLEDMM
+      if (last != prev) // optimization: only set pixel if color has changed
+        setPixelColorXY(int(x - 1), int(row), prev);
     }
-    if (before != uint32_t(cur))         // optimization: only set pixel if color has changed
-      setPixelColorXY(x, row, cur);
+    else // first pixel
+      setPixelColorXY(int(x), int(row), curnew);
+    lastnew = curnew;
+    last = cur; // save original value for comparison on next iteration
     carryover = part;
   }
+  setPixelColorXY(int(cols-1), int(row), curnew); // set last pixel
 }
 
 // blurCol: perform a blur on a column of a rectangular matrix
-void Segment::blurCol(uint16_t col, fract8 blur_amount) {
+void Segment::blurCol(uint32_t col, fract8 blur_amount, bool smear) {
   if (!isActive()) return; // not active
   const uint_fast16_t cols = virtualWidth();
   const uint_fast16_t rows = virtualHeight();
 
   if (col >= cols) return;
   // blur one column
-  uint8_t keep = 255 - blur_amount;
+  uint8_t keep = smear ? 255 : 255 - blur_amount;
   uint8_t seep = blur_amount >> 1;
-  CRGB carryover = CRGB::Black;
-  for (uint_fast16_t y = 0; y < rows; y++) {
-    CRGB cur = getPixelColorXY(col, y);
-    CRGB part = cur;
-    uint32_t before = uint32_t(cur);     // remember color before blur
-    part.nscale8(seep);
-    cur.nscale8(keep);
-    cur += carryover;
-    if (y>0) {
-      CRGB prev = CRGB(getPixelColorXY(col, y-1)) + part;
-      setPixelColorXY(col, y-1, prev);
+  uint32_t carryover = BLACK;
+  uint32_t lastnew;
+  uint32_t last;
+  uint32_t curnew = 0;
+  for (unsigned y = 0; y < rows; y++) {
+    uint32_t cur = getPixelColorXY(col, y);
+    uint32_t part = color_fade(cur, seep);
+    curnew = color_fade(cur, keep);
+    if (y > 0) {
+      if (carryover)
+        curnew = color_add(curnew, carryover, !smear);  // WLEDMM don't use "fast" when smear==true (better handling of bright colors)
+      uint32_t prev = color_add(lastnew, part, !smear); // WLEDMM
+      if (last != prev) // optimization: only set pixel if color has changed
+        setPixelColorXY(int(col), int(y - 1), prev);
     }
-    if (before != uint32_t(cur))         // optimization: only set pixel if color has changed
-      setPixelColorXY(col, y, cur);
-    carryover = part;
+    else // first pixel
+      setPixelColorXY(int(col), int(y), curnew);
+    lastnew = curnew;
+    last = cur; //save original value for comparison on next iteration
+    carryover = part;        
   }
+  setPixelColorXY(int(col), int(rows - 1), curnew);
 }
 
 // 1D Box blur (with added weight - blur_amount: [0=no blur, 255=max blur])

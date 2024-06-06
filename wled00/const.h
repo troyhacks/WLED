@@ -253,7 +253,7 @@
 #define TYPE_NET_ARTNET_RGB      82            //network ArtNet RGB bus (master broadcast bus, unused)
 #define TYPE_NET_DDP_RGBW        88            //network DDP RGBW bus (master broadcast bus)
 
-#define IS_DIGITAL(t) ((t) & 0x10) //digital are 16-31 and 48-63
+#define IS_DIGITAL(t) (((t) & 0x10) || ((t)==TYPE_HUB75MATRIX)) //digital are 16-31 and 48-63 // WLEDMM added HUB75
 #define IS_PWM(t)     ((t) > 40 && (t) < 46)
 #define NUM_PWM_PINS(t) ((t) - 40) //for analog PWM 41-45 only
 #define IS_2PIN(t)      ((t) > 47)
@@ -351,6 +351,7 @@
 #define ERR_LOW_MEM     33  // WLEDMM: low memory (RAM)
 #define ERR_LOW_SEG_MEM 34  // WLEDMM: low memory (segment data RAM)
 #define ERR_LOW_WS_MEM  35  // WLEDMM: low memory (ws)
+#define ERR_LOW_AJAX_MEM  36 // WLEDMM: low memory (oappend)
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness

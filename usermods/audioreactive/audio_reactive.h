@@ -1,5 +1,24 @@
 #pragma once
 
+/* 
+   @title     MoonModules WLED - audioreactive usermod
+   @file      audio_reactive.h
+   @repo      https://github.com/MoonModules/WLED, submit changes to this file as PRs to MoonModules/WLED
+   @Authors   https://github.com/MoonModules/WLED/commits/mdev/
+   @Copyright © 2024 Github MoonModules Commit Authors (contact moonmodules@icloud.com for details)
+   @license   GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
+
+     This file is part of the MoonModules WLED fork also known as "WLED-MM".
+     WLED-MM is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License 
+     as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+     WLED-MM is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
+     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+     
+     You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+
 #include "wled.h"
 
 #ifdef ARDUINO_ARCH_ESP32
@@ -353,9 +372,6 @@ constexpr uint16_t samplesFFT_2 = 256;          // meaningfull part of FFT resul
 // These are the input and output vectors.  Input vectors receive computed results from FFT.
 static float vReal[samplesFFT] = {0.0f};       // FFT sample inputs / freq output -  these are our raw result bins
 static float vImag[samplesFFT] = {0.0f};       // imaginary parts
-#ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
-static float windowWeighingFactors[samplesFFT] = {0.0f};
-#endif
 
 #ifdef FFT_MAJORPEAK_HUMAN_EAR
 static float pinkFactors[samplesFFT] = {0.0f};              // "pink noise" correction factors
@@ -381,7 +397,14 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 #include <arduinoFFT.h>
 
 #ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
-static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, windowWeighingFactors);
+#if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
+  // arduinoFFT 2.x has a slightly different API
+  static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, true);
+#else
+  // recommended version optimized by @softhack007 (API version 1.9)
+  static float windowWeighingFactors[samplesFFT] = {0.0f}; // cache for FFT windowing factors
+  static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, windowWeighingFactors);
+#endif
 #else
 static arduinoFFT FFT = arduinoFFT(vReal, vImag, samplesFFT, SAMPLE_RATE);
 #endif
@@ -564,7 +587,7 @@ void FFTcode(void * parameter)
             newZeroCrossingCount++;
       }
     }
-    newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typicially stays below 256
+    newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typically stays below 256
     zeroCrossingCount = newZeroCrossingCount; // update only once, to avoid that effects pick up an intermediate value
 
     // release highest sample to volume reactive effects early - not strictly necessary here - could also be done at the end of the function
@@ -602,6 +625,7 @@ void FFTcode(void * parameter)
         #endif
         FFT.compute( FFTDirection::Forward );                       // Compute FFT
         FFT.complexToMagnitude();                                   // Compute magnitudes
+        vReal[0] = 0;   // The remaining DC offset on the signal produces a strong spike on position 0 that should be eliminated to avoid issues.
         #else
         FFT.DCRemoval(); // let FFT lib remove DC component, so we don't need to care about this in getSamples()
 
@@ -616,6 +640,9 @@ void FFTcode(void * parameter)
         FFT.ComplexToMagnitude();                               // Compute magnitudes
         #endif
 
+        float last_majorpeak = FFT_MajorPeak;
+        float last_magnitude = FFT_Magnitude;
+
         #ifdef FFT_MAJORPEAK_HUMAN_EAR
         // scale FFT results
         for(uint_fast16_t binInd = 0; binInd < samplesFFT; binInd++)
@@ -623,10 +650,18 @@ void FFTcode(void * parameter)
         #endif
 
         #ifdef UM_AUDIOREACTIVE_USE_NEW_FFT
-          FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
+        #if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
+          // arduinoFFT 2.x has a slightly different API
+          FFT.majorPeak(&FFT_MajorPeak, &FFT_Magnitude);
         #else
-        FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);              // let the effects know which freq was most dominant
+          FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
         #endif
+        #else
+          FFT.MajorPeak(&FFT_MajorPeak, &FFT_Magnitude);
+        #endif
+
+        if (FFT_MajorPeak < (SAMPLE_RATE /  samplesFFT)) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                  // too low - use zero
+        if (FFT_MajorPeak > (0.42f * SAMPLE_RATE)) {FFT_MajorPeak = last_majorpeak; FFT_Magnitude = last_magnitude;} // too high - keep last peak
 
         #ifdef FFT_MAJORPEAK_HUMAN_EAR
         // undo scaling - we want unmodified values for FFTResult[] computations
@@ -914,7 +949,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels) // p
         if (post_gain < 1.0f) post_gain = ((post_gain -1.0f) * 0.8f) +1.0f;
         currentResult *= post_gain;
       }
-      fftResult[i] = constrain((int)currentResult, 0, 255);
+      fftResult[i] = max(min((int)(currentResult+0.5f), 255), 0);  // +0.5 for proper rounding
     }
 }
 ////////////////////
@@ -1564,7 +1599,7 @@ class AudioReactive : public Usermod {
       transmitData.zeroCrossingCount = zeroCrossingCount;
 
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
-        transmitData.fftResult[i] = (uint8_t)constrain(fftResult[i], 0, 254);
+        transmitData.fftResult[i] = fftResult[i];
       }
 
       transmitData.FFT_Magnitude = my_magnitude;
@@ -1792,6 +1827,11 @@ class AudioReactive : public Usermod {
         periph_module_reset(PERIPH_I2S0_MODULE);   // not possible on -C3
       #endif
       delay(100);         // Give that poor microphone some time to setup.
+
+      #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+        if ((i2sckPin == I2S_PIN_NO_CHANGE) && (i2ssdPin >= 0) && (i2swsPin >= 0) 
+            && ((dmType == 1) || (dmType == 4)) ) dmType = 51;   // dummy user support: SCK == -1 --means--> PDM microphone
+      #endif
 
       useInputFilter = 2; // default: DC blocker
       switch (dmType) {
