@@ -128,7 +128,11 @@ void Segment::allocLeds() {
   if ((size > 0) && (!ledsrgb || size > ledsrgbSize)) {    //softhack dont allocate zero bytes
     USER_PRINTF("allocLeds (%d,%d to %d,%d), %u from %u\n", start, startY, stop, stopY, size, ledsrgb?ledsrgbSize:0);
     if (ledsrgb) free(ledsrgb);   // we need a bigger buffer, so free the old one first
-    ledsrgb = (CRGB*)calloc(size, 1);
+    if (psramFound()){
+      ledsrgb = (CRGB*)ps_calloc(size, 1);
+    } else {
+      ledsrgb = (CRGB*)calloc(size, 1);
+    }
     ledsrgbSize = ledsrgb?size:0;
     if (ledsrgb == nullptr) {
       USER_PRINTLN("allocLeds failed!!");
@@ -2477,11 +2481,19 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
     // don't use new / delete
     if ((size > 0) && (customMappingTable != nullptr)) {
-      customMappingTable = (uint16_t*) reallocf(customMappingTable, sizeof(uint16_t) * size);  // reallocf will free memory if it cannot resize
+      if (psramFound()) {
+        customMappingTable = (uint16_t*) ps_realloc(customMappingTable, sizeof(uint16_t) * size); // TroyHacks: This should work? We always have tons of PSRAM
+      } else {
+        customMappingTable = (uint16_t*) reallocf(customMappingTable, sizeof(uint16_t) * size);  // reallocf will free memory if it cannot resize
+      }
     }
     if ((size > 0) && (customMappingTable == nullptr)) { // second try
       DEBUG_PRINTLN("deserializeMap: trying to get fresh memory block.");
-      customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+      if (psramFound()) {
+        customMappingTable = (uint16_t*) ps_calloc(size, sizeof(uint16_t));
+      } else {
+        customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+      }
       if (customMappingTable == nullptr) { 
         DEBUG_PRINTLN("deserializeMap: alloc failed!");
         errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
