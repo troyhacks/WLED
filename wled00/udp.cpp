@@ -859,7 +859,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       We're expecting equal numbers of channels per output, common for controllers like the H807SA - at some point
       we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
-      const size_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
+      const uint_fast16_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
 
       #ifndef ARTNET_TROYHACKS
       // Default WLED-to-WLED Art-Net output
@@ -871,27 +871,27 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       // You get 170 RGB LEDs per universe (128 RGBW) so the receiving hardware needs to be configured correctly.
       // The H807SA, for example, only allows one global setting of Art-Net universes-per-output.
       //
-      // const size_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
-      // const size_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
-      const size_t hardware_outputs[] = { 256,256,256,256,256,256,256,256 }; // specified in LED counts
-      const size_t hardware_outputs_universe_start[] = { 0,2,4,6,8,10,12,14 }; // universe start # per output
+      const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
+      const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
+      // const size_t hardware_outputs[] = { 256,256,256,256,256,256,256,256 }; // specified in LED counts
+      // const size_t hardware_outputs_universe_start[] = { 0,2,4,6,8,10,12,14 }; // universe start # per output
       #endif
       
-      size_t bufferOffset = 0;
-      size_t hardware_output_universe = 0;
+      uint_fast16_t bufferOffset = 0;
+      uint_fast16_t hardware_output_universe = 0;
       
       sequenceNumber++;
 
       if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
       if (sequenceNumber > 255) sequenceNumber = 1;
 
-      for (size_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
+      for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
         if (bufferOffset > length * (isRGBW?4:3)) return 1; // stop when we hit end of LEDs
 
         hardware_output_universe = hardware_outputs_universe_start[hardware_output];
 
-        size_t channels_remaining = hardware_outputs[hardware_output] * (isRGBW?4:3);
+        uint_fast16_t channels_remaining = hardware_outputs[hardware_output] * (isRGBW?4:3);
 
         while (channels_remaining > 0) {
 
@@ -900,7 +900,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
             return 1; // borked
           }
 
-          size_t packetSize = ARTNET_CHANNELS_PER_PACKET;
+          uint_fast16_t packetSize = ARTNET_CHANNELS_PER_PACKET;
 
           if (channels_remaining < ARTNET_CHANNELS_PER_PACKET) {
             packetSize = channels_remaining;
@@ -919,7 +919,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
           ddpUdp.write(0xFF & (packetSize >> 8)); // 16-bit length of channel data, MSB
           ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
 
-          for (size_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
+          for (uint_fast16_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
             // "Color Order Override" works on top of this if you need to change the color order before sending.
             ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // R
             ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // G

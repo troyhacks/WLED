@@ -2666,7 +2666,12 @@ class AudioReactive : public Usermod {
         infoArr.add(roundf(sampleTime)/100.0f);
         infoArr.add(" ms");
 
-        infoArr = user.createNestedArray(F("FFT time"));
+        #ifdef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
+          infoArr = user.createNestedArray(F("FFT time (ESP-DSP)"));
+        #else
+          infoArr = user.createNestedArray(F("FFT time"));
+        #endif
+
         infoArr.add(roundf(fftTime)/100.0f);
         if ((fftTime/100) >= FFT_MIN_CYCLE) // FFT time over budget -> I2S buffer will overflow 
           infoArr.add("<b style=\"color:red;\">! ms</b>");
