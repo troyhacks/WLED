@@ -413,7 +413,11 @@
   #if !defined(USERMOD_AUDIOREACTIVE)
     #define SETTINGS_STACK_BUF_SIZE 3834   // WLEDMM added 696+32 bytes of margin (was 3096)
   #else
-    #define SETTINGS_STACK_BUF_SIZE 5500   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #ifdef MAX_LEDS_PER_BUS && MAX_LEDS_PER_BUS > 2048
+      #define SETTINGS_STACK_BUF_SIZE 5500   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #else 
+      #define SETTINGS_STACK_BUF_SIZE 4100
+    #endif
   #endif
 #endif
 
