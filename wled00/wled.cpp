@@ -1034,6 +1034,15 @@ bool WLED::initEthernet()
   #define ETH_RST_PIN                     14
   #define ETH_ADDR                        1
 
+  // 7,6,5,4 and 41,42
+  // #define ETH_MISO_PIN                    41
+  // #define ETH_MOSI_PIN                    4
+  // #define ETH_SCLK_PIN                    5
+  // #define ETH_CS_PIN                      6
+  // #define ETH_INT_PIN                     7
+  // #define ETH_RST_PIN                     42
+  // #define ETH_ADDR                        1
+
   managed_pin_type pinsToAllocate[12] = { ETH_MISO_PIN,true,ETH_MOSI_PIN,true,ETH_SCLK_PIN,true,ETH_CS_PIN,true,ETH_INT_PIN,true,ETH_RST_PIN,true };
 
   if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {

@@ -250,7 +250,9 @@ void WiFiEvent(WiFiEvent_t event) {
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
-      DEBUG_PRINTF("Ethernet speed is %u mbit and link is %sfull duplex!\n",ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
+      DEBUG_PRINTF("Ethernet speed is %u mbit and link is %sfull duplex! (MAC: ",ETH.linkSpeed(), ETH.fullDuplex()?"":"not ", ETH.macAddress());
+      DEBUG_PRINT(ETH.macAddress());
+      DEBUG_PRINTLN(")\n");
       break;
 
     case ARDUINO_EVENT_ETH_DISCONNECTED: // was SYSTEM_EVENT_ETH_DISCONNECTED:
