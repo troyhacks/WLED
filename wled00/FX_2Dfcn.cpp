@@ -234,7 +234,7 @@ void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM:
     col = color_fade(col, _bri_t);
   }
 
-#if 0 // this is a dangerous optimization
+#if 1 // this is a dangerous optimization
   if ((i < UINT_MAX) && sameColor && (call > 0) && (ledsrgb[i] == CRGB(col)) && (_globalLeds == nullptr)) return; // WLEDMM looks like nothing to do (but we don't trust globalleds)
 #endif
 
