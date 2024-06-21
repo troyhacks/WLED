@@ -444,7 +444,7 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   _valid = true;
 }
 
-void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
+void IRAM_ATTR BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   if (!_valid || pix >= _len) return;
   if (hasWhite()) c = autoWhiteCalc(c);
   if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
@@ -485,7 +485,7 @@ void BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   }
 }
 
-uint32_t BusNetwork::getPixelColor(uint16_t pix) {
+uint32_t IRAM_ATTR BusNetwork::getPixelColor(uint16_t pix) {
   if (!_valid || pix >= _len) return 0;
   uint16_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
