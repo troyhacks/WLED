@@ -6,17 +6,19 @@
 #ifdef WLED_USE_ETHERNET
 #pragma message "Ethernet support enabled"
 
-// The following six pins are neither configurable nor
-// can they be re-assigned through IOMUX / GPIO matrix.
-// See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
-const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] = {
-    { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
-    { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
-    { 22, true  }, // RMII EMAC TXD1   == Second bit of transmitted data
-    { 25, false }, // RMII EMAC RXD0   == First bit of received data
-    { 26, false }, // RMII EMAC RXD1   == Second bit of received data
-    { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
-};
+#ifndef CONFIG_IDF_TARGET_ESP32S3
+  // The following six pins are neither configurable nor
+  // can they be re-assigned through IOMUX / GPIO matrix.
+  // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
+  const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] = {
+      { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
+      { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
+      { 22, true  }, // RMII EMAC TXD1   == Second bit of transmitted data
+      { 25, false }, // RMII EMAC RXD0   == First bit of received data
+      { 26, false }, // RMII EMAC RXD1   == Second bit of received data
+      { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
+  };
+#endif
 
 const ethernet_settings ethernetBoards[] = {
   // None
