@@ -737,7 +737,7 @@ void serializeConfig() {
   wifi[F("sleep")] = !noWifiSleep;
   wifi[F("phy")] = force802_3g;
 
-  #ifdef WLED_USE_ETHERNET
+  #if defined(WLED_USE_ETHERNET) && !defined(CONFIG_IDF_TARGET_ESP32S3)
   JsonObject ethernet = doc.createNestedObject("eth");
   ethernet["type"] = ethernetType;
   if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
@@ -746,7 +746,7 @@ void serializeConfig() {
     if (ethernetBoards[ethernetType].eth_power>=0)     pins.add(ethernetBoards[ethernetType].eth_power);
     if (ethernetBoards[ethernetType].eth_mdc>=0)       pins.add(ethernetBoards[ethernetType].eth_mdc);
     if (ethernetBoards[ethernetType].eth_mdio>=0)      pins.add(ethernetBoards[ethernetType].eth_mdio);
-    #ifndef CONFIG_IDF_TARGET_ESP32S3
+//    #ifndef CONFIG_IDF_TARGET_ESP32S3
     switch (ethernetBoards[ethernetType].eth_clk_mode) {
       case ETH_CLOCK_GPIO0_IN:
       case ETH_CLOCK_GPIO0_OUT:
@@ -759,7 +759,7 @@ void serializeConfig() {
         pins.add(17);
         break;
     }
-    #endif
+//    #endif
   }
   #endif
 
