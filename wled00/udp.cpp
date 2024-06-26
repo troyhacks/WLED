@@ -759,7 +759,6 @@ void sendSysInfoUDP()
 // isRGBW - true if the buffer contains 4 components per pixel
 
 static       size_t sequenceNumber = 0; // this needs to be shared across all outputs
-static const size_t ART_NET_HEADER_SIZE = 12;
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
 uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
@@ -919,15 +918,13 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
             channels_remaining -= packetSize;
           }
 
-          byte header_buffer[ART_NET_HEADER_SIZE];
-          memcpy_P(header_buffer, ART_NET_HEADER, ART_NET_HEADER_SIZE);
-          ddpUdp.write(header_buffer, ART_NET_HEADER_SIZE); // This doesn't change. Hard coded ID, OpCode, and protocol version.
-          ddpUdp.write(sequenceNumber & 0xFF); // sequence number. 1..255
+          ddpUdp.write(ART_NET_HEADER, 12); // This doesn't change. Hard coded ID, OpCode, and protocol version.
+          ddpUdp.write(sequenceNumber); // sequence number. 1..255
           ddpUdp.write(0x00); // physical - more an FYI, not really used for anything. 0..3
-          ddpUdp.write(hardware_output_universe & 0xFF); // Universe LSB. 1 full packet == 1 full universe.
+          ddpUdp.write(hardware_output_universe); // Universe LSB. 1 full packet == 1 full universe.
           ddpUdp.write(0x00); // Universe MSB, unused.
-          ddpUdp.write(0xFF & (packetSize >> 8)); // 16-bit length of channel data, MSB
-          ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
+          ddpUdp.write(packetSize >> 8); // 16-bit length of channel data, MSB
+          ddpUdp.write(packetSize     ); // 16-bit length of channel data, LSB
 
           std::copy(buffer+bufferOffset, buffer+bufferOffset+packetSize, packet_buffer);
           ddpUdp.write(packet_buffer,packetSize);
