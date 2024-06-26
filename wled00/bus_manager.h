@@ -334,9 +334,9 @@ class BusNetwork : public Bus {
     uint8_t   _UDPchannels;
     bool      _rgbw;
     bool      _broadcastLock;
-    uint16_t __attribute__((aligned (16))) *_data;
+    uint16_t  __attribute__((aligned (16))) *_data;
     uint8_t   _colorOrder = COL_ORDER_RGB;
-    const ColorOrderMap &_colorOrderMap;
+    const     ColorOrderMap &_colorOrderMap;
 };
 
 #ifdef WLED_ENABLE_HUB75MATRIX

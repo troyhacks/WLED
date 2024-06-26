@@ -763,14 +763,15 @@ static const size_t ART_NET_HEADER_SIZE = 12;
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
 extern "C" {
-  int s3_scale8x8(uint16_t *pA, uint16_t *pB, uint16_t *pC, uint8_t sar);
+  int s3_scale8x8(uint16_t *pA, uint16_t *pB, uint16_t *pC, uint16_t sar);
 }
 
 uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint16_t *buffer, uint8_t bri, bool isRGBW)  {
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
   WiFiUDP ddpUdp;
-
+  byte __attribute__((aligned (16))) *packet_buffer = (byte *) ps_malloc(512 * sizeof(byte));
+  
   switch (type) {
     case 0: // DDP
     {
@@ -864,7 +865,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
       we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
       const uint_fast16_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
-
+      
       #ifndef ARTNET_TROYHACKS
       // Default WLED-to-WLED Art-Net output
       //
@@ -890,11 +891,14 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
       if (sequenceNumber > 255) sequenceNumber = 1;
 
       uint16_t __attribute__((aligned (16))) bri_array[8] = {bri,bri,bri,bri,bri,bri,bri,bri};
-      s3_scale8x8(buffer, bri_array, buffer, 8);
+      s3_scale8x8(buffer, bri_array, buffer, length*(isRGBW?4:3)/8);
 
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
-        if (bufferOffset > length * (isRGBW?4:3)) return 1; // stop when we hit end of LEDs
+        if (bufferOffset > length * (isRGBW?4:3)) {
+          free(packet_buffer);
+          return 1; // stop when we hit end of LEDs
+        }
 
         hardware_output_universe = hardware_outputs_universe_start[hardware_output];
 
@@ -904,6 +908,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
 
           if (!ddpUdp.beginPacket(client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.beginPacket returned an error"));
+            free(packet_buffer);
             return 1; // borked
           }
 
@@ -934,8 +939,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
           //   if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
           // }
 
-          // byte *packet_buffer = (byte *) ps_malloc(packetSize * sizeof(byte));
-          byte packet_buffer[packetSize];
+          
+          // byte packet_buffer[packetSize];
           std::copy(buffer + bufferOffset, buffer + bufferOffset + packetSize, packet_buffer);
           ddpUdp.write(packet_buffer,packetSize);
           // free(packet_buffer);
@@ -947,11 +952,14 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
 
           if (!ddpUdp.endPacket()) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
+            free(packet_buffer);
             return 1; // borked
           }
           hardware_output_universe++;
         }
-      } break;
+      } 
+      free(packet_buffer);
+      break;
     }
   }
   return 0;
