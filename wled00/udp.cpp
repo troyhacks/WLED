@@ -763,7 +763,7 @@ static const size_t ART_NET_HEADER_SIZE = 12;
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
 extern "C" {
-  int s3_scale8x8(uint16_t *pA, uint16_t *pB, uint16_t *pC, uint16_t sar);
+  int s3_scale8x8(uint16_t *buffer_in, uint16_t *bri_array, uint16_t *buffer_out, uint16_t loops);
 }
 
 uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint16_t *buffer, uint8_t bri, bool isRGBW)  {
@@ -771,7 +771,7 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
 
   WiFiUDP ddpUdp;
   byte __attribute__((aligned (16))) *packet_buffer = (byte *) ps_malloc(512 * sizeof(byte));
-  
+
   switch (type) {
     case 0: // DDP
     {
