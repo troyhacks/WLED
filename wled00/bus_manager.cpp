@@ -438,7 +438,7 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   // _data = (byte *)malloc(bc.count * _UDPchannels);
   _data = (uint16_t*) calloc(bc.count * _UDPchannels, sizeof(uint16_t));
   if (_data == nullptr) return;
-  memset(_data, 0, bc.count * _UDPchannels);
+  // memset(_data, 0, bc.count * _UDPchannels);
   _len = bc.count;
   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
   _broadcastLock = false;

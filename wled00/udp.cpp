@@ -934,9 +934,11 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint1
           //   if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
           // }
 
+          // byte *packet_buffer = (byte *) ps_malloc(packetSize * sizeof(byte));
           byte packet_buffer[packetSize];
           std::copy(buffer + bufferOffset, buffer + bufferOffset + packetSize, packet_buffer);
           ddpUdp.write(packet_buffer,packetSize);
+          // free(packet_buffer);
           bufferOffset += packetSize;
 
             // ddpUdp.write(buffer[bufferOffset++]); // R
