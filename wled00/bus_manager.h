@@ -334,7 +334,7 @@ class BusNetwork : public Bus {
     uint8_t   _UDPchannels;
     bool      _rgbw;
     bool      _broadcastLock;
-    byte     *_data;
+    uint16_t __attribute__((aligned (16))) *_data;
     uint8_t   _colorOrder = COL_ORDER_RGB;
     const ColorOrderMap &_colorOrderMap;
 };

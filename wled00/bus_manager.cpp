@@ -435,7 +435,8 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
       break;
   }
   _UDPchannels = _rgbw ? 4 : 3;
-  _data = (byte *)malloc(bc.count * _UDPchannels);
+  // _data = (byte *)malloc(bc.count * _UDPchannels);
+  _data = (uint16_t*) calloc(bc.count * _UDPchannels, sizeof(uint16_t));
   if (_data == nullptr) return;
   memset(_data, 0, bc.count * _UDPchannels);
   _len = bc.count;

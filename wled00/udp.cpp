@@ -762,7 +762,11 @@ static       size_t sequenceNumber = 0; // this needs to be shared across all ou
 static const size_t ART_NET_HEADER_SIZE = 12;
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
-uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
+extern "C" {
+  int s3_scale8x8(uint16_t *pA, uint16_t *pB, uint16_t *pC, uint8_t sar);
+}
+
+uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint16_t *buffer, uint8_t bri, bool isRGBW)  {
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
   WiFiUDP ddpUdp;
@@ -885,6 +889,9 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
       if (sequenceNumber > 255) sequenceNumber = 1;
 
+      uint16_t __attribute__((aligned (16))) bri_array[8] = {bri,bri,bri,bri,bri,bri,bri,bri};
+      s3_scale8x8(buffer, bri_array, buffer, 8);
+
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
         if (bufferOffset > length * (isRGBW?4:3)) return 1; // stop when we hit end of LEDs
@@ -919,13 +926,22 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
           ddpUdp.write(0xFF & (packetSize >> 8)); // 16-bit length of channel data, MSB
           ddpUdp.write(0xFF & (packetSize     )); // 16-bit length of channel data, LSB
 
-          for (uint_fast16_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
-            // "Color Order Override" works on top of this if you need to change the color order before sending.
-            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // R
-            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // G
-            ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // B 
-            if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
-          }
+          // for (uint_fast16_t i = 0; i < packetSize; i += (isRGBW?4:3)) {
+          //   // "Color Order Override" works on top of this if you need to change the color order before sending.
+          //   ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // R
+          //   ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // G
+          //   ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // B 
+          //   if (isRGBW) ddpUdp.write(scale8(buffer[bufferOffset++], bri)); // W
+          // }
+
+          byte packet_buffer[packetSize];
+          std::copy(buffer + bufferOffset, buffer + bufferOffset + packetSize, packet_buffer);
+          ddpUdp.write(packet_buffer,packetSize);
+          bufferOffset += packetSize;
+
+            // ddpUdp.write(buffer[bufferOffset++]); // R
+            // ddpUdp.write(buffer[bufferOffset++]); // G
+            // ddpUdp.write(buffer[bufferOffset++]); // B 
 
           if (!ddpUdp.endPacket()) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
