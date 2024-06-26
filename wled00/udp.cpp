@@ -887,7 +887,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       if (sequenceNumber > 255) sequenceNumber = 1;
 
       for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i++) {
-        buffer[i] = scale8(buffer[i],bri); // set brightness all at once
+        // buffer[i] = scale8(buffer[i],bri); // set brightness all at once
+        buffer[i] = buffer[i] * bri >> 8; // set brightness all at once ( seems slightly faster than scale8()? )
       }
       
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
