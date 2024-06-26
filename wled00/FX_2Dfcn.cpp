@@ -79,7 +79,7 @@ void WS2812FX::setUpMatrix() {
       }
       if ((size > 0) && (customMappingTable == nullptr)) { // second try
         DEBUG_PRINTLN("setUpMatrix: trying to get fresh memory block.");
-        #ifdef ESP32
+        #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
         if (psramFound()){
           customMappingTable = (uint16_t*) ps_calloc(size, sizeof(uint16_t));
         } else {
