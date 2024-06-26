@@ -79,11 +79,15 @@ void WS2812FX::setUpMatrix() {
       }
       if ((size > 0) && (customMappingTable == nullptr)) { // second try
         DEBUG_PRINTLN("setUpMatrix: trying to get fresh memory block.");
+        #ifdef ESP32
         if (psramFound()){
           customMappingTable = (uint16_t*) ps_calloc(size, sizeof(uint16_t));
         } else {
           customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
         }
+        #else
+        customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+        #endif
         if (customMappingTable == nullptr) { 
           USER_PRINTLN("setUpMatrix: alloc failed");
           errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
