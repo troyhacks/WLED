@@ -250,7 +250,7 @@ void WiFiEvent(WiFiEvent_t event) {
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
-      DEBUG_PRINTF("Ethernet speed is %u mbit and link is %sfull duplex! (MAC: ",ETH.linkSpeed(), ETH.fullDuplex()?"":"not ", ETH.macAddress());
+      DEBUG_PRINTF("Ethernet speed is %u mbit and link is %sfull duplex! (MAC: ",ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
       DEBUG_PRINT(ETH.macAddress());
       DEBUG_PRINTLN(")\n");
       break;
