@@ -422,6 +422,7 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
   #else
   static arduinoFFT FFT = arduinoFFT(vReal, vImag, samplesFFT, SAMPLE_RATE);
   #endif
+#endif
 
 // Helper functions
 
@@ -1117,8 +1118,6 @@ static void detectSamplePeak(void) {
     udpSamplePeak = true;
   }
 }
-
-#endif
 
 static void autoResetPeak(void) {
   uint16_t MinShowDelay = MAX(50, strip.getMinShowDelay());  // Fixes private class variable compiler error. Unsure if this is the correct way of fixing the root problem. -THATDONFC
@@ -2670,6 +2669,13 @@ class AudioReactive : public Usermod {
         #else
           infoArr = user.createNestedArray(F("FFT time"));
         #endif
+        infoArr.add(roundf(fftTime)/100.0f);
+        if ((fftTime/100) >= FFT_MIN_CYCLE) // FFT time over budget -> I2S buffer will overflow 
+          infoArr.add("<b style=\"color:red;\">! ms</b>");
+        else if ((fftTime/80 + sampleTime/80) >= FFT_MIN_CYCLE) // FFT time >75% of budget -> risk of instability
+          infoArr.add("<b style=\"color:orange;\"> ms!</b>");
+        else
+          infoArr.add(" ms");
 
         infoArr = user.createNestedArray(F("Filtering time"));
         infoArr.add(roundf(filterTime)/100.0f);
