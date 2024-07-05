@@ -898,7 +898,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i+=(isRGBW?4:3)) {
         // set brightness all at once - seems slightly faster than scale8()?
-        // for some reason, doing 3 at a time is 200 micros faster than 1 at a time.
+        // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
         buffer[i] = buffer[i] * bri >> 8;
         buffer[i+1] = buffer[i+1] * bri >> 8;
         buffer[i+2] = buffer[i+2] * bri >> 8; 
@@ -906,7 +906,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       }
 
       #ifdef ARTNETTIMER
-      USER_PRINTF("Setup took %lu micros. ",micros()-timer);
+      uint_fast16_t setup = micros()-timer;
       #endif
 
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
@@ -959,7 +959,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
       float mbps = strip.getFps()*(datatotal*8)/(micros()-timer)*1000000.0f/1024.0f/1024.0f;
-      USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length,micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
+      if (micros() % 100 < 5) USER_PRINTF("Setup took %u micros. UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",setup, length, micros()-timer-setup, datatotal, packetstotal, mbps, strip.getFps());
       #endif
       free(packet_buffer);
       break;
