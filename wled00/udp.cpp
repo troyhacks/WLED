@@ -761,11 +761,11 @@ void sendSysInfoUDP()
 static       size_t sequenceNumber = 0; // this needs to be shared across all outputs
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
-uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
+uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
-  byte __attribute__((aligned (16))) *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
+  byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
   std::copy(ART_NET_HEADER, ART_NET_HEADER+12, packet_buffer); // copy in the Art-Net header.
 
   switch (type) {
@@ -862,6 +862,12 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
 
+      #ifdef ARTNETTIMER
+      uint_fast16_t datatotal = 0;
+      uint_fast16_t packetstotal = 0;
+      uint_fast16_t timer = micros();
+      #endif
+
       AsyncUDP artnetudp;// AsyncUDP so we can just blast packets.
 
       const uint_fast16_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
@@ -890,17 +896,17 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
       if (sequenceNumber > 255) sequenceNumber = 1;
 
-      for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i++) {
-        // buffer[i] = scale8(buffer[i],bri); // set brightness all at once
-        buffer[i] = buffer[i] * bri >> 8; // set brightness all at once ( seems slightly faster than scale8()? )
+      for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i+=(isRGBW?4:3)) {
+        // set brightness all at once - seems slightly faster than scale8()?
+        // for some reason, doing 3 at a time is 200 micros faster than 1 at a time.
+        buffer[i] = buffer[i] * bri >> 8;
+        buffer[i+1] = buffer[i+1] * bri >> 8;
+        buffer[i+2] = buffer[i+2] * bri >> 8; 
+        if (isRGBW)  buffer[i+3] = buffer[i+3] * bri >> 8; 
       }
 
-      // DEBUG_PRINTF("Setup took %lu millis. ",millis()-timer);
-      
       #ifdef ARTNETTIMER
-      uint_fast16_t datatotal = 0;
-      uint_fast16_t packetstotal = 0;
-      uint_fast16_t timer = micros();
+      USER_PRINTF("Setup took %lu micros. ",micros()-timer);
       #endif
 
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
@@ -952,8 +958,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8
       }
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
-      float mbps = (datatotal*8)/(micros()-timer)*1000000.0f/1024.0f/1024.0f;
-      DEBUG_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec.\n",length,micros()-timer, datatotal, packetstotal, mbps);
+      float mbps = strip.getFps()*(datatotal*8)/(micros()-timer)*1000000.0f/1024.0f/1024.0f;
+      USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length,micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
       free(packet_buffer);
       break;

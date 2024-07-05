@@ -435,7 +435,16 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
       break;
   }
   _UDPchannels = _rgbw ? 4 : 3;
+  #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
+  if (psramFound()){
+    _data = (byte*) ps_calloc(bc.count * _UDPchannels, sizeof(byte));
+  } else {
+    _data = (byte*) calloc(bc.count * _UDPchannels, sizeof(byte));
+  }
+  #else
   _data = (byte*) calloc(bc.count * _UDPchannels, sizeof(byte));
+  #endif
+  
   if (_data == nullptr) return;
   _len = bc.count;
   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
