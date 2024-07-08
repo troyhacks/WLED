@@ -863,9 +863,6 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       The H807SA obeys the "510 channels for RGB" rule like WLED and xLights - some other controllers do not care,
       but we're not supporting those here. If you run into one of these, override ARTNET_CHANNELS_PER_PACKET to 512.
-
-      We're expecting equal numbers of channels per output, common for controllers like the H807SA - at some point
-      we could consider an Art-Net mapping system to adjust universe starts for weird wiring situations.
       */
 
       #ifdef ARTNETTIMER
