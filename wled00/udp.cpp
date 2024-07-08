@@ -761,6 +761,12 @@ void sendSysInfoUDP()
 static       size_t sequenceNumber = 0; // this needs to be shared across all outputs
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
+#if defined(ARDUINO_ARCH_ESP32S3)
+extern "C" {
+  int s3_mul16x16(uint8_t *buffer, uint8_t *bright, uint16_t loops);
+}
+#endif
+
 uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
@@ -895,7 +901,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
       if (sequenceNumber > 255) sequenceNumber = 1;
-
+      
+      #if !defined(ARDUINO_ARCH_ESP32S3)
       for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i+=(isRGBW?4:3)) {
         // set brightness all at once - seems slightly faster than scale8()?
         // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
@@ -904,6 +911,14 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         buffer[i+2] = buffer[i+2] * bri >> 8; 
         if (isRGBW)  buffer[i+3] = buffer[i+3] * bri >> 8; 
       }
+      #else
+      // Use SIMD instructions on the S3 to calculate brightness
+      // This is 300 micros faster always, sometimes MUCH more depending on overall CPU load! (~700 micros down to under 100 sometimes)
+      // Art-Net "_data" is padded to ensure 16-unit widths won't overflow as this is 16 calcs at a time.
+      uint8_t __attribute__((aligned (16))) bright[16];
+      std::fill_n(bright, 16, bri); // seems no slower, and just cleaner code
+      s3_mul16x16(buffer,bright,(length*(isRGBW?4:3)/16));
+      #endif
 
       #ifdef ARTNETTIMER
       uint_fast16_t setup = micros()-timer;

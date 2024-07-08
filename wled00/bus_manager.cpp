@@ -437,12 +437,12 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   _UDPchannels = _rgbw ? 4 : 3;
   #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
   if (psramFound()){
-    _data = (byte*) ps_calloc(bc.count * _UDPchannels, sizeof(byte));
+    _data = (byte*) ps_calloc((bc.count * _UDPchannels)+15, sizeof(byte)); // adding 15 as SIMD math is aligned to 16 units per calculation
   } else {
-    _data = (byte*) calloc(bc.count * _UDPchannels, sizeof(byte));
+    _data = (byte*) calloc((bc.count * _UDPchannels)+15, sizeof(byte));
   }
   #else
-  _data = (byte*) calloc(bc.count * _UDPchannels, sizeof(byte));
+  _data = (byte*) calloc((bc.count * _UDPchannels)+15, sizeof(byte));
   #endif
   
   if (_data == nullptr) return;

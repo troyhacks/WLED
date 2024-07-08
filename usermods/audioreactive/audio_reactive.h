@@ -799,6 +799,7 @@ void FFTcode(void * parameter)
     if (fabsf(volumeSmth) > 0.25f) { // noise gate open
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
+        #ifndef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
         if (doDCRemoval) FFT.dcRemoval();                                            // remove DC offset
         switch(fftWindow) {                                                          // apply FFT window
           case 1:
@@ -832,6 +833,9 @@ void FFTcode(void * parameter)
 
         FFT.compute( FFTDirection::Forward );                       // Compute FFT
         FFT.complexToMagnitude();                                   // Compute magnitudes
+        #else
+        wc = 1.0f; // use Blackman_Harris value from ESP-DSP code
+        #endif
         vReal[0] = 0;   // The remaining DC offset on the signal produces a strong spike on position 0 that should be eliminated to avoid issues.
 
         float last_majorpeak = FFT_MajorPeak;
