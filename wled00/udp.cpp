@@ -971,7 +971,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
       float mbps = strip.getFps()*(datatotal*8)/(micros()-timer)*1000000.0f/1024.0f/1024.0f;
-      if (micros() % 100 < 5) USER_PRINTF("Setup took %u micros. UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",setup, length, micros()-timer-setup, datatotal, packetstotal, mbps, strip.getFps());
+      if (micros() % 100 < 5) USER_PRINTF("Setup took %4u micros. UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",setup, length, micros()-timer-setup, datatotal, packetstotal, mbps, strip.getFps());
       #endif
       free(packet_buffer);
       break;
