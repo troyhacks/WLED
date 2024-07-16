@@ -982,7 +982,6 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           if (i <= x) drawLine(x,0, x,y, col, false);  // right line (if visible)
         }
         break;
-      }
       case M12_jMap: //WLEDMM jMap
         if (jMap)
           ((JMapC *)jMap)->setPixelColor(i, col);
