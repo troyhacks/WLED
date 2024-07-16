@@ -771,16 +771,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
-  #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
-  if (psramFound()){
-    byte *packet_buffer = (byte *) ps_calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  } else {
-    byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  }
-  #else
   byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  #endif
-
   std::copy(ART_NET_HEADER, ART_NET_HEADER+12, packet_buffer); // copy in the Art-Net header.
 
   switch (type) {
