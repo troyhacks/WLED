@@ -930,7 +930,7 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
       case M12_pBar:
         // expand 1D effect vertically or have it play on virtual strips
         if (vStrip>0) setPixelColorXY(vStrip - 1, vH - i - 1, col);
-        else drawLine(0,vH-i-1,vW-1,vH-i-1,col);  
+        else drawLine(0,vH-i-1, vW-1,vH-i-1, col, false); // WLEDMM draw line instead of plotting each pixel
         break;
       case M12_pArc:
         // expand in circular fashion from center
@@ -976,10 +976,11 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
         }
         break;
       case M12_pCorner: {
-        int x = min(i,vW-1);
-        int y = min(i,vH-1);
-        drawLine(0,y,x,y,col);
-        drawLine(x,0,x,y,col);
+          int x = min(i, vW-1);
+          int y = min(i, vH-1);
+          if (i <= y) drawLine(0,y, x,y, col, false);  // botton line (if visible)
+          if (i <= x) drawLine(x,0, x,y, col, false);  // right line (if visible)
+        }
         break;
       }
       case M12_jMap: //WLEDMM jMap
@@ -1005,17 +1006,30 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           setPixelColorXY(x, y, col);
         }
         else { // pCorner -> block
-          for (int x = vW / 2 - i - 1; x <= vW / 2 + i; x++) { // top and bottom horizontal lines
-              setPixelColorXY(x, vH / 2 - i - 1, col);
-              setPixelColorXY(x, vH / 2 + i    , col);
-          }
-          for (int y = vH / 2 - i - 1 + 1; y <= vH / 2 + i - 1; y++) { //left and right vertical lines
-            setPixelColorXY(vW / 2 - i - 1, y, col);
-            setPixelColorXY(vW / 2 + i    , y, col);
-          }
+          int centerX = (vW+1)/2 - 1;
+          int centerY = (vH+1)/2 - 1;
+          int xLeft   = max(centerX-i, 0);
+          int yTop    = max(centerY-i, 0);
+          int xRight  = min(centerX+i+1, vW-1);
+          int yBottom = min(centerY+i+1, vH-1);
+
+          if (yTop == centerY-i)      drawLine(xLeft,yTop, xRight, yTop, col);       // top and bottom horizontal lines, if visible
+          if (yBottom == centerY+i+1) drawLine(xLeft,yBottom, xRight, yBottom, col);
+          if (xLeft == centerX-i)     drawLine(xLeft,yTop, xLeft, yBottom, col);     // left and right vertical lines, if visible
+          if (xRight == centerX+i+1)  drawLine(xRight,yTop, xRight, yBottom, col);
         }
         break;
       case M12_sPinwheel: {
+        // WLEDMM shortcut when no grouping/spacing used
+        bool simpleSegment = (grouping == 1) && (spacing == 0);
+        uint32_t scaled_col = col;
+        if (simpleSegment) {
+          // segment brightness must be pre-calculated for the "fast" setPixelColorXY variant!
+          uint8_t _bri_t = currentBri(on ? opacity : 0);
+          if (!_bri_t && !transitional) return;
+          if (_bri_t < 255) scaled_col = color_fade(col, _bri_t);
+        }
+
         // i = angle --> 0 - 296  (Big), 0 - 192  (Medium), 0 - 72 (Small)
         float centerX = roundf((vW-1) / 2.0f);
         float centerY = roundf((vH-1) / 2.0f);
@@ -1052,7 +1066,10 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           int x = posx / Fixed_Scale;
           int y = posy / Fixed_Scale;
           // set pixel
-          if (x != lastX || y != lastY) setPixelColorXY(x, y, col);  // only paint if pixel position is different
+          if (x != lastX || y != lastY) { // only paint if pixel position is different
+            if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
+            else setPixelColorXY(x, y, col);  
+          }
           lastX = x;
           lastY = y;
           // advance to next position
@@ -1328,15 +1345,29 @@ void Segment::refreshLightCapabilities() {
 }
 
 /*
- * Fills segment with color
+ * Fills segment with color - WLEDMM using faster sPC if possible
  */
 void Segment::fill(uint32_t c) {
   if (!isActive()) return; // not active
   const uint_fast16_t cols = is2D() ? virtualWidth() : virtualLength();             // WLEDMM use fast int types
   const uint_fast16_t rows = virtualHeight(); // will be 1 for 1D
-  for(uint_fast16_t y = 0; y < rows; y++) for (uint_fast16_t x = 0; x < cols; x++) {
-    if (is2D()) setPixelColorXY((uint16_t)x, (uint16_t)y, c);
-    else        setPixelColor((uint16_t)x, c);
+
+  if (is2D()) {
+    // pre-calculate scaled color
+    uint32_t scaled_col = c;
+    bool simpleSegment = (grouping == 1) && (spacing == 0);
+    if (simpleSegment) {
+      uint8_t _bri_t = currentBri(on ? opacity : 0);
+      if (!_bri_t && !transitional) return;
+      if (_bri_t < 255) scaled_col = color_fade(c, _bri_t);
+    }
+    // fill 2D segment
+    for(int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
+      if (simpleSegment) setPixelColorXY_fast(x, y, c, scaled_col, cols, rows);
+      else setPixelColorXY(x, y, c);
+    }
+  } else { // fill 1D strip
+    for (int x = 0; x < cols; x++) setPixelColor(x, c);
   }
 }
 
