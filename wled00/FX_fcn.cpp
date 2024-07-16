@@ -225,11 +225,13 @@ bool Segment::allocateData(size_t len) {
   //DEBUG_PRINTF("allocateData(%u) start %d, stop %d, vlen %d\n", len, start, stop, virtualLength());
   deallocateData();
   if (len == 0) return false; // nothing to do
+  #if defined(ARDUINO_ARCH_ESP32) && !defined(WLED_USE_PSRAM)
   if (Segment::getUsedSegmentData() + len > MAX_SEGMENT_DATA) {
     //USER_PRINTF("Segment::allocateData: Segment data quota exceeded! used:%u request:%u max:%d\n", Segment::getUsedSegmentData(), len, MAX_SEGMENT_DATA);
     if (len > 0) errorFlag = ERR_LOW_SEG_MEM;  // WLEDMM raise errorflag
     return false; //not enough memory
   }
+  #endif
   // do not use SPI RAM on ESP32 since it is slow
   #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
   if (psramFound())
@@ -928,7 +930,7 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
       case M12_pBar:
         // expand 1D effect vertically or have it play on virtual strips
         if (vStrip>0) setPixelColorXY(vStrip - 1, vH - i - 1, col);
-        else          for (int x = 0; x < vW; x++) setPixelColorXY(x, vH - i - 1, col);
+        else drawLine(0,vH-i-1,vW-1,vH-i-1,col);  
         break;
       case M12_pArc:
         // expand in circular fashion from center
@@ -973,10 +975,13 @@ void IRAM_ATTR_YN Segment::setPixelColor(int i, uint32_t col) //WLEDMM: IRAM_ATT
           //}
         }
         break;
-      case M12_pCorner:
-        for (int x = 0; x <= i; x++) setPixelColorXY(x, i, col);
-        for (int y = 0; y <  i; y++) setPixelColorXY(i, y, col);
+      case M12_pCorner: {
+        int x = min(i,vW-1);
+        int y = min(i,vH-1);
+        drawLine(0,y,x,y,col);
+        drawLine(x,0,x,y,col);
         break;
+      }
       case M12_jMap: //WLEDMM jMap
         if (jMap)
           ((JMapC *)jMap)->setPixelColor(i, col);
