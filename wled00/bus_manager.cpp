@@ -812,7 +812,7 @@ int BusManager::add(BusConfig &bc) {
   if (getNumBusses() - getNumVirtualBusses() >= WLED_MAX_BUSSES) return -1;
   DEBUG_PRINTF("BusManager::add(bc.type=%u)\n", bc.type);
   if (bc.type >= TYPE_NET_DDP_RGB && bc.type < 96) {
-    busses[numBusses] = new BusNetwork(bc);
+    busses[numBusses] = new BusNetwork(bc, colorOrderMap);
   } else if (bc.type >= TYPE_HUB75MATRIX && bc.type <= (TYPE_HUB75MATRIX + 10)) {
 #ifdef WLED_ENABLE_HUB75MATRIX
     DEBUG_PRINTLN("BusManager::add - Adding BusHub75Matrix");
