@@ -892,6 +892,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       //
       const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
+      // const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008 }; // specified in LED counts
+      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18 }; // universe start # per output
       // const size_t hardware_outputs[] = { 256,256,256,256,256,256,256,256 }; // specified in LED counts
       // const size_t hardware_outputs_universe_start[] = { 0,2,4,6,8,10,12,14 }; // universe start # per output
       #endif
@@ -909,10 +911,10 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i+=(isRGBW?4:3)) {
           // set brightness all at once - seems slightly faster than scale8()?
           // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
-          buffer[i] = buffer[i] * bri >> 8;
-          buffer[i+1] = buffer[i+1] * bri >> 8;
-          buffer[i+2] = buffer[i+2] * bri >> 8; 
-          if (isRGBW)  buffer[i+3] = buffer[i+3] * bri >> 8; 
+          buffer[i] = (buffer[i] * bri) >> 8;
+          buffer[i+1] = (buffer[i+1] * bri) >> 8;
+          buffer[i+2] = (buffer[i+2] * bri) >> 8; 
+          if (isRGBW) buffer[i+3] = (buffer[i+3] * bri) >> 8; 
         }
       }
       #else
