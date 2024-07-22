@@ -1024,10 +1024,6 @@ bool WLED::initEthernet()
   }
 
   #elif defined (ARDUINO_ARCH_ESP32S3)
-#include "driver/spi_master.h"
-#include "esp_netif.h"
-#include "esp_eth.h"
-
 
   #define ETH_MISO_PIN                    11
   #define ETH_MOSI_PIN                    12
@@ -1046,23 +1042,6 @@ bool WLED::initEthernet()
   // #define ETH_RST_PIN                     42
   // #define ETH_ADDR                        1
 
-#if 1
-#define INIT_SPI_ETH_MODULE_CONFIG(eth_module_config, num)                                      \
-    do {                                                                                        \
-        eth_module_config[num].spi_cs_gpio = ETH_CS_PIN;           \
-        eth_module_config[num].int_gpio = ETH_INT_PIN;             \
-        eth_module_config[num].phy_reset_gpio = ETH_RST_PIN;   \
-        eth_module_config[num].phy_addr = ETH_ADDR;                \
-    } while(0)
-
-typedef struct {
-    uint8_t spi_cs_gpio;
-    uint8_t int_gpio;
-    int8_t phy_reset_gpio;
-    uint8_t phy_addr;
-}spi_eth_module_config_t;
-#endif
-
   managed_pin_type pinsToAllocate[12] = { ETH_MISO_PIN,true,ETH_MOSI_PIN,true,ETH_SCLK_PIN,true,ETH_CS_PIN,true,ETH_INT_PIN,true,ETH_RST_PIN,true };
 
   if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
@@ -1070,65 +1049,18 @@ typedef struct {
     return false;
   }
 
-  #define CONFIG_EXAMPLE_SPI_ETHERNETS_NUM 1
-  // Create instance(s) of esp-netif for SPI Ethernet(s)
-  esp_netif_inherent_config_t esp_netif_config = ESP_NETIF_INHERENT_DEFAULT_ETH();
-  esp_netif_config_t cfg_spi = {
-      .base = &esp_netif_config,
-      .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH
-  };
-  esp_netif_t *eth_netif_spi[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM] = { NULL };
-  char if_key_str[10];
-  char if_desc_str[10];
-  char num_str[3];
-  for (int i = 0; i < CONFIG_EXAMPLE_SPI_ETHERNETS_NUM; i++) {
-      itoa(i, num_str, 10);
-      strcat(strcpy(if_key_str, "ETH_SPI_"), num_str);
-      strcat(strcpy(if_desc_str, "eth"), num_str);
-      esp_netif_config.if_key = if_key_str;
-      esp_netif_config.if_desc = if_desc_str;
-      esp_netif_config.route_prio = 30 - i;
-      eth_netif_spi[i] = esp_netif_new(&cfg_spi);
+  if (!ETH.begin(ETH_PHY_W5500, ETH_ADDR, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
+    DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
+    // de-allocate the allocated pins
+    for (managed_pin_type mpt : pinsToAllocate) {
+      pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+    }
+    return false;
+  } else {
+    Serial.println("ETH initialized W5500!");
   }
 
-  // Init MAC and PHY configs to default
-  eth_mac_config_t mac_config_spi = ETH_MAC_DEFAULT_CONFIG();
-  eth_phy_config_t phy_config_spi = ETH_PHY_DEFAULT_CONFIG();
-
-  // Install GPIO ISR handler to be able to service SPI Eth modlues interrupts
-  gpio_install_isr_service(0);
-
-  // Init SPI bus
-  spi_device_handle_t spi_handle[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM] = { NULL };
-  spi_bus_config_t buscfg = {
-      .miso_io_num = ETH_MISO_PIN,
-      .mosi_io_num = ETH_MOSI_PIN,
-      .sclk_io_num = ETH_SCLK_PIN,
-      .quadwp_io_num = -1,
-      .quadhd_io_num = -1,
-  };
-  ESP_ERROR_CHECK(spi_bus_initialize(ETH_ADDR, &buscfg, SPI_DMA_CH_AUTO));
-
-  // Init specific SPI Ethernet module configuration from Kconfig (CS GPIO, Interrupt GPIO, etc.)
-  spi_eth_module_config_t spi_eth_module_config[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM];
-  INIT_SPI_ETH_MODULE_CONFIG(spi_eth_module_config, 0);
-
-  esp_eth_mac_t *mac_spi[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM];
-  esp_eth_phy_t *phy_spi[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM];
-  esp_eth_handle_t eth_handle_spi[CONFIG_EXAMPLE_SPI_ETHERNETS_NUM] = { NULL };
-
-  // if (!ETH.begin(ETH_PHY_W5500, ETH_ADDR, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
-  //   DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
-  //   // de-allocate the allocated pins
-  //   for (managed_pin_type mpt : pinsToAllocate) {
-  //     pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
-  //   }
-  //   return false;
-  // } else {
-  //   Serial.println("ETH initialized W5500!");
-  // }
-
-  // #endif
+  #endif
 
   successfullyConfiguredEthernet = true;
   USER_PRINTLN(F("initC: *** Ethernet successfully configured! ***"));  // WLEDMM
