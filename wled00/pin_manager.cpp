@@ -13,7 +13,7 @@ static void DebugPrintOwnerTag(PinOwner tag)
   uint32_t q = static_cast<uint8_t>(tag);
   if (q) {
     DEBUG_PRINT(pinManager.getOwnerText(tag)); DEBUG_PRINT(F(" = ")); // WLEDMM
-    DEBUG_PRINTF("0x%02lx (%ld)", q, q);
+    DEBUG_PRINTF("0x%02x (%d)", q, q);
   } else {
     DEBUG_PRINT(F("(no owner)"));
   }
