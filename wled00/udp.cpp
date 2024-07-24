@@ -761,12 +761,6 @@ void sendSysInfoUDP()
 static       size_t sequenceNumber = 0; // this needs to be shared across all outputs
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 
-#if defined(ARDUINO_ARCH_ESP32S3)
-extern "C" {
-  int s3_mul16x16(uint8_t *buffer, uint8_t *bright, uint16_t loops);
-}
-#endif
-
 uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
@@ -906,32 +900,6 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
       if (sequenceNumber > 255) sequenceNumber = 1;
       
-      #if !defined(ARDUINO_ARCH_ESP32S3)
-      if (bri < 255) {
-        for (uint_fast16_t i = 0; i < length*(isRGBW?4:3); i+=(isRGBW?4:3)) {
-          // set brightness all at once - seems slightly faster than scale8()?
-          // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
-          buffer[i] = (buffer[i] * bri) >> 8;
-          buffer[i+1] = (buffer[i+1] * bri) >> 8;
-          buffer[i+2] = (buffer[i+2] * bri) >> 8; 
-          if (isRGBW) buffer[i+3] = (buffer[i+3] * bri) >> 8; 
-        }
-      }
-      #else
-      // Use SIMD instructions on the S3 to calculate brightness
-      // This is 300 micros faster always, sometimes MUCH more depending on overall CPU load! (~700 micros down to under 100 sometimes)
-      // Art-Net "_data" is padded to ensure 16-unit widths won't overflow as this is 16 calcs at a time.
-      if (bri < 255) {
-        uint8_t __attribute__((aligned (16))) bright[16];
-        std::fill_n(bright, 16, bri); // seems no slower, and just cleaner code
-        s3_mul16x16(buffer,bright,(length*(isRGBW?4:3)/16));
-      }
-      #endif
-
-      #ifdef ARTNETTIMER
-      uint_fast16_t setup = micros()-timer;
-      #endif
-
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
         if (bufferOffset > length * (isRGBW?4:3)) {
@@ -969,6 +937,17 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           // bulk copy the buffer range to the packet buffer after the header 
           std::copy(buffer+bufferOffset, buffer+bufferOffset+packetSize, packet_buffer+18);
 
+          if (bri < 255) {
+            for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
+              // set brightness all at once - seems slightly faster than scale8()?
+              // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
+              packet_buffer[i] = (packet_buffer[i] * bri) >> 8;
+              packet_buffer[i+1] = (packet_buffer[i+1] * bri) >> 8;
+              packet_buffer[i+2] = (packet_buffer[i+2] * bri) >> 8; 
+              if (isRGBW) packet_buffer[i+3] = (packet_buffer[i+3] * bri) >> 8; 
+            }
+          }
+
           bufferOffset += packetSize;
 
           if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
@@ -982,7 +961,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
-      if (micros() % 100 < 5) USER_PRINTF("Setup took %4u micros. UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",setup, length, micros()-timer-setup, datatotal, packetstotal, mbps, strip.getFps());
+      if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
       free(packet_buffer);
       break;
