@@ -888,7 +888,7 @@ void FFTcode(void * parameter)
           vReal[binInd] *= pinkFactors[binInd];
         #endif
 
-        #else
+        // #else
           #ifndef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
             #if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
               // arduinoFFT 2.x has a slightly different API
@@ -897,7 +897,7 @@ void FFTcode(void * parameter)
               FFT.majorPeak(FFT_MajorPeak, FFT_Magnitude);                // let the effects know which freq was most dominant
             #endif
           #endif
-        #endif
+        // #endif
         FFT_Magnitude *= wc;  // apply correction factor
 
         if (FFT_MajorPeak < (SAMPLE_RATE /  samplesFFT)) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                  // too low - use zero
@@ -1225,6 +1225,8 @@ static void detectSamplePeak(void) {
     udpSamplePeak = true;
   }
 }
+
+#endif
 
 static void autoResetPeak(void) {
   uint16_t MinShowDelay = MAX(50, strip.getMinShowDelay());  // Fixes private class variable compiler error. Unsure if this is the correct way of fixing the root problem. -THATDONFC
