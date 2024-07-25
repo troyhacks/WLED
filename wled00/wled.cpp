@@ -529,21 +529,21 @@ void WLED::setup()
   // WLEDMM end
 
   USER_PRINT(F("FLASH: ")); USER_PRINT((ESP.getFlashChipSize()/1024)/1024);
-  USER_PRINT(F("MB, Mode ")); USER_PRINT(ESP.getFlashChipMode());
+  // USER_PRINT(F("MB, Mode ")); USER_PRINT(ESP.getFlashChipMode());
   #ifdef WLED_DEBUG
-  switch (ESP.getFlashChipMode()) {
-    // missing: Octal modes
-    case FM_QIO:  DEBUG_PRINT(F(" (QIO)")); break;
-    case FM_QOUT: DEBUG_PRINT(F(" (QOUT)"));break;
-    case FM_DIO:  DEBUG_PRINT(F(" (DIO)")); break;
-    case FM_DOUT: DEBUG_PRINT(F(" (DOUT)"));break;
-    default: break;
-  }
+  // switch (ESP.getFlashChipMode()) {
+  //   // missing: Octal modes
+  //   case FM_QIO:  DEBUG_PRINT(F(" (QIO)")); break;
+  //   case FM_QOUT: DEBUG_PRINT(F(" (QOUT)"));break;
+  //   case FM_DIO:  DEBUG_PRINT(F(" (DIO)")); break;
+  //   case FM_DOUT: DEBUG_PRINT(F(" (DOUT)"));break;
+  //   default: break;
+  // }
   #endif
   USER_PRINT(F(", speed ")); USER_PRINT(ESP.getFlashChipSpeed()/1000000);USER_PRINTLN(F("MHz."));
   
   #if defined(WLED_DEBUG) && defined(ARDUINO_ARCH_ESP32)
-  showRealSpeed();
+  // showRealSpeed();
   #endif
 
 #else
@@ -556,16 +556,16 @@ void WLED::setup()
   USER_PRINTLN(ESP.getResetInfo());
 
   USER_PRINT(F("FLASH: ")); USER_PRINT((ESP.getFlashChipRealSize()/1024)/1024);
-  USER_PRINT(F("MB, Mode ")); USER_PRINT((int)ESP.getFlashChipMode());
+  // USER_PRINT(F("MB, Mode ")); USER_PRINT((int)ESP.getFlashChipMode());
   #ifdef WLED_DEBUG
-  switch (ESP.getFlashChipMode()) {
-    // missing: Octal modes
-    case FM_QIO:  DEBUG_PRINT(F(" (QIO)")); break;
-    case FM_QOUT: DEBUG_PRINT(F(" (QOUT)"));break;
-    case FM_DIO:  DEBUG_PRINT(F(" (DIO)")); break;
-    case FM_DOUT: DEBUG_PRINT(F(" (DOUT)"));break;
-    default: break;
-  }
+  // switch (ESP.getFlashChipMode()) {
+  //   // missing: Octal modes
+  //   case FM_QIO:  DEBUG_PRINT(F(" (QIO)")); break;
+  //   case FM_QOUT: DEBUG_PRINT(F(" (QOUT)"));break;
+  //   case FM_DIO:  DEBUG_PRINT(F(" (DIO)")); break;
+  //   case FM_DOUT: DEBUG_PRINT(F(" (DOUT)"));break;
+  //   default: break;
+  // }
   #endif
   USER_PRINT(F(", speed ")); USER_PRINT(ESP.getFlashChipSpeed()/1000000);USER_PRINT(F("MHz; "));
   USER_PRINT(F(" chip ID = 0x"));
