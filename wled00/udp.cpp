@@ -878,14 +878,14 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       #else
       // Example of more than 1 output, currently you can only hard-code this kind of setup here.
       // You get 170 RGB LEDs per universe (128 RGBW) so the receiving hardware needs to be configured correctly.
-      // The H807SA, for example, only allows one global setting of Art-Net universes-per-output.
+      // The H807SA, for example, only allows one global setting of Art-Net universes-per-output, but you
+      // can adjust how many pixels are on a particular output here too.
       //
       const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
-      // const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008 }; // specified in LED counts
-      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18 }; // universe start # per output
-      // const size_t hardware_outputs[] = { 256,256,256,256,256,256,256,256 }; // specified in LED counts
-      // const size_t hardware_outputs_universe_start[] = { 0,2,4,6,8,10,12,14 }; // universe start # per output
+      // Example of two H807SA units ganged together:
+      // const uint_fast16_t hardware_outputs[] = { 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512 }; // specified in LED counts
+      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60 }; // universe start # per output
       #endif
       
       uint_fast16_t bufferOffset = 0;
