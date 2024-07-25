@@ -765,13 +765,9 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
-  #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
-  byte *packet_buffer = (byte *) ps_calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  #else
-  byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  #endif
+  static byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
 
-  std::copy(ART_NET_HEADER, ART_NET_HEADER+12, packet_buffer); // copy in the Art-Net header.
+  memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header.
 
   switch (type) {
     case 0: // DDP
@@ -904,7 +900,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         
         if (bufferOffset > length * (isRGBW?4:3)) {
           // This stop is reached if we don't have enough pixels for the defined Art-Net output.
-          free(packet_buffer);
+          // free(packet_buffer);
           return 1; // stop when we hit end of LEDs
         }
 
@@ -935,7 +931,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           packet_buffer[17] = packetSize;
 
           // bulk copy the buffer range to the packet buffer after the header 
-          std::copy(buffer+bufferOffset, buffer+bufferOffset+packetSize, packet_buffer+18);
+          memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
 
           if (bri < 255) {
             for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
@@ -952,7 +948,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
           if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
-            free(packet_buffer);
+            // free(packet_buffer);
             return 1; // borked
           }
           hardware_output_universe++;
@@ -963,7 +959,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
       if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
-      free(packet_buffer);
+      // free(packet_buffer);
       break;
     }
   }
