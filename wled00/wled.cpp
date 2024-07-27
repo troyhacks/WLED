@@ -1368,7 +1368,6 @@ void WLED::handleConnection()
       initAP();
     }
   } else if (!interfacesInited) { //newly connected
-    DEBUG_PRINTLN("");
     USER_PRINT(F("Connected! IP address: "));
     if (Network.isEthernet()) {
       USER_PRINT(ETH.localIP());
