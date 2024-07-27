@@ -229,16 +229,19 @@ void WiFiEvent(WiFiEvent_t event) {
       break;
 
     #ifdef WLED_USE_ETHERNET
-    case ARDUINO_EVENT_ETH_GOT_IP:
-      if (!apActive) {
-        DEBUG_PRINTLN(F("ETH is up. Disabling WIFi"));
-        WiFi.disconnect(true);
-      } else {
-        DEBUG_PRINTLN(F("ETH is up. Leaving AP WiFi Active"));
+    case ARDUINO_EVENT_ETH_GOT_IP: {
+        IPAddress localIP = ETH.localIP();
+        USER_PRINTF("ETH is up on %d.%d.%d.%d. ", localIP[0], localIP[1], localIP[2], localIP[3]);
+        if (!apActive) {
+          USER_PRINTLN(F("Disabling WIFi."));
+          WiFi.disconnect(true);
+        } else {
+          USER_PRINTLN(F("Leaving AP WiFi Active."));
+        }
       }
       break;
 
-    case ARDUINO_EVENT_ETH_CONNECTED: // was SYSTEM_EVENT_ETH_CONNECTED:
+    case ARDUINO_EVENT_ETH_CONNECTED: {// was SYSTEM_EVENT_ETH_CONNECTED:
       DEBUG_PRINTLN(F("ETH connected. Setting up ETH"));
       if (staticIP != (uint32_t)0x00000000 && staticGateway != (uint32_t)0x00000000) {
         ETH.config(staticIP, staticGateway, staticSubnet, IPAddress(8, 8, 8, 8));
@@ -250,9 +253,10 @@ void WiFiEvent(WiFiEvent_t event) {
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
-      DEBUG_PRINTF("Ethernet speed is %u mbit and link is %sfull duplex! (MAC: ",ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
-      DEBUG_PRINT(ETH.macAddress());
-      DEBUG_PRINTLN(")\n");
+      USER_PRINTF("ETH up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
+      USER_PRINT(ETH.macAddress());
+      USER_PRINTLN(")");
+      }
       break;
 
     case ARDUINO_EVENT_ETH_DISCONNECTED: // was SYSTEM_EVENT_ETH_DISCONNECTED:

@@ -1370,10 +1370,11 @@ void WLED::handleConnection()
   } else if (!interfacesInited) { //newly connected
     DEBUG_PRINTLN("");
     USER_PRINT(F("Connected! IP address: "));
-    USER_PRINT(Network.localIP());
     if (Network.isEthernet()) {
+      USER_PRINT(ETH.localIP());
       USER_PRINTLN(" via Ethernet");
     } else {
+      USER_PRINT(Network.localIP());
       USER_PRINTLN(" via WiFi");
     }
     if (improvActive) {
