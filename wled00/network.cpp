@@ -231,13 +231,15 @@ void WiFiEvent(WiFiEvent_t event) {
     #ifdef WLED_USE_ETHERNET
     case ARDUINO_EVENT_ETH_GOT_IP: {
         IPAddress localIP = ETH.localIP();
-        USER_PRINTF("ETH is up on %d.%d.%d.%d. ", localIP[0], localIP[1], localIP[2], localIP[3]);
+        USER_PRINTF("Ethernet has IP %d.%d.%d.%d. ", localIP[0], localIP[1], localIP[2], localIP[3]);
         if (!apActive) {
           USER_PRINTLN(F("Disabling WIFi."));
           WiFi.disconnect(true);
         } else {
           USER_PRINTLN(F("Leaving AP WiFi Active."));
         }
+        USER_PRINTLN(F("Disabling mDNS as it doesn't work on Ethernet at the moment."));
+        MDNS.end();
       }
       break;
 
@@ -253,7 +255,7 @@ void WiFiEvent(WiFiEvent_t event) {
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
-      USER_PRINTF("ETH up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
+      USER_PRINTF("Ethernet link is up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
       USER_PRINT(ETH.macAddress());
       USER_PRINTLN(")");
       }
