@@ -765,17 +765,15 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
+  // For some reason, this is faster outside of the case block...
+  //
   static byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-
   memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header.
 
   switch (type) {
     case 0: // DDP
     {
       WiFiUDP ddpUdp; 
-      // #if defined WLED_USE_ETHERNET && !defined ESP8266
-      // ddpUdp.begin(Network.localIP(),DDP_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
-      // #endif
 
       // calculate the number of UDP packets we need to send
       size_t channelCount = length * (isRGBW? 4:3); // 1 channel for every R,G,B value
@@ -843,18 +841,14 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     {
     } break;
 
-    case 2: //ArtNet
+    case 2: //Art-Net
     {
-      // #if defined WLED_USE_ETHERNET && !defined ESP8266
-      // ddpUdp.begin(Network.localIP(),ARTNET_DEFAULT_PORT); // in case we have Ethernet on ESP32, this forces that source IP/routing.
-      // #endif
-      /* 
-      We don't really care about the number of universes - just how many hardware outputs we have.
-
+      /*
       WLED rendering Art-Net data considers itself to be 1 hardware output with many universes - but
-      many Art-Net controllers like the H807SA can be manually set to "X universes per output."
+      many Art-Net controllers like the H807SA can be manually set to "X universes per output" or in 
+      some cases "X channels per port" - which is the same thing, just expressed differently.
 
-      We need to know the channels per output so we can break the pixel data across physically attached universes.
+      We need to know the LEDs per output so we can break the pixel data across physically attached universes.
 
       The H807SA obeys the "510 channels for RGB" rule like WLED and xLights - some other controllers do not care,
       but we're not supporting those here. If you run into one of these, override ARTNET_CHANNELS_PER_PACKET to 512.
@@ -879,12 +873,14 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // Example of more than 1 output, currently you can only hard-code this kind of setup here.
       // You get 170 RGB LEDs per universe (128 RGBW) so the receiving hardware needs to be configured correctly.
       // The H807SA, for example, only allows one global setting of Art-Net universes-per-output, but you
-      // can adjust how many pixels are on a particular output here too.
+      // can adjust how many pixels are on a particular output.
       //
       const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
+
       // Example of two H807SA units ganged together:
-      // const uint_fast16_t hardware_outputs[] = { 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512, 512 }; // specified in LED counts
+      //
+      // const uint_fast16_t hardware_outputs[] = { 512,512,512,512,512,512,512,512,512,512,512,512,512,512,512,512 }; // specified in LED counts
       // const uint_fast16_t hardware_outputs_universe_start[] = { 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60 }; // universe start # per output
       #endif
       
@@ -900,7 +896,6 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         
         if (bufferOffset > length * (isRGBW?4:3)) {
           // This stop is reached if we don't have enough pixels for the defined Art-Net output.
-          // free(packet_buffer);
           return 1; // stop when we hit end of LEDs
         }
 
@@ -933,7 +928,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           // bulk copy the buffer range to the packet buffer after the header 
           memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
 
-          if (bri < 255) {
+          if (bri < 255) { // speed hack - don't adjust brightness if full brightness
             for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
               // set brightness all at once - seems slightly faster than scale8()?
               // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
@@ -947,8 +942,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           bufferOffset += packetSize;
 
           if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
-            DEBUG_PRINTLN(F("Art-Net WiFiUDP.endPacket returned an error"));
-            // free(packet_buffer);
+            DEBUG_PRINTLN(F("Art-Net artnetudp.writeTo() returned an error"));
             return 1; // borked
           }
           hardware_output_universe++;
@@ -959,7 +953,6 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
       if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
-      // free(packet_buffer);
       break;
     }
   }
