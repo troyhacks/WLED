@@ -758,9 +758,13 @@ void sendSysInfoUDP()
 // buffer - a buffer of at least length*4 bytes long
 // isRGBW - true if the buffer contains 4 components per pixel
 
+#ifndef ARTNET_FPS_LIMIT
+  #define ARTNET_FPS_LIMIT 44
+#endif
+
 static       size_t sequenceNumber = 0; // this needs to be shared across all outputs
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
-static uint_fast16_t artnetlimiter  = millis()+(1000/50);
+static uint_fast16_t artnetlimiter  = millis()+(1000/ARTNET_FPS_LIMIT);
 
 uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
 
@@ -843,8 +847,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     } break;
     case 2: //Art-Net
     {
-      if (artnetlimiter > millis()) {
-        // delay(artnetlimiter-millis());
+      while (artnetlimiter > millis()) {
         delay(1);
       }
 
@@ -859,14 +862,11 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       but we're not supporting those here. If you run into one of these, override ARTNET_CHANNELS_PER_PACKET to 512.
       */
 
-      IPAddress unit1 = IPAddress(192,168,8,253);
-      IPAddress unit2 = IPAddress(192,168,8,254);
-
       #ifdef ARTNETTIMER
       uint_fast16_t datatotal = 0;
       uint_fast16_t packetstotal = 0;
-      uint_fast16_t timer = micros();
       #endif
+      uint_fast16_t timer = micros();
 
       AsyncUDP artnetudp;// AsyncUDP so we can just blast packets.
 
@@ -953,7 +953,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
           bufferOffset += packetSize;
           
-          if (!artnetudp.writeTo(packet_buffer,packetSize+18, (hardware_output < 8) ? unit1:unit1, ARTNET_DEFAULT_PORT)) {
+          if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net artnetudp.writeTo() returned an error"));
             return 1; // borked
           }
@@ -966,37 +966,40 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // After the first sync packet, and assuming 1 sync packet every 4 
       // seconds at least, should keep Art-Net nodes in synchronous mode.
 
-      // // packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
-      // packet_buffer[9]  = 0x52; // ArtSync opcode high byte
-      // packet_buffer[12] = 0x00; // Aux1 - Transmit as 0. This is normally the sequence number in ArtDMX packets.
-      // // packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet alrady
+      #ifdef ENABLE_ARTNET_SYNC
+        
+        // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP because it doesn't support source port binding.
+        // Doesn't seem to do anything on my gear, so it's disabled.
 
-      // if (!artnetudp.broadcastTo(packet_buffer, 14, ARTNET_DEFAULT_PORT)) {
-      //   DEBUG_PRINTLN(F("Art-Net Sync artnetudp.broadcastTo() returned an error"));
-      //   return 1; // borked
-      // }
+        packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
+        packet_buffer[9]  = 0x52; // ArtSync opcode high byte
+        packet_buffer[12] = 0x00; // Aux1 - Transmit as 0. This is normally the sequence number in ArtDMX packets.
+        packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet already
 
-      // if (!artnetudp.writeTo(packet_buffer, 14, unit1,  ARTNET_DEFAULT_PORT)) {
-      //   DEBUG_PRINTLN(F("Art-Net Sync artnetudp.broadcastTo() returned an error"));
-      //   return 1; // borked
-      // }
+        WiFiUDP artnetsync;
+        artnetsync.begin(ETH.localIP(), ARTNET_DEFAULT_PORT);
+        artnetsync.beginPacket(IPADDR_BROADCAST,ARTNET_DEFAULT_PORT);
+        artnetsync.write(packet_buffer,14);
 
-      // if (!artnetudp.writeTo(packet_buffer, 14, unit2, ARTNET_DEFAULT_PORT)) {
-      //   DEBUG_PRINTLN(F("Art-Net Sync artnetudp.writeTo() returned an error"));
-      //   return 1; // borked
-      // }
+        if (!artnetsync.endPacket()) {
+          DEBUG_PRINTLN(F("Art-Net Sync Broadcast returned an error"));
+          return 1; // borked
+        }
 
-      // #ifdef ARTNETTIMER
-      // packetstotal++;
-      // datatotal += 14;
-      // #endif
+        #ifdef ARTNETTIMER
+        packetstotal++;
+        datatotal += 14;
+        #endif
+      
+      #endif
 
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
+      // the "micros()" calc is just to limit the print to a more random debug output so it doesn't overwhelm the terminal
       if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
-      artnetlimiter = millis()+(1000/50);
+      artnetlimiter = millis()+(1000/ARTNET_FPS_LIMIT)-((micros()-timer)/1000);
       break;
     }
   }
