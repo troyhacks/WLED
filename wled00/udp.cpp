@@ -759,6 +759,9 @@ void sendSysInfoUDP()
 // isRGBW - true if the buffer contains 4 components per pixel
 
 #ifndef ARTNET_FPS_LIMIT
+  // ...in theory we could discover and probe the hardware for the FPS limit, 
+  // but 44 is pretty common as it matches the wired DMX512 max speed for one universe.
+  // The H807SA responds with 44Hz, aka 44 FPS.
   #define ARTNET_FPS_LIMIT 44
 #endif
 
@@ -847,8 +850,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     } break;
     case 2: //Art-Net
     {
-      while (artnetlimiter > millis()) {
-        delay(1);
+      while (artnetlimiter > micros()) {
+        delayMicroseconds(10);
       }
 
       /*
@@ -968,8 +971,11 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       #ifdef ENABLE_ARTNET_SYNC
         
-        // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP because it doesn't support source port binding.
-        // Doesn't seem to do anything on my gear, so it's disabled.
+        // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP 
+        // because it doesn't support source port binding.
+        // Tested on Art-Net qualifier software but not on real hardware
+        // with known support for ArtSync.
+        // Doesn't seem to do anything on my gear, so it's disabled. 
 
         packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
         packet_buffer[9]  = 0x52; // ArtSync opcode high byte
@@ -993,13 +999,15 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       
       #endif
 
+      artnetlimiter = micros()+(1000000/ARTNET_FPS_LIMIT)-(micros()-timer);
+
       // This is the proper stop if pixels = Art-Net output.
       #ifdef ARTNETTIMER
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
       // the "micros()" calc is just to limit the print to a more random debug output so it doesn't overwhelm the terminal
       if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
       #endif
-      artnetlimiter = millis()+(1000/ARTNET_FPS_LIMIT)-((micros()-timer)/1000);
+    
       break;
     }
   }
