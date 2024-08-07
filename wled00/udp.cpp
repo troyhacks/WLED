@@ -893,6 +893,10 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       // const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
 
+      // const uint_fast16_t hardware_outputs[] = { 1024,1024,1024,1024,1024,1024,1024,1024 }; // specified in LED counts
+      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,7,14,21,28,35,42,49 }; // universe start # per output
+
+
       // Example of two H807SA units ganged together:
       //
       const uint_fast16_t hardware_outputs[] = { 512,512,512,512,512,512,512,512,512,512,512,512,512,512,512,512 }; // specified in LED counts
@@ -971,10 +975,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       #ifdef ENABLE_ARTNET_SYNC
         
-        // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP 
-        // because it doesn't support source port binding.
-        // Tested on Art-Net qualifier software but not on real hardware
-        // with known support for ArtSync.
+        // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP because it doesn't support source port binding.
+        // Tested on Art-Net qualifier software but not on real hardware with known support for ArtSync.
         // Doesn't seem to do anything on my gear, so it's disabled. 
 
         packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
@@ -1002,6 +1004,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       artnetlimiter = micros()+(1000000/ARTNET_FPS_LIMIT)-(micros()-timer);
 
       // This is the proper stop if pixels = Art-Net output.
+      
       #ifdef ARTNETTIMER
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
       // the "micros()" calc is just to limit the print to a more random debug output so it doesn't overwhelm the terminal
