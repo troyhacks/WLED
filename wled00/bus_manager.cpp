@@ -510,20 +510,20 @@ uint32_t IRAM_ATTR BusNetwork::getPixelColor(uint16_t pix) {
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
   if (_colorOrder != co) {
     if (co == COL_ORDER_GRB) {
-      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_RGB) {
-      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_BRG) {
-      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_RBG) {
-      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_GBR) {
-      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_BGR) {
-      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3] << 24) : 0);
+      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3]) : 0);
     }
   }
-  return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3] << 24) : 0);
+  return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
 }
 
 void BusNetwork::show() {
