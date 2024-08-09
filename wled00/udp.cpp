@@ -865,7 +865,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       but we're not supporting those here. If you run into one of these, override ARTNET_CHANNELS_PER_PACKET to 512.
       */
 
-      #ifdef ARTNETTIMER
+      #ifdef ARTNET_TIMER
       uint_fast16_t datatotal = 0;
       uint_fast16_t packetstotal = 0;
       #endif
@@ -933,7 +933,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
             channels_remaining -= packetSize;
           }
 
-          #ifdef ARTNETTIMER
+          #ifdef ARTNET_TIMER
           packetstotal++;
           datatotal += packetSize + 18;
           #endif
@@ -973,7 +973,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // After the first sync packet, and assuming 1 sync packet every 4 
       // seconds at least, should keep Art-Net nodes in synchronous mode.
 
-      #ifdef ENABLE_ARTNET_SYNC
+      #ifdef ARTNET_SYNC_ENABLED
         
         // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP because it doesn't support source port binding.
         // Tested on Art-Net qualifier software but not on real hardware with known support for ArtSync.
@@ -994,7 +994,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           return 1; // borked
         }
 
-        #ifdef ARTNETTIMER
+        #ifdef ARTNET_TIMER
         packetstotal++;
         datatotal += 14;
         #endif
@@ -1005,7 +1005,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
       // This is the proper stop if pixels = Art-Net output.
       
-      #ifdef ARTNETTIMER
+      #ifdef ARTNET_TIMER
       float mbps = (datatotal*8)/((micros()-timer)*1000000.0f/1024.0f/1024.0f);
       // the "micros()" calc is just to limit the print to a more random debug output so it doesn't overwhelm the terminal
       if (micros() % 100 < 5) USER_PRINTF("UDP for %u pixels took %lu micros. %u data in %u total packets. %2.2f mbit/sec at %u FPS.\n",length, micros()-timer, datatotal, packetstotal, mbps, strip.getFps());
