@@ -179,13 +179,31 @@ void WS2812FX::setUpMatrix() {
       //WLEDMM: no resetSegments here, only do it in set.cpp/handleSettingsSet - as we want t0 maintain the segment settings after setup has changed
     }
   }
+
+#ifdef WLED_ENABLE_HUB75MATRIX
+  // softhack007 hack: delete mapping table in case it only contains "identity"
+  if (customMappingTable != nullptr && customMappingTableSize > 0) {
+    bool isIdentity = true;
+    for (size_t i = 0; (i< customMappingSize) && isIdentity; i++) { //WLEDMM use customMappingTableSize
+      if (customMappingTable[i] != (uint16_t)i ) isIdentity = false;
+    }
+    if (isIdentity) {
+      free(customMappingTable); customMappingTable = nullptr;      
+      USER_PRINTF("!setupmatrix: customMappingTable is not needed. Dropping %d bytes.\n", customMappingTableSize * sizeof(uint16_t));
+      customMappingTableSize = 0;
+      customMappingSize = 0;
+      loadedLedmap = 0; //WLEDMM
+    }
+  }
+#endif
+
 #else
   isMatrix = false; // no matter what config says
 #endif
 }
 
 // absolute matrix version of setPixelColor(), without error checking
-void IRAM_ATTR WS2812FX::setPixelColorXY_fast(int x, int y, uint32_t col) //WLEDMM: IRAM_ATTR conditionally
+void IRAM_ATTR __attribute__((hot)) WS2812FX::setPixelColorXY_fast(int x, int y, uint32_t col) //WLEDMM: IRAM_ATTR conditionally
 {
   uint_fast16_t index = y * Segment::maxWidth + x;
   if (index < customMappingSize) index = customMappingTable[index];
@@ -208,7 +226,7 @@ void IRAM_ATTR_YN WS2812FX::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM
 }
 
 // returns RGBW values of pixel
-uint32_t WS2812FX::getPixelColorXY(uint16_t x, uint16_t y) {
+uint32_t __attribute__((hot)) WS2812FX::getPixelColorXY(uint16_t x, uint16_t y) const {
 #ifndef WLED_DISABLE_2D
   uint_fast16_t index = (y * Segment::maxWidth + x); //WLEDMM: use fast types
 #else
@@ -247,7 +265,7 @@ void Segment::startFrame(void) {
 
 // Simplified version of Segment::setPixelColorXY - without error checking. Does not support grouping or spacing
 // * expects scaled color (final brightness) as additional input parameter, plus segment  virtualWidth() and virtualHeight()
-void IRAM_ATTR Segment::setPixelColorXY_fast(int x, int y, uint32_t col, uint32_t scaled_col, int cols, int rows) //WLEDMM
+void IRAM_ATTR __attribute__((hot)) Segment::setPixelColorXY_fast(int x, int y, uint32_t col, uint32_t scaled_col, int cols, int rows) //WLEDMM
 {
   unsigned i = UINT_MAX;
   bool sameColor = false;
@@ -414,7 +432,7 @@ void Segment::setPixelColorXY(float x, float y, uint32_t col, bool aa, bool fast
 }
 
 // returns RGBW values of pixel
-uint32_t IRAM_ATTR_YN Segment::getPixelColorXY(int x, int y) {
+uint32_t IRAM_ATTR_YN Segment::getPixelColorXY(int x, int y) const {
   if (x<0 || y<0 || !isActive()) return 0; // not active or out-of range
   if (ledsrgb) {
     int i = XY(x,y);
