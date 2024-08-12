@@ -983,7 +983,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         packet_buffer[9]  = 0x52; // ArtSync opcode high byte
         packet_buffer[12] = 0x00; // Aux1 - Transmit as 0. This is normally the sequence number in ArtDMX packets.
         packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet already
-
+        
+        #ifdef ARTNET_SYNC_STRICT
         WiFiUDP artnetsync;
         artnetsync.begin(ETH.localIP(), ARTNET_DEFAULT_PORT);
         artnetsync.beginPacket(IPADDR_BROADCAST,ARTNET_DEFAULT_PORT);
@@ -993,6 +994,12 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           DEBUG_PRINTLN(F("Art-Net Sync Broadcast returned an error"));
           return 1; // borked
         }
+        #else
+        if (!artnetudp.writeTo(packet_buffer,14, client, ARTNET_DEFAULT_PORT)) {
+          DEBUG_PRINTLN(F("Art-Net Sync Unicast returned an error"));
+          return 1; // borked
+        }
+        #endif
 
         #ifdef ARTNET_TIMER
         packetstotal++;
