@@ -2148,7 +2148,7 @@ uint16_t mode_fire_2012() {
 
       // Step 4.  Map from heat cells to LED colors
       for (int j = 0; j < SEGLEN; j++) {
-        SEGMENT.setPixelColor(indexToVStrip(j, stripNr), ColorFromPalette(SEGPALETTE, min(heat[j],byte(240)), 255, NOBLEND));
+        SEGMENT.setPixelColor(indexToVStrip(j, stripNr), ColorFromPalette(SEGPALETTE, min(heat[j], byte(240)), 255, NOBLEND));
       }
     }
   };
@@ -2156,14 +2156,19 @@ uint16_t mode_fire_2012() {
   for (int stripNr=0; stripNr<strips; stripNr++)
     virtualStrip::runStrip(stripNr, &heat[stripNr * SEGLEN], it);
 
-  if (SEGMENT.is2D()) SEGMENT.blur(32);
+  if (SEGMENT.is2D()) {
+    uint8_t blurAmount = SEGMENT.custom2 >> 2;
+    if (blurAmount > 48) blurAmount += blurAmount-48;             // extra blur when slider > 192  (bush burn)
+    if (blurAmount < 16) SEGMENT.blurCols(SEGMENT.custom2 >> 1);  // no side-burn when slider < 64 (faster)
+    else SEGMENT.blur(blurAmount);
+  }
 
   if (it != SEGENV.step)
     SEGENV.step = it;
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_FIRE_2012[] PROGMEM = "Fire 2012@Cooling,Spark rate,,,Boost;;!;1.5d;sx=64,ix=160,m12=1"; // bars WLEDMM 1.5d, 
+static const char _data_FX_MODE_FIRE_2012[] PROGMEM = "Fire 2012@Cooling,Spark rate,,2D Blur,Boost;;!;1.5d;sx=64,ix=160,c2=128,m12=1"; // bars WLEDMM 1.5d, 
 
 
 // ColorWavesWithPalettes by Mark Kriegsman: https://gist.github.com/kriegsman/8281905786e8b2632aeb
