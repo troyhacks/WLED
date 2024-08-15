@@ -8647,7 +8647,7 @@ uint16_t mode_2DPaintbrush() {
   }
   return FRAMETIME;
 } // mode_2DPaintbrush()
-static const char _data_FX_MODE_2DPAINTBRUSH[] PROGMEM = "Paintbrush@Oscillator Offset,# of lines,Fade Rate,,Min Length,Color Chaos,Anti-aliasing,Phase Chaos;!,,Peaks;!;2f;sx=160,ix=255,c1=80,c2=255,c3=0,pal=11,o1=0,o2=1,o3=0";
+static const char _data_FX_MODE_2DPAINTBRUSH[] PROGMEM = "Paintbrush ☾@Oscillator Offset,# of lines,Fade Rate,,Min Length,Color Chaos,Anti-aliasing,Phase Chaos;!,,Peaks;!;2f;sx=160,ix=255,c1=80,c2=255,c3=0,pal=72,o1=0,o2=1,o3=0";
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // mode data
