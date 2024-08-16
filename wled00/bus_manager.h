@@ -340,7 +340,9 @@ class BusNetwork : public Bus {
       return _len;
     }
 
-    uint8_t getColorOrder() {
+    void setColorOrder(uint8_t colorOrder);
+
+    uint8_t getColorOrder() const {
       return _colorOrder;
     }
 

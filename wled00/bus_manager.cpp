@@ -456,6 +456,11 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
       _UDPtype = 2;
       USER_PRINT("NET_ARTNET_RGB");
       break;
+    case TYPE_NET_ARTNET_RGBW:
+      _rgbw = true;
+      _UDPtype = 2;
+      USER_PRINT("NET_ARTNET_RGBW");
+      break;
     case TYPE_NET_E131_RGB:
       _rgbw = false;
       _UDPtype = 1;
@@ -480,10 +485,11 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   
   if (_data == nullptr) return;
   _len = bc.count;
+  _colorOrder = bc.colorOrder;
   _client = IPAddress(bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
   _broadcastLock = false;
   _valid = true;
-  USER_PRINTF(" %u.%u.%u.%u] \n", bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
+  USER_PRINTF(" %u.%u.%u.%u]\n", bc.pins[0],bc.pins[1],bc.pins[2],bc.pins[3]);
 }
 
 void IRAM_ATTR BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
@@ -492,7 +498,7 @@ void IRAM_ATTR BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
   if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
   uint16_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co) {
+  if (_colorOrder != co || _colorOrder != COL_ORDER_RGB) {
     if (co == COL_ORDER_GRB) {
       _data[offset]   = G(c);
       _data[offset+1] = R(c);
@@ -531,7 +537,7 @@ uint32_t IRAM_ATTR BusNetwork::getPixelColor(uint16_t pix) const {
   if (!_valid || pix >= _len) return 0;
   uint16_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co) {
+  if (_colorOrder != co || _colorOrder != COL_ORDER_RGB) {
     if (co == COL_ORDER_GRB) {
       return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
     } else if (co == COL_ORDER_RGB) {

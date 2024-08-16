@@ -851,7 +851,11 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     case 2: //Art-Net
     {
       while (artnetlimiter > micros()) {
-        delayMicroseconds(10);
+        #ifdef ARTNET_SKIP_FRAME
+          return 0; // Let WLED keep generating effect frames and we output an Art-Net frame when ARTNET_FPS_LIMIT is reached.
+        #else
+          delayMicroseconds(10); // Make WLED obey ARTNET_FPS_LIMIT and just delay here until we're ready to send a frame.
+        #endif
       }
 
       /*
@@ -893,14 +897,13 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       // const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
 
-      // const uint_fast16_t hardware_outputs[] = { 1024,1024,1024,1024,1024,1024,1024,1024 }; // specified in LED counts
-      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,7,14,21,28,35,42,49 }; // universe start # per output
-
+      const uint_fast16_t hardware_outputs[] = { 1024,1024,1024,1024,1024,1024,1024,1024 }; // specified in LED counts
+      const uint_fast16_t hardware_outputs_universe_start[] = { 0,7,14,21,28,35,42,49 }; // universe start # per output
 
       // Example of two H807SA units ganged together:
       //
-      const uint_fast16_t hardware_outputs[] = { 512,512,512,512,512,512,512,512,512,512,512,512,512,512,512,512 }; // specified in LED counts
-      const uint_fast16_t hardware_outputs_universe_start[] = { 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60 }; // universe start # per output
+      // const uint_fast16_t hardware_outputs[] = { 512,512,512,512,512,512,512,512,512,512,512,512,512,512,512,512 }; // specified in LED counts
+      // const uint_fast16_t hardware_outputs_universe_start[] = { 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60 }; // universe start # per output
       #endif
       
       uint_fast16_t bufferOffset = 0;
