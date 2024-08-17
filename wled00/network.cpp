@@ -238,8 +238,8 @@ void WiFiEvent(WiFiEvent_t event) {
         } else {
           USER_PRINTLN(F("Leaving AP WiFi Active."));
         }
-        USER_PRINTLN(F("Disabling mDNS as it doesn't work on Ethernet at the moment."));
-        MDNS.end();
+        // USER_PRINTLN(F("Disabling mDNS as it doesn't work on Ethernet at the moment."));
+        // MDNS.end();
       }
       break;
 

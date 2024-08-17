@@ -852,6 +852,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     {
       while (artnetlimiter > micros()) {
         #ifdef ARTNET_SKIP_FRAME
+          // delayMicroseconds(10); // do some tiny delay regardless
           return 0; // Let WLED keep generating effect frames and we output an Art-Net frame when ARTNET_FPS_LIMIT is reached.
         #else
           delayMicroseconds(10); // Make WLED obey ARTNET_FPS_LIMIT and just delay here until we're ready to send a frame.
@@ -994,12 +995,12 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
         artnetsync.write(packet_buffer,14);
 
         if (!artnetsync.endPacket()) {
-          DEBUG_PRINTLN(F("Art-Net Sync Broadcast returned an error"));
+          DEBUG_PRINTLN(F("Art-Net Sync Broadcast Strict returned an error"));
           return 1; // borked
         }
         #else
-        if (!artnetudp.writeTo(packet_buffer,14, client, ARTNET_DEFAULT_PORT)) {
-          DEBUG_PRINTLN(F("Art-Net Sync Unicast returned an error"));
+        if (!artnetudp.broadcastTo(packet_buffer,14,ARTNET_DEFAULT_PORT)) {
+          DEBUG_PRINTLN(F("Art-Net Sync Broadcast returned an error"));
           return 1; // borked
         }
         #endif

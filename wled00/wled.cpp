@@ -1214,7 +1214,7 @@ void WLED::initInterfaces()
     MDNS.end();
     MDNS.begin(cmDNS);
 
-    USER_PRINTF("mDNS started: %s.local\n", cmDNS); // WLEDMM
+    USER_PRINTF("mDNS started: http://%s.local\n", cmDNS); // WLEDMM
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("wled", "tcp", 80);
     MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
