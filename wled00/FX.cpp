@@ -8497,11 +8497,7 @@ uint16_t mode_2DPaintbrush() {
   SEGENV.aux0++;  // hue
   SEGMENT.fadeToBlackBy(map8(SEGENV.custom1,10,128));
 
-  um_data_t *um_data;
-  if (!usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)) {
-    // add support for no audio
-    um_data = simulateSound(SEGMENT.soundSim);
-  }
+  um_data_t *um_data = getAudioData();
   uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
   
   SEGENV.aux1 = phase_chaos?random8():0;
