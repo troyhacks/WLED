@@ -977,16 +977,25 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // After the first sync packet, and assuming 1 sync packet every 4 
       // seconds at least, should keep Art-Net nodes in synchronous mode.
 
+      // This is very much untested and generally not needed unless you 
+      // have several Art-Net devices being broadcast to, and should only
+      // be called in that situation. 
+      
+      // Art-Net broadcast mode (setting Art-Net to 255.255.255.255) should ONLY
+      // be used if you know what you're doing, as that is a lot of pixels being 
+      // sent to EVERYTHING on your network, including WiFi devices - and can 
+      // overwhelm them if you have a lot of Art-Net data being broadcast.
+
       #ifdef ARTNET_SYNC_ENABLED
         
         // This block sends Art-Net "ArtSync" packets. Can't do this with AsyncUDP because it doesn't support source port binding.
         // Tested on Art-Net qualifier software but not on real hardware with known support for ArtSync.
         // Doesn't seem to do anything on my gear, so it's disabled. 
 
-        packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
+        // packet_buffer[8]  = 0x00; // ArtSync opcode low byte (low byte is same as ArtDmx, 0x00)
         packet_buffer[9]  = 0x52; // ArtSync opcode high byte
         packet_buffer[12] = 0x00; // Aux1 - Transmit as 0. This is normally the sequence number in ArtDMX packets.
-        packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet already
+        // packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet already
         
         #ifdef ARTNET_SYNC_STRICT
         WiFiUDP artnetsync;
