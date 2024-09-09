@@ -122,6 +122,9 @@ void handleSerial()
         } else if (next == 'v') {
           Serial.print("WLED"); Serial.write(' '); Serial.println(VERSION);
 
+        } else if (next == 'R') {
+          Serial.println("WLED Restaarting!");
+          esp_restart();
         } else if (next == '^') {
           #ifdef ARDUINO_ARCH_ESP32
           esp_err_t err;
