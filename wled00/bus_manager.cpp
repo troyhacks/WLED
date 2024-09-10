@@ -834,15 +834,15 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
     if (_ledBuffer) free(_ledBuffer);                 // should not happen
     if (_ledsDirty) free(_ledsDirty);                 // should not happen
 
-    #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
-    if (psramFound()){
-      _ledsDirty = (byte*) ps_malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    } else {
-      _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    }
-    #else
+    // #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
+    // if (psramFound()){
+    //   _ledsDirty = (byte*) ps_malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
+    // } else {
+    //   _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
+    // }
+    // #else
     _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    #endif
+    // #endif
 
     if (_ledsDirty == nullptr) {
       display->stopDMAoutput();
