@@ -667,7 +667,7 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   mxconfig.gpio.d =   21;   // this says GND but should be the "D" pin
   mxconfig.gpio.clk = 20;
   mxconfig.gpio.lat = 19;
-  mxconfig.gpio.oe  = 0;
+  mxconfig.gpio.oe  = 3;    // don't use GPIO0 or it might hold board in download mode
   // 16th pin is GND
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3) // ESP32-S3
