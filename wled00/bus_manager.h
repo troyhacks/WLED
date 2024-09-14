@@ -394,8 +394,9 @@ class BusHub75Matrix : public Bus {
     }
 
   private:
-    MatrixPanel_I2S_DMA *display = nullptr;
+    MatrixPanel_I2S_DMA *realdisplay = nullptr;
     VirtualMatrixPanel  *fourScanPanel = nullptr;
+    VirtualMatrixPanel  *display = nullptr;
     HUB75_I2S_CFG mxconfig;
     unsigned _panelWidth = 0;
     CRGB *_ledBuffer = nullptr;

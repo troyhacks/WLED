@@ -8492,10 +8492,12 @@ uint16_t mode_2DPaintbrush() {
   bool color_chaos = SEGMENT.check1;
   CRGB color;
 
-  byte numLines = map8(SEGMENT.intensity,1,16);
-
+  // byte numLines = map8(SEGMENT.intensity,1,64);
+  byte numLines = SEGMENT.intensity;
+  if (numLines < 2) numLines = 2;
+  
   SEGENV.aux0++;  // hue
-  SEGMENT.fadeToBlackBy(map8(SEGENV.custom1,10,128));
+  SEGMENT.fadeToBlackBy(map8(SEGENV.custom1,0,128));
 
   um_data_t *um_data = getAudioData();
   uint8_t *fftResult = (uint8_t*)um_data->u_data[2];

@@ -584,8 +584,7 @@ void BusNetwork::cleanup() {
 BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWhite) {
 
   _valid = false;
-  mxconfig.double_buff = false; // default to off, known to cause issue with some effects but needs more memory
-
+  
   fourScanPanel = nullptr;
 
   switch(bc.type) {
@@ -615,10 +614,10 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
       break;
   }
 
-  if(mxconfig.mx_height >= 64 && (bc.pins[0] > 1)) {
-    USER_PRINT("WARNING, only single panel can be used of 64 pixel boards due to memory");
-    mxconfig.chain_length = 1;
-  }
+  // if(mxconfig.mx_height >= 64 && (bc.pins[0] > 1)) {
+  //   USER_PRINT("WARNING, only single panel can be used of 64 pixel boards due to memory");
+  //   mxconfig.chain_length = 1;
+  // }
 
   // mxconfig.driver   = HUB75_I2S_CFG::SHIFTREG;
 
@@ -786,13 +785,22 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
 
 #endif
 
+  #ifndef PIXEL_COLOR_DEPTH_BIT
+    #define PIXEL_COLOR_DEPTH_BIT 8
+  #endif
+
+  mxconfig.setPixelColorDepthBits(PIXEL_COLOR_DEPTH_BIT);
+  mxconfig.double_buff = false; // default to off, known to cause issue with some effects but needs more memory
   mxconfig.clkphase = false;
   mxconfig.chain_length = max((u_int8_t) 1, min(bc.pins[0], (u_int8_t) 4)); // prevent bad data preventing boot due to low memory
 
-  USER_PRINTF("MatrixPanel_I2S_DMA config - %ux%u length: %u\n", mxconfig.mx_width, mxconfig.mx_height, mxconfig.chain_length);
+  USER_PRINTF("***** MatrixPanel_I2S_DMA config - %ux%u length: %u\n", mxconfig.mx_width, mxconfig.mx_height, mxconfig.chain_length);
 
   // OK, now we can create our matrix object
-  display = new MatrixPanel_I2S_DMA(mxconfig);
+  realdisplay = new MatrixPanel_I2S_DMA(mxconfig);
+
+  // virtualDisp = new VirtualMatrixPanel((*dma_display), NUM_ROWS, NUM_COLS, PANEL_RES_X, PANEL_RES_Y, VIRTUAL_MATRIX_CHAIN_TYPE); 
+  display = new VirtualMatrixPanel((*realdisplay), 2, 2, 64, 64, CHAIN_BOTTOM_RIGHT_UP );
 
   this->_len = (display->width() * display->height());
 
@@ -816,37 +824,30 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   // display->setLatBlanking(4);
 
   USER_PRINTLN("MatrixPanel_I2S_DMA created");
-  // let's adjust default brightness
-  display->setBrightness8(25);    // range is 0-255, 0 - 0%, 255 - 100%
-  _bri = 25;
 
   delay(24); // experimental
   // Allocate memory and start DMA display
-  if( not display->begin() ) {
+  if( not realdisplay->begin() ) {
       USER_PRINTLN("****** MatrixPanel_I2S_DMA !KABOOM! I2S memory allocation failed ***********");
       return;
-  }
-  else {
+  } else {
     delay(18);   // experiment - give the driver a moment (~ one full frame @ 60hz) to settle
+    // let's adjust default brightness
+    realdisplay->setBrightness8(25);    // range is 0-255, 0 - 0%, 255 - 100%
+    _bri = 25;
     _valid = true;
     display->clearScreen();   // initially clear the screen buffer
 
     if (_ledBuffer) free(_ledBuffer);                 // should not happen
     if (_ledsDirty) free(_ledsDirty);                 // should not happen
 
-    // #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
-    // if (psramFound()){
-    //   _ledsDirty = (byte*) ps_malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    // } else {
-    //   _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    // }
-    // #else
-    _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
-    // #endif
+    // _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
+    _ledsDirty = (byte*) heap_caps_malloc_prefer(getBitArrayBytes(_len),MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA,MALLOC_CAP_DEFAULT);  // create LEDs dirty bits
 
     if (_ledsDirty == nullptr) {
-      display->stopDMAoutput();
-      delete display; display = nullptr;
+      realdisplay->stopDMAoutput();
+      delete realdisplay; 
+      realdisplay = nullptr;
       _valid = false;
       USER_PRINTLN(F("MatrixPanel_I2S_DMA not started - not enough memory for dirty bits!"));
       return;  //  fail is we cannot get memory for the buffer
@@ -869,19 +870,19 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   switch(bc.type) {
     case 105:
       USER_PRINTLN("MatrixPanel_I2S_DMA FOUR_SCAN_32PX_HIGH - 32x32");
-      fourScanPanel = new VirtualMatrixPanel((*display), 1, 1, 32, 32);
+      fourScanPanel = new VirtualMatrixPanel((*realdisplay), 1, 1, 32, 32);
       fourScanPanel->setPhysicalPanelScanRate(FOUR_SCAN_32PX_HIGH);
       fourScanPanel->setRotation(0);
       break;
     case 106:
       USER_PRINTLN("MatrixPanel_I2S_DMA FOUR_SCAN_32PX_HIGH - 64x32");
-      fourScanPanel = new VirtualMatrixPanel((*display), 1, 1, 64, 32);
+      fourScanPanel = new VirtualMatrixPanel((*realdisplay), 1, 1, 64, 32);
       fourScanPanel->setPhysicalPanelScanRate(FOUR_SCAN_32PX_HIGH);
       fourScanPanel->setRotation(0);
       break;
     case 107:
       USER_PRINTLN("MatrixPanel_I2S_DMA FOUR_SCAN_64PX_HIGH");
-      fourScanPanel = new VirtualMatrixPanel((*display), 1, 1, 64, 64);
+      fourScanPanel = new VirtualMatrixPanel((*realdisplay), 1, 1, 64, 64);
       fourScanPanel->setPhysicalPanelScanRate(FOUR_SCAN_64PX_HIGH);
       fourScanPanel->setRotation(0);
       break;
@@ -950,13 +951,13 @@ uint32_t BusHub75Matrix::getPixelColor(uint16_t pix) const {
 
 void BusHub75Matrix::setBrightness(uint8_t b, bool immediate) {
   _bri = b;
-  if (_bri > 238) _bri=238;
-  display->setBrightness(_bri);
+  // if (_bri > 238) _bri=238;
+  realdisplay->setBrightness(_bri);
 }
 
 void __attribute__((hot)) BusHub75Matrix::show(void) {
   if (!_valid) return;
-  display->setBrightness(_bri);
+  realdisplay->setBrightness(_bri);
 
   if (_ledBuffer) {
     // write out buffered LEDs
@@ -994,15 +995,16 @@ void __attribute__((hot)) BusHub75Matrix::show(void) {
 }
 
 void BusHub75Matrix::cleanup() {
-  if (display && _valid) display->stopDMAoutput();  // terminate DMA driver (display goes black)
+  if (realdisplay && _valid) realdisplay->stopDMAoutput();  // terminate DMA driver (display goes black)
   _valid = false;
   _panelWidth = 0;
   deallocatePins();
   USER_PRINTLN("HUB75 output ended.");
 
   //if (fourScanPanel != nullptr) delete fourScanPanel;  // warning: deleting object of polymorphic class type 'VirtualMatrixPanel' which has non-virtual destructor might cause undefined behavior
-  delete display;
+  delete realdisplay;
   display = nullptr;
+  realdisplay = nullptr;
   fourScanPanel = nullptr;
   if (_ledBuffer != nullptr) free(_ledBuffer); _ledBuffer = nullptr;
   if (_ledsDirty != nullptr) free(_ledsDirty); _ledsDirty = nullptr;      
