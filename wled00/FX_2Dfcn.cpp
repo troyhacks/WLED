@@ -79,18 +79,21 @@ void WS2812FX::setUpMatrix() {
       }
       if ((size > 0) && (customMappingTable == nullptr)) { // second try
         DEBUG_PRINTLN("setUpMatrix: trying to get fresh memory block.");
-        #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
-        if (psramFound()){
-          customMappingTable = (uint16_t*) ps_calloc(size, sizeof(uint16_t));
-        } else {
-          customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
-        }
-        #else
-        customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
-        #endif
+        // #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && defined(WLED_USE_PSRAM)
+        // if (psramFound()){
+        //   customMappingTable = (uint16_t*) ps_calloc(size, sizeof(uint16_t));
+        // } else {
+        //   customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+        // }
+        // #else
+        // customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+        // #endif
+        customMappingTable = (uint16_t*) heap_caps_calloc_prefer(size, sizeof(uint16_t),MALLOC_CAP_SPIRAM,MALLOC_CAP_INTERNAL);
         if (customMappingTable == nullptr) { 
           USER_PRINTLN("setUpMatrix: alloc failed");
           errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
+        } else {
+          USER_PRINTLN("setUpMatrix: alloc failed");
         }
       }
       if (customMappingTable != nullptr) customMappingTableSize = size;
