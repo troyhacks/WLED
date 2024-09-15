@@ -88,7 +88,7 @@ void WS2812FX::setUpMatrix() {
         // #else
         // customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
         // #endif
-        customMappingTable = (uint16_t*) heap_caps_calloc_prefer(size, sizeof(uint16_t),MALLOC_CAP_SPIRAM,MALLOC_CAP_INTERNAL);
+        customMappingTable = (uint16_t*) heap_caps_calloc_prefer(size, sizeof(uint16_t),2,MALLOC_CAP_SPIRAM,MALLOC_CAP_INTERNAL);
         if (customMappingTable == nullptr) { 
           USER_PRINTLN("setUpMatrix: alloc failed");
           errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
