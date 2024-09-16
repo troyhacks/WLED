@@ -454,7 +454,7 @@ void WLED::setup()
   Serial.begin(115200);
   if (!Serial) delay(1000); // WLEDMM make sure that Serial has initalized
 
-  #ifdef CONFIG_ESP_EXT_CONN_ENABLE
+  #ifdef CONFIG_ESP_EXT_CONN_WIFI_ENABLE
   esp_extconn_config_t config = ESP_EXTCONN_CONFIG_DEFAULT();
   esp_extconn_init(&config);
   #endif
