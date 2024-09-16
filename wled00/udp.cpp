@@ -775,7 +775,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
   // For some reason, this is faster outside of the case block...
   //
-  static byte *packet_buffer = (byte *) calloc(600, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
+  static byte *packet_buffer = (byte *) calloc(530, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
   memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header.
 
   switch (type) {
