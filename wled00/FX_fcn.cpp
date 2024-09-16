@@ -2576,8 +2576,8 @@ bool WS2812FX::deserializeMap(uint8_t n) {
       resetSegments(true); //WLEDMM not makeAutoSegments() as we only want to change bounds
     }
     else
-    #endif
       setUpMatrix(); //reset segment sizes to panels
+    #endif
   }
 
   USER_PRINTF("deserializeMap %d x %d\n", Segment::maxWidth, Segment::maxHeight);
