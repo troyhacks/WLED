@@ -163,14 +163,14 @@ int getSignalQuality(int rssi)
 
 
 //handle Ethernet connection event
-void WiFiEvent(WiFiEvent_t event)
+void WiFiEvent(arduino_event_id_t event) // TROYHACKS P4
 {
   switch (event) {
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-    case SYSTEM_EVENT_ETH_START:
+    case ARDUINO_EVENT_ETH_START:
       DEBUG_PRINTLN(F("ETH Started"));
       break;
-    case SYSTEM_EVENT_ETH_CONNECTED:
+    case ARDUINO_EVENT_ETH_CONNECTED:
       {
       DEBUG_PRINTLN(F("ETH Connected"));
       if (!apActive) {
@@ -188,7 +188,7 @@ void WiFiEvent(WiFiEvent_t event)
       showWelcomePage = false;
       break;
       }
-    case SYSTEM_EVENT_ETH_DISCONNECTED:
+    case ARDUINO_EVENT_ETH_DISCONNECTED:
       DEBUG_PRINTLN(F("ETH Disconnected"));
       // This doesn't really affect ethernet per se,
       // as it's only configured once.  Rather, it

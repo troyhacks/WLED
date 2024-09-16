@@ -113,11 +113,22 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
+  #include <esp_extconn.h>
+  #include <esp_wifi.h>
+  #include "network_provisioning/network_config.h"
+  #include "network_provisioning/manager.h"
+  #include <esp_wifi_types_native.h>
+  #include <esp_wifi_types.h>
+  #include <esp_wifi_ap_get_sta_list.h>
+  #include <NetworkEvents.h>
   #include <WiFi.h>
   #include <ETH.h>
-  #include "esp_wifi.h"
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>
+  typedef struct wifi_sta_list_t {
+    wifi_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM]; /**< station list */
+    int       num; /**< number of stations in the list (other entries are invalid) */
+} wifi_sta_list_t;
   #if LOROL_LITTLEFS
     #ifndef CONFIG_LITTLEFS_FOR_IDF_3_2
       #define CONFIG_LITTLEFS_FOR_IDF_3_2
@@ -338,7 +349,7 @@ WLED_GLOBAL int8_t irPin _INIT(-1);
 WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||defined(CONFIG_IDF_TARGET_ESP32S2) || (defined(RX) && defined(TX))
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||  defined(CONFIG_IDF_TARGET_ESP32P4) ||defined(CONFIG_IDF_TARGET_ESP32S2) || (defined(RX) && defined(TX))
   // use RX/TX as set by the framework - these boards do _not_ have RX=3 and TX=1
   constexpr uint8_t hardwareRX = RX;
   constexpr uint8_t hardwareTX = TX;
@@ -377,7 +388,6 @@ WLED_GLOBAL bool force802_3g _INIT(false);
     WLED_GLOBAL int ethernetType _INIT(WLED_ETH_NONE);             // use none for ethernet board type if default not defined
   #endif
 #endif
-
 // LED CONFIG
 WLED_GLOBAL bool turnOnAtBoot _INIT(true);                // turn on LEDs at power-up
 WLED_GLOBAL byte bootPreset   _INIT(0);                   // save preset to load after power-up

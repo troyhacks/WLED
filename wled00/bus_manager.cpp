@@ -233,7 +233,7 @@ BusPwm::BusPwm(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWhite) {
   uint8_t numPins = NUM_PWM_PINS(bc.type);
   _frequency = bc.frequency ? bc.frequency : WLED_PWM_FREQ;
 
-#if !defined(CONFIG_IDF_TARGET_ESP32C6) // PWM (ledc) not yet working, due to breaking changes in new API
+#if !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4) // PWM (ledc) not yet working, due to breaking changes in new API
   #ifdef ESP8266
   analogWriteRange(255);  //same range as one RGB channel
   analogWriteFreq(_frequency);
@@ -346,7 +346,7 @@ uint32_t BusPwm::getPixelColor(uint16_t pix) {
 
 void BusPwm::show() {
   if (!_valid) return;
-#if !defined(CONFIG_IDF_TARGET_ESP32C6) // PWM (ledc) not yet working, due to breaking changes in new API
+#if !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4) // PWM (ledc) not yet working, due to breaking changes in new API
   uint8_t numPins = NUM_PWM_PINS(_type);
   for (uint8_t i = 0; i < numPins; i++) {
     uint8_t scaled = (_data[i] * _bri) / 255;
@@ -374,11 +374,11 @@ void BusPwm::deallocatePins() {
   for (uint8_t i = 0; i < numPins; i++) {
     pinManager.deallocatePin(_pins[i], PinOwner::BusPwm);
     if (!pinManager.isPinOk(_pins[i])) continue;
-#if !defined(CONFIG_IDF_TARGET_ESP32C6) // PWM (ledc) not yet working, due to breaking changes in new API
+#if !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4) // PWM (ledc) not yet working, due to breaking changes in new API
     #ifdef ESP8266
     digitalWrite(_pins[i], LOW); //turn off PWM interrupt
     #else
-    if (_ledcStart < 16) ledcDetachPin(_pins[i]);
+    if (_ledcStart < 16) ledcDetach(_pins[i]);
     #endif
 #endif
   }
