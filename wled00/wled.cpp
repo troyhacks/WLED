@@ -14,6 +14,9 @@
 #include "../tools/ESP32-Chip_info.hpp"
 #endif
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include <WiFiGeneric.h>
+#endif
 
 // WLEDMM some buildenv sanity checks
 

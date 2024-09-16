@@ -113,6 +113,7 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
+  #include <WiFi.h>
   #include <esp_extconn.h>
   #include <esp_wifi.h>
   #include "network_provisioning/network_config.h"
@@ -121,7 +122,7 @@
   #include <esp_wifi_types.h>
   #include <esp_wifi_ap_get_sta_list.h>
   #include <NetworkEvents.h>
-  #include <WiFi.h>
+  #include <WiFiGeneric.h>
   #include <ETH.h>
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>
