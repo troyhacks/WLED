@@ -2,6 +2,7 @@
   #include <ESP8266WiFi.h>
 #else // ESP32
   #include <WiFi.h>
+  #include <esp_wifi.h>
   #include <ETH.h>
 #endif
 

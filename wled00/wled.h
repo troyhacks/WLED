@@ -113,23 +113,24 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
-  #include <WiFi.h>
-  #include <esp_extconn.h>
+  // #include <esp_extconn.h>
   #include <esp_wifi.h>
-  #include "network_provisioning/network_config.h"
-  #include "network_provisioning/manager.h"
-  #include <esp_wifi_types_native.h>
-  #include <esp_wifi_types.h>
-  #include <esp_wifi_ap_get_sta_list.h>
-  #include <NetworkEvents.h>
-  #include <WiFiGeneric.h>
+  // #include "network_provisioning/network_config.h"
+  // #include "network_provisioning/manager.h"
+  // #include <esp_wifi_types_native.h>
+  // #include <esp_wifi_types.h>
+  // #include <esp_wifi_ap_get_sta_list.h>
+  // #include <NetworkEvents.h>
+  // #include <WiFiGeneric.h>
+  // #include "esp_wifi_ap_get_sta_list.h"
+  // #include <WiFi.h>
   #include <ETH.h>
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>
-  typedef struct wifi_sta_list_t {
-    wifi_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM]; /**< station list */
-    int       num; /**< number of stations in the list (other entries are invalid) */
-} wifi_sta_list_t;
+//   typedef struct wifi_sta_list_t {
+//     wifi_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM]; /**< station list */
+//     int       num; /**< number of stations in the list (other entries are invalid) */
+// } wifi_sta_list_t;
   #if LOROL_LITTLEFS
     #ifndef CONFIG_LITTLEFS_FOR_IDF_3_2
       #define CONFIG_LITTLEFS_FOR_IDF_3_2
