@@ -14,9 +14,9 @@
 #include "../tools/ESP32-Chip_info.hpp"
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-#include <WiFiGeneric.h>
-#endif
+// #if defined(CONFIG_IDF_TARGET_ESP32P4)
+// #include <WiFiGeneric.h>
+// #endif
 
 // WLEDMM some buildenv sanity checks
 
@@ -390,6 +390,9 @@ void WLED::loop()
     ESP.wdtFeed();
   #endif
 #endif
+
+delay(1); // TROYHACKS P4 making the WDT not panic
+if (!random16()) USER_PRINTLN("TROYHACKS P4 BUILD IS DOING SOMETING!");
 
 #if 0 && defined(ALL_JSON_TO_PSRAM) && defined(WLED_USE_PSRAM_JSON)
 // WLEDMM experiment - JSON garbagecollect once per minute. Warning: may crash at random
@@ -899,6 +902,7 @@ void WLED::beginStrip()
 
 void WLED::initAP(bool resetAP)
 {
+  #ifndef ARDUINO_ARCH_ESP32P4
   if (apBehavior == AP_BEHAVIOR_BUTTON_ONLY && !resetAP)
     return;
 
@@ -934,12 +938,12 @@ void WLED::initAP(bool resetAP)
     dnsServer.start(53, "*", WiFi.softAPIP());
   }
   apActive = true;
+  #endif
 }
 
 bool WLED::initEthernet()
 {
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-
   static bool successfullyConfiguredEthernet = false;
 
   if (successfullyConfiguredEthernet) {
@@ -1040,6 +1044,70 @@ bool WLED::initEthernet()
 
 }
 
+#include <stdio.h> //for basic printf commands
+#include <string.h> //for handling strings
+#include "freertos/FreeRTOS.h" //for delay,mutexs,semphrs rtos operations
+#include "esp_system.h" //esp_init funtions esp_err_t 
+#include "esp_wifi.h" //esp_wifi_init functions and wifi operations
+#include "esp_log.h" //for showing logs
+#include "esp_event.h" //for wifi event
+#include "nvs_flash.h" //non volatile storage
+#include "lwip/err.h" //light weight ip packets error handling
+#include "lwip/sys.h" //system applications for light weight ip apps
+
+const char *ssid = "Tarna";
+const char *pass = "jackalope";
+int retry_num=0;
+static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
+if(event_id == WIFI_EVENT_STA_START)
+{
+  printf("WIFI CONNECTING....\n");
+}
+else if (event_id == WIFI_EVENT_STA_CONNECTED)
+{
+  printf("WiFi CONNECTED\n");
+}
+else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
+{
+  printf("WiFi lost connection\n");
+  if(retry_num<5){esp_wifi_connect();retry_num++;printf("Retrying to Connect...\n");}
+}
+else if (event_id == IP_EVENT_STA_GOT_IP)
+{
+  printf("Wifi got IP...\n\n");
+}
+}
+
+void wifi_connection()
+{
+     //                          s1.4
+    // 2 - Wi-Fi Configuration Phase
+    esp_netif_init();
+    esp_event_loop_create_default();     // event loop                    s1.2
+    esp_netif_create_default_wifi_sta(); // WiFi station                      s1.3
+    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&wifi_initiation); //     
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
+    wifi_config_t wifi_configuration = {
+        .sta = {
+            .ssid = "",
+            .password = "",
+           }
+        };
+    strcpy((char*)wifi_configuration.sta.ssid, ssid);
+    strcpy((char*)wifi_configuration.sta.password, pass);    
+    //esp_log_write(ESP_LOG_INFO, "Kconfig", "SSID=%s, PASS=%s", ssid, pass);
+    esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
+    // 3 - Wi-Fi Start Phase
+    esp_wifi_start();
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    // 4- Wi-Fi Connect Phase
+    esp_wifi_connect();
+    USER_PRINTF("wifi_init_softap finished. SSID:%s  password:%s\n",ssid,pass);
+    
+}
+
 void WLED::initConnection()
 {
 #ifdef ARDUINO_ARCH_ESP32
@@ -1052,34 +1120,34 @@ void WLED::initConnection()
   ws.onEvent(wsEvent);
   #endif
 
-  WiFi.disconnect(true);        // close old connections
+  // WiFi.disconnect(true);        // close old connections
 #ifdef ESP8266
   WiFi.setPhyMode(force802_3g ? WIFI_PHY_MODE_11G : WIFI_PHY_MODE_11N);
 #endif
 
   if (staticIP[0] != 0 && staticGateway[0] != 0) {
-    WiFi.config(staticIP, staticGateway, staticSubnet, IPAddress(1, 1, 1, 1));
+    // WiFi.config(staticIP, staticGateway, staticSubnet, IPAddress(1, 1, 1, 1));
   } else {
-    WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));
+    // WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));
   }
 
   lastReconnectAttempt = millis();
-
-  if (!WLED_WIFI_CONFIGURED) {
-    USER_PRINTLN(F("No WiFi connection configured."));  // WLEDMM
-    if (!apActive) initAP();        // instantly go to ap mode
-    return;
-  } else if (!apActive) {
-    if (apBehavior == AP_BEHAVIOR_ALWAYS) {
-      DEBUG_PRINTLN(F("Access point ALWAYS enabled."));
-      initAP();
-    } else {
-      DEBUG_PRINTLN(F("Access point disabled (init)."));
-      WiFi.softAPdisconnect(true);
-      WiFi.mode(WIFI_STA);
-    }
-  }
-  showWelcomePage = false;
+  busses.removeAll();
+  // if (!WLED_WIFI_CONFIGURED) {
+  //   USER_PRINTLN(F("No WiFi connection configured."));  // WLEDMM
+  //   if (!apActive) initAP();        // instantly go to ap mode
+  //   return;
+  // } else if (!apActive) {
+  //   if (apBehavior == AP_BEHAVIOR_ALWAYS) {
+  //     DEBUG_PRINTLN(F("Access point ALWAYS enabled."));
+  //     initAP();
+  //   } else {
+  //     DEBUG_PRINTLN(F("Access point disabled (init)."));
+  //     WiFi.softAPdisconnect(true);
+  //     WiFi.mode(WIFI_STA);
+  //   }
+  // }
+  // showWelcomePage = false;
 
   USER_PRINT(F("Connecting to "));
   USER_PRINT(clientSSID);
@@ -1096,16 +1164,15 @@ void WLED::initConnection()
 #ifdef ESP8266
   WiFi.hostname(hostname);
 #endif
-
-  WiFi.begin(clientSSID, clientPass);
+  wifi_connection();
 #ifdef ARDUINO_ARCH_ESP32
   #if defined(LOLIN_WIFI_FIX) && (defined(ARDUINO_ARCH_ESP32C3) || defined(ARDUINO_ARCH_ESP32C6) || defined(ARDUINO_ARCH_ESP32S2) || defined(ARDUINO_ARCH_ESP32S3) || defined(ARDUINO_ARCH_ESP32P4))
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  // WiFi.setTxPower(WIFI_POWER_8_5dBm);
   #endif
-  WiFi.setSleep(!noWifiSleep);
-  WiFi.setHostname(hostname);
+  // WiFi.setSleep(!noWifiSleep);
+  // WiFi.setHostname(hostname);
 #else
-  wifi_set_sleep_type((noWifiSleep) ? NONE_SLEEP_T : MODEM_SLEEP_T);
+  // wifi_set_sleep_type((noWifiSleep) ? NONE_SLEEP_T : MODEM_SLEEP_T);
 #endif
 }
 
@@ -1329,10 +1396,10 @@ void WLED::handleConnection()
       DEBUG_PRINTLN(F("Last reconnect too old."));
       initConnection();
     }
-    if (!apActive && now - lastReconnectAttempt > 12000 && (!wasConnected || apBehavior == AP_BEHAVIOR_NO_CONN)) {
-      DEBUG_PRINTLN(F("Not connected AP."));
-      initAP();
-    }
+    // if (!apActive && now - lastReconnectAttempt > 12000 && (!wasConnected || apBehavior == AP_BEHAVIOR_NO_CONN)) {
+    //   DEBUG_PRINTLN(F("Not connected AP."));
+    //   initAP();
+    // }
   } else if (!interfacesInited) { //newly connected
     DEBUG_PRINTLN("");
     USER_PRINT(F("Connected! IP address: "));
