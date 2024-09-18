@@ -39,7 +39,11 @@
  #include <ESPAsyncWebServer.h>
 #else
  #ifdef ARDUINO_ARCH_ESP32
-  #include <WiFi.h>
+  #ifdef CONFIG_IDF_TARGET_ESP32P4
+   #include <esp_wifi_remote.h>
+  #else
+   #include "WiFi.h"
+  #endif
   #include <WebServer.h> //if you get an error here please update to ESP32 arduino core 1.0.0
  #else
   #include <ESP8266WebServer.h>

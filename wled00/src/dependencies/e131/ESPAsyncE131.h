@@ -27,7 +27,11 @@
 #define ESPASYNCE131_H_
 
 #ifdef ESP32
-#include <WiFi.h>
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+#include <esp_wifi_remote.h>
+#else
+#include "WiFi.h"
+#endif
 #include <AsyncUDP.h>
 #elif defined (ESP8266)
 #include <ESPAsyncUDP.h>

@@ -113,17 +113,11 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
-  // #include <esp_extconn.h>
-  #include <esp_wifi.h>
-  // #include "network_provisioning/network_config.h"
-  // #include "network_provisioning/manager.h"
-  // #include <esp_wifi_types_native.h>
-  // #include <esp_wifi_types.h>
-  // #include <esp_wifi_ap_get_sta_list.h>
-  // #include <NetworkEvents.h>
-  // #include <WiFiGeneric.h>
-  // #include "esp_wifi_ap_get_sta_list.h"
-  // #include <WiFi.h>
+  #ifdef CONFIG_IDF_TARGET_ESP32P4
+    #include <esp_wifi_remote.h>
+  #else
+    #include "WiFi.h"
+  #endif
   #include <ETH.h>
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>
@@ -907,12 +901,12 @@ WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
   WLED_GLOBAL unsigned long loops _INIT(0);
 #endif
 
-#ifdef ARDUINO_ARCH_ESP32
-  #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED || ETH.localIP()[0] != 0)
-#else
-  #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED)
-#endif
-#define WLED_WIFI_CONFIGURED (strlen(clientSSID) >= 1 && strcmp(clientSSID, DEFAULT_CLIENT_SSID) != 0)
+// #ifdef ARDUINO_ARCH_ESP32
+//   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED || ETH.localIP()[0] != 0)
+// #else
+//   #define WLED_CONNECTED (WiFi.status() == WL_CONNECTED)
+// #endif
+// #define WLED_WIFI_CONFIGURED (strlen(clientSSID) >= 1 && strcmp(clientSSID, DEFAULT_CLIENT_SSID) != 0)
 
 #ifndef WLED_AP_SSID_UNIQUE
   #define WLED_SET_AP_SSID() do { \

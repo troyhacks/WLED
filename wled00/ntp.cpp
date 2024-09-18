@@ -195,21 +195,21 @@ void handleTime() {
 
 void handleNetworkTime()
 {
-  if (ntpEnabled && ntpConnected && millis() - ntpLastSyncTime > (1000*NTP_SYNC_INTERVAL) && WLED_CONNECTED)
-  {
-    if (millis() - ntpPacketSentTime > 10000)
-    {
-      #ifdef ARDUINO_ARCH_ESP32   // I had problems using udp.flush() on 8266
-      while (ntpUdp.parsePacket() > 0) ntpUdp.flush(); // flush any existing packets
-      #endif
-      sendNTPPacket();
-      ntpPacketSentTime = millis();
-    }
-    if (checkNTPResponse())
-    {
-      ntpLastSyncTime = millis();
-    }
-  }
+  // if (ntpEnabled && ntpConnected && millis() - ntpLastSyncTime > (1000*NTP_SYNC_INTERVAL) && WLED_CONNECTED)
+  // {
+  //   if (millis() - ntpPacketSentTime > 10000)
+  //   {
+  //     #ifdef ARDUINO_ARCH_ESP32   // I had problems using udp.flush() on 8266
+  //     while (ntpUdp.parsePacket() > 0) ntpUdp.flush(); // flush any existing packets
+  //     #endif
+  //     sendNTPPacket();
+  //     ntpPacketSentTime = millis();
+  //   }
+  //   if (checkNTPResponse())
+  //   {
+  //     ntpLastSyncTime = millis();
+  //   }
+  // }
 }
 
 void sendNTPPacket()
@@ -219,7 +219,7 @@ void sendNTPPacket()
     #ifdef ESP8266
     WiFi.hostByName(ntpServerName, ntpServerIP, 750);
     #else
-    WiFi.hostByName(ntpServerName, ntpServerIP);
+    //WiFi.hostByName(ntpServerName, ntpServerIP);
     #endif
   }
 

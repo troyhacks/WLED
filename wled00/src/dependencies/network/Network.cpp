@@ -9,10 +9,10 @@ IPAddress NetworkClass::localIP()
     return localIP;
   }
 #endif
-  localIP = WiFi.localIP();
-  if (localIP[0] != 0) {
-    return localIP;
-  }
+  // localIP = WiFi.localIP();
+  // if (localIP[0] != 0) {
+  //   return localIP;
+  // }
 
   return INADDR_NONE;
 }
@@ -24,9 +24,9 @@ IPAddress NetworkClass::subnetMask()
     return ETH.subnetMask();
   }
 #endif
-  if (WiFi.localIP()[0] != 0) {
-    return WiFi.subnetMask();
-  }
+  // if (WiFi.localIP()[0] != 0) {
+  //   return WiFi.subnetMask();
+  // }
   return IPAddress(255, 255, 255, 0);
 }
 
@@ -37,9 +37,9 @@ IPAddress NetworkClass::gatewayIP()
       return ETH.gatewayIP();
   }
 #endif
-  if (WiFi.localIP()[0] != 0) {
-      return WiFi.gatewayIP();
-  }
+  // if (WiFi.localIP()[0] != 0) {
+  //     return WiFi.gatewayIP();
+  // }
   return INADDR_NONE;
 }
 
@@ -67,17 +67,18 @@ void NetworkClass::localMAC(uint8_t* MAC)
     }
   }
 #endif
-  WiFi.macAddress(MAC);
+  // WiFi.macAddress(MAC);
   return;
 }
 
 bool NetworkClass::isConnected()
 {
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-  return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED) || ETH.localIP()[0] != 0;
+  // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED) || ETH.localIP()[0] != 0;
 #else
-  return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
+  // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
 #endif
+return true;
 }
 
 bool NetworkClass::isEthernet()

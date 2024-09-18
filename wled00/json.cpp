@@ -1004,12 +1004,12 @@ void serializeInfo(JsonObject root)
     outputs.add(busses.getBus(b)->getLength());
   }
 
-  JsonObject wifi_info = root.createNestedObject("wifi");
-  wifi_info[F("bssid")] = WiFi.BSSIDstr();
-  int qrssi = WiFi.RSSI();
-  wifi_info[F("rssi")] = qrssi;
-  wifi_info[F("signal")] = getSignalQuality(qrssi);
-  wifi_info[F("channel")] = WiFi.channel();
+  // JsonObject wifi_info = root.createNestedObject("wifi");
+  // wifi_info[F("bssid")] = WiFi.BSSIDstr();
+  // int qrssi = WiFi.RSSI();
+  // wifi_info[F("rssi")] = qrssi;
+  // wifi_info[F("signal")] = getSignalQuality(qrssi);
+  // wifi_info[F("channel")] = WiFi.channel();
 
   JsonObject fs_info = root.createNestedObject("fs");
   fs_info["u"] = fsBytesUsed / 1000;
@@ -1019,10 +1019,10 @@ void serializeInfo(JsonObject root)
   root[F("ndc")] = nodeListEnabled ? (int)Nodes.size() : -1;
 
   #ifdef ARDUINO_ARCH_ESP32
-  #ifdef WLED_DEBUG
-    wifi_info[F("txPower")] = (int) WiFi.getTxPower();
-    wifi_info[F("sleep")] = (bool) WiFi.getSleep();
-  #endif
+  // #ifdef WLED_DEBUG
+  //   wifi_info[F("txPower")] = (int) WiFi.getTxPower();
+  //   wifi_info[F("sleep")] = (bool) WiFi.getSleep();
+  // #endif
   //#if !defined(CONFIG_IDF_TARGET_ESP32C2) && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32S3)
   #if CONFIG_IDF_TARGET_ESP32
     root[F("arch")] = "esp32";
@@ -1363,30 +1363,30 @@ void serializePalettes(JsonObject root, AsyncWebServerRequest* request)
 void serializeNetworks(JsonObject root)
 {
   JsonArray networks = root.createNestedArray(F("networks"));
-  int16_t status = WiFi.scanComplete();
+  // int16_t status = WiFi.scanComplete();
 
-  switch (status) {
-    case WIFI_SCAN_FAILED:
-      WiFi.scanNetworks(true);
-      return;
-    case WIFI_SCAN_RUNNING:
-      return;
-  }
+  // switch (status) {
+  //   case WIFI_SCAN_FAILED:
+  //     WiFi.scanNetworks(true);
+  //     return;
+  //   case WIFI_SCAN_RUNNING:
+  //     return;
+  // }
 
-  for (int i = 0; i < status; i++) {
-    JsonObject node = networks.createNestedObject();
-    node["ssid"]    = WiFi.SSID(i);
-    node["rssi"]    = WiFi.RSSI(i);
-    node["bssid"]   = WiFi.BSSIDstr(i);
-    node["channel"] = WiFi.channel(i);
-    node["enc"]     = WiFi.encryptionType(i);
-  }
+  // for (int i = 0; i < status; i++) {
+  //   JsonObject node = networks.createNestedObject();
+  //   node["ssid"]    = WiFi.SSID(i);
+  //   node["rssi"]    = WiFi.RSSI(i);
+  //   node["bssid"]   = WiFi.BSSIDstr(i);
+  //   node["channel"] = WiFi.channel(i);
+  //   node["enc"]     = WiFi.encryptionType(i);
+  // }
 
-  WiFi.scanDelete();
+  // WiFi.scanDelete();
 
-  if (WiFi.scanComplete() == WIFI_SCAN_FAILED) {
-    WiFi.scanNetworks(true);
-  }
+//   if (WiFi.scanComplete() == WIFI_SCAN_FAILED) {
+//     WiFi.scanNetworks(true);
+//   }
 }
 
 void serializeNodes(JsonObject root)

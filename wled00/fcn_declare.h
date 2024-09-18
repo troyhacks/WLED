@@ -250,7 +250,7 @@ void sendSysInfoUDP();
 
 //network.cpp
 int getSignalQuality(int rssi);
-void WiFiEvent(WiFiEvent_t event);
+// void WiFiEvent(WiFiEvent_t event);
 
 //um_manager.cpp
 typedef enum UM_Data_Types {

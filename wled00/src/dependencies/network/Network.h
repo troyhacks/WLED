@@ -1,8 +1,11 @@
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
 #else // ESP32
-  #include <WiFi.h>
-  #include <esp_wifi.h>
+  #ifdef CONFIG_IDF_TARGET_ESP32P4
+  #include <esp_wifi_remote.h>
+  #else
+  #include "WiFi.h"
+  #endif
   #include <ETH.h>
 #endif
 

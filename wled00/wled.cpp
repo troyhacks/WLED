@@ -342,12 +342,12 @@ void WLED::loop()
       //DEBUG_PRINTLN(F("No PSRAM"));
 	}
     #endif
-    DEBUG_PRINT(F("Wifi state: "));      DEBUG_PRINTLN(WiFi.status());
+    // DEBUG_PRINT(F("Wifi state: "));      DEBUG_PRINTLN(WiFi.status());
 
-    if (WiFi.status() != lastWifiState) {
-      wifiStateChangedTime = millis();
-    }
-    lastWifiState = WiFi.status();
+    // if (WiFi.status() != lastWifiState) {
+    //   wifiStateChangedTime = millis();
+    // }
+    // lastWifiState = WiFi.status();
     DEBUG_PRINT(F("State time: "));      DEBUG_PRINTLN(wifiStateChangedTime);
     DEBUG_PRINT(F("NTP last sync: "));   DEBUG_PRINTLN(ntpLastSyncTime);
     DEBUG_PRINT(F("Client IP: "));       DEBUG_PRINTLN(Network.localIP());
@@ -697,7 +697,7 @@ void WLED::setup()
   USER_PRINT(((fsBytesTotal-fsBytesUsed)/1024)); USER_PRINTLN(F(" kB free.\n"));
 
   // generate module IDs must be done before AP setup
-  escapedMac = WiFi.macAddress();
+  // escapedMac = WiFi.macAddress();
   escapedMac.replace(":", "");
   escapedMac.toLowerCase();
 
@@ -725,10 +725,10 @@ void WLED::setup()
 
   if (strcmp(clientSSID, DEFAULT_CLIENT_SSID) == 0)
     showWelcomePage = true;
-  WiFi.persistent(false);
-  #ifdef WLED_USE_ETHERNET
-  WiFi.onEvent(WiFiEvent);
-  #endif
+  // WiFi.persistent(false);
+  // #ifdef WLED_USE_ETHERNET
+  // WiFi.onEvent(WiFiEvent);
+  // #endif
 
   #ifdef WLED_ENABLE_ADALIGHT
   //Serial RX (Adalight, Improv, Serial JSON) only possible if GPIO3 unused
@@ -1048,7 +1048,7 @@ bool WLED::initEthernet()
 #include <string.h> //for handling strings
 #include "freertos/FreeRTOS.h" //for delay,mutexs,semphrs rtos operations
 #include "esp_system.h" //esp_init funtions esp_err_t 
-#include "esp_wifi.h" //esp_wifi_init functions and wifi operations
+#include "esp_wifi_remote.h" //esp_wifi_init functions and wifi operations
 #include "esp_log.h" //for showing logs
 #include "esp_event.h" //for wifi event
 #include "nvs_flash.h" //non volatile storage
@@ -1280,8 +1280,8 @@ void WLED::handleConnection()
   static unsigned long heapTime = 0;
   unsigned long now = millis();
 
-  if (now < 2000 && (!WLED_WIFI_CONFIGURED || apBehavior == AP_BEHAVIOR_ALWAYS))
-    return;
+  // if (now < 2000 && (!WLED_WIFI_CONFIGURED || apBehavior == AP_BEHAVIOR_ALWAYS))
+  //   return;
 
   if (lastReconnectAttempt == 0) {
     DEBUG_PRINTLN(F("lastReconnectAttempt == 0"));
@@ -1364,12 +1364,12 @@ void WLED::handleConnection()
       stacO = stac;
       DEBUG_PRINT(F("Connected AP clients: "));
       DEBUG_PRINTLN(stac);
-      if (!WLED_CONNECTED && WLED_WIFI_CONFIGURED) {        // trying to connect, but not connected
-        if (stac)
-          WiFi.disconnect();        // disable search so that AP can work
-        else
-          initConnection();         // restart search
-      }
+      // if (!WLED_CONNECTED && WLED_WIFI_CONFIGURED) {        // trying to connect, but not connected
+      //   if (stac)
+      //     WiFi.disconnect();        // disable search so that AP can work
+      //   else
+      //     initConnection();         // restart search
+      // }
     }
   }
   if (forceReconnect) {
@@ -1391,11 +1391,11 @@ void WLED::handleConnection()
       sendImprovStateResponse(0x03, true);
       improvActive = 2;
     }
-    if (now - lastReconnectAttempt > ((stac) ? 300000 : 18000) && WLED_WIFI_CONFIGURED) {
-      if (improvActive == 2) improvActive = 3;
-      DEBUG_PRINTLN(F("Last reconnect too old."));
-      initConnection();
-    }
+    // if (now - lastReconnectAttempt > ((stac) ? 300000 : 18000) && WLED_WIFI_CONFIGURED) {
+    //   if (improvActive == 2) improvActive = 3;
+    //   DEBUG_PRINTLN(F("Last reconnect too old."));
+    //   initConnection();
+    // }
     // if (!apActive && now - lastReconnectAttempt > 12000 && (!wasConnected || apBehavior == AP_BEHAVIOR_NO_CONN)) {
     //   DEBUG_PRINTLN(F("Not connected AP."));
     //   initAP();
@@ -1415,12 +1415,12 @@ void WLED::handleConnection()
     lastMqttReconnectAttempt = 0; // force immediate update
 
     // shut down AP
-    if (apBehavior != AP_BEHAVIOR_ALWAYS && apActive) {
-      dnsServer.stop();
-      WiFi.softAPdisconnect(true);
-      apActive = false;
-      USER_PRINTLN(F("Access point disabled (handle)."));
-    }
+    // if (apBehavior != AP_BEHAVIOR_ALWAYS && apActive) {
+    //   dnsServer.stop();
+    //   WiFi.softAPdisconnect(true);
+    //   apActive = false;
+    //   USER_PRINTLN(F("Access point disabled (handle)."));
+    // }
   }
 }
 

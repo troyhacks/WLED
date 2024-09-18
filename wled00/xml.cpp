@@ -374,16 +374,16 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
       sappends('m',SET_F("(\"sip\")[0]"),(char*)F("Not connected"));
     }
 
-    if (WiFi.softAPIP()[0] != 0) //is active
-    {
-      char s[16];
-      IPAddress apIP = WiFi.softAPIP();
-      sprintf(s, "%d.%d.%d.%d", apIP[0], apIP[1], apIP[2], apIP[3]);
-      sappends('m',SET_F("(\"sip\")[1]"),s);
-    } else
-    {
+    // if (WiFi.softAPIP()[0] != 0) //is active
+    // {
+    //   char s[16];
+    //   IPAddress apIP = WiFi.softAPIP();
+    //   sprintf(s, "%d.%d.%d.%d", apIP[0], apIP[1], apIP[2], apIP[3]);
+    //   sappends('m',SET_F("(\"sip\")[1]"),s);
+    // } else
+    // {
       sappends('m',SET_F("(\"sip\")[1]"),(char*)F("Not active"));
-    }
+    // }
 
     #ifndef WLED_DISABLE_ESPNOW
     if (last_signal_src[0] != 0) //Have seen an ESP-NOW Remote

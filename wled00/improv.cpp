@@ -94,7 +94,7 @@ void handleImprovPacket() {
             case ImprovRPCType::Command_Wifi: parseWiFiCommand(rpcData); break;
             case ImprovRPCType::Request_State: {
               uint8_t improvState = 0x02; //authorized
-              if (WLED_WIFI_CONFIGURED) improvState = 0x03; //provisioning
+              // if (WLED_WIFI_CONFIGURED) improvState = 0x03; //provisioning
               if (Network.isConnected()) improvState = 0x04; //provisioned
               sendImprovStateResponse(improvState, false);
               if (improvState == 0x04) sendImprovIPRPCResult(ImprovRPCType::Request_State);
