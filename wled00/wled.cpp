@@ -2,7 +2,7 @@
 #include "wled.h"
 #include "wled_ethernet.h"
 #include <Arduino.h>
-
+esp_eth_handle_t eth_handle = NULL;
 #warning WLED-MM GPL-v3. By installing WLED MM you implicitly accept the terms!
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_DISABLE_BROWNOUT_DET)
@@ -460,31 +460,148 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
   }
 }
 
+# ifdef WLED_USE_ETHERNET
+static const char *TAG = "eth_init";
+
+// static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    
+//     uint8_t mac_addr[6] = {0};
+//     /* we can get the ethernet driver handle from event data */
+//     esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)event_data;
+
+//     switch (event_id) {
+//     case ETHERNET_EVENT_CONNECTED:
+//         esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
+//         ESP_LOGI(TAG, "Ethernet Link Up");
+//         ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
+//                  mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+//         break;
+//     case ETHERNET_EVENT_DISCONNECTED:
+//         ESP_LOGI(TAG, "Ethernet Link Down");
+//         break;
+//     case ETHERNET_EVENT_START:
+//         ESP_LOGI(TAG, "Ethernet Started");
+//         break;
+//     case ETHERNET_EVENT_STOP:
+//         ESP_LOGI(TAG, "Ethernet Stopped");
+//         break;
+//     default:
+//         break;
+//     }
+// }
+
+static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    if (event_id == ETHERNET_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "Ethernet Link Up");
+    } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
+        ESP_LOGI(TAG, "Ethernet Link Down");
+    } else if (event_id == ETHERNET_EVENT_START) {
+        ESP_LOGI(TAG, "** Ethernet Started!! **");
+    } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
+        ESP_LOGI(TAG, "Ethernet Disconnected");
+    } else {
+      ESP_LOGI(TAG, "Ethernet Undeclared Error %d", event_id);
+    }
+}
+
+static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+    ESP_LOGI(TAG, "Got IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
+    interfacesInited = false;
+}
+#endif
+
 void WLED::setup()
 {
   esp_log_level_set("*",ESP_LOG_VERBOSE);
 
-  esp_hosted_init(NULL);
-  esp_netif_init();
-  esp_event_loop_create_default();
-  esp_netif_create_default_wifi_sta();
-  wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
-  esp_wifi_init(&wifi_initiation); //     
-  esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
-  esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
-  wifi_config_t wifi_configuration = {
-      .sta = {
-          .ssid = CLIENT_SSID,
-          .password = CLIENT_PASS
-          }
-      };
-  strcpy((char*)wifi_configuration.sta.ssid, CLIENT_SSID);
-  strcpy((char*)wifi_configuration.sta.password, CLIENT_PASS);    
-  //esp_log_write(ESP_LOG_INFO, "Kconfig", "SSID=%s, PASS=%s", ssid, pass);
-  esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
-  // 3 - Wi-Fi Start Phase
-  esp_wifi_start();
-  // delay(1000);
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
+    #ifndef WLED_USE_ETHERNET
+      #ifdef ARDUINO_ARCH_ESP32P4
+        esp_hosted_init(NULL);
+      #endif
+      esp_netif_init();
+      esp_event_loop_create_default();
+      esp_netif_create_default_wifi_sta();
+      wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+      esp_wifi_init(&wifi_initiation); //     
+      esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
+      esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
+      wifi_config_t wifi_configuration = {
+          .sta = {
+              .ssid = CLIENT_SSID,
+              .password = CLIENT_PASS
+              }
+          }; 
+      esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
+      esp_wifi_start();
+      delay(500);
+    #else
+      // uint8_t eth_port_cnt = 0;
+      // esp_eth_handle_t *eth_handles = NULL;
+      // // ESP_ERROR_CHECK(example_eth_init(&eth_handles, &eth_port_cnt));
+      //   esp_err_t ret = ESP_OK;
+      //   uint8_t eth_cnt = 0;
+      //   *eth_handles = calloc(1, sizeof(esp_eth_handle_t));
+      //   eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+      //   eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+      //   phy_config.phy_addr = 0;
+      //   phy_config.reset_gpio_num = 51;
+      //   eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+      //   esp32_emac_config.smi_gpio.mdc_num = 31;
+      //   esp32_emac_config.smi_gpio.mdio_num = 52;
+      //   esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
+      //   esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config); // IP101GRI
+      //   esp_eth_handle_t eth_handle = NULL;
+      //   esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
+      //   ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
+      // // end example_eth_init()
+      // ESP_ERROR_CHECK(esp_netif_init());
+      // ESP_ERROR_CHECK(esp_event_loop_create_default());
+      // esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+      // esp_netif_t *eth_netif = esp_netif_new(&cfg);
+      // ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handles[0])));
+      // ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
+      // ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL));
+      // ESP_ERROR_CHECK(esp_eth_start(eth_handles[0]));
+      
+      // Initialize TCP/IP network interface
+      ESP_LOGI(TAG, "Trying Ethernet Setup");
+      ESP_ERROR_CHECK(esp_netif_init());
+      ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+      // Create default Ethernet interface
+      esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+      esp_netif_t *eth_netif = esp_netif_new(&cfg);
+      assert(eth_netif);
+
+      // Initialize Ethernet driver
+      eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+      esp32_emac_config.smi_gpio.mdc_num = 31;
+      esp32_emac_config.smi_gpio.mdio_num = 52;
+      eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+      eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+      phy_config.phy_addr = 1; // Set PHY address
+      phy_config.reset_gpio_num = 51; // Set PHY reset GPIO number
+
+      esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
+      esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);
+
+      esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
+      
+      ESP_LOGI(TAG, "Trying Eth Driver Install");
+      ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
+      ESP_LOGI(TAG, "Trying NetIF Attach");
+      ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handle)));
+
+      // Start Ethernet driver
+      ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+
+      // Register event handler for Ethernet events
+      ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
+      ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL));
+    #endif
+  #endif
 
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_DISABLE_BROWNOUT_DET)
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detection
@@ -746,12 +863,32 @@ void WLED::setup()
 
   // generate module IDs must be done before AP setup
   #ifdef ARDUINO_ARCH_ESP32P4
-    uint8_t mymac[6];
-    char buf[18];
-    esp_err_t result = esp_wifi_get_mac(WIFI_IF_STA, mymac);
-    sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
-    USER_PRINTF("Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
-    escapedMac = buf;
+    #ifdef WLED_USE_ETHERNET
+      // char buf[18];
+      // uint8_t mac_addr[6];
+      // esp_eth_mac_t **mac_instance;
+      // esp_eth_get_mac_instance(eth_handle, mac_instance);
+
+      // if (mac_instance) {
+        
+      //   ESP_ERROR_CHECK(mac_instance->get_addr(mac_instance, mac_addr));
+      //   ESP_LOGI(TAG, "MAC Address: %02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      // } else {
+      //     ESP_LOGE(TAG, "Failed to get MAC instance");
+      // }
+
+      // sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      // USER_PRINTF("Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      // escapedMac = buf;
+    #else
+      uint8_t mymac[6];
+      char buf[18];
+      // esp_err_t result = esp_wifi_get_mac(WIFI_IF_STA, mymac);
+      esp_err_t result = esp_eth_get_mac_instance(esp_netif_get_default_netif(), mymac);
+      sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
+      USER_PRINTF("Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
+      escapedMac = buf;
+    #endif
   #else
     escapedMac = WiFi.macAddress();
   #endif
@@ -1166,7 +1303,11 @@ void WLED::initConnection()
 #ifdef ESP8266
   WiFi.hostname(hostname);
 #endif
-  wifi_connection();
+  #ifdef WLED_USE_ETHERNET
+    // ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+  #else
+    wifi_connection();
+  #endif
   // ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
   // wifi_init_sta();
 #ifdef ARDUINO_ARCH_ESP32

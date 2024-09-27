@@ -754,9 +754,9 @@ bool PinManagerClass::isPinOk(byte gpio, bool output)
   #elif defined(CONFIG_IDF_TARGET_ESP32P4)
     // strapping pins: ???
     // Hide all pins not available on connector except pins we need to assign to things later, like I2S
-    if (gpio > 13 && gpio < 20) return false;      // I2S pins and ESP-Hosted WiFi pins
+    if (gpio > 13 && gpio < 20) return false;     // I2S pins and ESP-Hosted WiFi pins
     if (gpio > 27 && gpio < 32) return false;     // Ethernet pins
-    if (gpio > 33 && gpio < 35) return false;     // was < 36 // Ethernet pins 
+    if (gpio > 33 && gpio < 36) return false;     // Ethernet pins - boot button is on 35 and works... but messes with Ethernet if enabled in WLED
     if (gpio > 48 && gpio < 55) return false;     // Ethernet pins & others
     if (gpio > 38 && gpio < 45) return false;     // SD1 Pins
     // NOTE: GPIO53 and 54 are on the connector, but are used for other things.

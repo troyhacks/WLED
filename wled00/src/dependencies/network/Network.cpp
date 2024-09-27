@@ -3,7 +3,7 @@
 IPAddress NetworkClass::localIP()
 {
   
-#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
+#if defined(ARDUINO_ARCH_ESP32) // && defined(WLED_USE_ETHERNET) // TROYHACKS
   #ifdef ARDUINO_ARCH_ESP32P4
   esp_netif_ip_info_t ip_info;
   esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
