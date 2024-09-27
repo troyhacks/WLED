@@ -519,11 +519,13 @@
 // which GPIO pins are actually used in a hardware layout (controller board)
 //WLEDMM: unchangeable pins are not treated here by undef them, but elsewhere in the code 
 // defaults for 1st I2C on ESP32 (Wire global)
-#ifndef HW_PIN_SCL
-  #define HW_PIN_SCL -1 //WLEDMM if not defined, -1 will be used (not SCL/22) (also for esp8266?)
-#endif
-#ifndef HW_PIN_SDA
-  #define HW_PIN_SDA -1 //WLEDMM if not defined, -1 will be used (not SDA/21) (also for esp8266?)
+#ifndef ARDUINO_ARCH_ESP32P4 
+  #ifndef HW_PIN_SCL
+    #define HW_PIN_SCL -1 //WLEDMM if not defined, -1 will be used (not SCL/22) (also for esp8266?)
+  #endif
+  #ifndef HW_PIN_SDA
+    #define HW_PIN_SDA -1 //WLEDMM if not defined, -1 will be used (not SDA/21) (also for esp8266?)
+  #endif
 #endif
 
 // HW_PIN_SCLKSPI & HW_PIN_MOSISPI & HW_PIN_MISOSPI are used for information in usermods settings page and usermods themselves

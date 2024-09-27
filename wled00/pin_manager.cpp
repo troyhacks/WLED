@@ -47,6 +47,7 @@ String PinManagerClass::getOwnerText(PinOwner tag) {
     case PinOwner::SPI_RAM    : return(F("PSRAM")); break;          // 'SpiR' == SPI RAM (aka PSRAM)
 #endif
     case PinOwner::DMX        : return(F("DMX out")); break;        // 'DMX'  == hard-coded to IO2
+    case PinOwner::WiFi       : return(F("ESP-Hosted WiFi")); break; 
     case PinOwner::HW_I2C     : return(F("I2C (hw)")); break;            // 'I2C'  == hardware I2C pins (4&5 on ESP8266, 21&22 on ESP32)
     case PinOwner::HW_SPI     : return(F("SPI (hw)")); break;            // 'SPI'  == hardware (V)SPI pins (13,14&15 on ESP8266, 5,18&23 on ESP32)
     case PinOwner::DMX_INPUT  : return(F("DMX Input")); break;            
@@ -140,7 +141,7 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
       //if (gpio == 12) return (F("(strapping pin - MTDI)"));
       //if (gpio == 15) return (F("(strapping pin - MTDO)"));
       //if (gpio > 11 && gpio < 16) return (F("(optional) JTAG debug probe"));
-      #if defined(BOARD_HAS_PSRAM)
+      #if defined(BOARD_HAS_PSRAM) && !defined(ARDUINO_ARCH_ESP32P4)
         if (gpio == 16 || gpio == 17) return (F("(reserved) PSRAM"));
       #endif
       #if defined(ARDUINO_TTGO_T7_V14_Mini32) || defined(ARDUINO_LOLIN_D32_PRO) || defined(ARDUINO_ADAFRUIT_FEATHER_ESP32_V2)
@@ -750,6 +751,16 @@ bool PinManagerClass::isPinOk(byte gpio, bool output)
     if (gpio > 21 && gpio < 33) return false;     // 22 to 32: not connected + SPI FLASH
     // JTAG: GPIO39-42 are usually used for inline debugging
     // GPIO46 is input only and pulled down
+  #elif defined(CONFIG_IDF_TARGET_ESP32P4)
+    // strapping pins: ???
+    // Hide all pins not available on connector except pins we need to assign to things later, like I2S
+    if (gpio > 13 && gpio < 20) return false;      // I2S pins and ESP-Hosted WiFi pins
+    if (gpio > 27 && gpio < 32) return false;     // Ethernet pins
+    if (gpio > 33 && gpio < 36) return false;     // Ethernet pins
+    if (gpio > 48 && gpio < 55) return false;     // Ethernet pins & others
+    if (gpio > 38 && gpio < 45) return false;     // SD1 Pins
+    // NOTE: GPIO53 and 54 are on the connector, but are used for other things.
+    // We could likely allow 53 as it's for audio amp output, but 54 is used for resetting the C6 board
   #else
     if (gpio > 5 && gpio < 12) return false;      //SPI flash pins
   #endif

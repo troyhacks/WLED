@@ -24,7 +24,7 @@
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #ifdef CONFIG_IDF_TARGET_ESP32P4
-#include <esp_wifi_remote.h>
+#include <esp_wifi.h>
 #else
 #include "WiFi.h"
 #endif

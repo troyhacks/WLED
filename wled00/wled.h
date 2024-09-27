@@ -114,7 +114,17 @@
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
   #ifdef CONFIG_IDF_TARGET_ESP32P4
-    #include <esp_wifi_remote.h>
+    #include "esp_log.h"
+    #include "esp_hosted_api.h"
+    // #include "esp_hosted_config.h"
+    #include "esp_wifi_remote.h"
+    #include <esp_wifi.h>
+    #define I2S_SDPIN 9
+    #define I2S_WSPIN 10
+    #define I2S_CKPIN 12
+    #define MCLK_PIN  10
+    #define HW_PIN_SDA 7
+    #define HW_PIN_SCL 8
   #else
     #include "WiFi.h"
   #endif

@@ -15,6 +15,7 @@
 #define NODE_TYPE_ID_ESP32S3         34
 #define NODE_TYPE_ID_ESP32C3         35
 #define NODE_TYPE_ID_ESP32C6         36
+#define NODE_TYPE_ID_ESP32P4         37
 
 /*********************************************************************************************\
 * NodeStruct

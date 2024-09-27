@@ -447,6 +447,11 @@ DEBUG_PRINTLN(F("Watchdog: disabled"));
 
 void WLED::setup()
 {
+  esp_log_level_set("*",ESP_LOG_VERBOSE);
+
+  esp_hosted_init(NULL);
+  delay(1000);
+
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_DISABLE_BROWNOUT_DET)
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detection
   #endif
@@ -594,6 +599,20 @@ void WLED::setup()
   DEBUG_PRINTF("%s min free stack %d\n", pcTaskGetTaskName(NULL), uxTaskGetStackHighWaterMark(NULL)); //WLEDMM
 #endif
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // managed_pin_type wifipins[] = { { 14, true}, {15, true}, {16, true}, {17, true}, {18, true}, {19, true}, {54, true} };  
+  // pinManager.allocateMultiplePins(wifipins, sizeof(wifipins)/sizeof(managed_pin_type), PinOwner::WiFi);
+  // managed_pin_type ethpins[] = { { 35, true}, {34, true}, {31, true}, {30, true}, {29, true}, {28, true}, {50, true} , {49, true}, {52, true}, {53, true} };  
+  // pinManager.allocateMultiplePins(ethpins, sizeof(ethpins)/sizeof(managed_pin_type), PinOwner::Ethernet);
+  managed_pin_type i2spins[] = { { 9, true}, {10, true}, {11, true}, {12, true}, {13, true} };  
+  pinManager.allocateMultiplePins(i2spins, sizeof(i2spins)/sizeof(managed_pin_type), PinOwner::UM_Audioreactive);
+  // managed_pin_type i2cpins[] = { { 7, true}, {8, true} };  
+  // pinManager.allocateMultiplePins(i2cpins, sizeof(i2cpins)/sizeof(managed_pin_type), PinOwner::HW_I2C);
+  // esp_hosted_host_init();   
+  // transport_drv_reconfigure();
+  // esp_wifi_init(); //  needs args
+#endif
+
 #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
   //psramInit(); //WLEDMM?? softhack007: not sure if explicit init is really needed ... lets disable it here and see if that works
   #if defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -623,7 +642,7 @@ void WLED::setup()
   #endif
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
-  if (strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) { // WLEDMM detect pico board at runtime
+  if(strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) { // WLEDMM detect pico board at runtime
     // special handling for PICO-D4: gpio16+17 are in use for onboard SPI FLASH (not PSRAM)
     managed_pin_type pins[] = { {16, true}, {17, true} };
     pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
@@ -817,7 +836,7 @@ void WLED::setup()
   //#ifdef WLED_DEBUG
   USER_PRINTLN(F("\nGPIO\t| Assigned to\t\t| Info"));
   USER_PRINTLN(F("--------|-----------------------|------------"));
-  for(int pinNr = 0; pinNr < WLED_NUM_PINS; pinNr++) { // 49 = highest PIN on ESP32-S3
+  for(int pinNr = 0; pinNr < WLED_NUM_PINS; pinNr++) { // 54 = highest PIN on ESP32-P4
     if(pinManager.isPinOk(pinNr, false)) {
       //if ((!pinManager.isPinAllocated(pinNr)) && (pinManager.getPinSpecialText(pinNr).length() == 0)) continue;      // un-comment to hide no-name,unused GPIO pins
       bool is_inOut = pinManager.isPinOk(pinNr, true);
@@ -1044,42 +1063,172 @@ bool WLED::initEthernet()
 
 }
 
-#include <stdio.h> //for basic printf commands
-#include <string.h> //for handling strings
-#include "freertos/FreeRTOS.h" //for delay,mutexs,semphrs rtos operations
-#include "esp_system.h" //esp_init funtions esp_err_t 
-#include "esp_wifi_remote.h" //esp_wifi_init functions and wifi operations
-#include "esp_log.h" //for showing logs
-#include "esp_event.h" //for wifi event
-#include "nvs_flash.h" //non volatile storage
-#include "lwip/err.h" //light weight ip packets error handling
-#include "lwip/sys.h" //system applications for light weight ip apps
+// #define EXAMPLE_ESP_WIFI_SSID      CLIENT_SSID
+// #define EXAMPLE_ESP_WIFI_PASS      CLIENT_PASS
+// #define EXAMPLE_ESP_MAXIMUM_RETRY  10
+// #if CONFIG_ESP_WPA3_SAE_PWE_HUNT_AND_PECK
+// #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_HUNT_AND_PECK
+// #define EXAMPLE_H2E_IDENTIFIER ""
+// #elif CONFIG_ESP_WPA3_SAE_PWE_HASH_TO_ELEMENT
+// #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_HASH_TO_ELEMENT
+// #define EXAMPLE_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
+// #elif CONFIG_ESP_WPA3_SAE_PWE_BOTH
+// #define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
+// #define EXAMPLE_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
+// #endif
+// #if CONFIG_ESP_WIFI_AUTH_OPEN
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_OPEN
+// #elif CONFIG_ESP_WIFI_AUTH_WEP
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WEP
+// #elif CONFIG_ESP_WIFI_AUTH_WPA_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_PSK
+// #elif CONFIG_ESP_WIFI_AUTH_WPA2_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
+// #elif CONFIG_ESP_WIFI_AUTH_WPA_WPA2_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_WPA2_PSK
+// #elif CONFIG_ESP_WIFI_AUTH_WPA3_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA3_PSK
+// #elif CONFIG_ESP_WIFI_AUTH_WPA2_WPA3_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_WPA3_PSK
+// #elif CONFIG_ESP_WIFI_AUTH_WAPI_PSK
+// #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WAPI_PSK
+// #endif
 
-const char *ssid = "Tarna";
-const char *pass = "jackalope";
+// /* FreeRTOS event group to signal when we are connected*/
+// static EventGroupHandle_t s_wifi_event_group;
+
+// /* The event group allows multiple bits for each event, but we only care about two events:
+//  * - we are connected to the AP with an IP
+//  * - we failed to connect after the maximum amount of retries */
+// #define WIFI_CONNECTED_BIT BIT0
+// #define WIFI_FAIL_BIT      BIT1
+
+// static const char *TAG = "wifi station";
+
+// static int s_retry_num = 0;
+
+
+// static void event_handler(void* arg, esp_event_base_t event_base,
+//                                 int32_t event_id, void* event_data)
+// {
+//     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+//         Serial.print("WIFI_EVENT_STA_START");
+//         esp_wifi_connect();
+//     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+//         Serial.print("WIFI_EVENT_STA_DISCONNECTED");
+//         if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+//             esp_wifi_connect();
+//             s_retry_num++;
+//             Serial.print("retry to connect to the AP");
+//         } else {
+//             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+//         }
+//         Serial.print("connect to the AP fail");
+//     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+//         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+//         Serial.printf("got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+//         s_retry_num = 0;
+//         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+//     }
+// }
+
+// void wifi_init_sta(void)
+// {
+//     s_wifi_event_group = xEventGroupCreate();
+
+//     ESP_ERROR_CHECK(esp_netif_init());
+
+//     ESP_ERROR_CHECK(esp_event_loop_create_default());
+//     esp_netif_create_default_wifi_sta();
+
+//     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+//     esp_event_handler_instance_t instance_any_id;
+//     esp_event_handler_instance_t instance_got_ip;
+//     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+//                                                         ESP_EVENT_ANY_ID,
+//                                                         &event_handler,
+//                                                         NULL,
+//                                                         &instance_any_id));
+//     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+//                                                         IP_EVENT_STA_GOT_IP,
+//                                                         &event_handler,
+//                                                         NULL,
+//                                                         &instance_got_ip));
+
+//     wifi_config_t wifi_config = {
+//         .sta = {
+//             .ssid = EXAMPLE_ESP_WIFI_SSID,
+//             .password = EXAMPLE_ESP_WIFI_PASS,
+//             /* Authmode threshold resets to WPA2 as default if password matches WPA2 standards (password len => 8).
+//              * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
+//              * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
+//              * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
+//              */
+//             // .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
+//             // .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
+//             // .sae_h2e_identifier = EXAMPLE_H2E_IDENTIFIER,
+//         },
+//     };
+//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
+//     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+//     ESP_ERROR_CHECK(esp_wifi_start() );
+
+//     ESP_LOGI(TAG, "wifi_init_sta finished.");
+
+//     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
+//      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
+//     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+//             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+//             pdFALSE,
+//             pdFALSE,
+//             portMAX_DELAY);
+
+//     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
+//      * happened. */
+//     if (bits & WIFI_CONNECTED_BIT) {
+//         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
+//                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+//     } else if (bits & WIFI_FAIL_BIT) {
+//         ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
+//                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+//     } else {
+//         ESP_LOGE(TAG, "UNEXPECTED EVENT");
+//     }
+// }
+
+// #include <stdio.h> //for basic printf commands
+// #include <string.h> //for handling strings
+// #include "freertos/FreeRTOS.h" //for delay,mutexs,semphrs rtos operations
+// #include "esp_system.h" //esp_init funtions esp_err_t 
+// // #include "esp_wifi_remote.h" //esp_wifi_init functions and wifi operations
+// #include "esp_log.h" //for showing logs
+// #include "esp_event.h" //for wifi event
+// #include "nvs_flash.h" //non volatile storage
+// #include "lwip/err.h" //light weight ip packets error handling
+// #include "lwip/sys.h" //system applications for light weight ip apps
+
 int retry_num=0;
 static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
-if(event_id == WIFI_EVENT_STA_START)
-{
-  printf("WIFI CONNECTING....\n");
-}
-else if (event_id == WIFI_EVENT_STA_CONNECTED)
-{
-  printf("WiFi CONNECTED\n");
-}
-else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
-{
-  printf("WiFi lost connection\n");
-  if(retry_num<5){esp_wifi_connect();retry_num++;printf("Retrying to Connect...\n");}
-}
-else if (event_id == IP_EVENT_STA_GOT_IP)
-{
-  printf("Wifi got IP...\n\n");
-}
+  if(event_id == WIFI_EVENT_STA_START) {
+    USER_PRINTLN("WIFI CONNECTING....\n");
+  } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+    USER_PRINTLN("WiFi CONNECTED\n");
+  }
+  else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    USER_PRINTLN("WiFi lost connection\n");
+    if(retry_num<5){esp_wifi_connect();retry_num++;USER_PRINTLN("Retrying to Connect...\n");}
+  }
+  else if (event_id == IP_EVENT_STA_GOT_IP){
+    USER_PRINTLN("Wifi got IP...\n\n");
+    interfacesInited = false;
+  } else {
+    USER_PRINTF("WiFi threw unidentified code %d\n",event_id);
+  }
 }
 
-void wifi_connection()
-{
+void wifi_connection() {
      //                          s1.4
     // 2 - Wi-Fi Configuration Phase
     esp_netif_init();
@@ -1091,12 +1240,12 @@ void wifi_connection()
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
     wifi_config_t wifi_configuration = {
         .sta = {
-            .ssid = "",
-            .password = "",
+            .ssid = CLIENT_SSID,
+            .password = CLIENT_PASS
            }
         };
-    strcpy((char*)wifi_configuration.sta.ssid, ssid);
-    strcpy((char*)wifi_configuration.sta.password, pass);    
+    strcpy((char*)wifi_configuration.sta.ssid, CLIENT_SSID);
+    strcpy((char*)wifi_configuration.sta.password, CLIENT_PASS);    
     //esp_log_write(ESP_LOG_INFO, "Kconfig", "SSID=%s, PASS=%s", ssid, pass);
     esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
     // 3 - Wi-Fi Start Phase
@@ -1104,7 +1253,7 @@ void wifi_connection()
     esp_wifi_set_mode(WIFI_MODE_STA);
     // 4- Wi-Fi Connect Phase
     esp_wifi_connect();
-    USER_PRINTF("wifi_init_softap finished. SSID:%s  password:%s\n",ssid,pass);
+    USER_PRINTF("wifi_init_softap finished. SSID:%s  password: ********\n",CLIENT_SSID);
     
 }
 
@@ -1132,7 +1281,9 @@ void WLED::initConnection()
   }
 
   lastReconnectAttempt = millis();
-  busses.removeAll();
+  
+  // busses.removeAll(); // TROYHACKS FAILSAFE
+
   // if (!WLED_WIFI_CONFIGURED) {
   //   USER_PRINTLN(F("No WiFi connection configured."));  // WLEDMM
   //   if (!apActive) initAP();        // instantly go to ap mode
@@ -1165,6 +1316,8 @@ void WLED::initConnection()
   WiFi.hostname(hostname);
 #endif
   wifi_connection();
+  // ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+  // wifi_init_sta();
 #ifdef ARDUINO_ARCH_ESP32
   #if defined(LOLIN_WIFI_FIX) && (defined(ARDUINO_ARCH_ESP32C3) || defined(ARDUINO_ARCH_ESP32C6) || defined(ARDUINO_ARCH_ESP32S2) || defined(ARDUINO_ARCH_ESP32S3) || defined(ARDUINO_ARCH_ESP32P4))
   // WiFi.setTxPower(WIFI_POWER_8_5dBm);

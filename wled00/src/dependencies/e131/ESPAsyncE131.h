@@ -28,7 +28,7 @@
 
 #ifdef ESP32
 #ifdef CONFIG_IDF_TARGET_ESP32P4
-#include <esp_wifi_remote.h>
+#include <esp_wifi.h>
 #else
 #include "WiFi.h"
 #endif
