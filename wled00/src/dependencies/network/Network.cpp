@@ -2,12 +2,25 @@
 
 IPAddress NetworkClass::localIP()
 {
-  IPAddress localIP;
+  
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-  localIP = ETH.localIP();
+  #ifdef ARDUINO_ARCH_ESP32P4
+  esp_netif_ip_info_t ip_info;
+  esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
+  // esp_netif_get_ip_info(ESP_IF_WIFI_STA,&ip_info);
+  IPAddress localIP;
+  char buf[32];
+  sprintf(buf, IPSTR, IP2STR(&ip_info.ip));
+  localIP = buf;
   if (localIP[0] != 0) {
     return localIP;
   }
+  #else
+  IPAddress localIP = ETH.localIP();
+  if (localIP[0] != 0) {
+    return localIP;
+  }
+  #endif
 #endif
   // localIP = WiFi.localIP();
   // if (localIP[0] != 0) {
