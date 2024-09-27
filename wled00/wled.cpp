@@ -1270,7 +1270,9 @@ void WLED::initConnection()
 
   lastReconnectAttempt = millis();
   
-  // busses.removeAll(); // TROYHACKS FAILSAFE
+  #ifdef TROYHACKS_FAILSAFE_BUSSES
+    busses.removeAll(); // TROYHACKS FAILSAFE IN CASE BUSSES ARE CAUSING CRASHES
+  #endif
 
   // if (!WLED_WIFI_CONFIGURED) {
   //   USER_PRINTLN(F("No WiFi connection configured."));  // WLEDMM
