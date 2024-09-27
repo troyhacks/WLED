@@ -3089,7 +3089,7 @@ class AudioReactive : public Usermod {
 
       oappend(SET_F("addInfo(uxp,3,'<i>master clock</i>','I2S MCLK');"));
       oappend(SET_F("dRO(uxp,3);")); // disable read only pins
-      #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
+      #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32P4)
         oappend(SET_F("dOpt(uxp,3,2,2);")); //only use -1, 0, 1 or 3
         oappend(SET_F("dOpt(uxp,3,4,39);")); //only use -1, 0, 1 or 3
       #endif
