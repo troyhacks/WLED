@@ -130,7 +130,8 @@ bool NetworkClass::isConnected() {
 
 bool NetworkClass::isEthernet() {
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-    return (ETH.localIP()[0] != 0);
+    // return (ETH.localIP()[0] != 0);
+    return true;
   #endif
     return false;
 }
