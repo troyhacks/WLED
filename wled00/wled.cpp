@@ -1238,7 +1238,7 @@ void WLED::initConnection()
     USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
     USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
     USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
-    USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
+    // USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
 
     // Network.isConnected();
     // Network.isEthernet();
