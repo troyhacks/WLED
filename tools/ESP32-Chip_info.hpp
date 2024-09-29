@@ -10,61 +10,93 @@
  * that was created by Jason2866, subject to the GNU General Public License v3.0 
  * detailed license conditions: https://github.com/Jason2866/ESP32_Show_Info/blob/main/LICENSE
  */
-#include <Arduino.h>
-
-#ifdef ARDUINO_ARCH_ESP32
-
-#include "soc/spi_reg.h"
+#include "Arduino.h"
 #include <soc/efuse_reg.h>
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
-  #include "esp_chip_info.h"  // esp-idf v4.4.x
+#include "Esp.h"
+#include "esp_sleep.h"
+#include <memory>
+#include <soc/soc.h>
+#include <esp_partition.h>
+
+extern "C" {
+#include "esp_ota_ops.h"
+#include "esp_image_format.h"
+}
+
+#include "soc/spi_reg.h"
+#include "esp_system.h"
+#include "esp_chip_info.h"
+#include "esp_mac.h"
+#include "esp_flash.h"
+
+#ifdef ESP_IDF_VERSION_MAJOR  // IDF 4+
+#if CONFIG_IDF_TARGET_ESP32   // ESP32/PICO-D4
+#include "esp32/rom/spi_flash.h"
+#include "soc/efuse_reg.h"
+#elif CONFIG_IDF_TARGET_ESP32S2
+#include "esp32s2/rom/spi_flash.h"
+#include "soc/efuse_reg.h"
+#elif CONFIG_IDF_TARGET_ESP32S3
+#include "esp32s3/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32C2
+#include "esp32c2/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32C3
+#include "esp32c3/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32C6
+#include "esp32c6/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32H2
+#include "esp32h2/rom/spi_flash.h"
+#elif CONFIG_IDF_TARGET_ESP32P4
+#include "esp32p4/rom/spi_flash.h"
 #else
-  #include "esp_system.h"     // esp-idf v3.x
+#error Target CONFIG_IDF_TARGET is not supported
+#endif
+#else  // ESP32 Before IDF 4.0
+#include "rom/spi_flash.h"
 #endif
 
-#if CONFIG_IDF_TARGET_ESP32
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
-  #include "esp32/rom/spi_flash.h"
-  #include "esp32/spiram.h"
-  #include "spiram_psram.h"
-#else
-  #include "esp_spi_flash.h"
-  #include "rom/spi_flash.h"
-  #include "esp_spiram.h"
-  //#include "spiram_psram.h"
-#endif
+#if CONFIG_IDF_TARGET_ESP32      // ESP32/PICO-D4
+  #include "esp32/rom/rtc.h"
 #elif CONFIG_IDF_TARGET_ESP32S2  // ESP32-S2
-  #include "esp32s2/rom/spi_flash.h"
+  #include "esp32s2/rom/rtc.h"
 #elif CONFIG_IDF_TARGET_ESP32S3  // ESP32-S3
-  #include "esp32s3/rom/spi_flash.h"
+  #include "esp32s3/rom/rtc.h"
+#elif CONFIG_IDF_TARGET_ESP32C2  // ESP32-C2
+  #include "esp32c2/rom/rtc.h"
 #elif CONFIG_IDF_TARGET_ESP32C3  // ESP32-C3
-  #include "esp32c3/rom/spi_flash.h"
+  #include "esp32c3/rom/rtc.h"
+#elif CONFIG_IDF_TARGET_ESP32C6  // ESP32-C6
+  #include "esp32c6/rom/rtc.h"
+#elif CONFIG_IDF_TARGET_ESP32H2  // ESP32-H2
+  #include "esp32h2/rom/rtc.h"
+#elif CONFIG_IDF_TARGET_ESP32P4  // ESP32-P4
+  #include "esp32p4/rom/rtc.h"
+#else
+  #error Target CONFIG_IDF_TARGET is not supported
 #endif
 
 #include <sdkconfig.h>
 #include <rom/cache.h>
-
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
-  #ifndef REG_SPI_BASE
+  #undef REG_SPI_BASE
   #define REG_SPI_BASE(i)     (DR_REG_SPI1_BASE + (((i)>1) ? (((i)* 0x1000) + 0x20000) : (((~(i)) & 1)* 0x1000 )))
-  #endif // REG_SPI_BASE
 #endif // TARGET
 
-uint32_t my_ESP_getFlashChipId(void)
+uint32_t ESP_get_FlashChipId(void)
 {
   uint32_t id = g_rom_flashchip.device_id;
   id = ((id & 0xff) << 16) | ((id >> 16) & 0xff) | (id & 0xff00);
   return id;
 }
 
-uint32_t my_ESP_getFlashChipRealSize(void)
+uint32_t ESP_getFlashChipRealSize(void)
 {
-  uint32_t id = (my_ESP_getFlashChipId() >> 16) & 0xFF;
+  uint32_t id = (ESP_get_FlashChipId() >> 16) & 0xFF;
   return 2 << (id - 1);
 }
 
-String my_ESP_getFlashChipMode(void) {
+String ESP_getFlashChipMode(void) {
 #if CONFIG_IDF_TARGET_ESP32S2
 const uint32_t spi_ctrl = REG_READ(PERIPHS_SPI_FLASH_CTRL);
 #else
@@ -88,8 +120,8 @@ return F("DOUT");
 }
 
 
-//******** Flash Chip Speed is NOT correct !!!! *****
-uint32_t my_ESP_getFlashChipSpeed(void)
+//******** Flash Chip Speed is NOT correctl !!!! *****
+uint32_t ESP_getFlashChipSpeed(void)
 {
   const uint32_t spi_clock = REG_READ(SPI_CLOCK_REG(0));
   if (spi_clock & BIT(31)) {
@@ -99,7 +131,7 @@ uint32_t my_ESP_getFlashChipSpeed(void)
   return spiClockDivToFrequency(spi_clock);
 }
 
-String my_GetDeviceHardware(void) {
+String GetDeviceHardware(void) {
   // https://www.espressif.com/en/products/socs
 
 /*
@@ -294,23 +326,20 @@ typedef struct {
   return F("ESP32");
 }
 
-String my_GetDeviceHardwareRevision(void) {
+String GetDeviceHardwareRevision(void) {
   // ESP32-S2
   // ESP32-D0WDQ6 rev.1
   // ESP32-C3 rev.2
   // ESP32-C3 rev.3
-  String result = my_GetDeviceHardware();   // ESP32-C3
+  String result = GetDeviceHardware();   // ESP32-C3
 
   esp_chip_info_t chip_info;
   esp_chip_info(&chip_info);
-  char revision[24] = { 0 };
+  char revision[10] = { 0 };
   if (chip_info.revision) {
-    snprintf_P(revision, sizeof(revision), PSTR(" rev.%d (0x%x)"), chip_info.revision, chip_info.revision);
+    snprintf_P(revision, sizeof(revision), PSTR(" rev.%d"), chip_info.revision);
   }
   result += revision;                    // ESP32-C3 rev.3
-#if CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
-  result += soc_has_cache_lock_bug() ? F(", chip has cache lock bug") : F(", free of cache lock bug");
-#endif
 
   return result;
 }
@@ -382,6 +411,8 @@ static void my_show_chip_info(void) {
 #include <esp32c3/rom/rtc.h>
 #elif CONFIG_IDF_TARGET_ESP32S3
 #include <esp32s3/rom/rtc.h>
+#elif CONFIG_IDF_TARGET_ESP32P4
+#include <esp32p4/rom/rtc.h>
 #else 
 #error Target CONFIG_IDF_TARGET is not supported
 #endif
@@ -474,7 +505,7 @@ void my_verbose_print_reset_reason(int reason)
 
 void show_psram_info_part1(void)
 {
-#if defined(BOARD_HAS_PSRAM) || defined(WLED_USE_PSRAM)
+#if 0 && (defined(BOARD_HAS_PSRAM) || defined(WLED_USE_PSRAM))
   //if (esp_spiram_is_initialized() == false) esp_spiram_init();
   Serial.println(psramFound() ? "ESP32 PSRAM: found.": "ESP32 PSRAM: not found!"); 
   if (!psramFound()) return;
@@ -553,7 +584,7 @@ void showRealSpeed() {
   Serial.print(F(", ")); Serial.print(ESP.getChipCores()); Serial.print(F(" core(s)"));
   Serial.print(F(", ")); Serial.print(ESP.getCpuFreqMHz()); Serial.println(F("MHz."));
 #endif
-  Serial.print(  F("ESP32 device: ")); Serial.println(my_GetDeviceHardwareRevision());
+  Serial.print(  F("ESP32 device: ")); Serial.println(GetDeviceHardwareRevision());
   Serial.print(  F("SDK:          ")); Serial.println(ESP.getSdkVersion());
   for(int aa=0; aa<42; aa++) Serial.print("-"); Serial.println();
 
@@ -569,12 +600,12 @@ void showRealSpeed() {
   Serial.print("FLASH MODE (magic byte): "); Serial.print(ESP.getFlashChipMode()); Serial.println(" ;  0=QIO, 1=QOUT, 2=DIO, 3=DOUT or other\n");
 
   Serial.flush();
-  Serial.print("FLASH CHIP ID:   0x"); Serial.println(my_ESP_getFlashChipId(), HEX);
+  Serial.print("FLASH CHIP ID:   0x"); Serial.println(ESP_get_FlashChipId(), HEX);
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
   //Serial.print("FLASH CHIP FREQ: "); Serial.print(my_ESP_getFlashChipSpeed() / 1000000.0, 1); Serial.println(" MHz"); // this seems to crash on -S2
 #endif
-  Serial.print("FLASH REAL SIZE: "); Serial.print(my_ESP_getFlashChipRealSize() / (1024.0 * 1024), 2); Serial.println(" MB");
-  Serial.print("FLASH REAL MODE: "); Serial.println(my_ESP_getFlashChipMode());
+  Serial.print("FLASH REAL SIZE: "); Serial.print(ESP_getFlashChipRealSize() / (1024.0 * 1024), 2); Serial.println(" MB");
+  Serial.print("FLASH REAL MODE: "); Serial.println(ESP_getFlashChipMode());
 
   for(int aa=0; aa<42; aa++) Serial.print("-"); Serial.println();
   Serial.flush();
@@ -613,8 +644,3 @@ void showRealSpeed() {
   for(int aa=0; aa<42; aa++) Serial.print("="); Serial.println("\n");
   Serial.flush();
 }
-
-
-#else
-  #error this tool only supports ESP32 chips
-#endif

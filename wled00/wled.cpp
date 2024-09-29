@@ -10,7 +10,7 @@ esp_eth_handle_t eth_handle = NULL;
 #include "soc/rtc_cntl_reg.h"
 #endif
 
-#if defined(WLED_DEBUG) && defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(WLED_DEBUG) && defined(ARDUINO_ARCH_ESP32) // && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "../tools/ESP32-Chip_info.hpp"
 #endif
 
@@ -486,7 +486,7 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t
 
 void WLED::setup()
 {
-  esp_log_level_set("*",ESP_LOG_VERBOSE);
+  // esp_log_level_set("*",ESP_LOG_VERBOSE);
 
   #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
     #ifdef ARDUINO_ARCH_ESP32P4
@@ -692,8 +692,8 @@ void WLED::setup()
   // pinManager.allocateMultiplePins(wifipins, sizeof(wifipins)/sizeof(managed_pin_type), PinOwner::WiFi);
   // managed_pin_type ethpins[] = { { 35, true}, {34, true}, {31, true}, {30, true}, {29, true}, {28, true}, {50, true} , {49, true}, {52, true}, {53, true} };  
   // pinManager.allocateMultiplePins(ethpins, sizeof(ethpins)/sizeof(managed_pin_type), PinOwner::Ethernet);
-  managed_pin_type i2spins[] = { { 9, true}, {10, true}, {11, true}, {12, true}, {13, true} };  
-  pinManager.allocateMultiplePins(i2spins, sizeof(i2spins)/sizeof(managed_pin_type), PinOwner::UM_Audioreactive);
+  // managed_pin_type i2spins[] = { { 9, true}, {10, true}, {11, true}, {12, true}, {13, true} };  
+  // pinManager.allocateMultiplePins(i2spins, sizeof(i2spins)/sizeof(managed_pin_type), PinOwner::UM_Audioreactive);
   // managed_pin_type i2cpins[] = { { 7, true}, {8, true} };  
   // pinManager.allocateMultiplePins(i2cpins, sizeof(i2cpins)/sizeof(managed_pin_type), PinOwner::HW_I2C);
 #endif
