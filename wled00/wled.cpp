@@ -489,26 +489,28 @@ void WLED::setup()
   // esp_log_level_set("*",ESP_LOG_VERBOSE);
 
   #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
-    #ifdef ARDUINO_ARCH_ESP32P4
-      esp_hosted_init(NULL);
+    #if !defined(WLED_USE_ETHERNET)
+      #if defined(ARDUINO_ARCH_ESP32P4)
+        esp_hosted_init(NULL);
+      #endif
+      esp_netif_init();
+      esp_event_loop_create_default();
+      esp_netif_create_default_wifi_sta();
+      wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+      esp_wifi_init(&wifi_initiation); //     
+      esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
+      esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
+      wifi_config_t wifi_configuration = {
+          .sta = {
+              .ssid = CLIENT_SSID,
+              .password = CLIENT_PASS
+              }
+          }; 
+      esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
+      esp_wifi_start();
+      delay(500);
     #endif
-    esp_netif_init();
-    esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
-    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&wifi_initiation); //     
-    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
-    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
-    wifi_config_t wifi_configuration = {
-        .sta = {
-            .ssid = CLIENT_SSID,
-            .password = CLIENT_PASS
-            }
-        }; 
-    esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
-    esp_wifi_start();
-    delay(500);
-    
+
     #ifdef WLED_USE_ETHERNET
       // Initialize TCP/IP network interface
       ESP_ERROR_CHECK(esp_netif_init());
@@ -1168,12 +1170,6 @@ bool WLED::initEthernet()
 
 }
 
-void wifi_connection() {
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_connect();
-    USER_PRINTF("wifi_init_softap finished. SSID:%s  password: ********\n",CLIENT_SSID);
-}
-
 void WLED::initConnection()
 {
 #ifdef ARDUINO_ARCH_ESP32
@@ -1225,17 +1221,21 @@ void WLED::initConnection()
     WiFi.hostname(hostname);
   #endif
 
-  USER_PRINT(clientSSID);
-  USER_PRINT(" / ");
-  for(unsigned i = 0; i<strlen(clientPass); i++) {
-      USER_PRINT("*");
-  }
-  USER_PRINTLN(" ...");
-
   // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
   char hostname[25];
   prepareHostname(hostname);
-  wifi_connection();
+  #ifndef WLED_USE_ETHERNET
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_connect();
+    USER_PRINTF("wifi_init_softap finished. SSID:%s  password: ********\n",CLIENT_SSID);
+  #else
+    USER_PRINT(clientSSID);
+    USER_PRINT(" / ");
+    for(unsigned i = 0; i<strlen(clientPass); i++) {
+        USER_PRINT("*");
+    }
+    USER_PRINTLN(" ...");
+  #endif
 
   #ifdef WLED_USE_ETHERNET
     USER_PRINTLN(F("Connecting to Ethernet"));
