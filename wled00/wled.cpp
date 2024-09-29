@@ -1215,8 +1215,6 @@ void WLED::initConnection()
   // }
   // showWelcomePage = false;
 
-  USER_PRINT(F("Connecting to Wifi: "));
-
   #ifdef ESP8266
     WiFi.hostname(hostname);
   #endif
@@ -1224,27 +1222,23 @@ void WLED::initConnection()
   // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
   char hostname[25];
   prepareHostname(hostname);
-  #ifndef WLED_USE_ETHERNET
+
+  #if !defined(WLED_USE_ETHERNET) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
+    USER_PRINT("Connecting to WiFi: ");
+    USER_PRINT(clientSSID);
+    USER_PRINTLN(" / ******** ...");
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_connect();
-    USER_PRINTF("wifi_init_softap finished. SSID:%s  password: ********\n",CLIENT_SSID);
-  #else
-    USER_PRINT(clientSSID);
-    USER_PRINT(" / ");
-    for(unsigned i = 0; i<strlen(clientPass); i++) {
-        USER_PRINT("*");
-    }
-    USER_PRINTLN(" ...");
   #endif
 
   #ifdef WLED_USE_ETHERNET
     USER_PRINTLN(F("Connecting to Ethernet"));
     USER_PRINTF("Network.isConnected (not fixed, lying) = %d\n",Network.isConnected());
-    USER_PRINTF("Network.isEthernet (not fixed, lying) = %d\n",Network.isEthernet());
+    USER_PRINTF("Network.isEthernet (not fixed, kinda lying) = %d\n",Network.isEthernet());
     USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
     USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
     USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
-    // USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
+    USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
 
     // Network.isConnected();
     // Network.isEthernet();
