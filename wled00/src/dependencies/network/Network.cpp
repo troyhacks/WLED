@@ -119,22 +119,20 @@ void NetworkClass::localMAC(uint8_t* MAC) {
 
 }
 
-bool NetworkClass::isConnected()
-{
-#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-  // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED) || ETH.localIP()[0] != 0;
-#else
-  // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
-#endif
-return true;
+bool NetworkClass::isConnected() {
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
+    // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED) || ETH.localIP()[0] != 0;
+  #else
+    // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
+  #endif
+  return true;
 }
 
-bool NetworkClass::isEthernet()
-{
-#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-  return (ETH.localIP()[0] != 0);
-#endif
-  return false;
+bool NetworkClass::isEthernet() {
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
+    return (ETH.localIP()[0] != 0);
+  #endif
+    return false;
 }
 
 #ifdef ARDUINO_ARCH_ESP32

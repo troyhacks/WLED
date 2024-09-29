@@ -448,12 +448,12 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
     USER_PRINTLN("WIFI CONNECTING....\n");
   } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
     USER_PRINTLN("WiFi CONNECTED\n");
-  }
-  else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+  } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
     USER_PRINTLN("WiFi lost connection\n");
     if(retry_num<5){esp_wifi_connect();retry_num++;USER_PRINTLN("Retrying to Connect...\n");}
-  }
-  else if (event_id == IP_EVENT_STA_GOT_IP){
+  } else if (event_id == WIFI_EVENT_HOME_CHANNEL_CHANGE){
+    USER_PRINTLN("WiFi home channel change，doesn't occur when scanning\n");
+  } else if (event_id == IP_EVENT_STA_GOT_IP){
     interfacesInited = false;
   } else {
     USER_PRINTF("WiFi threw unidentified code %d\n",event_id);
@@ -463,40 +463,13 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
 # ifdef WLED_USE_ETHERNET
 static const char *TAG = "eth_init";
 
-// static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-    
-//     uint8_t mac_addr[6] = {0};
-//     /* we can get the ethernet driver handle from event data */
-//     esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)event_data;
-
-//     switch (event_id) {
-//     case ETHERNET_EVENT_CONNECTED:
-//         esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
-//         ESP_LOGI(TAG, "Ethernet Link Up");
-//         ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
-//                  mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-//         break;
-//     case ETHERNET_EVENT_DISCONNECTED:
-//         ESP_LOGI(TAG, "Ethernet Link Down");
-//         break;
-//     case ETHERNET_EVENT_START:
-//         ESP_LOGI(TAG, "Ethernet Started");
-//         break;
-//     case ETHERNET_EVENT_STOP:
-//         ESP_LOGI(TAG, "Ethernet Stopped");
-//         break;
-//     default:
-//         break;
-//     }
-// }
-
 static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_id == ETHERNET_EVENT_CONNECTED) {
         ESP_LOGI(TAG, "Ethernet Link Up");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
         ESP_LOGI(TAG, "Ethernet Link Down");
     } else if (event_id == ETHERNET_EVENT_START) {
-        ESP_LOGI(TAG, "** Ethernet Started!! **");
+        ESP_LOGI(TAG, "Ethernet Started");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
         ESP_LOGI(TAG, "Ethernet Disconnected");
     } else {
@@ -506,7 +479,7 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t ev
 
 static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-    ESP_LOGI(TAG, "Got IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
+    ESP_LOGI(TAG, "Ethernet Got IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
     interfacesInited = false;
 }
 #endif
@@ -516,27 +489,27 @@ void WLED::setup()
   esp_log_level_set("*",ESP_LOG_VERBOSE);
 
   #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
-    #ifndef WLED_USE_ETHERNET
-      #ifdef ARDUINO_ARCH_ESP32P4
-        esp_hosted_init(NULL);
-      #endif
-      esp_netif_init();
-      esp_event_loop_create_default();
-      esp_netif_create_default_wifi_sta();
-      wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
-      esp_wifi_init(&wifi_initiation); //     
-      esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
-      esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
-      wifi_config_t wifi_configuration = {
-          .sta = {
-              .ssid = CLIENT_SSID,
-              .password = CLIENT_PASS
-              }
-          }; 
-      esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
-      esp_wifi_start();
-      delay(500);
-    #else
+    #ifdef ARDUINO_ARCH_ESP32P4
+      esp_hosted_init(NULL);
+    #endif
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+    wifi_init_config_t wifi_initiation = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&wifi_initiation); //     
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL);
+    wifi_config_t wifi_configuration = {
+        .sta = {
+            .ssid = CLIENT_SSID,
+            .password = CLIENT_PASS
+            }
+        }; 
+    esp_wifi_set_config((wifi_interface_t)ESP_IF_WIFI_STA, &wifi_configuration);
+    esp_wifi_start();
+    delay(500);
+    
+    #ifdef WLED_USE_ETHERNET
       // Initialize TCP/IP network interface
       ESP_ERROR_CHECK(esp_netif_init());
       ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -723,9 +696,6 @@ void WLED::setup()
   pinManager.allocateMultiplePins(i2spins, sizeof(i2spins)/sizeof(managed_pin_type), PinOwner::UM_Audioreactive);
   // managed_pin_type i2cpins[] = { { 7, true}, {8, true} };  
   // pinManager.allocateMultiplePins(i2cpins, sizeof(i2cpins)/sizeof(managed_pin_type), PinOwner::HW_I2C);
-  // esp_hosted_host_init();   
-  // transport_drv_reconfigure();
-  // esp_wifi_init(); //  needs args
 #endif
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
@@ -1249,15 +1219,28 @@ void WLED::initConnection()
   // }
   // showWelcomePage = false;
 
-  USER_PRINT(F("Connecting to "));
+  USER_PRINT(F("Connecting to Wifi: "));
 
-#ifdef ESP8266
-  WiFi.hostname(hostname);
-#endif
+  #ifdef ESP8266
+    WiFi.hostname(hostname);
+  #endif
+
+  USER_PRINT(clientSSID);
+  USER_PRINT(" / ");
+  for(unsigned i = 0; i<strlen(clientPass); i++) {
+      USER_PRINT("*");
+  }
+  USER_PRINTLN(" ...");
+
+  // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
+  char hostname[25];
+  prepareHostname(hostname);
+  wifi_connection();
+
   #ifdef WLED_USE_ETHERNET
-    USER_PRINTLN(F("Ethernet"));
-    USER_PRINTF("Network.isConnected = %d\n",Network.isConnected());
-    USER_PRINTF("Network.isEthernet = %d\n",Network.isEthernet());
+    USER_PRINTLN(F("Connecting to Ethernet"));
+    USER_PRINTF("Network.isConnected (not fixed, lying) = %d\n",Network.isConnected());
+    USER_PRINTF("Network.isEthernet (not fixed, lying) = %d\n",Network.isEthernet());
     USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
     USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
     USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
@@ -1270,19 +1253,8 @@ void WLED::initConnection()
     // Network.subnetMask();
     // Network.gatewayIP();
 
-  #else
-    USER_PRINT(clientSSID);
-    USER_PRINT(" / ");
-    for(unsigned i = 0; i<strlen(clientPass); i++) {
-        USER_PRINT("*");
-    }
-    USER_PRINTLN(" ...");
-
-    // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
-    char hostname[25];
-    prepareHostname(hostname);
-    wifi_connection();
   #endif
+
   // ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
   // wifi_init_sta();
 #ifdef ARDUINO_ARCH_ESP32
