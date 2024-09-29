@@ -252,7 +252,7 @@
 #define TYPE_NET_DDP_RGB         80            //network DDP RGB bus (master broadcast bus)
 #define TYPE_NET_E131_RGB        81            //network E131 RGB bus (master broadcast bus, unused)
 #define TYPE_NET_ARTNET_RGB      82            //network ArtNet RGB bus (master broadcast bus)
-#define TYPE_NET_ARTNET_RGBW     83            //network ArtNet RGB bus (master broadcast bus)
+#define TYPE_NET_ARTNET_RGBW     83            //network ArtNet RGBW bus (master broadcast bus)
 #define TYPE_NET_DDP_RGBW        88            //network DDP RGBW bus (master broadcast bus)
 
 #define IS_DIGITAL(t) (((t) & 0x10) || ((t)==TYPE_HUB75MATRIX)) //digital are 16-31 and 48-63 // WLEDMM added HUB75
@@ -282,7 +282,7 @@
 #define BTN_TYPE_ANALOG_INVERTED  8
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       12 //WLEDMM +1 for Olimex ESP32-Gateway
+#define WLED_NUM_ETH_TYPES       13 //WLEDMM +1 for Olimex ESP32-Gateway +1 for W5500
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
@@ -296,6 +296,7 @@
 #define WLED_ETH_ABCWLEDV43ETH    9
 #define WLED_ETH_SERG74          10
 #define WLED_ETH_OLIMEX_GTW      11
+#define WLED_ETH_W5500           12
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0
@@ -354,6 +355,7 @@
 #define ERR_LOW_SEG_MEM 34  // WLEDMM: low memory (segment data RAM)
 #define ERR_LOW_WS_MEM  35  // WLEDMM: low memory (ws)
 #define ERR_LOW_AJAX_MEM  36 // WLEDMM: low memory (oappend)
+#define ERR_LOW_BUF     37  // WLEDMM: low memory (LED buffer from allocLEDs)
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness
@@ -423,17 +425,23 @@
   #if !defined(USERMOD_AUDIOREACTIVE)
     #define SETTINGS_STACK_BUF_SIZE 3834   // WLEDMM added 696+32 bytes of margin (was 3096)
   #else
-    #define SETTINGS_STACK_BUF_SIZE 4000   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #if defined(MAX_LEDS_PER_BUS) && MAX_LEDS_PER_BUS > 2048
+      #define SETTINGS_STACK_BUF_SIZE 5500   // WLEDMM more buffer for audioreactive UI (add '-D CONFIG_ASYNC_TCP_TASK_STACK_SIZE=9216' to your build_flags)
+    #else 
+      #define SETTINGS_STACK_BUF_SIZE 4100
+    #endif
   #endif
 #endif
 
-#ifdef WLED_USE_ETHERNET
-  #define E131_MAX_UNIVERSE_COUNT 20
-#else
-  #ifdef ESP8266
-    #define E131_MAX_UNIVERSE_COUNT 9
+#ifndef E131_MAX_UNIVERSE_COUNT
+  #ifdef WLED_USE_ETHERNET
+    #define E131_MAX_UNIVERSE_COUNT 20
   #else
-    #define E131_MAX_UNIVERSE_COUNT 12
+    #ifdef ESP8266
+      #define E131_MAX_UNIVERSE_COUNT 9
+    #else
+      #define E131_MAX_UNIVERSE_COUNT 12
+    #endif
   #endif
 #endif
 
@@ -480,7 +488,9 @@
 #endif
 
 //#define MIN_HEAP_SIZE (8k for AsyncWebServer)
+#if !defined(MIN_HEAP_SIZE)
 #define MIN_HEAP_SIZE 8192
+#endif
 
 // Maximum size of node map (list of other WLED instances)
 #ifdef ESP8266
