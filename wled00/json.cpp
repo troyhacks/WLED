@@ -1004,12 +1004,20 @@ void serializeInfo(JsonObject root)
     outputs.add(busses.getBus(b)->getLength());
   }
 
-  // JsonObject wifi_info = root.createNestedObject("wifi");
-  // wifi_info[F("bssid")] = WiFi.BSSIDstr();
-  // int qrssi = WiFi.RSSI();
-  // wifi_info[F("rssi")] = qrssi;
-  // wifi_info[F("signal")] = getSignalQuality(qrssi);
-  // wifi_info[F("channel")] = WiFi.channel();
+  JsonObject wifi_info = root.createNestedObject("wifi");
+  #ifdef ARDUINO_ARCH_ESP32P4
+    wifi_info[F("bssid")] = CLIENT_SSID;
+    int qrssi = 69;
+    wifi_info[F("rssi")] = qrssi;
+    wifi_info[F("signal")] = getSignalQuality(qrssi);
+    wifi_info[F("channel")] = 99;
+  #else
+    wifi_info[F("bssid")] = WiFi.BSSIDstr();
+    int qrssi = WiFi.RSSI();
+    wifi_info[F("rssi")] = qrssi;
+    wifi_info[F("signal")] = getSignalQuality(qrssi);
+    wifi_info[F("channel")] = WiFi.channel();
+  #endif
 
   JsonObject fs_info = root.createNestedObject("fs");
   fs_info["u"] = fsBytesUsed / 1000;
