@@ -121,7 +121,7 @@ void NetworkClass::localMAC(uint8_t* MAC) {
 
 bool NetworkClass::isConnected() {
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-    // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED) || ETH.localIP()[0] != 0;
+    return true;
   #else
     // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
   #endif
