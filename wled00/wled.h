@@ -116,10 +116,9 @@
   #ifdef CONFIG_IDF_TARGET_ESP32P4
     #ifdef WLED_USE_ETHERNET
       #include <esp_eth.h>
-    #else
-      #include <esp_hosted_api.h>
-      #include <esp_wifi.h>
     #endif
+    #include <esp_hosted_api.h>
+    #include <esp_wifi.h>
     #define I2S_SDPIN 11
     #define I2S_WSPIN 10
     #define I2S_CKPIN 12
