@@ -966,9 +966,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           bufferOffset += packetSize;
           
           if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
-            #ifndef WLED_USE_ETHERNET
             DEBUG_PRINTLN(F("Art-Net artnetudp.writeTo() returned an error"));
-            #endif
             return 1; // borked
           }
           hardware_output_universe++;
