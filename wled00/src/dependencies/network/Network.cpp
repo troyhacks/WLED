@@ -32,6 +32,23 @@ IPAddress NetworkClass::localIP()
 
 IPAddress NetworkClass::subnetMask()
 {
+  #ifdef ARDUINO_ARCH_ESP32P4
+  esp_netif_ip_info_t ip_info;
+  esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
+  // esp_netif_get_ip_info(ESP_IF_WIFI_STA,&ip_info);
+  IPAddress localIP;
+  char buf[32];
+  sprintf(buf, IPSTR, IP2STR(&ip_info.netmask));
+  localIP = buf;
+  if (localIP[0] != 0) {
+    return localIP;
+  }
+  #else
+  IPAddress localIP = ETH.localIP();
+  if (localIP[0] != 0) {
+    return localIP;
+  }
+  #endif
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
   if (ETH.localIP()[0] != 0) {
     return ETH.subnetMask();
@@ -45,7 +62,24 @@ IPAddress NetworkClass::subnetMask()
 
 IPAddress NetworkClass::gatewayIP()
 {
-#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
+  #ifdef ARDUINO_ARCH_ESP32P4
+  esp_netif_ip_info_t ip_info;
+  esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
+  // esp_netif_get_ip_info(ESP_IF_WIFI_STA,&ip_info);
+  IPAddress localIP;
+  char buf[32];
+  sprintf(buf, IPSTR, IP2STR(&ip_info.gw));
+  localIP = buf;
+  if (localIP[0] != 0) {
+    return localIP;
+  }
+  #else
+  IPAddress localIP = ETH.localIP();
+  if (localIP[0] != 0) {
+    return localIP;
+  }
+  #endif
+#if defined(ARDUINO_ARCH_ESP32P4) && defined(WLED_USE_ETHERNET)
   if (ETH.localIP()[0] != 0) {
       return ETH.gatewayIP();
   }
@@ -56,8 +90,8 @@ IPAddress NetworkClass::gatewayIP()
   return INADDR_NONE;
 }
 
-void NetworkClass::localMAC(uint8_t* MAC)
-{
+void NetworkClass::localMAC(uint8_t* MAC) {
+
 #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
   // ETH.macAddress(MAC); // Does not work because of missing ETHClass:: in ETH.ccp
 
@@ -82,6 +116,7 @@ void NetworkClass::localMAC(uint8_t* MAC)
 #endif
   // WiFi.macAddress(MAC);
   return;
+
 }
 
 bool NetworkClass::isConnected()

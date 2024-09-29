@@ -120,6 +120,7 @@ void handleSerial()
           Serial.print("WLED"); Serial.write(' '); Serial.println(VERSION);
         } else if (next == 'F') {
           ArtNetSkipFrame = !ArtNetSkipFrame;
+          USER_PRINTF("Art-Net Skip-Frame is now %s.\n",ArtNetSkipFrame?"ON":"OFF");
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
         } else if (next == 0xB0) {updateBaudRate( 115200);

@@ -537,36 +537,7 @@ void WLED::setup()
       esp_wifi_start();
       delay(500);
     #else
-      // uint8_t eth_port_cnt = 0;
-      // esp_eth_handle_t *eth_handles = NULL;
-      // // ESP_ERROR_CHECK(example_eth_init(&eth_handles, &eth_port_cnt));
-      //   esp_err_t ret = ESP_OK;
-      //   uint8_t eth_cnt = 0;
-      //   *eth_handles = calloc(1, sizeof(esp_eth_handle_t));
-      //   eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
-      //   eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
-      //   phy_config.phy_addr = 0;
-      //   phy_config.reset_gpio_num = 51;
-      //   eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
-      //   esp32_emac_config.smi_gpio.mdc_num = 31;
-      //   esp32_emac_config.smi_gpio.mdio_num = 52;
-      //   esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
-      //   esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config); // IP101GRI
-      //   esp_eth_handle_t eth_handle = NULL;
-      //   esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
-      //   ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
-      // // end example_eth_init()
-      // ESP_ERROR_CHECK(esp_netif_init());
-      // ESP_ERROR_CHECK(esp_event_loop_create_default());
-      // esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
-      // esp_netif_t *eth_netif = esp_netif_new(&cfg);
-      // ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handles[0])));
-      // ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
-      // ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL));
-      // ESP_ERROR_CHECK(esp_eth_start(eth_handles[0]));
-      
       // Initialize TCP/IP network interface
-      ESP_LOGI(TAG, "Trying Ethernet Setup");
       ESP_ERROR_CHECK(esp_netif_init());
       ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -589,9 +560,7 @@ void WLED::setup()
 
       esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
       
-      ESP_LOGI(TAG, "Trying Eth Driver Install");
       ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
-      ESP_LOGI(TAG, "Trying NetIF Attach");
       ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handle)));
 
       // Start Ethernet driver
@@ -864,29 +833,19 @@ void WLED::setup()
   // generate module IDs must be done before AP setup
   #ifdef ARDUINO_ARCH_ESP32P4
     #ifdef WLED_USE_ETHERNET
-      // char buf[18];
-      // uint8_t mac_addr[6];
-      // esp_eth_mac_t **mac_instance;
-      // esp_eth_get_mac_instance(eth_handle, mac_instance);
-
-      // if (mac_instance) {
-        
-      //   ESP_ERROR_CHECK(mac_instance->get_addr(mac_instance, mac_addr));
-      //   ESP_LOGI(TAG, "MAC Address: %02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-      // } else {
-      //     ESP_LOGE(TAG, "Failed to get MAC instance");
-      // }
-
-      // sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-      // USER_PRINTF("Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-      // escapedMac = buf;
+      char buf[18];
+      uint8_t mac_addr[6];
+      esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
+      sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      USER_PRINTF("Ethernet Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      escapedMac = buf;
     #else
       uint8_t mymac[6];
       char buf[18];
       // esp_err_t result = esp_wifi_get_mac(WIFI_IF_STA, mymac);
       esp_err_t result = esp_eth_get_mac_instance(esp_netif_get_default_netif(), mymac);
       sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
-      USER_PRINTF("Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
+      USER_PRINTF("WiFi Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
       escapedMac = buf;
     #endif
   #else
@@ -1291,23 +1250,37 @@ void WLED::initConnection()
   // showWelcomePage = false;
 
   USER_PRINT(F("Connecting to "));
-  USER_PRINT(clientSSID);
-  USER_PRINT(" / ");
-  for(unsigned i = 0; i<strlen(clientPass); i++) {
-      USER_PRINT("*");
-  }
-  USER_PRINTLN(" ...");
-
-  // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
-  char hostname[25];
-  prepareHostname(hostname);
 
 #ifdef ESP8266
   WiFi.hostname(hostname);
 #endif
   #ifdef WLED_USE_ETHERNET
-    // ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+    USER_PRINTLN(F("Ethernet"));
+    USER_PRINTF("Network.isConnected = %d\n",Network.isConnected());
+    USER_PRINTF("Network.isEthernet = %d\n",Network.isEthernet());
+    USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
+    USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
+    USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
+    // USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
+
+    // Network.isConnected();
+    // Network.isEthernet();
+    // Network.localIP();
+    // Network.localMAC();
+    // Network.subnetMask();
+    // Network.gatewayIP();
+
   #else
+    USER_PRINT(clientSSID);
+    USER_PRINT(" / ");
+    for(unsigned i = 0; i<strlen(clientPass); i++) {
+        USER_PRINT("*");
+    }
+    USER_PRINTLN(" ...");
+
+    // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
+    char hostname[25];
+    prepareHostname(hostname);
     wifi_connection();
   #endif
   // ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
