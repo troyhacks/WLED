@@ -743,6 +743,12 @@ WLED_GLOBAL unsigned long presetsModifiedTime _INIT(0L);
 WLED_GLOBAL JsonDocument* fileDoc;
 WLED_GLOBAL bool doCloseFile _INIT(false);
 
+#ifdef ARTNET_SKIP_FRAME
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(true);
+#else 
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(false);
+#endif
+
 // presets
 WLED_GLOBAL byte currentPreset _INIT(0);
 

@@ -853,12 +853,11 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
     case 2: //Art-Net
     {
       while (artnetlimiter > micros()) {
-        #ifdef ARTNET_SKIP_FRAME
-          // delayMicroseconds(10); // do some tiny delay regardless
+        if (ArtNetSkipFrame) {
           return 0; // Let WLED keep generating effect frames and we output an Art-Net frame when ARTNET_FPS_LIMIT is reached.
-        #else
+        } else {
           delayMicroseconds(10); // Make WLED obey ARTNET_FPS_LIMIT and just delay here until we're ready to send a frame.
-        #endif
+        }
       }
 
       /*

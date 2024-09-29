@@ -118,7 +118,8 @@ void handleSerial()
           return;
         } else if (next == 'v') {
           Serial.print("WLED"); Serial.write(' '); Serial.println(VERSION);
-
+        } else if (next == 'F') {
+          ArtNetSkipFrame = !ArtNetSkipFrame;
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
         } else if (next == 0xB0) {updateBaudRate( 115200);
