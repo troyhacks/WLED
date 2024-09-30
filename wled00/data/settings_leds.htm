@@ -356,7 +356,7 @@
 <hr class="sml">
 ${i+1}:
 <select name="LT${i}" onchange="UI(true)">${i>=maxB ? '' :
-'<option value="22" selected>WS281x</option>\
+'<!-- <option value="22">WS281x</option>\
 <option value="30">SK6812/WS2814 RGBW</option>\
 <option value="31">TM1814</option>\
 <option value="24">400kHz</option>\
@@ -374,11 +374,11 @@ ${i+1}:
 <option value="42">PWM CCT</option>\
 <option value="43">PWM RGB</option>\
 <option value="44">PWM RGBW</option>\
-<option value="45">PWM RGB+CCT</option>\
+<option value="45">PWM RGB+CCT</option> -->\
 <!--option value="46">PWM RGB+DCCT</option-->'}
 <option value="80">DDP RGB (network)</option>
 <!--option value="81">E1.31 RGB (network)</option-->
-<option value="82">Art-Net RGB (network)</option>
+<option value="82" selected>Art-Net RGB (network)</option>
 <option value="83">Art-Net RGBW (network)</option>
 <option value="88">DDP RGBW (network)</option>
 <option value="101">Hub75Matrix 32x32</option>
