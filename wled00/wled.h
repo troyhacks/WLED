@@ -113,11 +113,13 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
-  #ifdef CONFIG_IDF_TARGET_ESP32P4
+  #if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     #ifdef WLED_USE_ETHERNET
       #include <esp_eth.h>
     #else
-      #include <esp_hosted_api.h>
+      #ifdef CONFIG_IDF_TARGET_ESP32P4
+        #include <esp_hosted_api.h>
+      #endif
       #include <esp_wifi.h>
     #endif
     #define I2S_SDPIN 11
