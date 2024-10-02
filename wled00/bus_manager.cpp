@@ -990,7 +990,7 @@ uint32_t __attribute__((hot)) BusHub75Matrix::getPixelColorRestored(uint16_t pix
 void BusHub75Matrix::setBrightness(uint8_t b, bool immediate) {
   _bri = b;
   // if (_bri > 238) _bri=238; // not strictly needed. Enable this line if you see glitches at highest brightness.
-  display->setBrightness(_bri);
+  realdisplay->setBrightness(_bri);
 }
 
 void __attribute__((hot)) BusHub75Matrix::show(void) {
