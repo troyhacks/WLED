@@ -1314,7 +1314,7 @@ uint32_t __attribute__((hot)) Segment::getPixelColor(int i) const
   if (offset < INT16_MAX) i += offset; // WLEDMM
   if ((i >= stop) && (stop>0)) i -= length(); // WLEDMM avoid negative index (stop = 0 is a possible value)
   if (i<0) i=0; // WLEDMM just to be 100% sure
-  return strip.getPixelColor(i);
+  return strip.getPixelColorRestored(i);
 }
 
 uint8_t Segment::differs(Segment& b) const {
@@ -1423,12 +1423,12 @@ void __attribute__((hot)) Segment::fill(uint32_t c) {
       if (_bri_t < 255) scaled_col = color_fade(c, _bri_t);
     }
     // fill 2D segment
-    for(int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
+    for(unsigned y = 0; y < rows; y++) for (unsigned x = 0; x < cols; x++) {
       if (simpleSegment) setPixelColorXY_fast(x, y, c, scaled_col, cols, rows);
       else setPixelColorXY_slow(x, y, c);
     }
   } else { // fill 1D strip
-    for (int x = 0; x < cols; x++) setPixelColor(x, c);
+    for (unsigned x = 0; x < cols; x++) setPixelColor(int(x), c);
   }
 }
 
@@ -1481,8 +1481,8 @@ void __attribute__((hot)) Segment::fade_out(uint8_t rate) {
   int g2 = G(color2);
   int b2 = B(color2);
 
-  for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
-    uint32_t color = is2D() ? getPixelColorXY(x, y) : getPixelColor(x);
+  for (unsigned y = 0; y < rows; y++) for (unsigned x = 0; x < cols; x++) {
+    uint32_t color = is2D() ? getPixelColorXY(int(x), int(y)) : getPixelColor(int(x));
     if (color == color2) continue;  // WLEDMM speedup - pixel color = target color, so nothing to do
     int w1 = W(color);
     int r1 = R(color);
@@ -1502,8 +1502,8 @@ void __attribute__((hot)) Segment::fade_out(uint8_t rate) {
     uint32_t colorNew = RGBW32(r1 + rdelta, g1 + gdelta, b1 + bdelta, w1 + wdelta); // WLEDMM
 
     if (colorNew != color) {                                                        // WLEDMM speedup - do not repaint the same color
-      if (is2D()) setPixelColorXY(x, y, colorNew);
-      else        setPixelColor(x, colorNew);
+      if (is2D()) setPixelColorXY(int(x), int(y), colorNew);
+      else        setPixelColor(int(x), colorNew);
     }
   }
 }
@@ -1517,11 +1517,13 @@ void __attribute__((hot)) Segment::fadeToBlackBy(uint8_t fadeBy) {
 
   // WLEDMM minor optimization
   if(is2D()) {
-    for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
-      uint32_t cc = getPixelColorXY(x,y);                            // WLEDMM avoid RGBW32 -> CRGB -> RGBW32 conversion
+    for (unsigned y = 0; y < rows; y++) for (unsigned x = 0; x < cols; x++) {
+      uint32_t cc = getPixelColorXY(int(x),int(y));                            // WLEDMM avoid RGBW32 -> CRGB -> RGBW32 conversion
       uint32_t cc2 = color_fade(cc, scaledown);                      // fade
-      //if (cc2 != cc)                                               // WLEDMM only re-paint if faded color is different - disabled - causes problem with text overlay
-        setPixelColorXY((uint16_t)x, (uint16_t)y, cc2);
+#ifdef WLEDMM_FASTPATH
+      if (cc2 != cc)                                               // WLEDMM only re-paint if faded color is different - normally disabled - causes problem with text overlay
+#endif
+        setPixelColorXY(int(x), int(y), cc2);
     }
   } else {
     for (uint_fast16_t x = 0; x < cols; x++) {
@@ -1951,6 +1953,12 @@ uint32_t WS2812FX::getPixelColor(uint_fast16_t i) const // WLEDMM fast int types
   return busses.getPixelColor(i);
 }
 
+uint32_t WS2812FX::getPixelColorRestored(uint_fast16_t i)  const  // WLEDMM gets the original color from the driver (without downscaling by _bri)
+{
+  if (i < customMappingSize) i = customMappingTable[i];
+  if (i >= _length) return 0;
+  return busses.getPixelColorRestored(i);
+}
 
 //DISCLAIMER
 //The following function attemps to calculate the current LED power usage,
@@ -1995,7 +2003,8 @@ void WS2812FX::estimateCurrentAndLimitBri() {
 
   for (uint_fast8_t bNum = 0; bNum < busses.getNumBusses(); bNum++) {
     Bus *bus = busses.getBus(bNum);
-    if (bus->getType() >= TYPE_NET_DDP_RGB) continue; //exclude non-physical network busses
+    auto btype = bus->getType();
+    if (EXCLUDE_FROM_ABL(btype)) continue; // WLEDMM exclude non-ABL and network busses
     uint16_t len = bus->getLength();
     uint32_t busPowerSum = 0;
     for (uint_fast16_t i = 0; i < len; i++) { //sum up the usage of each LED
@@ -2206,7 +2215,20 @@ uint16_t WS2812FX::getLengthPhysical(void) const {  // WLEDMM fast int types
   uint_fast16_t len = 0;
   for (unsigned b = 0; b < busses.getNumBusses(); b++) {   //  WLEDMM use native (fast) types
     Bus *bus = busses.getBus(b);
-    if (bus->getType() >= TYPE_NET_DDP_RGB) continue; //exclude non-physical network busses
+    auto btype = bus->getType();
+    if (EXCLUDE_FROM_ABL(btype)) continue;  //exclude HUB75, and non-physical network busses
+    len += bus->getLength();
+  }
+  return len;
+}
+
+//WLEDMM - getLengthPhysical plus plysical busses not supporting ABL (i.e. HUB75)
+uint16_t WS2812FX::getLengthPhysical2(void) const {
+  uint_fast16_t len = 0;
+  for (unsigned b = 0; b < busses.getNumBusses(); b++) {
+    Bus *bus = busses.getBus(b);
+    auto btype = bus->getType();
+    if (IS_VIRTUAL(btype)) continue;
     len += bus->getLength();
   }
   return len;

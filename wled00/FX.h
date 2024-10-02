@@ -761,7 +761,7 @@ typedef struct Segment {
     inline void drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, CRGB c, bool soft = false, uint8_t depth = UINT8_MAX) { drawLine(x0, y0, x1, y1, RGBW32(c.r,c.g,c.b,0), soft, depth); } // automatic inline
     void drawArc(unsigned x0, unsigned y0, int radius, uint32_t color, uint32_t fillColor = 0);
     inline void drawArc(unsigned x0, unsigned y0, int radius, CRGB color, CRGB fillColor = BLACK) { drawArc(x0, y0, radius, RGBW32(color.r,color.g,color.b,0), RGBW32(fillColor.r,fillColor.g,fillColor.b,0)); } // automatic inline
-    void drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, uint8_t h, uint32_t color, uint32_t col2 = 0);
+    void drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, uint8_t h, uint32_t color, uint32_t col2 = 0, bool drawShadow = false);
     inline void drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, uint8_t h, CRGB c, CRGB c2) { drawCharacter(chr, x, y, w, h, RGBW32(c.r,c.g,c.b,0), RGBW32(c2.r,c2.g,c2.b,0)); } // automatic inline
     void wu_pixel(uint32_t x, uint32_t y, CRGB c);
     //void blur1d(fract8 blur_amount); // blur all rows in 1 dimension
@@ -951,18 +951,19 @@ class WS2812FX {  // 96 bytes
       setPixelSegment(uint8_t n);
 
     inline uint8_t getBrightness(void)  const { return _brightness; }
-    inline uint8_t getMaxSegments(void)  const { return MAX_NUM_SEGMENTS; }  // returns maximum number of supported segments (fixed value)
     inline uint8_t getSegmentsNum(void)  const { return _segments.size(); }  // returns currently present segments
     inline uint8_t getCurrSegmentId(void)  const { return _segment_index; }
     inline uint8_t getMainSegmentId(void)  const { return _mainSegment; }
-    inline uint8_t getPaletteCount()  const { return 13 + GRADIENT_PALETTE_COUNT; }  // will only return built-in palette count
     inline uint8_t getTargetFps()  const { return _targetFps; }
     inline uint8_t getModeCount()  const { return _modeCount; }
+    inline static constexpr uint8_t getMaxSegments(void)  { return MAX_NUM_SEGMENTS; }  // returns maximum number of supported segments (fixed value)
+    inline static constexpr uint8_t getPaletteCount()  { return 13 + GRADIENT_PALETTE_COUNT; }  // will only return built-in palette count
 
     uint16_t
       ablMilliampsMax,
       currentMilliamps,
       getLengthPhysical(void) const,
+      getLengthPhysical2(void) const, // WLEDMM total length including HUB75, network busses excluded
       __attribute__((pure)) getLengthTotal(void) const, // will include virtual/nonexistent pixels in matrix //WLEDMM attribute added
       getFps() const;
 
@@ -975,6 +976,7 @@ class WS2812FX {  // 96 bytes
       now,
       timebase;
     uint32_t __attribute__((pure)) getPixelColor(uint_fast16_t)  const;   // WLEDMM attribute pure = does not have side-effects
+    uint32_t __attribute__((pure)) getPixelColorRestored(uint_fast16_t i)  const;// WLEDMM gets the original color from the driver (without downscaling by _bri)
 
     inline uint32_t getLastShow(void)  const { return _lastShow; }
     inline uint32_t segColor(uint8_t i)  const { return _colors_t[i]; }
@@ -1066,6 +1068,8 @@ class WS2812FX {  // 96 bytes
 
     std::vector<segment> _segments;
     friend class Segment;
+
+    uint32_t getPixelColorXYRestored(uint16_t x, uint16_t y)  const;  // WLEDMM gets the original color from the driver (without downscaling by _bri)
 
   private:
     uint16_t _length;

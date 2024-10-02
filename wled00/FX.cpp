@@ -37,6 +37,9 @@
 
 #define indexToVStrip(index, stripNr) ((index) | (int((stripNr)+1)<<16))
 
+// WLEDMM replace abs8 by abs, as abs8 does not work for numbers >127
+#define abs8(x) abs(x)
+
 // effect utility functions
 static uint8_t sin_gap(uint16_t in) {
   if (in & 0x100) return 0;
@@ -4979,8 +4982,8 @@ uint16_t mode_2DColoredBursts() {              // By: ldirko   https://editor.so
   SEGMENT.fadeToBlackBy(40);
   for (size_t i = 0; i < numLines; i++) {
     byte x1 = beatsin8(2 + SEGMENT.speed/16, 0, (cols - 1));
-    byte x2 = beatsin8(1 + SEGMENT.speed/16, 0, (cols - 1));
-    byte y1 = beatsin8(5 + SEGMENT.speed/16, 0, (rows - 1), 0, i * 24);
+    byte x2 = beatsin8(1 + SEGMENT.speed/16, 0, (rows - 1));
+    byte y1 = beatsin8(5 + SEGMENT.speed/16, 0, (cols - 1), 0, i * 24);
     byte y2 = beatsin8(3 + SEGMENT.speed/16, 0, (rows - 1), 0, i * 48 + 64);
     CRGB color = ColorFromPalette(SEGPALETTE, i * 255 / numLines + (SEGENV.aux0&0xFF), 255, LINEARBLEND);
 
@@ -5064,10 +5067,12 @@ uint16_t mode_2DDNASpiral() {               // By: ldirko  https://editor.soulma
     if ((i + ms / 8) & 3) {
       // draw a gradient line between x and x1
       x = x / 2; x1 = x1 / 2;
-      uint8_t steps = abs8(x - x1) + 1;
+      unsigned steps = abs8(x - x1) + 1;
+      bool positive = (x1 >= x);                         // direction of drawing
       for (size_t k = 1; k <= steps; k++) {
-        uint8_t rate = k * 255 / steps;
-        uint8_t dx = lerp8by8(x, x1, rate);
+        unsigned rate = k * 255 / steps;
+        //unsigned dx = lerp8by8(x, x1, rate);
+        unsigned dx = positive? (x + k-1) : (x - k+1);   // behaves the same as "lerp8by8" but does not create holes
         //SEGMENT.setPixelColorXY(dx, i, ColorFromPalette(SEGPALETTE, hue, 255, LINEARBLEND).nscale8_video(rate));
         SEGMENT.addPixelColorXY(dx, i, ColorFromPalette(SEGPALETTE, hue, 255, LINEARBLEND)); // use setPixelColorXY for different look
         SEGMENT.fadePixelColorXY(dx, i, rate);
@@ -5536,7 +5541,10 @@ uint16_t mode_2DLissajous(void) {            // By: Andrew Tuline
         float ylocn = float(cos8(phase/2 + i*2)) / 255.0f;
         //SEGMENT.setPixelColorXY(xlocn, ylocn, SEGMENT.color_from_palette(strip.now/100+i, false, PALETTE_SOLID_WRAP, 0)); // draw pixel with anti-aliasing
         unsigned palIndex = (256*ylocn) + phase/2 + (i* SEGMENT.speed)/64;
-        SEGMENT.setPixelColorXY(xlocn, ylocn, SEGMENT.color_from_palette(palIndex, false, PALETTE_SOLID_WRAP, 0)); // draw pixel with anti-aliasing - color follows rotation
+        //SEGMENT.setPixelColorXY(xlocn, ylocn, SEGMENT.color_from_palette(palIndex, false, PALETTE_SOLID_WRAP, 0)); // draw pixel with anti-aliasing - color follows rotation
+        // WLEDMM wu_pixel is 50% faster, and still lokks better
+        SEGMENT.wu_pixel(uint32_t(xlocn * (cols <<8)), uint32_t(ylocn * (rows <<8)), 
+                         CRGB(SEGMENT.color_from_palette(palIndex, false, PALETTE_SOLID_WRAP, 0)));
       }
   } else
   for (int i=0; i < 256; i ++) {
@@ -6371,7 +6379,7 @@ uint16_t mode_2Dscrollingtext(void) {
   if (SEGMENT.name) for (size_t i=0,j=0; i<maxLen; i++) if (SEGMENT.name[i]>31 && SEGMENT.name[i]<128) text[j++] = SEGMENT.name[i];
   const bool zero = strchr(text, '0') != nullptr;
 
-  if (!strlen(text) || !strncmp_P(text,PSTR("#F"),2) || !strncmp_P(text,PSTR("#P"),2) || !strncmp_P(text,PSTR("#DATE"),5) || !strncmp_P(text,PSTR("#DDMM"),5) || !strncmp_P(text,PSTR("#MMDD"),5) || !strncmp_P(text,PSTR("#TIME"),5) || !strncmp_P(text,PSTR("#HH"),3) || !strncmp_P(text,PSTR("#MM"),3)) { // fallback if empty segment name: display date and time
+  if (!strlen(text) || !strncmp_P(text,PSTR("#F"),2) || !strncmp_P(text,PSTR("#P"),2) || !strncmp_P(text,PSTR("#A"),2) || !strncmp_P(text,PSTR("#DATE"),5) || !strncmp_P(text,PSTR("#DDMM"),5) || !strncmp_P(text,PSTR("#MMDD"),5) || !strncmp_P(text,PSTR("#TIME"),5) || !strncmp_P(text,PSTR("#HH"),3) || !strncmp_P(text,PSTR("#MM"),3)) { // fallback if empty segment name: display date and time
     char sec[5]= {'\0'};
     byte AmPmHour = hour(localTime);
     boolean isitAM = true;
@@ -6404,6 +6412,7 @@ uint16_t mode_2Dscrollingtext(void) {
         SEGMENT.blendPixelColorXY(x, y, SEGCOLOR(1), 255 - (SEGMENT.custom1>>1));
     }
   }
+  bool drawShadow = (SEGMENT.check2) && (SEGMENT.custom1 == 0);
   for (int i = 0; i < numberOfLetters; i++) {
     if (int(cols) - int(SEGENV.aux0) + letterWidth*(i+1) < 0) continue; // don't draw characters off-screen
     uint32_t col1 = SEGMENT.color_from_palette(SEGENV.aux1, false, PALETTE_SOLID_WRAP, 0);
@@ -6412,7 +6421,7 @@ uint16_t mode_2Dscrollingtext(void) {
       col1 = SEGCOLOR(0);
       col2 = SEGCOLOR(2);
     }
-    SEGMENT.drawCharacter(text[i], int(cols) - int(SEGENV.aux0) + letterWidth*i, yoffset, letterWidth, letterHeight, col1, col2);
+    SEGMENT.drawCharacter(text[i], int(cols) - int(SEGENV.aux0) + letterWidth*i, yoffset, letterWidth, letterHeight, col1, col2, drawShadow);
   }
 
   return FRAMETIME;
@@ -7950,7 +7959,7 @@ uint16_t mode_2DAkemi(void) {
   const uint16_t cols = SEGMENT.virtualWidth();
   const uint16_t rows = SEGMENT.virtualHeight();
 
-  if (SEGENV.call == 0) {SEGMENT.setUpLeds(); SEGMENT.fill(BLACK);}
+  if (SEGENV.call == 0) {SEGMENT.fill(BLACK);}
 
   uint16_t counter = (strip.now * ((SEGMENT.speed >> 2) +2)) & 0xFFFF;
   counter = counter >> 8;
@@ -7991,11 +8000,12 @@ uint16_t mode_2DAkemi(void) {
 
   //add geq left and right
   if (um_data) {
-    for (int x=0; x < cols/8; x++) {
-      uint16_t band = x * cols/8;
+    int xMax = cols/8;
+    for (int x=0; x < xMax; x++) {
+      size_t band = map2(x, 0, max(xMax,4), 0, 15);  // map 0..cols/8 to 16 GEQ bands
+      CRGB color = SEGMENT.color_from_palette((band * 35), false, PALETTE_SOLID_WRAP, 0);
       band = constrain(band, 0, 15);
       uint16_t barHeight = map(fftResult[band], 0, 255, 0, 17*rows/32);
-      CRGB color = SEGMENT.color_from_palette((band * 35), false, PALETTE_SOLID_WRAP, 0);
 
       for (int y=0; y < barHeight; y++) {
         SEGMENT.setPixelColorXY(x, rows/2-y, color);
