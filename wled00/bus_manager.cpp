@@ -674,8 +674,8 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
 
   USER_PRINTLN("MatrixPanel_I2S_DMA - S3 with PSRAM");
 
-  mxconfig.gpio.r1 =  1;
-  mxconfig.gpio.g1 =  2;
+  mxconfig.gpio.r1 =   1;
+  mxconfig.gpio.g1 =   2;
   mxconfig.gpio.b1 =  42;
   // 4th pin is GND
   mxconfig.gpio.r2 =  41;
@@ -688,7 +688,7 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   mxconfig.gpio.d =   21;   // this says GND but should be the "D" pin
   mxconfig.gpio.clk = 20;
   mxconfig.gpio.lat = 19;
-  mxconfig.gpio.oe  = 14;   // don't use GPIO0 or it might hold board in download mode
+  mxconfig.gpio.oe  =  8;   // don't use GPIO0 or it might hold board in download mode
   // 16th pin is GND
 
 #elif defined(CONFIG_IDF_TARGET_ESP32S3) // ESP32-S3
