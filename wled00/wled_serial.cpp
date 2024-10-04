@@ -123,6 +123,14 @@ void handleSerial()
           USER_PRINTF("Art-Net Skip-Frame is now %s.\n",ArtNetSkipFrame?"ON":"OFF");
         } else if (next == 'X') {
           forceReconnect = true; // WLEDMM - force reconnect via Serial
+        } else if (next == 'R') {
+          Serial.print("Rebooting ");
+          for (int i=0;i<5;i++) {
+            Serial.print(".");
+            delay(200);
+          }
+          Serial.println(" now!");
+          ESP.restart();  // WLEDMM - force reboot via Serial
         } else if (next == 0xB0) {updateBaudRate( 115200);
         } else if (next == 0xB1) {updateBaudRate( 230400);
         } else if (next == 0xB2) {updateBaudRate( 460800);
