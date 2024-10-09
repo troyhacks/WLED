@@ -829,50 +829,16 @@ void Segment::deletejMap() {
   }
 }
 
-
-// Constants for mapping mode "Pinwheel"
 #ifndef WLED_DISABLE_2D
-constexpr int Pinwheel_Steps_Small = 72;       // no holes up to 16x16
-constexpr int Pinwheel_Size_Small  = 16;       // larger than this -> use "Medium"
-constexpr int Pinwheel_Steps_Medium = 192;     // no holes up to 32x32
-constexpr int Pinwheel_Size_Medium  = 32;      // larger than this -> use "Big"
-constexpr int Pinwheel_Steps_Big = 304;        // no holes up to 50x50
-constexpr int Pinwheel_Size_Big  = 50;         // larger than this -> use "XL"
-constexpr int Pinwheel_Steps_XL  = 368;
-constexpr int Pinwheel_Size_XL   = 58;         // larger than this -> use "XXL"
-constexpr int Pinwheel_Steps_XXL = 456;
-constexpr int Pinwheel_Size_XXL   = 68;        // larger than this -> use "LL"
-constexpr int Pinwheel_Steps_LL = 592;         // 128x64 no holes, 28fps
-constexpr float Int_to_Rad_Small = (DEG_TO_RAD * 360) / Pinwheel_Steps_Small;  // conversion: from 0...72 to Radians
-constexpr float Int_to_Rad_Med =   (DEG_TO_RAD * 360) / Pinwheel_Steps_Medium; // conversion: from 0...192 to Radians
-constexpr float Int_to_Rad_Big =   (DEG_TO_RAD * 360) / Pinwheel_Steps_Big;    // conversion: from 0...304 to Radians
-constexpr float Int_to_Rad_XL =    (DEG_TO_RAD * 360) / Pinwheel_Steps_XL;     // conversion: from 0...368 to Radians
-constexpr float Int_to_Rad_XXL =   (DEG_TO_RAD * 360) / Pinwheel_Steps_XXL;    // conversion: from 0...456 to Radians
-constexpr float Int_to_Rad_LL =   (DEG_TO_RAD * 360) / Pinwheel_Steps_LL;      // conversion: from 0...592 to Radians
 
-constexpr int Fixed_Scale = 32768;               // fixpoint scaling factor (15bit for fraction)
-
-// Pinwheel helper function: pixel index to radians
-static float getPinwheelAngle(int i, int vW, int vH) {
-  int maxXY = max(vW, vH);
-  if (maxXY <= Pinwheel_Size_Small)  return float(i) * Int_to_Rad_Small;
-  if (maxXY <= Pinwheel_Size_Medium) return float(i) * Int_to_Rad_Med;
-  if (maxXY <= Pinwheel_Size_Big)    return float(i) * Int_to_Rad_Big;
-  if (maxXY <= Pinwheel_Size_XL)     return float(i) * Int_to_Rad_XL;
-  if (maxXY <= Pinwheel_Size_XXL)     return float(i) * Int_to_Rad_XXL;
-  // else
-  return float(i) * Int_to_Rad_LL;
-}
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
   int maxXY = max(vW, vH);
-  if (maxXY <= Pinwheel_Size_Small)  return Pinwheel_Steps_Small;
-  if (maxXY <= Pinwheel_Size_Medium) return Pinwheel_Steps_Medium;
-  if (maxXY <= Pinwheel_Size_Big)    return Pinwheel_Steps_Big;
-  if (maxXY <= Pinwheel_Size_XL)     return Pinwheel_Steps_XL;
-  if (maxXY <= Pinwheel_Size_XXL)     return Pinwheel_Steps_XXL;
-  // else
-  return Pinwheel_Steps_LL;
+  // use factors of 360 for best results
+  // 360, 180, 120, 90, 72, 60, 45, 40, 36, 30, 24, 20, 18, 15, 12, 10, 9, 8
+  if (maxXY < 24) return 24;
+  if (maxXY < 48) return 60;
+  return 72;
 }
 #endif
 
@@ -1064,6 +1030,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         }
         break;
       case M12_sPinwheel: {
+        // Uses Bresenham's algorithm to place coordinates of two lines in arrays then draws between them
         // WLEDMM shortcut when no grouping/spacing used
         bool simpleSegment = (grouping == 1) && (spacing == 0);
         uint32_t scaled_col = col;
@@ -1074,51 +1041,96 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           if (_bri_t < 255) scaled_col = color_fade(col, _bri_t);
         }
 
-        // i = angle --> 0 - 296  (Big), 0 - 192  (Medium), 0 - 72 (Small)
-        float centerX = roundf((vW-1) / 2.0f);
-        float centerY = roundf((vH-1) / 2.0f);
-        float angleRad = getPinwheelAngle(i, vW, vH); // angle in radians
-        float cosVal = cosf(angleRad);
-        float sinVal = sinf(angleRad);
+        int rayWidth = 360 / getPinwheelLength(vW, vH);
+        int ang = i * rayWidth;
+        int angles[2] = {ang, ang + rayWidth};
 
-        // avoid re-painting the same pixel
-        int lastX = INT_MIN; // impossible position
-        int lastY = INT_MIN; // impossible position
-        // draw line at angle, starting at center and ending at the segment edge
-        // we use fixed point math for better speed. Starting distance is 0.5 for better rounding
-        // int_fast16_t and int_fast32_t types changed to int, minimum bits commented
-        int posx = (centerX + 0.5f * cosVal) * Fixed_Scale; // X starting position in fixed point 18 bit
-        int posy = (centerY + 0.5f * sinVal) * Fixed_Scale; // Y starting position in fixed point 18 bit
-        int inc_x = cosVal * Fixed_Scale; // X increment per step (fixed point) 10 bit
-        int inc_y = sinVal * Fixed_Scale; // Y increment per step (fixed point) 10 bit
+        int centerX = vW / 2;
+        int centerY = vH / 2;
 
-        int32_t maxX = vW * Fixed_Scale; // X edge in fixedpoint
-        int32_t maxY = vH * Fixed_Scale; // Y edge in fixedpoint
+        int listLen = max(vW, vH);
+        // [x0, y0, x1, y1, x2, y2, ...]
+        uint16_t line1Coords[listLen];
+        uint16_t line2Coords[listLen];
 
-        // Odd rays start further from center if prevRay started at center.
-        static int prevRay = INT_MIN; // previous ray number
-        if ((i % 2 == 1) && (i - 1 == prevRay || i + 1 == prevRay)) {
-          int jump = min(vW/3, vH/3); // can add 2 if using medium pinwheel 
-          posx += inc_x * jump;
-          posy += inc_y * jump;
-        }
-        prevRay = i;
+        int line1Length = 0;
+        int line2Length = 0;
 
-        // draw ray until we hit any edge
-        while ((posx >= 0) && (posy >= 0) && (posx < maxX)  && (posy < maxY))  {
-          // scale down to integer (compiler will replace division with appropriate bitshift)
-          int x = posx / Fixed_Scale;
-          int y = posy / Fixed_Scale;
-          // set pixel
-          if (x != lastX || y != lastY) { // only paint if pixel position is different
-            if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
-            else setPixelColorXY_slow(x, y, col);  
+        for (int angleIndex = 0; angleIndex < 2; angleIndex++) {
+          int angle = angles[angleIndex];
+          float angleRad = DEG_TO_RAD * angle;
+          float cosVal = cosf(angleRad);
+          float sinVal = sinf(angleRad);
+
+          uint16_t *coords = angleIndex == 0 ? line1Coords : line2Coords;
+          int *length = angleIndex == 0 ? &line1Length : &line2Length;
+
+          int x0 = centerX;
+          int y0 = centerY;
+          int x1 = x0 + cosVal * vW; // outside of grid
+          int y1 = y0 + sinVal * vH; // outside of grid
+
+          const int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1; // x distance & step
+          const int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1; // y distance & step
+
+          int index = 0;
+
+          // Bresenham's algorithm
+          int err = (dx>dy ? dx : -dy)/2;   // error direction
+          for (;;) {
+            if (x0 < 0 || x0 >= vW || y0 < 0 || y0 >= vH) break; // stop if outside of grid
+            coords[index++] = x0;
+            coords[index++] = y0;
+            (*length)++;
+            if (x0==x1 && y0==y1) break;
+            int e2 = err;
+            if (e2 >-dx) { err -= dy; x0 += sx; }
+            if (e2 < dy) { err += dx; y0 += sy; }
           }
-          lastX = x;
-          lastY = y;
-          // advance to next position
-          posx += inc_x;
-          posy += inc_y;
+        }
+
+        // Fill possible gaps near edges.
+        // Example Angles 117-120 on 64x32 grid:
+        // line1Length: 17, line2Length: 19
+        // index: line1 x,y line2 x,y
+        // 15: 17, 30   17, 29
+        // 16: 16, 31   16, 29
+        // 17: -1, -1   15, 30 - > 17: 15, 31 
+        // 18: -1, -1   14, 31 - > 18: 14, 31
+
+        int diff = line1Length - line2Length;
+        if (diff != 0) {
+          uint16_t* shortLine = (diff > 0) ? line2Coords : line1Coords;
+          uint16_t* longLine  = (diff > 0) ? line1Coords : line2Coords;
+
+          // fill shorter line
+          int lastIndex = (min(line1Length, line2Length) - 1) * 2;
+          int lastX = shortLine[lastIndex];
+          int lastY = shortLine[lastIndex + 1];
+          bool keepX = lastX == 0 || lastX == vW - 1;
+
+          for (int d = 1; d <= abs(diff); d++) {
+            int index = lastIndex + d * 2;
+            int x = keepX ? lastX : longLine[index];
+            int y = keepX ? longLine[index + 1] : lastY;
+            shortLine[index] = x;
+            shortLine[index + 1] = y;
+          }
+        }
+
+        // draw between the two lines
+        for (int index = 0; index < max(line1Length, line2Length) * 2; index += 2) {
+          int x1 = line1Coords[index];
+          int y1 = line1Coords[index + 1];
+          int x2 = line2Coords[index];
+          int y2 = line2Coords[index + 1];
+          
+          for (int x = min(x1, x2); x <= max(x1, x2); x++) {
+            for (int y = min(y1, y2); y <= max(y1, y2); y++) {
+              if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
+              else setPixelColorXY_slow(x, y, col);
+            }
+          }
         }
         break;
       }
@@ -1268,32 +1280,36 @@ uint32_t __attribute__((hot)) Segment::getPixelColor(int i) const
         break;
       case M12_sPinwheel:
         // not 100% accurate, returns pixel at outer edge
-        // i = angle --> 0 - 296  (Big), 0 - 192  (Medium), 0 - 72 (Small)
-        float centerX = roundf((vW-1) / 2.0f);
-        float centerY = roundf((vH-1) / 2.0f);
-        float angleRad = getPinwheelAngle(i, vW, vH); // angle in radians
+        int rayWidth = 360 / getPinwheelLength(vW, vH);
+        // int angle = i * rayWidth; // start of ray
+        // int angle = i * rayWidth + rayWidth; // end of ray
+        int angle = i * rayWidth + (rayWidth / 2); // middle of ray
+
+        float angleRad = DEG_TO_RAD * angle;
         float cosVal = cosf(angleRad);
         float sinVal = sinf(angleRad);
 
-        int posx = (centerX + 0.5f * cosVal) * Fixed_Scale; // X starting position in fixed point 18 bit
-        int posy = (centerY + 0.5f * sinVal) * Fixed_Scale; // Y starting position in fixed point 18 bit
-        int inc_x = cosVal * Fixed_Scale; // X increment per step (fixed point) 10 bit
-        int inc_y = sinVal * Fixed_Scale; // Y increment per step (fixed point) 10 bit
-        int32_t maxX = vW * Fixed_Scale; // X edge in fixedpoint
-        int32_t maxY = vH * Fixed_Scale; // Y edge in fixedpoint
+        int x0 = vW / 2;
+        int y0 = vH / 2;
+        int x1 = x0 + cosVal * vW; // outside of grid
+        int y1 = y0 + sinVal * vH; // outside of grid
 
-        // trace ray from center until we hit any edge - to avoid rounding problems, we use the same method as in setPixelColor
-        int x = INT_MIN;
-        int y = INT_MIN;
-        while ((posx >= 0) && (posy >= 0) && (posx < maxX)  && (posy < maxY))  {
-          // scale down to integer (compiler will replace division with appropriate bitshift)
-          x = posx / Fixed_Scale;
-          y = posy / Fixed_Scale;
-          // advance to next position
-          posx += inc_x;
-          posy += inc_y;
+        const int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1; // x distance & step
+        const int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1; // y distance & step
+
+        // Bresenham's algorithm
+        int err = (dx>dy ? dx : -dy)/2;   // error direction
+        for (;;) {
+          if (x0 < 0 || x0 >= vW || y0 < 0 || y0 >= vH) { // stop if outside of grid
+            x0 -= sx; y0 -= sy; // go back one step
+            break;
+          }
+          if (x0==x1 && y0==y1) break;
+          int e2 = err;
+          if (e2 >-dx) { err -= dy; x0 += sx; }
+          if (e2 < dy) { err += dx; y0 += sy; }
         }
-        return getPixelColorXY(x, y);
+        return getPixelColorXY(x0, y0); // return last pixel before leaving grid
         break;
       }
     return 0;
