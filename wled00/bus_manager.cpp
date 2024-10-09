@@ -982,7 +982,7 @@ void __attribute__((hot)) BusHub75Matrix::setPixelColor(uint16_t pix, uint32_t c
 uint32_t BusHub75Matrix::getPixelColor(uint16_t pix) const {
   if (!_valid || pix >= _len) return BLACK;
   if (_ledBuffer)
-    return uint32_t(_ledBuffer[pix].scale8(_bri)) & 0x00FFFFFF;  // scale8() is needed to mimic NeoPixelBus, which returns scaled-down colours
+    return uint32_t(_ledBuffer[pix].scale8(_bri).r << 16 | _ledBuffer[pix].scale8(_bri).g << 8 | _ledBuffer[pix].scale8(_bri).b); // scale8() is needed to mimic NeoPixelBus, which returns scaled-down colours
   else
     return getBitFromArray(_ledsDirty, pix) ? DARKGREY: BLACK;   // just a hack - we only know if the pixel is black or not
 }
@@ -990,7 +990,7 @@ uint32_t BusHub75Matrix::getPixelColor(uint16_t pix) const {
 uint32_t __attribute__((hot)) BusHub75Matrix::getPixelColorRestored(uint16_t pix) const {
   if (!_valid || pix >= _len) return BLACK;
   if (_ledBuffer)
-    return uint32_t(_ledBuffer[pix]) & 0x00FFFFFF;
+    return uint32_t(_ledBuffer[pix].r << 16 | _ledBuffer[pix].g << 8 | _ledBuffer[pix].b);
   else
     return getBitFromArray(_ledsDirty, pix) ? DARKGREY: BLACK;   // just a hack - we only know if the pixel is black or not
 }
@@ -1017,7 +1017,7 @@ void __attribute__((hot)) BusHub75Matrix::show(void) {
     size_t pix = 0; // running pixel index
     for (int y=0; y<height; y++) for (int x=0; x<width; x++) {
       if (getBitFromArray(_ledsDirty, pix) == true) {        // only repaint the "dirty"  pixels
-        uint32_t c = uint32_t(_ledBuffer[pix]) & 0x00FFFFFF; // get RGB color, removing FastLED "alpha" component 
+        uint32_t c = uint32_t(_ledBuffer[pix].r << 16 | _ledBuffer[pix].g << 8 | _ledBuffer[pix].b); // get RGB color, removing FastLED "alpha" component 
         #ifndef NO_CIE1931
         c = unGamma24(c); // to use the driver linear brightness feature, we first need to undo WLED gamma correction
         #endif
