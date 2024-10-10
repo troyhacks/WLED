@@ -8372,7 +8372,7 @@ uint16_t mode_2Doctopus() {
   const uint8_t mapp = 180 / MAX(cols,rows);
 
   typedef struct {
-    uint8_t angle;
+    int8_t angle;
     uint8_t radius;
   } map_t;
 
