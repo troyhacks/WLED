@@ -1041,9 +1041,14 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           if (_bri_t < 255) scaled_col = color_fade(col, _bri_t);
         }
 
+        static int prevRay = INT_MIN; // previous ray number
+        // static int drawCount = 0;
+        // if (i == 0) drawCount = 0; // reset draw count
+
         int rayWidth = 360 / getPinwheelLength(vW, vH);
         int ang = i * rayWidth;
-        int angles[2] = {ang, ang + rayWidth};
+        int angles[2] = {ang, min(ang + rayWidth, 358)}; // don't allow 360 to overlap with 0
+        if (ang != 0 && prevRay == i-1) angles[0] += 1; // avoid overlap with previous ray
 
         int centerX = vW / 2;
         int centerY = vH / 2;
@@ -1059,16 +1064,14 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         for (int angleIndex = 0; angleIndex < 2; angleIndex++) {
           int angle = angles[angleIndex];
           float angleRad = DEG_TO_RAD * angle;
-          float cosVal = cosf(angleRad);
-          float sinVal = sinf(angleRad);
 
           uint16_t *coords = angleIndex == 0 ? line1Coords : line2Coords;
           int *length = angleIndex == 0 ? &line1Length : &line2Length;
 
           int x0 = centerX;
           int y0 = centerY;
-          int x1 = x0 + cosVal * vW; // outside of grid
-          int y1 = y0 + sinVal * vH; // outside of grid
+          int x1 = x0 + cosf(angleRad) * 512.0f; // outside of grid
+          int y1 = y0 + sinf(angleRad) * 512.0f; // outside of grid
 
           const int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1; // x distance & step
           const int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1; // y distance & step
@@ -1118,8 +1121,15 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           }
         }
 
+        int index = 0;
+        // odd rays skip the center if the previous ray was adjacent
+        if ((i % 2 == 1) && (i - 1 == prevRay || i + 1 == prevRay)) {
+          index = min(vW, vH) / 3.6; // /3 causes gaps
+          index &= ~1; // make sure index is even
+        }
+        prevRay = i;
         // draw between the two lines
-        for (int index = 0; index < max(line1Length, line2Length) * 2; index += 2) {
+        for (; index < max(line1Length, line2Length) * 2; index += 2) {
           int x1 = line1Coords[index];
           int y1 = line1Coords[index + 1];
           int x2 = line2Coords[index];
@@ -1129,9 +1139,11 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
             for (int y = min(y1, y2); y <= max(y1, y2); y++) {
               if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
               else setPixelColorXY_slow(x, y, col);
+              // drawCount++;
             }
           }
         }
+        // if (i == getPinwheelLength(vW, vH) - 1) printf("drawCount: %d\n", drawCount);
         break;
       }
     }
@@ -1286,13 +1298,11 @@ uint32_t __attribute__((hot)) Segment::getPixelColor(int i) const
         int angle = i * rayWidth + (rayWidth / 2); // middle of ray
 
         float angleRad = DEG_TO_RAD * angle;
-        float cosVal = cosf(angleRad);
-        float sinVal = sinf(angleRad);
 
         int x0 = vW / 2;
         int y0 = vH / 2;
-        int x1 = x0 + cosVal * vW; // outside of grid
-        int y1 = y0 + sinVal * vH; // outside of grid
+        int x1 = x0 + cosf(angleRad) * 512.0f; // outside of grid
+        int y1 = y0 + sinf(angleRad) * 512.0f; // outside of grid
 
         const int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1; // x distance & step
         const int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1; // y distance & step
