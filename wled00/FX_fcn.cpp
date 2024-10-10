@@ -837,8 +837,16 @@ static int getPinwheelLength(int vW, int vH) {
   // use factors of 360 for best results
   // 360, 180, 120, 90, 72, 60, 45, 40, 36, 30, 24, 20, 18, 15, 12, 10, 9, 8
   if (maxXY < 24) return 24;
-  if (maxXY < 48) return 60;
+  if (maxXY < 48) return 45;
   return 72;
+}
+static int getPinwheelJump(int length) {
+  if (length == 72) return 16;
+  if (length == 45) return 10;
+  if (length == 24) return 8;
+  if (length == 60) return 10;
+  if (length == 90) return 14; // worse than 72? don't know why
+  return 0;
 }
 #endif
 
@@ -1045,7 +1053,8 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         // static int drawCount = 0;
         // if (i == 0) drawCount = 0; // reset draw count
 
-        int rayWidth = 360 / getPinwheelLength(vW, vH);
+        int pinwheelLength = getPinwheelLength(vW, vH);
+        int rayWidth = 360 / pinwheelLength;
         int ang = i * rayWidth;
         int angles[2] = {ang, min(ang + rayWidth, 358)}; // don't allow 360 to overlap with 0
         if (ang != 0 && prevRay == i-1) angles[0] += 1; // avoid overlap with previous ray
@@ -1123,9 +1132,8 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
 
         int index = 0;
         // odd rays skip the center if the previous ray was adjacent
-        if ((i % 2 == 1) && (i - 1 == prevRay || i + 1 == prevRay)) {
-          index = min(vW, vH) / 3.6; // /3 causes gaps
-          index &= ~1; // make sure index is even
+        if ((i & 1) && (i - 1 == prevRay || i + 1 == prevRay)) {
+          index = getPinwheelJump(pinwheelLength);
         }
         prevRay = i;
         // draw between the two lines
@@ -1143,7 +1151,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
             }
           }
         }
-        // if (i == getPinwheelLength(vW, vH) - 1) printf("drawCount: %d\n", drawCount);
+        // if ((i == pinwheelLength - 1) && millis() % 100 == 0) printf("drawCount: %d\n", drawCount);
         break;
       }
     }
