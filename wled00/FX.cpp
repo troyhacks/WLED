@@ -5154,8 +5154,8 @@ uint16_t mode_2DDrift() {              // By: Stepko   https://editor.soulmateli
   unsigned long t_20 = t/20; // softhack007: pre-calculating this gives about 10% speedup
   for (float i = 1; i < maxDim; i += 0.25) {
     float angle = radians(t * (maxDim - i));
-    uint16_t myX = (cols>>1) + (uint16_t)(sinf(angle) * i) + (cols%2);
-    uint16_t myY = (rows>>1) + (uint16_t)(cosf(angle) * i) + (rows%2);
+    uint16_t myX = (cols>>1) + (int16_t)(sinf(angle) * i) + (cols%2);
+    uint16_t myY = (rows>>1) + (int16_t)(cosf(angle) * i) + (rows%2);
     SEGMENT.setPixelColorXY(myX, myY, ColorFromPalette(SEGPALETTE, (i * 20) + t_20, 255, LINEARBLEND));
   }
   SEGMENT.blur(SEGMENT.intensity>>3);
