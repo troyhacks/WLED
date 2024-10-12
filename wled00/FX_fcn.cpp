@@ -1124,7 +1124,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         }
 
         // draw and block-fill the line oordinates. Note: block filling only efficient if angle between lines is small
-        closestEdgeIdx += 4;
+        closestEdgeIdx += 2;
         for (int idx = 0; idx < lineLength[longLineIdx] * 2;) { //!! should be long line idx!
           int x1 = lineCoords[0][idx];
           int x2 = lineCoords[1][idx++];
@@ -1145,7 +1145,8 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
                   (onLine2 && drawLast  && !onLine1) || 
                   (onLine1 && drawFirst && !onLine2) ||
                   (onLine1 && onLine2 && drawFirst && drawLast) ||
-                  (onLine1 && idx >= closestEdgeIdx)) {
+                  (onLine1 && idx > closestEdgeIdx) ||
+                  (onLine2 && idx > closestEdgeIdx)) {
                 if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
                 else setPixelColorXY_slow(x, y, col); 
                 // drawCount++;
