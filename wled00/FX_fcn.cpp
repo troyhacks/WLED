@@ -832,7 +832,7 @@ void Segment::deletejMap() {
 // Constants for mapping mode "Pinwheel"
 #ifndef WLED_DISABLE_2D
 constexpr int Fixed_Scale = 16384; // fixpoint scaling factor (14bit for fraction)
-constexpr float stepFactor = 1.125; // number of angle steps (rays = stepFacor * maxXY)
+constexpr float stepFactor = 1.6; // number of angle steps (rays = stepFacor * maxXY)
 
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
@@ -849,7 +849,8 @@ static int getPinwheelSteps(int vW, int vH) {
   return (maxXY * stepfactor) / Fixed_Scale;
 }
 static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& starty, int* cosVal, int* sinVal, bool getPixel = false) {
-  int steps = getPinwheelSteps(vW, vH);
+  // int steps = getPinwheelSteps(vW, vH); // Dynamic ray count  // change virtualLength() if swapping
+  int steps = getPinwheelLength(vW, vH); // Static ray count
   int baseAngle =  0xFFFF / steps; // 360° / steps, in 16 bit scale
   int rotate = 0;
   if (getPixel) rotate = baseAngle / 2; // rotate by half a ray width when reading pixel color
@@ -858,8 +859,8 @@ static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& start
     cosVal[k] = (cos16((i + k) * baseAngle + rotate) * Fixed_Scale) >> 15; // step per pixel in fixed point, cos16 output is -0x7FFF to +0x7FFF
     sinVal[k] = (sin16((i + k) * baseAngle + rotate) * Fixed_Scale) >> 15; // using explicit bit shifts as dividing negative numbers is not equivalent (rounding error is acceptable)
   }
-  startx = (vW * Fixed_Scale) / 2 + cosVal[0] / 4; // starting position = center + 1/4 pixel (in fixed point)
-  starty = (vH * Fixed_Scale) / 2 + sinVal[0] / 4;
+  startx = (vW * Fixed_Scale) / 2; // + cosVal[0] / 4; // starting position = center + 1/4 pixel (in fixed point)
+  starty = (vH * Fixed_Scale) / 2; // + sinVal[0] / 4;
 }
 #endif
 
@@ -893,7 +894,8 @@ uint16_t Segment::virtualLength() const {
           vLen = max(vW,vH) * 0.5; // get the longest dimension
         break;
       case M12_sPinwheel:
-        vLen = getPinwheelSteps(vW, vH);
+        vLen = getPinwheelLength(vW, vH); // Static ray count
+        // vLen = getPinwheelSteps(vW, vH); // Dynamic ray count
         break;
     }
     return vLen;
@@ -1068,16 +1070,17 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         setPinwheelParameters(i, vW, vH, startX, startY, cosVal, sinVal);
 
         unsigned maxLineLength = max(vW, vH) + 2; // pixels drawn is always smaller than dx or dy, +1 pair for rounding errors
-        uint16_t lineCoords[2][maxLineLength]; // uint16_t to save ram
+        uint16_t lineCoords[2][maxLineLength];    // uint16_t to save ram
         int lineLength[2] = {0};
 
-        static int prevRay = INT_MAX; // previous ray number
+        static int prevRay = INT_MAX;  // previous ray number
+        int closestEdgeIdx = INT_MAX;  // index of the closest edge pixel
 
         for (int lineNr = 0; lineNr < 2; lineNr++) {
           int x0 = startX; // x / y coordinates in fixed scale
           int y0 = startY;
-          int x1 = (startX + (cosVal[lineNr] * 512)); // outside of grid
-          int y1 = (startY + (sinVal[lineNr] * 512));
+          int x1 = (startX + (cosVal[lineNr] << 9)); // outside of grid
+          int y1 = (startY + (sinVal[lineNr] << 9)); // outside of grid
           const int dx =  abs(x1-x0), sx = x0<x1 ? 1 : -1;  // x distance & step
           const int dy = -abs(y1-y0), sy = y0<y1 ? 1 : -1;  // y distance & step
           uint16_t* coordinates = lineCoords[lineNr]; // 1D access is faster
@@ -1089,7 +1092,10 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           int idx = 0;
           int err = dx + dy;
           while (true) {
-            if (unsigned(x0) >= vW || unsigned(y0) >= vH) break; // stop if outside of grid (exploit unsigned int overflow)
+            if (unsigned(x0) >= vW || unsigned(y0) >= vH) {
+              closestEdgeIdx = min(closestEdgeIdx, idx-2);
+              break; // stop if outside of grid (exploit unsigned int overflow)
+            }
             coordinates[idx++] = x0;
             coordinates[idx++] = y0;
             (*length)++;
@@ -1118,6 +1124,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         }
 
         // draw and block-fill the line oordinates. Note: block filling only efficient if angle between lines is small
+        closestEdgeIdx += 4;
         for (int idx = 0; idx < lineLength[longLineIdx] * 2;) { //!! should be long line idx!
           int x1 = lineCoords[0][idx];
           int x2 = lineCoords[1][idx++];
@@ -1126,15 +1133,27 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           int minX, maxX, minY, maxY;
           (x1 < x2) ? (minX = x1, maxX = x2) : (minX = x2, maxX = x1);
           (y1 < y2) ? (minY = y1, maxY = y2) : (minY = y2, maxY = y1);
+
           // fill the block between the two x,y points
+          bool drawFirst = prevRay != i - 1; // draw first line if previous ray was not adjacent
+          bool drawLast =  prevRay != i + 1; // draw second line if previous ray was not adjacent
           for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
-              if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
-              else setPixelColorXY_slow(x, y, col);  
-              // drawCount++;            
+              bool onLine1 = x == x1 && y == y1;
+              bool onLine2 = x == x2 && y == y2;
+              if ((!onLine1 && !onLine2) || 
+                  (onLine2 && drawLast  && !onLine1) || 
+                  (onLine1 && drawFirst && !onLine2) ||
+                  (onLine1 && onLine2 && drawFirst && drawLast) ||
+                  (onLine1 && idx >= closestEdgeIdx)) {
+                if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
+                else setPixelColorXY_slow(x, y, col); 
+                // drawCount++;
+              } 
             }
           }
         }
+        prevRay = i;
         break;
       }
     }
