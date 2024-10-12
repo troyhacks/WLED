@@ -837,10 +837,10 @@ constexpr float stepFactor = 1.6; // number of angle steps (rays = stepFacor * m
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
   int maxXY = max(vW, vH);
-  // use factors of 360 for best results
-  // 360, 180, 120, 90, 72, 60, 45, 40, 36, 30, 24, 20, 18, 15, 12, 10, 9, 8
+  // best values to prevent over drawing
+  // 8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,144,152,168,176,192
   if (maxXY < 24) return 24;
-  if (maxXY < 48) return 45;
+  if (maxXY < 48) return 48;
   return 72;
 }
 static int getPinwheelSteps(int vW, int vH) {
@@ -1135,8 +1135,11 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           (y1 < y2) ? (minY = y1, maxY = y2) : (minY = y2, maxY = y1);
 
           // fill the block between the two x,y points
-          bool drawFirst = prevRay != i - 1; // draw first line if previous ray was not adjacent
-          bool drawLast =  prevRay != i + 1; // draw second line if previous ray was not adjacent
+          int max_i = getPinwheelLength(vW, vH) - 1;
+          bool drawFirst = !(prevRay == i - 1 || (i == 0 && prevRay == max_i)); // draw first line if previous ray was not adjacent including wrap
+          bool drawLast =  !(prevRay == i + 1 || (i == max_i && prevRay == 0)); // same as above for last line
+          bool centerPixel = i == 0 && idx == 2; // special case for center pixel
+          bool edgePixel = idx > closestEdgeIdx; // edge pixels are drawn to remove holes
           for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
               bool onLine1 = x == x1 && y == y1;
@@ -1145,8 +1148,9 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
                   (onLine2 && drawLast  && !onLine1) || 
                   (onLine1 && drawFirst && !onLine2) ||
                   (onLine1 && onLine2 && drawFirst && drawLast) ||
-                  (onLine1 && idx > closestEdgeIdx) ||
-                  (onLine2 && idx > closestEdgeIdx)) {
+                  (edgePixel) ||
+                  (centerPixel)
+                  ) {
                 if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
                 else setPixelColorXY_slow(x, y, col); 
                 // drawCount++;
