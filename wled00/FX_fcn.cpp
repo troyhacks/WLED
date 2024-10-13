@@ -836,11 +836,17 @@ constexpr float stepFactor = 1.6; // number of angle steps (rays = stepFacor * m
 
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
-  int maxXY = max(vW, vH);
-  // best values to prevent over drawing
+  // best values to prevent over drawing, work on all sizes
   // 8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,144,152,168,176,192
+  int maxXY = max(vW, vH); 
+  if (maxXY < 8)  return 8;
+  if (maxXY < 16) return 16;
   if (maxXY < 24) return 24;
+  if (maxXY < 32) return 32;
+  if (maxXY < 40) return 40;
   if (maxXY < 48) return 48;
+  if (maxXY < 56) return 56;
+  if (maxXY < 64) return 64;
   return 72;
 }
 static int getPinwheelSteps(int vW, int vH) {
@@ -1125,6 +1131,9 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
 
         // draw and block-fill the line oordinates. Note: block filling only efficient if angle between lines is small
         closestEdgeIdx += 2;
+        int max_i = getPinwheelLength(vW, vH) - 1;
+        bool drawFirst = !(prevRay == i - 1 || (i == 0 && prevRay == max_i)); // draw first line if previous ray was not adjacent including wrap
+        bool drawLast =  !(prevRay == i + 1 || (i == max_i && prevRay == 0)); // same as above for last line
         for (int idx = 0; idx < lineLength[longLineIdx] * 2;) { //!! should be long line idx!
           int x1 = lineCoords[0][idx];
           int x2 = lineCoords[1][idx++];
@@ -1135,26 +1144,21 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           (y1 < y2) ? (minY = y1, maxY = y2) : (minY = y2, maxY = y1);
 
           // fill the block between the two x,y points
-          int max_i = getPinwheelLength(vW, vH) - 1;
-          bool drawFirst = !(prevRay == i - 1 || (i == 0 && prevRay == max_i)); // draw first line if previous ray was not adjacent including wrap
-          bool drawLast =  !(prevRay == i + 1 || (i == max_i && prevRay == 0)); // same as above for last line
-          bool centerPixel = i == 0 && idx == 2; // special case for center pixel
-          bool edgePixel = idx > closestEdgeIdx; // edge pixels are drawn to remove holes
+          bool alwaysDraw = (drawFirst && drawLast) || // No adjacent rays, draw all pixels
+                            (idx > closestEdgeIdx)  || // Edge pixels on uneven lines are always drawn
+                            (i == 0 && idx == 2);      // Center pixel special case
           for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
               bool onLine1 = x == x1 && y == y1;
               bool onLine2 = x == x2 && y == y2;
-              if ((!onLine1 && !onLine2) || 
-                  (onLine2 && drawLast  && !onLine1) || 
-                  (onLine1 && drawFirst && !onLine2) ||
-                  (onLine1 && onLine2 && drawFirst && drawLast) ||
-                  (edgePixel) ||
-                  (centerPixel)
-                  ) {
+              if ((alwaysDraw) ||
+                  (!onLine1 && (!onLine2 || drawLast))  || // Middle pixels and line2 if drawLast
+                  (!onLine2 && (!onLine1 || drawFirst))    // Middle pixels and line1 if drawFirst
+                ) {
                 if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
-                else setPixelColorXY_slow(x, y, col); 
+                else setPixelColorXY_slow(x, y, col);
                 // drawCount++;
-              } 
+              }
             }
           }
         }
