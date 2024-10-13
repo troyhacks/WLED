@@ -4,16 +4,19 @@ IPAddress NetworkClass::localIP()
 {
   
 #if defined(ARDUINO_ARCH_ESP32) // && defined(WLED_USE_ETHERNET) // TROYHACKS
-  #ifdef ARDUINO_ARCH_ESP32P4
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
   esp_netif_ip_info_t ip_info;
-  esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
-  // esp_netif_get_ip_info(ESP_IF_WIFI_STA,&ip_info);
-  IPAddress localIP;
-  char buf[32];
-  sprintf(buf, IPSTR, IP2STR(&ip_info.ip));
-  localIP = buf;
-  if (localIP[0] != 0) {
-    return localIP;
+  esp_err_t err = esp_netif_get_ip_info(esp_netif_get_default_netif(),&ip_info);
+  if (err == ESP_OK) {
+    IPAddress localIP;
+    char buf[32];
+    sprintf(buf, IPSTR, IP2STR(&ip_info.ip));
+    localIP = buf;
+    if (localIP[0] != 0) {
+      return localIP;
+    }
+  } else {
+    return INADDR_NONE;
   }
   #else
   IPAddress localIP = ETH.localIP();
@@ -121,9 +124,10 @@ void NetworkClass::localMAC(uint8_t* MAC) {
 
 bool NetworkClass::isConnected() {
   #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-    return true;
+    return (WL_Network.localIP()[0] != 0);
   #else
     // return (WiFi.localIP()[0] != 0 && WiFi.status() == WL_CONNECTED);
+    return (WL_Network.localIP()[0] != 0);
   #endif
   return true;
 }

@@ -141,6 +141,8 @@ void WLED::loop()
   }
   #endif
 
+  if (!interfacesInited) delay(10); // TroyHacks: burn some loop in case we're waiting on network with nothing else to do.
+
 #ifdef WLED_ENABLE_DMX
   handleDMXOutput();
 #endif
@@ -465,22 +467,20 @@ static const char *TAG = "eth_init";
 
 static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_id == ETHERNET_EVENT_CONNECTED) {
-        ESP_LOGI(TAG, "Ethernet Link Up");
+      USER_PRINTLN("Ethernet Link Up");
     } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
-        ESP_LOGI(TAG, "Ethernet Link Down");
+      USER_PRINTLN("Ethernet Link Down");
     } else if (event_id == ETHERNET_EVENT_START) {
-        ESP_LOGI(TAG, "Ethernet Started");
-    } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
-        ESP_LOGI(TAG, "Ethernet Disconnected");
+      USER_PRINTLN("Ethernet Started");
     } else {
-      ESP_LOGI(TAG, "Ethernet Undeclared Error %d", event_id);
+      USER_PRINTF("Ethernet Undeclared Error %d\n", event_id);
     }
 }
 
 static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-    ESP_LOGI(TAG, "Ethernet Got IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
-    interfacesInited = false;
+    USER_PRINTF("Ethernet Got IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
+    USER_PRINTLN();
 }
 #endif
 
@@ -814,8 +814,7 @@ void WLED::setup()
     #else
       uint8_t mymac[6];
       char buf[18];
-      // esp_err_t result = esp_wifi_get_mac(WIFI_IF_STA, mymac);
-      esp_err_t result = esp_eth_get_mac_instance(esp_netif_get_default_netif(), mymac);
+      esp_err_t result = esp_wifi_get_mac(WIFI_IF_STA, mymac);
       sprintf(buf,"%02X:%02X:%02X:%02X:%02X:%02X", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
       USER_PRINTF("WiFi Mac Address: %02X:%02X:%02X:%02X:%02X:%02X\n", mymac[0], mymac[1], mymac[2], mymac[3], mymac[4], mymac[5]);
       escapedMac = buf;
@@ -1233,19 +1232,12 @@ void WLED::initConnection()
 
   #ifdef WLED_USE_ETHERNET
     USER_PRINTLN(F("Connecting to Ethernet"));
-    USER_PRINTF("Network.isConnected (not fixed, lying) = %d\n",Network.isConnected());
-    USER_PRINTF("Network.isEthernet (not fixed, kinda lying) = %d\n",Network.isEthernet());
-    USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
-    USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
-    USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
+    // USER_PRINTF("Network.isConnected = %d\n",Network.isConnected());
+    // USER_PRINTF("Network.isEthernet (not fixed, kinda lying) = %d\n",Network.isEthernet());
+    // USER_PRINTF("Network.localIP = %s\n",Network.localIP().toString());
+    // USER_PRINTF("Network.subnetMask = %s\n",Network.subnetMask().toString());
+    // USER_PRINTF("Network.gatewayIP = %s\n",Network.gatewayIP().toString());
     // USER_PRINTF("Network.localMAC = %s\n",Network.localMAC());
-
-    // Network.isConnected();
-    // Network.isEthernet();
-    // Network.localIP();
-    // Network.localMAC();
-    // Network.subnetMask();
-    // Network.gatewayIP();
 
   #endif
 
