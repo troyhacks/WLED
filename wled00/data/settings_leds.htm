@@ -5,7 +5,7 @@
 	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
 	<title>LED Settings</title>
 	<script>
-		var d=document,laprev=55,maxB=1,maxV=0,maxM=4000,maxPB=8465,maxL=1333,maxLbquot=0; //maximum bytes for LED allocation: 4kB for 8266, 32kB for 32
+		var d=document,laprev=55,maxB=1,maxV=0,maxM=4000,maxPB=18438,maxL=1333,maxLbquot=0; //maximum bytes for LED allocation: 4kB for 8266, 64kB for 32
 		d.um_p = [];
 		d.rsvd = [];
 		d.ro_gpio = [];
@@ -383,9 +383,11 @@ ${i+1}:
 <option value="101">Hub75Matrix 32x32</option>
 <option value="102">Hub75Matrix 64x32</option>
 <option value="103">Hub75Matrix 64x64</option>
+<option value="104">Hub75Matrix 128x64</option>
 <option value="105">Hub75Matrix 32x32 (Outdoor 8S)</option>
 <option value="106">Hub75Matrix 64x32 (Outdoor 8S)</option>
 <option value="107">Hub75Matrix 64x64 (Outdoor 16S)</option>
+<option value="108">Hub75Matrix 128x64 (Outdoor 16S)</option>
 </select><br>
 <div id="co${i}" style="display:inline">Color Order:
 <select name="CO${i}">
