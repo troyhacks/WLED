@@ -832,8 +832,6 @@ void Segment::deletejMap() {
 // Constants for mapping mode "Pinwheel"
 #ifndef WLED_DISABLE_2D
 constexpr int Fixed_Scale = 16384; // fixpoint scaling factor (14bit for fraction)
-constexpr float stepFactor = 1.6; // number of angle steps (rays = stepFacor * maxXY)
-
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
   // best values to prevent over drawing, work on all sizes
@@ -847,16 +845,11 @@ static int getPinwheelLength(int vW, int vH) {
   if (maxXY < 48) return 48;
   if (maxXY < 56) return 56;
   if (maxXY < 64) return 64;
-  return 72;
-}
-static int getPinwheelSteps(int vW, int vH) {
-  int maxXY = max(vW, vH);
-  unsigned stepfactor = unsigned(stepFactor * Fixed_Scale);
-  return (maxXY * stepfactor) / Fixed_Scale;
+  if (maxXY < 72) return 72;
+  return 96;
 }
 static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& starty, int* cosVal, int* sinVal, bool getPixel = false) {
-  // int steps = getPinwheelSteps(vW, vH); // Dynamic ray count  // change virtualLength() if swapping
-  int steps = getPinwheelLength(vW, vH); // Static ray count
+  int steps = getPinwheelLength(vW, vH);
   int baseAngle =  0xFFFF / steps; // 360° / steps, in 16 bit scale
   int rotate = 0;
   if (getPixel) rotate = baseAngle / 2; // rotate by half a ray width when reading pixel color
@@ -900,8 +893,7 @@ uint16_t Segment::virtualLength() const {
           vLen = max(vW,vH) * 0.5; // get the longest dimension
         break;
       case M12_sPinwheel:
-        vLen = getPinwheelLength(vW, vH); // Static ray count
-        // vLen = getPinwheelSteps(vW, vH); // Dynamic ray count
+        vLen = getPinwheelLength(vW, vH);
         break;
     }
     return vLen;
@@ -1069,9 +1061,6 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           if (!_bri_t && !transitional) return;
           if (_bri_t < 255) scaled_col = color_fade(col, _bri_t);
         }
-        // static int drawCount = 0;
-        // if (i == 0) {printf("drawCount: %d\n", drawCount); drawCount = 0;} // reset draw count
-
         int startX, startY, cosVal[2], sinVal[2]; // in fixed point scale
         setPinwheelParameters(i, vW, vH, startX, startY, cosVal, sinVal);
 
@@ -1079,7 +1068,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         uint16_t lineCoords[2][maxLineLength];    // uint16_t to save ram
         int lineLength[2] = {0};
 
-        static int prevRay = INT_MAX;  // previous ray number
+        static int prevRays[2] = {INT_MAX, INT_MAX};  // previous two ray numbers
         int closestEdgeIdx = INT_MAX;  // index of the closest edge pixel
 
         for (int lineNr = 0; lineNr < 2; lineNr++) {
@@ -1132,8 +1121,8 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         // draw and block-fill the line oordinates. Note: block filling only efficient if angle between lines is small
         closestEdgeIdx += 2;
         int max_i = getPinwheelLength(vW, vH) - 1;
-        bool drawFirst = !(prevRay == i - 1 || (i == 0 && prevRay == max_i)); // draw first line if previous ray was not adjacent including wrap
-        bool drawLast =  !(prevRay == i + 1 || (i == max_i && prevRay == 0)); // same as above for last line
+        bool drawFirst = !(prevRays[0] == i - 1 || (i == 0 && prevRays[0] == max_i)); // draw first line if previous ray was not adjacent including wrap
+        bool drawLast =  !(prevRays[0] == i + 1 || (i == max_i && prevRays[0] == 0)); // same as above for last line
         for (int idx = 0; idx < lineLength[longLineIdx] * 2;) { //!! should be long line idx!
           int x1 = lineCoords[0][idx];
           int x2 = lineCoords[1][idx++];
@@ -1146,7 +1135,8 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           // fill the block between the two x,y points
           bool alwaysDraw = (drawFirst && drawLast) || // No adjacent rays, draw all pixels
                             (idx > closestEdgeIdx)  || // Edge pixels on uneven lines are always drawn
-                            (i == 0 && idx == 2);      // Center pixel special case
+                            (i == 0 && idx == 2)    || // Center pixel special case
+                            (i == prevRays[1]);         // Effect drawing twice in 1 frame
           for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
               bool onLine1 = x == x1 && y == y1;
@@ -1157,12 +1147,12 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
                 ) {
                 if (simpleSegment) setPixelColorXY_fast(x, y, col, scaled_col, vW, vH);
                 else setPixelColorXY_slow(x, y, col);
-                // drawCount++;
               }
             }
           }
         }
-        prevRay = i;
+        prevRays[1] = prevRays[0];
+        prevRays[0] = i;
         break;
       }
     }
