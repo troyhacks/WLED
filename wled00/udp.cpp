@@ -899,8 +899,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       // const uint_fast16_t hardware_outputs[] = { 1008,1008,1008,1008,1008,1008,1008,1008 }; // specified in LED counts
       // const uint_fast16_t hardware_outputs_universe_start[] = { 0,6,12,18,24,30,36,42 }; // universe start # per output
 
-      const uint_fast16_t hardware_outputs[] = { 1024,1024,1024,1024,1024,1024,1024,1024 }; // specified in LED counts
-      const uint_fast16_t hardware_outputs_universe_start[] = { 0,7,14,21,28,35,42,49 }; // universe start # per output
+      const uint_fast16_t hardware_outputs[] = { 768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768,768 }; // specified in LED counts
+      const uint_fast16_t hardware_outputs_universe_start[] = { 0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110,115 }; // universe start # per output
 
       // Example of two H807SA units ganged together:
       //
