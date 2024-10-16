@@ -600,11 +600,11 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   mxconfig.clkphase = false; // can help in case that the leftmost column is invisible, or pixels on the right side "bleeds out" to the left.
  
   // How many panels we have connected, cap at sane value
-  mxconfig.chain_length = max((uint8_t) 1, min(bc.pins[0], (uint8_t) 4)); // prevent bad data preventing boot due to low memory
+  mxconfig.chain_length = max((uint8_t) 1, min(bc.pins[0], (uint8_t) 6)); // prevent bad data preventing boot due to low memory
 
   #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(BOARD_HAS_PSRAM)
-  if(bc.pins[0] > 4) {
-    USER_PRINTLN("WARNING, chain limited to 4");
+  if(bc.pins[0] > 6) {
+    USER_PRINTLN("WARNING, chain limited to 6");
   }
   # else
   // Disable this check if you are want to try bigger setups and accept you
@@ -817,7 +817,7 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   mxconfig.setPixelColorDepthBits(PIXEL_COLOR_DEPTH_BIT);
   mxconfig.double_buff = false; // default to off, known to cause issue with some effects but needs more memory
   mxconfig.clkphase = false;
-  mxconfig.chain_length = max((u_int8_t) 1, min(bc.pins[0], (u_int8_t) 4)); // prevent bad data preventing boot due to low memory
+  mxconfig.chain_length = max((u_int8_t) 1, min(bc.pins[0], (u_int8_t) 6)); // prevent bad data preventing boot due to low memory
 
   USER_PRINTF("MatrixPanel_I2S_DMA config - %ux%u (type %u) length: %u, %u bits/pixel.\n", mxconfig.mx_width, mxconfig.mx_height, bc.type, mxconfig.chain_length, mxconfig.getPixelColorDepthBits() * 3);
   DEBUG_PRINT(F("Free heap: ")); DEBUG_PRINTLN(ESP.getFreeHeap()); lastHeap = ESP.getFreeHeap();
@@ -831,7 +831,7 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
       return;
   }
   // virtualDisp = new VirtualMatrixPanel((*dma_display), NUM_ROWS, NUM_COLS, PANEL_RES_X, PANEL_RES_Y, VIRTUAL_MATRIX_CHAIN_TYPE); 
-  display = new VirtualMatrixPanel((*realdisplay), 2, 2, 64, 64, CHAIN_BOTTOM_RIGHT_UP );
+  display = new VirtualMatrixPanel((*realdisplay), 2, 3, 64, 64, CHAIN_BOTTOM_RIGHT_UP );
 
   this->_len = (display->width() * display->height());
 
