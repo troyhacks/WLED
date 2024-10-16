@@ -948,8 +948,11 @@ void WLED::initAP(bool resetAP)
     if (udpPort2 > 0 && udpPort2 != ntpLocalPort && udpPort2 != udpPort && udpPort2 != udpRgbPort) {
       udp2Connected = notifier2Udp.begin(udpPort2);
     }
+    
+    #if E131_MAX_UNIVERSE_COUNT > 0
     e131.begin(false, e131Port, e131Universe, E131_MAX_UNIVERSE_COUNT);
     ddp.begin(false, DDP_DEFAULT_PORT);
+    #endif
 
     dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
     dnsServer.start(53, "*", WiFi.softAPIP());
@@ -1259,8 +1262,11 @@ void WLED::initInterfaces()
   if (ntpEnabled)
     ntpConnected = ntpUdp.begin(ntpLocalPort);
 
+  #if E131_MAX_UNIVERSE_COUNT > 0
   e131.begin(e131Multicast, e131Port, e131Universe, E131_MAX_UNIVERSE_COUNT);
   ddp.begin(false, DDP_DEFAULT_PORT);
+  #endif
+
   reconnectHue();
 #ifndef WLED_DISABLE_MQTT
   initMqtt();
