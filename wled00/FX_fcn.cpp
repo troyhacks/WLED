@@ -834,19 +834,8 @@ void Segment::deletejMap() {
 constexpr int Fixed_Scale = 16384; // fixpoint scaling factor (14bit for fraction)
 // Pinwheel helper function: matrix dimensions to number of rays
 static int getPinwheelLength(int vW, int vH) {
-  // best values to prevent over drawing, work on all sizes
-  // 8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,144,152,168,176,192
-  int maxXY = max(vW, vH); 
-  if (maxXY < 8)  return 8;
-  if (maxXY < 16) return 16;
-  if (maxXY < 24) return 24;
-  if (maxXY < 32) return 32;
-  if (maxXY < 40) return 40;
-  if (maxXY < 48) return 48;
-  if (maxXY < 56) return 56;
-  if (maxXY < 64) return 64;
-  if (maxXY < 72) return 72;
-  return 96;
+  // Returns multiple of 8, prevents over drawing 
+  return (max(vW, vH) + 15) & ~7;
 }
 static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& starty, int* cosVal, int* sinVal, bool getPixel = false) {
   int steps = getPinwheelLength(vW, vH);
