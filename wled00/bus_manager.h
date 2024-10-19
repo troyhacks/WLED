@@ -353,13 +353,13 @@ class BusNetwork : public Bus {
     }
 
   private:
-    IPAddress _client;
-    uint8_t   _UDPtype;
-    uint8_t   _UDPchannels;
-    bool      _rgbw;
-    bool      _broadcastLock;
-    byte     *_data;
-    uint8_t   _colorOrder = COL_ORDER_RGB;
+    IPAddress           _client;
+    uint8_t             _UDPtype;
+    uint8_t             _UDPchannels;
+    bool                _rgbw;
+    bool                _broadcastLock;
+    byte                *_data;
+    uint8_t             _colorOrder = COL_ORDER_RGB;
     const ColorOrderMap &_colorOrderMap;
 };
 

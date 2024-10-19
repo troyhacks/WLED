@@ -494,66 +494,60 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
 }
 
 void IRAM_ATTR BusNetwork::setPixelColor(uint16_t pix, uint32_t c) {
-  if (!_valid || pix >= _len) return;
-  if (_rgbw) c = autoWhiteCalc(c);
-  if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); //color correction from CCT
-  uint16_t offset = pix * _UDPchannels;
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co || _colorOrder != COL_ORDER_RGB) {
-    if (co == COL_ORDER_GRB) {
-      _data[offset]   = G(c);
-      _data[offset+1] = R(c);
-      _data[offset+2] = B(c);     
-    } else if (co == COL_ORDER_RGB) {
-      _data[offset]   = R(c);
-      _data[offset+1] = G(c);
-      _data[offset+2] = B(c);
-    } else if (co == COL_ORDER_BRG) {
-      _data[offset]   = B(c);
-      _data[offset+1] = R(c);
-      _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_RBG) {
-      _data[offset]   = R(c);
-      _data[offset+1] = B(c);
-      _data[offset+2] = G(c);
-    } else if (co == COL_ORDER_GBR) {
-      _data[offset]   = G(c);
-      _data[offset+1] = B(c);
-      _data[offset+2] = R(c);
-    } else if (co == COL_ORDER_BGR) {
-      _data[offset]   = B(c);
-      _data[offset+1] = G(c);
-      _data[offset+2] = R(c);
+    if (!_valid || pix >= _len) return;
+    if (_rgbw) c = autoWhiteCalc(c);
+    if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); // color correction from CCT
+
+    uint16_t offset = pix * _UDPchannels;
+    uint8_t co = _colorOrderMap.getPixelColorOrder(pix + _start, _colorOrder);
+
+    if (_colorOrder != co || _colorOrder != COL_ORDER_RGB) {
+        switch (co) {
+            case COL_ORDER_GRB:
+                _data[offset] = G(c); _data[offset+1] = R(c); _data[offset+2] = B(c);
+                break;
+            case COL_ORDER_RGB:
+                _data[offset] = R(c); _data[offset+1] = G(c); _data[offset+2] = B(c);
+                break;
+            case COL_ORDER_BRG:
+                _data[offset] = B(c); _data[offset+1] = R(c); _data[offset+2] = G(c);
+                break;
+            case COL_ORDER_RBG:
+                _data[offset] = R(c); _data[offset+1] = B(c); _data[offset+2] = G(c);
+                break;
+            case COL_ORDER_GBR:
+                _data[offset] = G(c); _data[offset+1] = B(c); _data[offset+2] = R(c);
+                break;
+            case COL_ORDER_BGR:
+                _data[offset] = B(c); _data[offset+1] = G(c); _data[offset+2] = R(c);
+                break;
+        }
+        if (_rgbw) _data[offset+3] = W(c);
+    } else {
+        _data[offset] = R(c); _data[offset+1] = G(c); _data[offset+2] = B(c);
+        if (_rgbw) _data[offset+3] = W(c);
     }
-    if (_rgbw) _data[offset+3] = W(c);
-  } else {
-    _data[offset]   = R(c);
-    _data[offset+1] = G(c);
-    _data[offset+2] = B(c);
-    if (_rgbw) _data[offset+3] = W(c);
-  }
 }
 
 uint32_t IRAM_ATTR BusNetwork::getPixelColor(uint16_t pix) const {
-  if (!_valid || pix >= _len) return 0;
-  uint16_t offset = pix * _UDPchannels;
-  uint8_t co = _colorOrderMap.getPixelColorOrder(pix+_start, _colorOrder);
-  if (_colorOrder != co || _colorOrder != COL_ORDER_RGB) {
-    if (co == COL_ORDER_GRB) {
-      return RGBW32(_data[offset+1], _data[offset+0], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
-    } else if (co == COL_ORDER_RGB) {
-      return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
-    } else if (co == COL_ORDER_BRG) {
-      return RGBW32(_data[offset+2], _data[offset+0], _data[offset+1], _rgbw ? (_data[offset+3]) : 0);
-    } else if (co == COL_ORDER_RBG) {
-      return RGBW32(_data[offset+0], _data[offset+2], _data[offset+1], _rgbw ? (_data[offset+3]) : 0);
-    } else if (co == COL_ORDER_GBR) {
-      return RGBW32(_data[offset+1], _data[offset+2], _data[offset+0], _rgbw ? (_data[offset+3]) : 0);
-    } else if (co == COL_ORDER_BGR) {
-      return RGBW32(_data[offset+2], _data[offset+1], _data[offset+0], _rgbw ? (_data[offset+3]) : 0);
+    if (!_valid || pix >= _len) return 0;
+    uint16_t offset = pix * _UDPchannels;
+    uint8_t co = _colorOrderMap.getPixelColorOrder(pix + _start, _colorOrder);
+
+    uint8_t r = _data[offset + 0];
+    uint8_t g = _data[offset + 1];
+    uint8_t b = _data[offset + 2];
+    uint8_t w = _rgbw ? _data[offset + 3] : 0;
+
+    switch (co) {
+        case COL_ORDER_GRB: return RGBW32(g, r, b, w);
+        case COL_ORDER_RGB: return RGBW32(r, g, b, w);
+        case COL_ORDER_BRG: return RGBW32(b, r, g, w);
+        case COL_ORDER_RBG: return RGBW32(r, b, g, w);
+        case COL_ORDER_GBR: return RGBW32(g, b, r, w);
+        case COL_ORDER_BGR: return RGBW32(b, g, r, w);
+        default: return RGBW32(r, g, b, w); // default to RGB order
     }
-  }
-  return RGBW32(_data[offset+0], _data[offset+1], _data[offset+2], _rgbw ? (_data[offset+3]) : 0);
 }
 
 void BusNetwork::show() {
