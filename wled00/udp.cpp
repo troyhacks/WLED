@@ -771,15 +771,24 @@ static       size_t sequenceNumber = 0; // this needs to be shared across all ou
 static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x74,0x00,0x00,0x50,0x00,0x0e};
 static uint_fast16_t artnetlimiter  = millis()+(1000/ARTNET_FPS_LIMIT);
 
+#if defined(ARDUINO_ARCH_ESP32P4)
+extern "C" {
+  int p4_mul16x16(uint8_t* buffer, uint8_t* bright, uint16_t loops);
+}
+#endif
+
 uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, uint8_t *buffer, uint8_t bri, bool isRGBW)  {
 
   if (!(apActive || interfacesInited) || !client[0] || !length) return 1;  // network not initialised or dummy/unset IP address  031522 ajn added check for ap
 
   // For some reason, this is faster outside of the case block...
   //
-  static byte *packet_buffer = (byte *) calloc(530, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
+  static byte *packet_buffer = (byte *) ps_calloc(530, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
+  // static byte* packet_buffer = (byte*) heap_caps_aligned_calloc(16, 530, sizeof(byte), MALLOC_CAP_8BIT);
   memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header.
-
+  static uint8_t bright[16];
+  if (bright[0] != bri) std::fill_n(bright, 16, bri); // seems no slower, and just cleaner code
+  
   switch (type) {
     case 0: // DDP
     {
@@ -953,6 +962,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
 
           if (bri < 255) { // speed hack - don't adjust brightness if full brightness
+            #if !defined(ARDUINO_ARCH_ESP32P4)
             for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
               // set brightness all at once - seems slightly faster than scale8()?
               // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
@@ -961,10 +971,15 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
               packet_buffer[i+2] = (packet_buffer[i+2] * bri) >> 8; 
               if (isRGBW) packet_buffer[i+3] = (packet_buffer[i+3] * bri) >> 8; 
             }
-          }
+            #else
+            p4_mul16x16(packet_buffer+18, bright, 32);
+            #endif
+          } // end brightness speed hack
 
           bufferOffset += packetSize;
           
+          // std::fill_n(packet_buffer+18, 512, 0); // TEST HACK to stop lights being weird in the house :D
+
           if (!artnetudp.writeTo(packet_buffer,packetSize+18, client, ARTNET_DEFAULT_PORT)) {
             DEBUG_PRINTLN(F("Art-Net artnetudp.writeTo() returned an error"));
             return 1; // borked
