@@ -817,8 +817,11 @@ static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& start
   if (getPixel) rotate = baseAngle / 2; // rotate by half a ray width when reading pixel color
   for (int k = 0; k < 2; k++) // angular steps for two consecutive rays
   {
-    cosVal[k] = (cos16((i + k) * baseAngle + rotate) * Fixed_Scale) >> 15; // step per pixel in fixed point, cos16 output is -0x7FFF to +0x7FFF
-    sinVal[k] = (sin16((i + k) * baseAngle + rotate) * Fixed_Scale) >> 15; // using explicit bit shifts as dividing negative numbers is not equivalent (rounding error is acceptable)
+    int angle = i + k;
+    if (angle >= steps) angle = 0;
+    angle = angle * baseAngle + rotate;
+    cosVal[k] = (cos16(angle) * Fixed_Scale) >> 15; // step per pixel in fixed point, cos16 output is -0x7FFF to +0x7FFF
+    sinVal[k] = (sin16(angle) * Fixed_Scale) >> 15; // using explicit bit shifts as dividing negative numbers is not equivalent (rounding error is acceptable)
   }
   startx = (vW * Fixed_Scale) / 2; // + cosVal[0] / 4; // starting position = center + 1/4 pixel (in fixed point)
   starty = (vH * Fixed_Scale) / 2; // + sinVal[0] / 4;
@@ -1034,16 +1037,16 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
         uint16_t lineCoords[2][maxLineLength];    // uint16_t to save ram
         int lineLength[2] = {0};
 
-        static int prevRays[2] = {INT_MAX, INT_MAX};  // previous two ray numbers
-        int closestEdgeIdx = INT_MAX;  // index of the closest edge pixel
+        static int prevRays[2] = {INT_MAX, INT_MAX}; // previous two ray numbers
+        int closestEdgeIdx = INT_MAX; // index of the closest edge pixel
 
         for (int lineNr = 0; lineNr < 2; lineNr++) {
-          int x0 = startX; // x / y coordinates in fixed scale
+          int x0 = startX; // x, y coordinates in fixed scale
           int y0 = startY;
           int x1 = (startX + (cosVal[lineNr] << 9)); // outside of grid
           int y1 = (startY + (sinVal[lineNr] << 9)); // outside of grid
-          const int dx =  abs(x1-x0), sx = x0<x1 ? 1 : -1;  // x distance & step
-          const int dy = -abs(y1-y0), sy = y0<y1 ? 1 : -1;  // y distance & step
+          const int dx =  abs(x1-x0), sx = x0<x1 ? 1 : -1; // x distance & step
+          const int dy = -abs(y1-y0), sy = y0<y1 ? 1 : -1; // y distance & step
           uint16_t* coordinates = lineCoords[lineNr]; // 1D access is faster
           int* length = &lineLength[lineNr];          // faster access
           x0 /= Fixed_Scale; // convert to pixel coordinates
@@ -1084,7 +1087,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           }
         }
 
-        // draw and block-fill the line oordinates. Note: block filling only efficient if angle between lines is small
+        // draw and block-fill the line coordinates. Note: block filling only efficient if angle between lines is small
         closestEdgeIdx += 2;
         int max_i = getPinwheelLength(vW, vH) - 1;
         bool drawFirst = !(prevRays[0] == i - 1 || (i == 0 && prevRays[0] == max_i)); // draw first line if previous ray was not adjacent including wrap
@@ -1102,7 +1105,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(int i, uint32_t co
           bool alwaysDraw = (drawFirst && drawLast) || // No adjacent rays, draw all pixels
                             (idx > closestEdgeIdx)  || // Edge pixels on uneven lines are always drawn
                             (i == 0 && idx == 2)    || // Center pixel special case
-                            (i == prevRays[1]);         // Effect drawing twice in 1 frame
+                            (i == prevRays[1]);        // Effect drawing twice in 1 frame
           for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
               bool onLine1 = x == x1 && y == y1;
