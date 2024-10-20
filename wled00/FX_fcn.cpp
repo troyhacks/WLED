@@ -812,14 +812,12 @@ static int getPinwheelLength(int vW, int vH) {
 }
 static void setPinwheelParameters(int i, int vW, int vH, int& startx, int& starty, int* cosVal, int* sinVal, bool getPixel = false) {
   int steps = getPinwheelLength(vW, vH);
-  int baseAngle =  0xFFFF / steps; // 360° / steps, in 16 bit scale
+  int baseAngle = ((0xFFFF + steps / 2) / steps);  // 360° / steps, in 16 bit scale round to nearest integer
   int rotate = 0;
   if (getPixel) rotate = baseAngle / 2; // rotate by half a ray width when reading pixel color
   for (int k = 0; k < 2; k++) // angular steps for two consecutive rays
   {
-    int angle = i + k;
-    if (angle >= steps) angle = 0;
-    angle = angle * baseAngle + rotate;
+    int angle = (i + k) * baseAngle + rotate;
     cosVal[k] = (cos16(angle) * Fixed_Scale) >> 15; // step per pixel in fixed point, cos16 output is -0x7FFF to +0x7FFF
     sinVal[k] = (sin16(angle) * Fixed_Scale) >> 15; // using explicit bit shifts as dividing negative numbers is not equivalent (rounding error is acceptable)
   }
