@@ -773,7 +773,7 @@ static uint_fast16_t artnetlimiter  = millis()+(1000/ARTNET_FPS_LIMIT);
 
 #if defined(ARDUINO_ARCH_ESP32P4)
 extern "C" {
-  int p4_mul16x16(uint8_t* buffer, uint8_t* bright, uint16_t loops);
+  int p4_mul16x16(uint8_t* outpacket, uint8_t* brightness, uint16_t num_loops, uint8_t* pixelbuffer);
 }
 #endif
 
@@ -783,12 +783,9 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
 
   // For some reason, this is faster outside of the case block...
   //
-  static byte *packet_buffer = (byte *) ps_calloc(530, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
-  // static byte* packet_buffer = (byte*) heap_caps_aligned_calloc(16, 530, sizeof(byte), MALLOC_CAP_8BIT);
-  memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header.
-  static uint8_t bright[16];
-  if (bright[0] != bri) std::fill_n(bright, 16, bri); // seems no slower, and just cleaner code
-  
+  static byte *packet_buffer = (byte *) calloc(530, sizeof(byte)); // don't care if RGB or RGBW, assume enough (18 header+512 data) for both. calloc zeros.
+  if (packet_buffer[0] != 0x41) memcpy(packet_buffer, ART_NET_HEADER, 12); // copy in the Art-Net header if it isn't there already
+
   switch (type) {
     case 0: // DDP
     {
@@ -922,9 +919,8 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
       
       sequenceNumber++;
 
-      if (sequenceNumber == 0) sequenceNumber = 1; // just in case, as 0 is considered "Sequence not in use"
-      if (sequenceNumber > 255) sequenceNumber = 1;
-      
+      if (sequenceNumber == 0 || sequenceNumber > 255) sequenceNumber = 1;
+
       for (uint_fast16_t hardware_output = 0; hardware_output < sizeof(hardware_outputs)/sizeof(size_t); hardware_output++) {
         
         if (bufferOffset > length * (isRGBW?4:3)) {
@@ -958,11 +954,10 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           packet_buffer[16] = packetSize >> 8;
           packet_buffer[17] = packetSize;
 
-          // bulk copy the buffer range to the packet buffer after the header 
-          memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
-
           if (bri < 255) { // speed hack - don't adjust brightness if full brightness
             #if !defined(ARDUINO_ARCH_ESP32P4)
+            // bulk copy the buffer range to the packet buffer after the header 
+            memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
             for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
               // set brightness all at once - seems slightly faster than scale8()?
               // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
@@ -972,7 +967,7 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
               if (isRGBW) packet_buffer[i+3] = (packet_buffer[i+3] * bri) >> 8; 
             }
             #else
-            p4_mul16x16(packet_buffer+18, bright, 32);
+            p4_mul16x16(packet_buffer+18, &bri, (packetSize >> 4)+1, buffer+bufferOffset); // packetSize>>4 == packetSize/16
             #endif
           } // end brightness speed hack
 
