@@ -772,6 +772,32 @@ static const byte   ART_NET_HEADER[] PROGMEM = {0x41,0x72,0x74,0x2d,0x4e,0x65,0x
 static uint_fast16_t artnetlimiter  = millis()+(1000/ARTNET_FPS_LIMIT);
 
 #if defined(ARDUINO_ARCH_ESP32P4)
+asm (
+    ".text\n\t"
+    ".align 4\n\t"
+    ".global p4_mul16x16\n\t"
+    ".type p4_mul16x16,@function\n\t"
+    ".option arch, rv32imafc_zicsr_zifencei_xesppie\n\t"
+
+    "p4_mul16x16:\n\t"
+    "    esp.movx.r.cfg    t6\n\t"              // Enable aligned data access
+    "    or                t6, t6, 2\n\t"       // Enable aligned data access
+    "    esp.movx.w.cfg    t6\n\t"              // Enable aligned data access
+    "    li                t6, 8\n\t"           // put 8 in temp register 6
+    "    esp.movx.w.sar    t6\n\t"              // set the numbers of bits to right-shift from t6
+    "    esp.vldbc.8.ip    q1, a1, 0\n\t"       // load the 'B' value into q1 from a1, broadcasting the same value to all 16 values of q1
+    "    li                t1, 0\n\t"           // start our loop_num counter t1 at 0
+    "loop:\n\t"
+    "    beq             t1, a2, exit\n\t"      // branch to 'exit' if loop_num == num_loops
+    "    esp.vld.128.ip  q0, a3, 16\n\t"        // load 16 'A' values into q0 from a3, then move the pointer by 16 to get a new batch
+    "    esp.vmul.u8     q2, q0, q1\n\t"        // C = A*B (q2 = q0 * q1) then >> by esp.movx.w.sar which we set to 8
+    "    esp.vst.128.ip  q2, a0, 16\n\t"        // store the 16 'C' values into a0, then move the pointer by 16
+    "    addi            t1, t1, 1\n\t"         // increment loop_num counter t1
+    "    j               loop\n\t"              // jump to 'loop'
+    "exit:\n\t"
+    "    ret\n\t"                               // return
+);
+
 extern "C" {
   int p4_mul16x16(uint8_t* outpacket, uint8_t* brightness, uint16_t num_loops, uint8_t* pixelbuffer);
 }
@@ -954,22 +980,22 @@ uint8_t IRAM_ATTR realtimeBroadcast(uint8_t type, IPAddress client, uint16_t len
           packet_buffer[16] = packetSize >> 8;
           packet_buffer[17] = packetSize;
 
-          if (bri < 255) { // speed hack - don't adjust brightness if full brightness
-            #if !defined(ARDUINO_ARCH_ESP32P4)
-            // bulk copy the buffer range to the packet buffer after the header 
+          if (bri == 255) { // speed hack - don't adjust brightness if full brightness
             memcpy(packet_buffer+18, buffer+bufferOffset, packetSize);
-            for (uint_fast16_t i = 18; i < packetSize+18; i+=(isRGBW?4:3)) {
-              // set brightness all at once - seems slightly faster than scale8()?
-              // for some reason, doing 3/4 at a time is 200 micros faster than 1 at a time.
-              packet_buffer[i] = (packet_buffer[i] * bri) >> 8;
-              packet_buffer[i+1] = (packet_buffer[i+1] * bri) >> 8;
-              packet_buffer[i+2] = (packet_buffer[i+2] * bri) >> 8; 
-              if (isRGBW) packet_buffer[i+3] = (packet_buffer[i+3] * bri) >> 8; 
+          } else {
+            #if !defined(ARDUINO_ARCH_ESP32P4)
+            for (uint_fast16_t i = 0; i < packetSize; i+=(isRGBW?4:3)) {
+              // set brightness values in the packet - seems slightly faster than scale8()?
+              // for some reason, doing 3 (or 4) at a time is 200 micros faster than 1 at a time.
+              packet_buffer[i+18] = (buffer[bufferOffset+i] * bri) >> 8;
+              packet_buffer[i+19] = (buffer[bufferOffset+i+1] * bri) >> 8;
+              packet_buffer[i+20] = (buffer[bufferOffset+i+2] * bri) >> 8; 
+              if (isRGBW) packet_buffer[i+21] = (buffer[bufferOffset+i+3] * bri) >> 8; 
             }
             #else
             p4_mul16x16(packet_buffer+18, &bri, (packetSize >> 4)+1, buffer+bufferOffset); // packetSize>>4 == packetSize/16
             #endif
-          } // end brightness speed hack
+          }
 
           bufferOffset += packetSize;
           
