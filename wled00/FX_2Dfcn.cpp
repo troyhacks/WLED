@@ -1,25 +1,5 @@
 /*
   FX_2Dfcn.cpp contains all 2D utility functions
-
-  LICENSE
-  The MIT License (MIT)
-  Copyright (c) 2022  Blaz Kristan (https://blaz.at/home)
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so, subject to the following conditions:
-  The above copyright notice and this permission notice shall be included in
-  all copies or substantial portions of the Software.
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-  THE SOFTWARE.
-
   Parts of the code adapted from WLED Sound Reactive: Copyright (c) 2022 Andrew Tuline, Ewoud Wijma, Harm Aldick
 */
 #include "wled.h"
@@ -286,8 +266,9 @@ void Segment::startFrame(void) {
   _isValid2D  = isActive() && is2D();
   _brightness = currentBri(on ? opacity : 0);
   // if (reverse_y) _isSimpleSegment = false; // for A/B testing
-  _2dWidth    = is2D() ? calc_virtualWidth() : virtualLength();
+  _2dWidth    = is2D() ? calc_virtualWidth() : calc_virtualLength();
   _2dHeight   = calc_virtualHeight();
+  _virtuallength = calc_virtualLength();
   #if 0 && defined(WLED_ENABLE_HUB75MATRIX)
     _firstFill = true; // dirty HACK
   #endif
@@ -313,7 +294,7 @@ void IRAM_ATTR __attribute__((hot)) Segment::setPixelColorXY_fast(int x, int y, 
   }
 
 #if 0 // this is still a dangerous optimization
-  if ((i < UINT_MAX) && sameColor && (call > 0) && (!transitional) && (ledsrgb[i] == CRGB(scaled_col))) return; // WLEDMM looks like nothing to do
+  if ((i < UINT_MAX) && sameColor && (call > 0) && (!transitional)  && (mode != FX_MODE_2DSCROLLTEXT) && (ledsrgb[i] == CRGB(scaled_col))) return; // WLEDMM looks like nothing to do
 #endif
 
   // handle reverse and transpose
@@ -375,7 +356,7 @@ void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM:
   }
 
 #if 1 // this is a dangerous optimization
-  if ((i < UINT_MAX) && sameColor && (call > 0) && (!transitional) && (ledsrgb[i] == CRGB(col))) return; // WLEDMM looks like nothing to do
+  if ((i < UINT_MAX) && sameColor && (call > 0) && (!transitional) && (mode != FX_MODE_2DSCROLLTEXT) && (ledsrgb[i] == CRGB(col))) return; // WLEDMM looks like nothing to do
 #endif
 
   if (reverse  ) x = cols  - x - 1;
@@ -858,8 +839,8 @@ void Segment::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint3
 
 void Segment::drawArc(unsigned x0, unsigned y0, int radius, uint32_t color, uint32_t fillColor) {
   if (!isActive() || (radius <=0)) return; // not active
-  float minradius = float(radius) - .5;
-  float maxradius = float(radius) + .5;
+  float minradius = float(radius) - .5f;
+  float maxradius = float(radius) + .5f;
   // WLEDMM pre-calculate values to speed up the loop
   const int minradius2 = roundf(minradius * minradius);
   const int maxradius2 = roundf(maxradius * maxradius);
@@ -872,17 +853,18 @@ void Segment::drawArc(unsigned x0, unsigned y0, int radius, uint32_t color, uint
   const int starty = max(0, int(y0)-radius-1);
   const int endy = min(height, int(y0)+radius+1);
 
-  for (int x=startx; x<endx; x++) for (int y=starty; y<endy; y++) {
-    int newX2 = x - int(x0); newX2 *= newX2; // (distance from centerX) ^2
-    int newY2 = y - int(y0); newY2 *= newY2; // (distance from centerY) ^2
-    int distance2 = newX2 + newY2;
-
-    if ((distance2 >= minradius2) && (distance2 <= maxradius2)) {
-      setPixelColorXY(x, y, color);
-    } else {
-    if (fillColor != 0)
-      if (distance2 < minradius2)
-        setPixelColorXY(x, y, fillColor);
+  for (int x=startx; x<endx; x++) {
+    int newX2 = x - int(x0); newX2 *= newX2;   // (distance from centerX) ^2
+    for (int y=starty; y<endy; y++) {
+      int newY2 = y - int(y0); newY2 *= newY2; // (distance from centerY) ^2
+      int distance2 = newX2 + newY2;
+      if ((distance2 >= minradius2) && (distance2 <= maxradius2)) {
+        setPixelColorXY(x, y, color);
+      } else {
+      if (fillColor != 0)
+        if (distance2 < minradius2)
+          setPixelColorXY(x, y, fillColor);
+      }
     }
   }
 }

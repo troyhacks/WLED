@@ -3,31 +3,19 @@
   WS2812FX.cpp contains all effect methods
   Harm Aldick - 2016
   www.aldick.org
-  LICENSE
-  The MIT License (MIT)
-  Copyright (c) 2016  Harm Aldick
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so, subject to the following conditions:
-  The above copyright notice and this permission notice shall be included in
-  all copies or substantial portions of the Software.
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-  THE SOFTWARE.
-
   Modified heavily for WLED
 */
 
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"
+
+#ifdef WLEDMM_FASTPATH
+#undef SEGMENT
+#undef SEGENV
+#define SEGMENT (*strip._currentSeg) // saves us many calls to strip._segments[strip.getCurrSegmentId()]
+#define SEGENV SEGMENT
+#endif
 
 #define IBN 5100
 
@@ -5074,9 +5062,21 @@ uint16_t mode_2Ddna(void) {         // dna originally by by ldirko at https://pa
 
   SEGMENT.fadeToBlackBy(64);
 
+  // WLEDMM optimized to prevent holes at height > 32
+  int lastY1 = -1;
+  int lastY2 = -1;
   for (int i = 0; i < cols; i++) {
-    SEGMENT.setPixelColorXY(i, beatsin8(SEGMENT.speed/8, 0, rows-1, 0, i*4    ), ColorFromPalette(SEGPALETTE, i*5+strip.now/17, beatsin8(5, 55, 255, 0, i*10), LINEARBLEND));
-    SEGMENT.setPixelColorXY(i, beatsin8(SEGMENT.speed/8, 0, rows-1, 0, i*4+128), ColorFromPalette(SEGPALETTE, i*5+128+strip.now/17, beatsin8(5, 55, 255, 0, i*10+128), LINEARBLEND));
+    int posY1 = beatsin8(SEGMENT.speed/8, 0, rows-1, 0, i*4    );
+    int posY2 = beatsin8(SEGMENT.speed/8, 0, rows-1, 0, i*4+128);
+    if ((i==0) || ((abs(lastY1 - posY1) < 2) && (abs(lastY2 - posY2) < 2))) {   // use original code when no holes
+      SEGMENT.setPixelColorXY(i, posY1, ColorFromPalette(SEGPALETTE, i*5+strip.now/17, beatsin8(5, 55, 255, 0, i*10), LINEARBLEND));
+      SEGMENT.setPixelColorXY(i, posY2, ColorFromPalette(SEGPALETTE, i*5+128+strip.now/17, beatsin8(5, 55, 255, 0, i*10+128), LINEARBLEND));
+    } else {                                                                    // draw line to prevent holes
+      SEGMENT.drawLine(i-1, lastY1, i, posY1, ColorFromPalette(SEGPALETTE, i*5+strip.now/17, beatsin8(5, 55, 255, 0, i*10), LINEARBLEND));
+      SEGMENT.drawLine(i-1, lastY2, i, posY2, ColorFromPalette(SEGPALETTE, i*5+128+strip.now/17, beatsin8(5, 55, 255, 0, i*10+128), LINEARBLEND));
+    }
+    lastY1 = posY1;
+    lastY2 = posY2;
   }
   SEGMENT.blur(SEGMENT.intensity>>3);
 
@@ -5596,8 +5596,11 @@ uint16_t mode_2DJulia(void) {                           // An animated Julia set
     SEGMENT.intensity = 24;
   }
 
-  julias->xcen  = julias->xcen  + (float)(SEGMENT.custom1 - 128)/100000.f;
-  julias->ycen  = julias->ycen  + (float)(SEGMENT.custom2 - 128)/100000.f;
+  // WLEDMM limit drift, so we don't move away into nothing
+  constexpr float maxCenter = 2.5f; // just an educated guess
+  if (fabsf(julias->xcen) < maxCenter) julias->xcen  = julias->xcen  + (float)(SEGMENT.custom1 - 128)/100000.f;
+  if (fabsf(julias->ycen) < maxCenter) julias->ycen  = julias->ycen  + (float)(SEGMENT.custom2 - 128)/100000.f;
+
   julias->xymag = julias->xymag + (float)((SEGMENT.custom3 - 16)<<3)/100000.f; // reduced resolution slider
   if (julias->xymag < 0.01f) julias->xymag = 0.01f;
   if (julias->xymag > 1.0f) julias->xymag = 1.0f;
@@ -5669,11 +5672,23 @@ uint16_t mode_2DJulia(void) {                           // An animated Julia set
     }
     y += dy;
   }
-//  SEGMENT.blur(64);
+
+  // WLEDMM
+  if(SEGMENT.check1)
+    SEGMENT.blurRows(48, false); // slight blurr
+  if(SEGMENT.check2)
+    SEGMENT.blur(64, true);      // strong blurr
+  if(SEGMENT.check3) {           // draw crosshair
+    int screenX = lround((0.5f / maxCenter) * (julias->xcen + maxCenter) * float(cols));
+    int screenY = lround((0.5f / maxCenter) * (julias->ycen + maxCenter) * float(rows));
+    int hair = min(min(cols-1, rows-1)/2, 3);
+    SEGMENT.drawLine(screenX, screenY-hair, screenX, screenY+hair, GREEN, true);
+    SEGMENT.drawLine(screenX-hair, screenY, screenX+hair, screenY, GREEN, true);
+  }
 
   return FRAMETIME;
 } // mode_2DJulia()
-static const char _data_FX_MODE_2DJULIA[] PROGMEM = "Julia@,Max iterations per pixel,X center,Y center,Area size;!;!;2;ix=24,c1=128,c2=128,c3=16";
+static const char _data_FX_MODE_2DJULIA[] PROGMEM = "Julia@,Max iterations per pixel,X center,Y center,Area size,Soft Blur,Strong Blur,Show Center;!;!;2;ix=24,c1=128,c2=128,c3=16";
 
 
 //////////////////////////////
@@ -6535,6 +6550,23 @@ uint16_t mode_2Dscrollingtext(void) {
   unsigned maxLen = (SEGMENT.name) ? min(32, (int)strlen(SEGMENT.name)) : 0;  // WLEDMM make it robust against too long segment names
   if (SEGMENT.name) for (size_t i=0,j=0; i<maxLen; i++) if (SEGMENT.name[i]>31 && SEGMENT.name[i]<128) text[j++] = SEGMENT.name[i];
   const bool zero = strchr(text, '0') != nullptr;
+
+  // #ERR = show last error code
+  if ((strlen(text) > 3) && (strncmp_P(text,PSTR("#ERR"),4) == 0)) {
+    // read wled error code, and keep it for 30sec max
+    static byte lastErr = ERR_NONE;        // errorFlag cache - we can use a static (global) variable here because the error code is global, too
+    static unsigned long lastErrTime = 0;  // time when lastErr was updated
+    if ((errorFlag != ERR_NONE) && (lastErr != errorFlag)) { // new error code arrived
+      lastErr = errorFlag;
+      lastErrTime = millis();
+    }
+    bool haveError = (lastErr != ERR_NONE) && (millis() - lastErrTime < 30000);   // true if we have an "active" error code
+    if (SEGENV.call < 512) haveError = true;                                      // for testing - initially show "E00"
+    if ((!haveError) && (errorFlag == ERR_NONE)) lastErr = ERR_NONE;              // reset error code
+    // print error number
+    if (haveError) sprintf_P(text, PSTR("E%-2.2d"), (int)lastErr);
+    else sprintf_P(text, PSTR("   "));
+  }
 
   if (!strlen(text) || !strncmp_P(text,PSTR("#F"),2) || !strncmp_P(text,PSTR("#P"),2) || !strncmp_P(text,PSTR("#A"),2) || !strncmp_P(text,PSTR("#DATE"),5) || !strncmp_P(text,PSTR("#DDMM"),5) || !strncmp_P(text,PSTR("#MMDD"),5) || !strncmp_P(text,PSTR("#TIME"),5) || !strncmp_P(text,PSTR("#HH"),3) || !strncmp_P(text,PSTR("#MM"),3)) { // fallback if empty segment name: display date and time
     char sec[5]= {'\0'};
@@ -8410,7 +8442,7 @@ uint16_t mode_2Doctopus() {
     const uint8_t C_Y = rows / 2 + (SEGMENT.custom2 - 128)*rows/255;
     for (int x = xStart; x < xEnd; x++) {
       for (int y = yStart; y < yEnd; y++) {
-        rMap[XY(x, y)].angle = 40.7436f * atan2f(y - C_Y, x - C_X); // avoid 128*atan2()/PI
+        rMap[XY(x, y)].angle  = int(40.7436f * atan2f((y - C_Y), (x - C_X)));  // avoid 128*atan2()/PI
         rMap[XY(x, y)].radius = hypotf(x - C_X, y - C_Y) * mapp; //thanks Sutaburosu
       }
     }
@@ -8463,16 +8495,7 @@ static const char _data_FX_MODE_2DWAVINGCELL[] PROGMEM = "Waving Cell@!,,Amplitu
    @repo      https://github.com/MoonModules/WLED, submit changes to this file as PRs to MoonModules/WLED
    @Authors   https://github.com/MoonModules/WLED/commits/mdev/
    @Copyright © 2024 Github MoonModules Commit Authors (contact moonmodules@icloud.com for details)
-   @license   GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
-
-     This function is part of the MoonModules WLED fork also known as "WLED-MM".
-     WLED-MM is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License 
-     as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
-     WLED-MM is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
-     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-     
-     You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
+   @license   Licensed under the EUPL-1.2 or later
 */
 
 /////////////////////////

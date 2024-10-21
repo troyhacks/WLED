@@ -2,24 +2,6 @@
   WS2812FX.h - Library for WS2812 LED effects.
   Harm Aldick - 2016
   www.aldick.org
-  LICENSE
-  The MIT License (MIT)
-  Copyright (c) 2016  Harm Aldick
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so, subject to the following conditions:
-  The above copyright notice and this permission notice shall be included in
-  all copies or substantial portions of the Software.
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-  THE SOFTWARE.
 
   Modified for WLED
 */
@@ -446,6 +428,7 @@ typedef struct Segment {
     bool _firstFill = true;  // dirty HACK support
     uint16_t _2dWidth = 0;  // virtualWidth
     uint16_t _2dHeight = 0; // virtualHeight
+    uint16_t _virtuallength = 0; // virtualLength
 
     void setPixelColorXY_slow(int x, int y, uint32_t c); // set relative pixel within segment with color - full slow version
 #else
@@ -637,7 +620,12 @@ typedef struct Segment {
     void     setCurrentPalette(void);
 
     // 1D strip
-    uint16_t virtualLength(void) const;
+    uint16_t calc_virtualLength(void) const;
+#ifndef WLEDMM_FASTPATH
+    inline uint16_t virtualLength(void) const {return calc_virtualLength();}
+#else
+    inline uint16_t virtualLength(void) const {return _virtuallength;}
+#endif
     void setPixelColor(int n, uint32_t c); // set relative pixel within segment with color
     inline void setPixelColor(int n, byte r, byte g, byte b, byte w = 0) { setPixelColor(n, RGBW32(r,g,b,w)); } // automatically inline
     inline void setPixelColor(int n, CRGB c)                             { setPixelColor(n, RGBW32(c.r,c.g,c.b,0)); } // automatically inline
@@ -678,12 +666,14 @@ typedef struct Segment {
       if (mirror) vWidth = (vWidth + 1) /2;  // divide by 2 if mirror, leave at least a single LED
       return vWidth;
     }
+    inline uint16_t calc_virtualWidth() const { return virtualWidth();}
     inline uint16_t virtualHeight() const {  // WLEDMM use fast types, and make function inline
       uint_fast16_t groupLen = groupLength();
       uint_fast16_t vHeight = ((transpose ? width() : height()) + groupLen - 1) / groupLen;
       if (mirror_y) vHeight = (vHeight + 1) /2;  // divide by 2 if mirror, leave at least a single LED
       return vHeight;
     }
+    inline uint16_t calc_virtualHeight() const { return virtualHeight();}
 #else
     inline uint16_t virtualWidth() const  { return(_2dWidth);}  // WLEDMM get pre-calculated virtualWidth
     inline uint16_t virtualHeight() const { return(_2dHeight);} // WLEDMM get pre-calculated virtualHeight
@@ -1066,6 +1056,9 @@ class WS2812FX {  // 96 bytes
     // and color transitions
     uint32_t _colors_t[3]; // color used for effect (includes transition)
     uint16_t _virtualSegmentLength;
+#ifdef WLEDMM_FASTPATH
+    segment* _currentSeg = nullptr;  // WLEDMM speed up SEGMENT access
+#endif
 
     std::vector<segment> _segments;
     friend class Segment;

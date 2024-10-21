@@ -6,16 +6,7 @@
    @repo      https://github.com/MoonModules/WLED, submit changes to this file as PRs to MoonModules/WLED
    @Authors   https://github.com/MoonModules/WLED/commits/mdev/
    @Copyright © 2024 Github MoonModules Commit Authors (contact moonmodules@icloud.com for details)
-   @license   GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
-
-     This file is part of the MoonModules WLED fork also known as "WLED-MM".
-     WLED-MM is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License 
-     as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
-     WLED-MM is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
-     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-     
-     You should have received a copy of the GNU General Public License along with WLED-MM. If not, see <https://www.gnu.org/licenses/>.
+   @license   Licensed under the EUPL-1.2 or later
 
 */
 
@@ -37,7 +28,8 @@
 #define SRate_t int
 #endif
 
-constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change ! I2S_NUM_1 possible but this has limitation -> no MCLK routing, no ADC support)
+constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change!  I2S_NUM_1 possible but this has 
+                                                    // strong limitations -> no MCLK routing, no ADC support, no PDM support
 
 //#include <driver/i2s_std.h>
 //#include <driver/i2s_pdm.h>
@@ -72,6 +64,11 @@ constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not c
 
 // data type requested from the I2S driver - currently we always use 32bit
 //#define I2S_USE_16BIT_SAMPLES   // (experimental) define this to request 16bit - more efficient but possibly less compatible
+
+#if defined(WLED_ENABLE_HUB75MATRIX) && defined(CONFIG_IDF_TARGET_ESP32)
+  // this is bitter, but necessary to survive
+  #define I2S_USE_16BIT_SAMPLES
+#endif
 
 #ifdef I2S_USE_16BIT_SAMPLES
 #define I2S_SAMPLE_RESOLUTION I2S_BITS_PER_SAMPLE_16BIT
@@ -300,6 +297,9 @@ class I2SSource : public AudioSource {
       #endif
       #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
       if (ESP.getChipRevision() == 0) _config.use_apll = false; // APLL is broken on ESP32 revision 0
+      #endif
+      #if defined(WLED_ENABLE_HUB75MATRIX)
+        _config.use_apll = false; // APLL needed for HUB75 DMA driver ?
       #endif
 #endif
 
