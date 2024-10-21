@@ -281,7 +281,7 @@ void IRAM_ATTR __attribute__((hot)) Segment::setPixelColorXY_fast(int x, int y, 
     else ledsrgb[i] = fastled_col;
   }
 
-#if 0 // this is still a dangerous optimization
+#if 1 // this is still a dangerous optimization
   if ((i < UINT_MAX) && sameColor && (call > 0) && (!transitional) && (ledsrgb[i] == CRGB(scaled_col))) return; // WLEDMM looks like nothing to do
 #endif
 
