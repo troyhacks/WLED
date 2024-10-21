@@ -1,3 +1,4 @@
+#if defined(ARDUINO_ARCH_ESP32P4)
 .text
 .align 4
 .global p4_mul16x16
@@ -27,3 +28,4 @@ p4_mul16x16:
     j               loop            # jump to "loop"
   exit:                             # "exit" label
     ret                             # return
+#endif
