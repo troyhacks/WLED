@@ -20,9 +20,9 @@ p4_mul16x16:
     esp.vmul.u8     q2, q0, q1      # C = A*B (q2 = q0 * q1) then >> by esp.movx.w.sar which we set to 8
     esp.vst.128.ip  q2, a0, 16      # store the 16 "C" values into a0, then move the pointer by 16
     j               end_skip        # jump to "end_skip"
-    skip:                           # "skip" label
+  skip:                             # "skip" label
     esp.vst.128.ip  q0, a0, 16      # just store q0 (from a3) to a0
-    end_skip:                       # "end_skip" label
+  end_skip:                         # "end_skip" label
     addi            t1, t1, 1       # increment loop_num counter t1
     j               loop            # jump to "loop"
   exit:                             # "exit" label
