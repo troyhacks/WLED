@@ -329,12 +329,14 @@ uint32_t IRAM_ATTR_YN colorBalanceFromKelvin(uint16_t kelvin, uint32_t rgb)  // 
   //remember so that slow colorKtoRGB() doesn't have to run for every setPixelColor()
   static byte correctionRGB[4] = {0,0,0,0};
   static uint16_t lastKelvin = 0;
-  if (lastKelvin != kelvin) colorKtoRGB(kelvin, correctionRGB);  // convert Kelvin to RGB
-  lastKelvin = kelvin;
+  if (lastKelvin != kelvin) {
+    colorKtoRGB(kelvin, correctionRGB);  // convert Kelvin to RGB
+    lastKelvin = kelvin;
+  }
   byte rgbw[4];
-  rgbw[0] = ((uint16_t) correctionRGB[0] * R(rgb)) /255; // correct R
-  rgbw[1] = ((uint16_t) correctionRGB[1] * G(rgb)) /255; // correct G
-  rgbw[2] = ((uint16_t) correctionRGB[2] * B(rgb)) /255; // correct B
+  rgbw[0] = ((uint16_t) correctionRGB[0] * R(rgb)) >> 8; // correct R
+  rgbw[1] = ((uint16_t) correctionRGB[1] * G(rgb)) >> 8; // correct G
+  rgbw[2] = ((uint16_t) correctionRGB[2] * B(rgb)) >> 8; // correct B
   rgbw[3] =                                W(rgb);
   return RGBW32(rgbw[0],rgbw[1],rgbw[2],rgbw[3]);
 }
