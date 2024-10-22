@@ -1251,10 +1251,20 @@ uint32_t __attribute__((hot)) Segment::getPixelColor(int i) const
           return vW>vH ? getPixelColorXY(i, 0) : getPixelColorXY(0, i); // Corner and Arc
           break;
         }
-        int length = virtualLength();
-        int x = i * vW / length;
-        int y = i * vH / length;
-        return getPixelColorXY(x, y); // Not 100% accurate
+        float minradius = float(i) - 0.1f;
+        const int minradius2 = roundf(minradius * minradius);
+        int startX, startY;
+        if (vW >= vH) {startX = vW - 1; startY = 1;} // Last Column
+        else          {startX = 1; startY = vH - 1;} // Last Row
+        // Loop through only last row/column depending on orientation
+        for (int x = startX; x < vW; x++) {
+          int newX2 = x * x;
+          for (int y = startY; y < vH; y++) {
+            int newY2 = y * y;
+            if (newX2 + newY2 >= minradius2) return getPixelColorXY(x, y);        
+          }
+        }
+        return getPixelColorXY(vW-1, vH-1); // Last pixel
         break;
       }
       case M12_jMap: //WLEDMM jMap
