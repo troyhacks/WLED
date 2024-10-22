@@ -482,7 +482,7 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   // #else
   // _data = (byte*) calloc((bc.count * _UDPchannels)+15, sizeof(byte));
   // #endif
-  _data = (byte*) heap_caps_calloc_prefer((bc.count * _UDPchannels)+15, sizeof(byte), 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_DEFAULT);
+  _data = (byte*) heap_caps_calloc_prefer((bc.count * _UDPchannels)+15, sizeof(byte), 3, MALLOC_CAP_IRAM_8BIT, MALLOC_CAP_DEFAULT, MALLOC_CAP_SPIRAM);
 
   if (_data == nullptr) return;
   _len = bc.count;
