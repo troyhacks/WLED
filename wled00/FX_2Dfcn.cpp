@@ -891,7 +891,7 @@ bool Segment::jsonToPixels(char * name, uint8_t fileNr) {
 
 // draws a raster font character on canvas
 // only supports: 4x6=24, 5x8=40, 5x12=60, 6x8=48 and 7x9=63 fonts ATM
-void Segment::drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, uint8_t h, uint32_t color, uint32_t col2) {
+void Segment::drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, uint8_t h, uint32_t color, uint32_t col2, bool drawShadow) {
   if (!isActive()) return; // not active
   if (chr < 32 || chr > 126) return; // only ASCII 32-126 supported
   chr -= 32; // align with font table entries
@@ -900,7 +900,8 @@ void Segment::drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, 
   const int font = w*h;
 
   CRGB col = CRGB(color);
-  CRGBPalette16 grad = CRGBPalette16(col, col2 ? CRGB(col2) : col);
+  CRGBPalette16 grad = CRGBPalette16(col, (col2 != BLACK) ? CRGB(col2) : col);
+  uint32_t bgCol = SEGCOLOR(1);
 
   //if (w<5 || w>6 || h!=8) return;
   for (int i = 0; i<h; i++) { // character height
@@ -908,12 +909,23 @@ void Segment::drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, 
     if (y0 < 0) continue; // drawing off-screen
     if (y0 >= rows) break; // drawing off-screen
     uint8_t bits = 0;
+    uint8_t bits_up = 0; // WLEDMM this is the previous line: font[(chr * h) + i -1]
     switch (font) {
-      case 24: bits = pgm_read_byte_near(&console_font_4x6[(chr * h) + i]); break;  // 5x8 font
-      case 40: bits = pgm_read_byte_near(&console_font_5x8[(chr * h) + i]); break;  // 5x8 font
-      case 48: bits = pgm_read_byte_near(&console_font_6x8[(chr * h) + i]); break;  // 6x8 font
-      case 63: bits = pgm_read_byte_near(&console_font_7x9[(chr * h) + i]); break;  // 7x9 font
-      case 60: bits = pgm_read_byte_near(&console_font_5x12[(chr * h) + i]); break; // 5x12 font
+      case 24: bits = pgm_read_byte_near(&console_font_4x6[(chr * h) + i]);
+        if ((i>0) && drawShadow) bits_up = pgm_read_byte_near(&console_font_4x6[(chr * h) + i -1]);
+        break;  // 5x8 font
+      case 40: bits = pgm_read_byte_near(&console_font_5x8[(chr * h) + i]); 
+        if ((i>0) && drawShadow) bits_up = pgm_read_byte_near(&console_font_5x8[(chr * h) + i -1]);
+        break;  // 5x8 font
+      case 48: bits = pgm_read_byte_near(&console_font_6x8[(chr * h) + i]); 
+        if ((i>0) && drawShadow) bits_up = pgm_read_byte_near(&console_font_6x8[(chr * h) + i -1]);
+        break;  // 6x8 font
+      case 63: bits = pgm_read_byte_near(&console_font_7x9[(chr * h) + i]); 
+        if ((i>0) && drawShadow) bits_up = pgm_read_byte_near(&console_font_7x9[(chr * h) + i -1]);
+        break;  // 7x9 font
+      case 60: bits = pgm_read_byte_near(&console_font_5x12[(chr * h) + i]); 
+        if ((i>0) && drawShadow) bits_up = pgm_read_byte_near(&console_font_5x12[(chr * h) + i -1]);
+        break; // 5x12 font
       default: return;
     }
     if (col2 != BLACK) col = ColorFromPalette(grad, (i+1)*255/h, 255, NOBLEND);
