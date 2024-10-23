@@ -916,11 +916,22 @@ void Segment::drawCharacter(unsigned char chr, int16_t x, int16_t y, uint8_t w, 
       case 60: bits = pgm_read_byte_near(&console_font_5x12[(chr * h) + i]); break; // 5x12 font
       default: return;
     }
-    col = ColorFromPalette(grad, (i+1)*255/h, 255, NOBLEND);
+    if (col2 != BLACK) col = ColorFromPalette(grad, (i+1)*255/h, 255, NOBLEND);
+    uint32_t fgCol = uint32_t(col) & 0x00FFFFFF; // WLEDMM cache color value
+
     for (int j = 0; j<w; j++) { // character width
       int16_t x0 = x + (w-1) - j;
-      if ((x0 >= 0 || x0 < cols) && ((bits>>(j+(8-w))) & 0x01)) { // bit set & drawing on-screen
-        setPixelColorXY(x0, y0, col);
+      if ((x0 >= 0) || (x0 < cols)) {
+        if ((bits>>(j+(8-w))) & 0x01) { // bit set & drawing on-screen
+        setPixelColorXY(x0, y0, fgCol);
+        } else {
+          if (drawShadow) {
+			// WLEDMM
+            if ((j < (w-1)) && (bits>>(j+(8-w) +1)) & 0x01) setPixelColorXY(x0, y0, bgCol); // blank when pixel to the right is set
+            else if ((j > 0) && (bits>>(j+(8-w) -1)) & 0x01) setPixelColorXY(x0, y0, bgCol);// blank when pixel to the left is set
+            else if ((bits_up>>(j+(8-w))) & 0x01) setPixelColorXY(x0, y0, bgCol);           // blank when pixel above is set
+          }
+        }
       }
     }
   }
