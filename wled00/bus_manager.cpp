@@ -1259,6 +1259,7 @@ int BusManager::add(BusConfig &bc) {
   lastBus = nullptr;
   laststart = 0;
   lastend = 0;
+  slowMode = false;
   return numBusses++;
 }
 
@@ -1277,6 +1278,7 @@ void BusManager::removeAll() {
   lastBus = nullptr;
   laststart = 0;
   lastend = 0;
+  slowMode = false;
 }
 
 void __attribute__((hot)) BusManager::show() {
@@ -1296,7 +1298,7 @@ void BusManager::setStatusPixel(uint32_t c) {
 }
 
 void IRAM_ATTR __attribute__((hot)) BusManager::setPixelColor(uint16_t pix, uint32_t c, int16_t cct) {
-  if ((pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
+  if ( !slowMode && (pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
     // WLEDMM same bus as last time - no need to search again
     lastBus->setPixelColor(pix - laststart, c);
     return;
@@ -1307,10 +1309,12 @@ void IRAM_ATTR __attribute__((hot)) BusManager::setPixelColor(uint16_t pix, uint
     uint_fast16_t bstart = b->getStart();
     if (pix < bstart || pix >= bstart + b->getLength()) continue;
     else {
-      // WLEDMM remember last Bus we took
-      lastBus = b;
-      laststart = bstart; 
-      lastend = bstart + b->getLength();
+      if (!slowMode) {
+        // WLEDMM remember last Bus we took
+        lastBus = b;
+        laststart = bstart; 
+        lastend = bstart + b->getLength();
+      }
       b->setPixelColor(pix - bstart, c);
       break; // WLEDMM found the right Bus -> so we can stop searching
     }
@@ -1333,7 +1337,7 @@ void __attribute__((cold)) BusManager::setSegmentCCT(int16_t cct, bool allowWBCo
 }
 
 uint32_t IRAM_ATTR  __attribute__((hot)) BusManager::getPixelColor(uint_fast16_t pix) {     // WLEDMM use fast native types, IRAM_ATTR
-  if ((pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
+  if ( !slowMode && (pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
     // WLEDMM same bus as last time - no need to search again
     return lastBus->getPixelColor(pix - laststart);
   }
@@ -1343,10 +1347,12 @@ uint32_t IRAM_ATTR  __attribute__((hot)) BusManager::getPixelColor(uint_fast16_t
     uint_fast16_t bstart = b->getStart();
     if (pix < bstart || pix >= bstart + b->getLength()) continue;
     else {
-      // WLEDMM remember last Bus we took
-      lastBus = b;
-      laststart = bstart; 
-      lastend = bstart + b->getLength();
+      if (!slowMode) {
+        // WLEDMM remember last Bus we took
+        lastBus = b;
+        laststart = bstart; 
+        lastend = bstart + b->getLength();
+      }
       return b->getPixelColor(pix - bstart);
     }
   }
@@ -1354,7 +1360,7 @@ uint32_t IRAM_ATTR  __attribute__((hot)) BusManager::getPixelColor(uint_fast16_t
 }
 
 uint32_t IRAM_ATTR  __attribute__((hot)) BusManager::getPixelColorRestored(uint_fast16_t pix) {     // WLEDMM uses bus::getPixelColorRestored()
-  if ((pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
+  if ( !slowMode && (pix >= laststart) && (pix < lastend ) && (lastBus != nullptr)) {
     // WLEDMM same bus as last time - no need to search again
     return lastBus->getPixelColorRestored(pix - laststart);
   }
@@ -1364,10 +1370,12 @@ uint32_t IRAM_ATTR  __attribute__((hot)) BusManager::getPixelColorRestored(uint_
     uint_fast16_t bstart = b->getStart();
     if (pix < bstart || pix >= bstart + b->getLength()) continue;
     else {
-      // WLEDMM remember last Bus we took
-      lastBus = b;
-      laststart = bstart; 
-      lastend = bstart + b->getLength();
+      if (!slowMode) {
+        // WLEDMM remember last Bus we took
+        lastBus = b;
+        laststart = bstart; 
+        lastend = bstart + b->getLength();
+      }
       return b->getPixelColorRestored(pix - bstart);
     }
   }

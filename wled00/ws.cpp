@@ -268,6 +268,7 @@ static bool sendLiveLedsWs(uint32_t wsClient)  // WLEDMM added "static"
     uint32_t c = restoreColorLossy(strip.getPixelColor(i), stripBrightness); // WLEDMM full bright preview - does _not_ recover ABL reductions
     #endif
     //uint32_t c = strip.getPixelColorRestored(i);
+    
     // WLEDMM begin: preview with color gamma correction
     if (gammaCorrectPreview) {
       uint8_t w = W(c);  // not sure why, but it looks better if using "white" without corrections
