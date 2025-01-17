@@ -484,9 +484,6 @@ void WLED::setup()
   #else // "standard" serial-to-USB chip
   if (Serial) Serial.setTimeout(50);  // WLEDMM - only when serial is initialized
   #endif
-  #else  // 8266
-  if (Serial) Serial.setTimeout(50);  // WLEDMM - only when serial is initialized
-  #endif
 
   //Serial0.setDebugOutput(false);
   #if CORE_DEBUG_LEVEL || defined(WLED_DEBUG_HEAP) || defined(WLED_DEBUG)
