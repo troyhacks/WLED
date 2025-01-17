@@ -449,18 +449,22 @@ void WLED::setup()
   delay(WLED_BOOTUPDELAY); // delay to let voltage stabilize, helps with boot issues on some setups
   #endif
   Serial.begin(115200);
-  #ifndef WLED_NO_SERIAL_WAIT
+#if !defined(WLEDMM_NO_SERIAL_WAIT) || defined(WLED_DEBUG)
   if (!Serial) delay(1000); // WLEDMM make sure that Serial has initalized
+#else
+  if (!Serial) delay(300);  // just a tiny wait to avoid problems later when acessing serial
+#endif
 
   #ifdef ARDUINO_ARCH_ESP32
   #if defined(WLED_DEBUG) && (defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) || ARDUINO_USB_CDC_ON_BOOT)
-  if (!Serial) delay(2500);  // WLEDMM allow CDC USB serial to initialise
+  if (!Serial) delay(2500);  // WLEDMM allow CDC USB serial to initialise (WLED_DEBUG only)
   #endif
   #if ARDUINO_USB_CDC_ON_BOOT || ARDUINO_USB_MODE
     #if ARDUINO_USB_CDC_ON_BOOT && (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6))
     //  WLEDMM avoid "hung devices" when USB_CDC is enabled; see https://github.com/espressif/arduino-esp32/issues/9043
     Serial.setTxTimeoutMs(0);    // potential side-effect: incomplete debug output, with missing characters whenever TX buffer is full.
     #endif
+#if !defined(WLEDMM_NO_SERIAL_WAIT) || defined(WLED_DEBUG)
   if (!Serial) delay(2500);  // WLEDMM: always allow CDC USB serial to initialise
   if (Serial) Serial.println("wait 1");  // waiting a bit longer ensures that a  debug messages are shown in serial monitor
   if (!Serial) delay(2500);
@@ -468,6 +472,8 @@ void WLED::setup()
   if (!Serial) delay(2500);
   #endif
   if (Serial) Serial.flush(); // WLEDMM
+#endif
+
   //Serial.setTimeout(350); // WLEDMM: don't change timeout, as it causes crashes later
   // WLEDMM: redirect debug output to HWCDC
   #if ARDUINO_USB_CDC_ON_BOOT && (defined(WLED_DEBUG) || defined(SR_DEBUG))
@@ -519,6 +525,7 @@ void WLED::setup()
   USER_PRINT(F(", ")); USER_PRINT(ESP.getCpuFreqMHz()); USER_PRINTLN(F("MHz."));
 
   // WLEDMM begin
+  delay(20); USER_FLUSH(); // drain serial output buffers
   USER_PRINT(F("CPU    "));
   esp_reset_reason_t resetReason = getRestartReason();
   USER_PRINT(restartCode2InfoLong(resetReason));
@@ -627,7 +634,8 @@ void WLED::setup()
   #endif
 
 #if defined(ARDUINO_ARCH_ESP32)
-  if (strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) { // WLEDMM detect pico board at runtime
+  if ((strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) || (strncmp("ESP32-U4WDH", ESP.getChipModel(), 11) == 0))
+  { // WLEDMM detect pico board and esp32-mini1 board at runtime
     // special handling for PICO-D4: gpio16+17 are in use for onboard SPI FLASH (not PSRAM)
     managed_pin_type pins[] = { {16, true}, {17, true} };
     pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
@@ -889,9 +897,10 @@ void WLED::setup()
 void WLED::beginStrip()
 {
   // Initialize NeoPixel Strip and button
+  strip.fill(BLACK);    // WLEDMM avoids random colors at power-on
   strip.finalizeInit(); // busses created during deserializeConfig()
   strip.makeAutoSegments();
-  strip.setBrightness(0);
+  strip.setBrightness(0, true); // WLEDMM directly apply BLACK (no transition time)
   strip.setShowCallback(handleOverlayDraw);
 
   if (turnOnAtBoot) {
@@ -909,8 +918,13 @@ void WLED::beginStrip()
   colorUpdated(CALL_MODE_INIT);
 
   // init relay pin
-  if (rlyPin>=0)
+  if (rlyPin>=0) {
+    if (strip.isUpdating()) delay(FRAMETIME_FIXED); // WLEDMM ensure that no background led communication is happening while powering on the strip
     digitalWrite(rlyPin, (rlyMde ? bri : !bri));
+    delay(75); // wait for relay to switch and power to stabilize
+    strip.show(); // update LEDs
+    delay(5);
+  }
 }
 
 void WLED::initAP(bool resetAP)

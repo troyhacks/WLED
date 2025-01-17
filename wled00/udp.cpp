@@ -201,6 +201,8 @@ void realtimeLock(uint32_t timeoutMs, byte md)
   if (realtimeOverride) return;
   if (arlsForceMaxBri) strip.setBrightness(scaledBri(255), true);
   if (briT > 0 && md == REALTIME_MODE_GENERIC) strip.show();
+
+  if (realtimeMode && !realtimeOverride && useMainSegmentOnly) strip.getMainSegment().startFrame(); // WLEDMM make sure the main segment is ready for drawing
 }
 
 void exitRealtime() {
@@ -877,7 +879,7 @@ uint8_t IRAM_ATTR_YN realtimeBroadcast(uint8_t type, IPAddress client, uint16_t 
         if (ArtNetSkipFrame) {
           return 0; // Let WLED keep generating effect frames and we output an Art-Net frame when fps_limit is reached.
         } else {
-          delayMicroseconds(10); // Make WLED obey fps_limit and just delay here until we're ready to send a frame.
+          delayMicroseconds(100); // Make WLED obey fps_limit and just delay here until we're ready to send a frame.
         }
       }
 

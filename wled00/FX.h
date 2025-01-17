@@ -607,12 +607,18 @@ typedef struct Segment {
     // transition functions
     void     startTransition(uint16_t dur); // transition has to start before actual segment values change
     void     handleTransition(void);
-    uint16_t progress(void) const; //transition progression between 0-65535
+    // transition progression between 0-65535
+    [[gnu::hot]] inline uint16_t progress() const {
+      if (!transitional || !_t) return 0xFFFFU;
+      unsigned long timeNow = millis();
+      if (timeNow - _t->_start > _t->_dur || _t->_dur == 0) return 0xFFFFU;
+      return (timeNow - _t->_start) * 0xFFFFU / _t->_dur;
+    }
 
     // WLEDMM method inlined for speed (its called at each setPixelColor)
-    inline uint8_t  currentBri(uint8_t briNew, bool useCct = false) {
-      uint32_t prog = (transitional && _t) ? progress() : 0xFFFFU;
-      if (transitional && _t && prog < 0xFFFFU) {
+    [[gnu::hot]] inline uint8_t currentBri(uint8_t briNew, bool useCct = false) {
+      uint32_t prog = progress();
+      if (prog < 0xFFFFU) {  // progress() < 0xFFFFU implies that _t is valid (see progress() function)
         if (useCct) return ((briNew * prog) + _t->_cctT * (0xFFFFU - prog)) >> 16;
         else        return ((briNew * prog) + _t->_briT * (0xFFFFU - prog)) >> 16;
       } else {
@@ -703,7 +709,7 @@ typedef struct Segment {
     void deletejMap(); //WLEDMM jMap
   
   #ifndef WLED_DISABLE_2D
-    inline uint16_t XY(uint_fast16_t x, uint_fast16_t y)  const  { // support function to get relative index within segment (for leds[]) // WLEDMM inline for speed
+    [[gnu::hot]] inline uint16_t XY(uint_fast16_t x, uint_fast16_t y)  const  { // support function to get relative index within segment (for leds[]) // WLEDMM inline for speed
       uint_fast16_t width  = max(uint16_t(1), virtualWidth());   // segment width in logical pixels  -- softhack007 avoid div/0
       uint_fast16_t height = max(uint16_t(1), virtualHeight());  // segment height in logical pixels -- softhack007 avoid div/0
       return (x%width) + (y%height) * width;
@@ -711,7 +717,7 @@ typedef struct Segment {
 
 #ifdef WLEDMM_FASTPATH
     // WLEDMM this is a "gateway" function - we either call _fast or fall back to "slow" 
-    inline void setPixelColorXY(int x, int y, uint32_t col) {
+    [[gnu::hot]] inline void setPixelColorXY(int x, int y, uint32_t col) {
       if (!_isSimpleSegment) { // slow path
         setPixelColorXY_slow(x, y, col);
       } else {                 // fast path
@@ -724,7 +730,7 @@ typedef struct Segment {
         setPixelColorXY_fast(x, y, col, scaled_col, int(_2dWidth), int(_2dHeight));       // call "fast" function
       }
     }
-    inline uint32_t getPixelColorXY(int x, int y) const {
+    [[gnu::hot]] inline uint32_t getPixelColorXY(int x, int y) const {
       // minimal sanity checks
       if (!_isValid2D) return 0;                                                // not active
       if ((unsigned(x) >= _2dWidth) || (unsigned(y) >= _2dHeight)) return 0 ;   // check if (x,y) are out-of-range - due to 2's complement, this also catches negative values
@@ -1080,7 +1086,7 @@ class WS2812FX {  // 96 bytes
 #endif
 
     std::vector<segment> _segments;
-    friend class Segment;
+    friend struct Segment;
 
     uint32_t getPixelColorXYRestored(uint16_t x, uint16_t y)  const;  // WLEDMM gets the original color from the driver (without downscaling by _bri)
 

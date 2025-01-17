@@ -369,6 +369,7 @@ void handleIO()
       if (rlyPin>=0) {
         pinMode(rlyPin, OUTPUT);
         digitalWrite(rlyPin, rlyMde);
+        delay(50); // wait for relay to switch and power to stabilize
       }
       offMode = false;
     }
@@ -388,6 +389,7 @@ void handleIO()
       esp32RMTInvertIdle();
       #endif
       if (rlyPin>=0) {
+        if (strip.isUpdating()) delay(FRAMETIME_FIXED); // WLEDMM avoids randomly colored pixles at power-on
         pinMode(rlyPin, OUTPUT);
         digitalWrite(rlyPin, !rlyMde);
       }
