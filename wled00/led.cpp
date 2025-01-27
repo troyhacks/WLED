@@ -67,7 +67,7 @@ void toggleOnOff()
   stateChanged = true;
 }
 
-
+#if !defined(ARDUINO_ARCH_ESP32) || !defined(WLEDMM_FASTPATH) || defined(WLEDMM_SAVE_FLASH)  // WLEDMM color utils moved into colorTools.hpp for performance reasons
 //scales the brightness with the briMultiplier factor
 IRAM_ATTR_YN __attribute__((hot)) byte scaledBri(byte in)  // WLEDMM added IRAM_ATTR_YN
 {
@@ -76,7 +76,7 @@ IRAM_ATTR_YN __attribute__((hot)) byte scaledBri(byte in)  // WLEDMM added IRAM_
   if (val > 255) val = 255;
   return (byte)val;
 }
-
+#endif
 
 //applies global brightness
 void applyBri() {
@@ -194,7 +194,7 @@ void handleTransitions()
   if (transitionActive && transitionDelayTemp > 0)
   {
     float tper = (millis() - transitionStartTime)/(float)transitionDelayTemp;
-    if (tper >= 1.0f)
+    if ((tper >= 1.0f) || (tper < 0.0f)) // WLEDMM also catch "<0" case, that may happen when millis() rolls over
     {
       strip.setTransitionMode(false);
       // restore (global) transition time if not called from UDP notifier or single/temporary transition from JSON (also playlist)
@@ -207,7 +207,7 @@ void handleTransitions()
     }
     if (tper - tperLast < 0.004f) return;
     tperLast = tper;
-    briT = briOld + ((bri - briOld) * tper);
+    briT = briOld + ((int(bri) - int(briOld)) * tper); // WLEDMM avoid undefined behaviour when briOld < bri
 
     applyBri();
   }
