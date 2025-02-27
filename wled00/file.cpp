@@ -66,6 +66,9 @@ static bool bufferedFind(const char *target, bool fromStart = true) {
 
   size_t index = 0;
   #if ESP32
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
   byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
   #else 
   byte buf[FS_BUFSIZE];
@@ -110,7 +113,14 @@ static bool bufferedFindSpace(size_t targetLen, bool fromStart = true) {
   if (!f || !f.size()) return false;
 
   size_t index = 0; // better to use size_t instead if uint16_t
+  #if ESP32
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
+  byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
+  #else 
   byte buf[FS_BUFSIZE];
+  #endif
   if (fromStart) f.seek(0);
 
   while (f.position() < f.size() -1) {
@@ -153,8 +163,14 @@ static bool bufferedFindObjectEnd() {
 
   uint16_t objDepth = 0; //num of '{' minus num of '}'. return once 0
   //size_t start = f.position();
+  #if ESP32
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
+  byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
+  #else 
   byte buf[FS_BUFSIZE];
-
+  #endif
   while (f.position() < f.size() -1) {
     size_t bufsize = f.read(buf, FS_BUFSIZE); // better to use size_t instead of uint16_t
     size_t count = 0;
@@ -177,9 +193,15 @@ static bool bufferedFindObjectEnd() {
 //fills n bytes from current file pos with ' ' characters
 static void writeSpace(size_t l)
 {
+  #if ESP32
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
+  byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
+  #else 
   byte buf[FS_BUFSIZE];
+  #endif
   memset(buf, ' ', FS_BUFSIZE);
-
   while (l > 0) {
     size_t block = (l>FS_BUFSIZE) ? FS_BUFSIZE : l;
     f.write(buf, block);
