@@ -379,12 +379,20 @@ void WLED::loop()
 #endif
 #ifdef WLED_DEBUG_HEAP
   if (millis() - debugTime > 4999 ) { // WLEDMM: Special case for debugging heap faster
-    DEBUG_PRINT(F("*** Free heap: "));     DEBUG_PRINT(heap_caps_get_free_size(0x1800));
-    DEBUG_PRINT(F("\tLargest free block: "));     DEBUG_PRINT(heap_caps_get_largest_free_block(0x1800));
-    DEBUG_PRINT(F(" *** \t\tArduino min free stack: ")); DEBUG_PRINT(uxTaskGetStackHighWaterMark(NULL));
+    size_t largest_free = heap_caps_get_largest_free_block(0x1800);
+    size_t total_free   = heap_caps_get_free_size(0x1800);
+    DEBUG_PRINT(F("*** Free heap: "));     DEBUG_PRINT(total_free);
+    DEBUG_PRINT(F(" - Largest free block: "));     DEBUG_PRINT(largest_free);
+    float fragmentation = 100.0f;
+    if ((largest_free > 1) && (total_free > largest_free)) {
+      fragmentation = 100.f * (1.0f - (float(largest_free) / float(total_free)) );
+    }
+    DEBUG_PRINT(F(" (frag ")); DEBUG_PRINTF("%0.2f",fragmentation); DEBUG_PRINT(F("%)"));
+    DEBUG_PRINT(F(" - Arduino min free stack: ")); DEBUG_PRINT(uxTaskGetStackHighWaterMark(NULL));
 #if INCLUDE_xTaskGetHandle
-    DEBUG_PRINT(F("   TCP min free stack: ")); DEBUG_PRINT(wledmm_get_tcp_stacksize());
+    DEBUG_PRINT(F(" - TCP min free stack: ")); DEBUG_PRINT(wledmm_get_tcp_stacksize());
 #endif
+
     DEBUG_PRINTLN(F(" ***"));    
     debugTime = millis();
   }
