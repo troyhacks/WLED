@@ -72,6 +72,7 @@ static bool bufferedFind(const char *target, bool fromStart = true) {
   byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
   #else 
   byte buf[FS_BUFSIZE];
+  #endif
   #if ESP_IDF_VERSION_MAJOR >= 4
   f.setBufferSize(FS_BUFSIZE);
   #endif
@@ -122,6 +123,7 @@ static bool bufferedFindSpace(size_t targetLen, bool fromStart = true) {
   byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
   #else 
   byte buf[FS_BUFSIZE];
+  #endif
   #if ESP_IDF_VERSION_MAJOR >= 4
   f.setBufferSize(FS_BUFSIZE);
   #endif
@@ -174,6 +176,7 @@ static bool bufferedFindObjectEnd() {
   byte *buf = (byte *) heap_caps_malloc_prefer(FS_BUFSIZE,2,MALLOC_CAP_SPIRAM,MALLOC_CAP_DEFAULT);
   #else 
   byte buf[FS_BUFSIZE];
+  #endif
   #if ESP_IDF_VERSION_MAJOR >= 4
   f.setBufferSize(FS_BUFSIZE);
   #endif

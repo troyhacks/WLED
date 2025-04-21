@@ -168,6 +168,7 @@ int getSignalQuality(int rssi)
   #define SYSTEM_EVENT_ETH_GOT_IP ARDUINO_EVENT_ETH_GOT_IP
 #endif
 
+void WiFiEvent(WiFiEvent_t event) {
   switch (event) {
     #ifndef ESP8266
     #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
@@ -186,11 +187,13 @@ int getSignalQuality(int rssi)
     case SYSTEM_EVENT_ETH_GOT_IP:
       if (Network.isEthernet()) {
         if (!apActive) {
-          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Disabling WIFi"));
+          DEBUG_PRINTLN(F("WiFi Connec+ted *and* ETH Connected. Disabling WIFi"));
           WiFi.disconnect(true);
         } else {
           DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Leaving AP WiFi active"));
         }
+        USER_PRINT(F("Ethernet IP is now http://"));
+        USER_PRINTLN(ETH.localIP());
       } else {
         DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
       }
@@ -223,7 +226,6 @@ int getSignalQuality(int rssi)
       // alternative access to the device.
       forceReconnect = true;
       break;
-    #endif
     #endif
     #endif
     default:
