@@ -956,7 +956,7 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   //display->setBrightness8(25);    // range is 0-255, 0 - 0%, 255 - 100% //  [setBrightness()] Tried to set output brightness before begin()
   _bri = (last_bri > 0) ? last_bri : 25;  // try to restore persistent brightness value
 
-  delay(24); // experimental
+  // delay(24); // experimental
   DEBUG_PRINT(F("heap usage: ")); DEBUG_PRINTLN(int(lastHeap - ESP.getFreeHeap()));
   // Allocate memory and start DMA display
   if (newDisplay && (display->begin() == false)) {
@@ -976,16 +976,38 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
     display->clearScreen();   // initially clear the screen buffer
     USER_PRINTLN("MatrixPanel_I2S_DMA clear ok");
 
-    if (_ledBuffer) free(_ledBuffer);                 // should not happen
-    if (_ledsDirty) free(_ledsDirty);                 // should not happen
+    if (_ledBuffer) {
+      free(_ledBuffer);                 // should not happen
+      _ledBuffer = nullptr;            // should not happen
+    }
+    if (_ledsDirty) {
+      free(_ledsDirty);                 // should not happen
+      _ledsDirty = nullptr;            // should not happen
+    }
 
     #if ESP32
     _ledsDirty = (byte*) heap_caps_malloc_prefer(getBitArrayBytes(_len), 3, MALLOC_CAP_INTERNAL, MALLOC_CAP_DEFAULT, MALLOC_CAP_SPIRAM);
-    _ledBuffer = (CRGB*) heap_caps_calloc_prefer(_len, sizeof(CRGB), 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_DEFAULT);
+    USER_PRINTLN("MatrixPanel_I2S_DMA Step 2");
+    // _ledBuffer = (CRGB*) heap_caps_calloc_prefer(_len, sizeof(CRGB), 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_DEFAULT);
+    #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
+      if (psramFound()) {
+        USER_PRINTLN("MatrixPanel_I2S_DMA trying PSRAM allocation for LED buffer");
+        USER_PRINT("Length: "); USER_PRINT(_len); USER_PRINT(" Size: "); USER_PRINT(sizeof(CRGB)); USER_PRINT(" Bytes: "); USER_PRINT(_len*sizeof(CRGB)); USER_PRINTLN(" bytes");
+        _ledBuffer = (CRGB*) ps_malloc(_len*sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
+        USER_PRINTLN("MatrixPanel_I2S_DMA trying PSRAM allocation for LED buffer- WORKED!");
+      } else {
+        USER_PRINTLN("MatrixPanel_I2S_DMA using heap allocation for LED buffer");
+        _ledBuffer = (CRGB*) calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
+      }
+    #else
+      USER_PRINTLN("MatrixPanel_I2S_DMA using heap allocation for LED buffer (default)");
+      _ledBuffer = (CRGB*) calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
+    #endif
+    USER_PRINTLN("MatrixPanel_I2S_DMA Step 3");
     #endif
 
     if (_ledsDirty) setBitArray(_ledsDirty, _len, false); // reset dirty bits
-
+    USER_PRINTLN("MatrixPanel_I2S_DMA Step 4 end block");
   }
 
   if ((_ledBuffer == nullptr) || (_ledsDirty == nullptr)) {

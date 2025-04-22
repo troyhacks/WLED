@@ -391,6 +391,9 @@ bool readObjectFromFile(const char* file, const char* key, JsonDocument* dest)
     uint32_t s = millis();
   #endif
   f = WLED_FS.open(file, "r");
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
   if (!f) return false;
   else { DEBUG_PRINTF(PSTR("FILE '%s' open to read, size %d bytes\n"), file, (int)f.size());} // WLEDMM additional debug message
 
