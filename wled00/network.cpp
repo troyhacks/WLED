@@ -214,6 +214,9 @@ void WiFiEvent(WiFiEvent_t event) {
       USER_PRINTF("Ethernet link is up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex()?"":"not ");
       USER_PRINT(ETH.macAddress());
       USER_PRINTLN(")");
+      escapedMac = ETH.macAddress();
+      escapedMac.replace(":", "");
+      escapedMac.toLowerCase();
       }
       break;
 
@@ -229,7 +232,7 @@ void WiFiEvent(WiFiEvent_t event) {
     #endif
     #endif
     default:
-      DEBUG_PRINTLN(F("No action"));
+      // DEBUG_PRINTLN(F("Network Event with no action"));
       break;
 
   }

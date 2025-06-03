@@ -1071,22 +1071,27 @@ bool WLED::initEthernet()
 
   #elif defined (ARDUINO_ARCH_ESP32S3)
 
-  #define ETH_MISO_PIN                    11
-  #define ETH_MOSI_PIN                    12
-  #define ETH_SCLK_PIN                    10
-  #define ETH_CS_PIN                      9
-  #define ETH_INT_PIN                     13
-  #define ETH_RST_PIN                     14
-  #define ETH_ADDR                        1
+  // ESP32-S3 Ethernet initialization
 
-  // 7,6,5,4 and 41,42
-  // #define ETH_MISO_PIN                    41
-  // #define ETH_MOSI_PIN                    4
-  // #define ETH_SCLK_PIN                    5
-  // #define ETH_CS_PIN                      6
-  // #define ETH_INT_PIN                     7
-  // #define ETH_RST_PIN                     42
-  // #define ETH_ADDR                        1
+  #if defined (WaveShare_ESP32S3ETH)
+    // WaveShare ESP32-S3-ETH - This one has a USB port so it's easier to flash.
+    #define ETH_MISO_PIN                    12 
+    #define ETH_MOSI_PIN                    11
+    #define ETH_SCLK_PIN                    13
+    #define ETH_CS_PIN                      14
+    #define ETH_INT_PIN                     10
+    #define ETH_RST_PIN                     9
+    #define ETH_ADDR                        1
+  #else
+    // TTGO_T-Eth-Lite_S3 - our "default" ESP32-S3 Ethernet board - no USB programming port.
+    #define ETH_MISO_PIN                    11
+    #define ETH_MOSI_PIN                    12
+    #define ETH_SCLK_PIN                    10
+    #define ETH_CS_PIN                      9
+    #define ETH_INT_PIN                     13
+    #define ETH_RST_PIN                     14
+    #define ETH_ADDR                        1
+  #endif
 
   managed_pin_type pinsToAllocate[12] = { ETH_MISO_PIN,true,ETH_MOSI_PIN,true,ETH_SCLK_PIN,true,ETH_CS_PIN,true,ETH_INT_PIN,true,ETH_RST_PIN,true };
 
