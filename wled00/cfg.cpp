@@ -1110,6 +1110,9 @@ void serializeConfig() {
   DEBUG_PRINTF("serializeConfig\n");
 
   File f = WLED_FS.open("/cfg.json", "w");
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
   if (f) serializeJson(doc, f);
   f.close();
   releaseJSONBufferLock();
@@ -1198,6 +1201,9 @@ void serializeConfigSec() {
   ota[F("aota")] = aOtaEnabled;
 
   File f = WLED_FS.open("/wsec.json", "w");
+  #if ESP_IDF_VERSION_MAJOR >= 4
+  f.setBufferSize(FS_BUFSIZE);
+  #endif
   if (f) serializeJson(doc, f);
   f.close();
   releaseJSONBufferLock();

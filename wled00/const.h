@@ -91,6 +91,9 @@
   #endif
 #endif
 
+//WLEDMM seems that 256 is indeed the optimal buffer length
+#define FS_BUFSIZE 256
+
 //Usermod IDs
 #define USERMOD_ID_RESERVED               0     //Unused. Might indicate no usermod present
 #define USERMOD_ID_UNSPECIFIED            1     //Default value for a general user mod that does not specify a custom ID
@@ -285,7 +288,7 @@
 #define BTN_TYPE_ANALOG_INVERTED  8
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       13 //WLEDMM +1 for Olimex ESP32-Gateway +1 for W5500
+#define WLED_NUM_ETH_TYPES       14 //WLEDMM +1 for Olimex ESP32-Gateway +2 for W5500
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
@@ -300,6 +303,7 @@
 #define WLED_ETH_SERG74          10
 #define WLED_ETH_OLIMEX_GTW      11
 #define WLED_ETH_W5500           12
+#define WLED_ETH_W5500_2         13
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0

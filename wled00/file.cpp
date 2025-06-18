@@ -10,9 +10,6 @@
 #endif
 #endif
 
-//WLEDMM seems that 256 is indeed the optimal buffer length
-#define FS_BUFSIZE 256
-
 /*
  * Structural requirements for files managed by writeObjectToFile() and readObjectFromFile() utilities:
  * 1. File must be a string representation of a valid JSON object
