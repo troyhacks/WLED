@@ -4,6 +4,13 @@ static const char *TAG = "WLED";
 #include "wled_ethernet.h"
 #include <Arduino.h>
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
+
+  #include "esp_lcd_panel_ops.h"
+  #include "esp_lcd_panel_io.h"
+  #include "esp_lcd_mipi_dsi.h"
+  #include "esp_lcd_st7703.h"
+  #include "esp_cache.h"
+  
   #include "esp_ldo_regulator.h" // ESP32-P4 for higher GPIOS.
   esp_ldo_channel_handle_t ldo2 = NULL;
   esp_ldo_channel_handle_t ldo3 = NULL;
@@ -15,6 +22,12 @@ static const char *TAG = "WLED";
   // ESP-ROM:esp32p4-eco1-20240205 // Espressif EV
   // ESP-ROM:esp32p4-eco2-20240710 // Wireless Tag Fancy C5 board that's weird.
   // 
+
+  /**
+ * Uncomment these line if use custom initialization commands.
+ * The array should be declared as static const and positioned outside the function.
+ */
+
 #endif
 #ifdef SOC_USB_OTG_SUPPORTED
   #ifndef CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED
@@ -535,6 +548,41 @@ void background_loop_nonblocking(void* pvParameters) {
     handleNotifications();
     handleTransitions();
 
+    static uint8_t requested_preset = 0;
+
+    if (tp) {
+      esp_lcd_touch_read_data(tp);
+
+      if (esp_lcd_touch_get_coordinates(tp, touchscreen_x, touchscreen_y, touchscreen_strength, &touchscreen_cnt, 1)) {
+
+        static unsigned long lastTouchPrint = 0;
+        static int last_x = -1, last_y = -1, last_strength = -1, last_cnt = -1;
+        const unsigned long PRINT_INTERVAL_MS = 200;
+
+        int cur_x = touchscreen_x[0];
+        int cur_y = touchscreen_y[0];
+        int cur_strength = touchscreen_strength[0];
+        int cur_cnt = touchscreen_cnt;
+
+        bool changed = (cur_x != last_x) || (cur_y != last_y) || (cur_strength != last_strength) || (cur_cnt != last_cnt);
+        if (changed || (millis() - lastTouchPrint) > PRINT_INTERVAL_MS) {
+          lastTouchPrint = millis();
+          last_x = cur_x; last_y = cur_y; last_strength = cur_strength; last_cnt = cur_cnt;
+
+          USER_PRINTF("TOUCH: cnt=%d x=%d y=%d strength=%d\n", cur_cnt, cur_x, cur_y, cur_strength);
+          // USER_PRINTF("  touch buffer idx0: x0=%d y0=%d str0=%d\n", touchscreen_x[0], touchscreen_y[0], touchscreen_strength[0]);
+
+          USER_PRINTF("Current Preset = %d trying %d last requested %d\n", currentPreset, currentPreset + 1, requested_preset);
+          requested_preset = currentPreset + 1;
+          applyPreset(requested_preset);
+          handlePresets();
+          if (currentPreset != requested_preset) {
+            applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+          }
+        }
+      }
+    }
+
     #ifdef WLED_ENABLE_DMX
     handleDMXOutput();
     #endif
@@ -665,10 +713,67 @@ void WLED::loop() {
     if (!offMode || strip.isOffRefreshRequired()) {
       if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
         strip.service();
+
+        byte* busPixelData = nullptr;
+        uint32_t busPixelSize = 0;
+        Bus* bus = busses.getBus(0);
+        if (bus) {
+          busPixelData = bus->getPixelData();
+          busPixelSize = SEGMENT.maxWidth * SEGMENT.maxHeight * 3;
+          if (busPixelData == NULL) {
+            USER_PRINTLN("No Bus Pixel Data");
+            return;
+          } else if (busPixelSize == 0) {
+            USER_PRINT("Bad Bus Pixel Length: ");
+            USER_PRINTLN(busPixelSize);
+            return;
+          }
+        } else {
+          USER_PRINTLN("No Bus.");
+          return;
+        }
+
+        void* fb0_ptr = NULL;
+        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+        uint8_t* fb0 = (uint8_t*)fb0_ptr;
+
+        ppa_srm_oper_config_t srm_config = {};
+        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+        srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+        srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
+        srm_config.in.block_offset_x = 0;
+        srm_config.in.block_offset_y = 0;
+        srm_config.in.buffer = busPixelData;
+        srm_config.out.buffer = fb0;
+        srm_config.out.buffer_size = 720 * 720 * 3;
+        srm_config.in.pic_w = SEGMENT.maxWidth;
+        srm_config.in.pic_h = SEGMENT.maxHeight;
+        srm_config.out.pic_w = 720;
+        srm_config.out.pic_h = 720;
+
+        float reference_size = 720.0f; // or whatever your target size is
+        float dominant_dim = (SEGMENT.maxWidth > SEGMENT.maxHeight) ? SEGMENT.maxWidth : SEGMENT.maxHeight;
+        float scale = reference_size / dominant_dim;
+
+        srm_config.scale_x = scale;
+        srm_config.scale_y = scale;
+
+        srm_config.out.block_offset_x = (720 - (SEGMENT.maxWidth * scale)) / 2;
+        srm_config.out.block_offset_y = (720 - (SEGMENT.maxHeight * scale)) / 2;
+
+        srm_config.mirror_x = false;
+        srm_config.mirror_y = false;
+        srm_config.rgb_swap = 0;
+        srm_config.byte_swap = 0;
+        srm_config.mode = PPA_TRANS_MODE_BLOCKING;
+        srm_config.in.block_w = SEGMENT.maxWidth;
+        srm_config.in.block_h = SEGMENT.maxHeight;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+
         xSemaphoreGive(busMutex);
       }
     }
-    
+
     #ifdef WLED_DEBUG
     stripMillis = millis() - stripMillis;
     avgStripMillis += stripMillis;
@@ -853,6 +958,17 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t
   interfacesInited = false;
 }
 #endif
+
+static SemaphoreHandle_t refresh_finish = NULL;
+
+IRAM_ATTR static bool test_notify_refresh_ready(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_data_t* edata, void* user_ctx) {
+  SemaphoreHandle_t refresh_finish = (SemaphoreHandle_t)user_ctx;
+  BaseType_t need_yield = pdFALSE;
+
+  xSemaphoreGiveFromISR(refresh_finish, &need_yield);
+
+  return (need_yield == pdTRUE);
+}
 
 void WLED::setup() {
 
@@ -1099,18 +1215,18 @@ void WLED::setup() {
     }
   };
 
-  // Try to acquire both channels
-  if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 2 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 2");
-  }
+  // // Try to acquire both channels
+  // if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
+  //   DEBUG_PRINTLN("LDO index 2 acquired");
+  // } else {
+  //   USER_PRINTLN("Failed to acquire LDO index 2");
+  // }
 
-  if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 3 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
-  }
+  // if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
+  //   DEBUG_PRINTLN("LDO index 3 acquired");
+  // } else {
+  //   USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
+  // }
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };
@@ -1381,16 +1497,189 @@ void WLED::setup() {
       USER_PRINTF("ADC1-%d = %d, ", p, pinManager.getADCPin(PinManagerClass::ADC1, p));
   }
   USER_PRINTLN();
-  for(int p=0; p<11; p++) {
-    if(pinManager.getADCPin(PinManagerClass::ADC2, p) < 255)
+  for (int p = 0; p < 11; p++) {
+    if (pinManager.getADCPin(PinManagerClass::ADC2, p) < 255)
       USER_PRINTF("ADC2-%d = %d, ", p, pinManager.getADCPin(PinManagerClass::ADC2, p));
   }
   USER_PRINTLN(F("\n"));
-#endif
+  #endif
+
+  gpio_config_t bk_gpio_config = {};
+  bk_gpio_config.mode = GPIO_MODE_OUTPUT;
+  bk_gpio_config.pin_bit_mask = 1ULL << 26;
+  ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
+  gpio_set_level(GPIO_NUM_26, 0);
+
+  USER_PRINTLN("MIPI DSI PHY Powered on");
+  esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
+  esp_ldo_channel_config_t ldo_mipi_phy_config = {
+      .chan_id = 3, .voltage_mv = 2500,
+  };
+  ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
+
+  USER_PRINTLN("Initialize MIPI DSI bus");
+  esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
+
+  esp_lcd_dsi_bus_config_t bus_config = {
+      .bus_id = 0,
+      .num_data_lanes = 2, // this is important, and I think we need 2.
+      .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+      .lane_bit_rate_mbps = 360, // this is tied to FPS and BPP and the magic values
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
+
+  // H total = h_size + hsync_front_porch + hsync_pulse_width + hsync_back_porch
+  // V Total = v_size + vsync_front_porch + vsync_pulse_width + vsync_back_porch
+  // lane_bit_rate_mbps = (H Total * V Total * FPS * BPP) / (num_data_lanes * 1000000)
+
+  USER_PRINTLN("Install panel IO");
+  esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
+  esp_lcd_dbi_io_config_t dbi_config = {
+      .virtual_channel = 0,
+      .lcd_cmd_bits = 8,
+      .lcd_param_bits = 8,
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io));
+
+  USER_PRINTLN("Install ST7703 panel driver");
+
+  esp_lcd_dpi_panel_config_t dpi_config = {};
+
+  dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+  dpi_config.dpi_clock_freq_mhz = 30; // important: your "FPS" 
+  dpi_config.virtual_channel = 0;
+
+  dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
+  dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
+  dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
+
+  dpi_config.num_fbs = 1;
+
+  // Use Standard Timings (from ST7703_720_720_PANEL_60HZ_DPI_CONFIG)
+  dpi_config.video_timing.h_size = 720;
+  dpi_config.video_timing.v_size = 720;
+  dpi_config.video_timing.hsync_back_porch = 120;     // magic value
+  dpi_config.video_timing.hsync_pulse_width = 60;     // magic value
+  dpi_config.video_timing.hsync_front_porch = 106;    // magic value
+  dpi_config.video_timing.vsync_back_porch = 20;      // magic value
+  dpi_config.video_timing.vsync_pulse_width = 4;      // magic value
+  dpi_config.video_timing.vsync_front_porch = 20;     // magic value
+
+
+  dpi_config.flags.use_dma2d = false;
+  dpi_config.flags.disable_lp = true;
+
+  st7703_vendor_config_t vendor_config = {};
+  vendor_config.flags.use_mipi_interface = 1;
+  vendor_config.mipi_config.dsi_bus = mipi_dsi_bus;
+  vendor_config.mipi_config.dpi_config = &dpi_config;
+
+  const esp_lcd_panel_dev_config_t panel_config = {
+      .reset_gpio_num = 27,
+      .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+      .bits_per_pixel = 24, // important: your bits per pixel. 24 for RGB888
+      .vendor_config = &vendor_config,
+  };
+
+  ESP_ERROR_CHECK(esp_lcd_new_panel_st7703(mipi_dbi_io, &panel_config, &panel_handle));
+  ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+  ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle)); // Uses default init now
+  ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+  esp_lcd_panel_io_i2c_config_t touch_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+
+  esp_lcd_touch_io_gt911_config_t tp_gt911_config = {
+      .dev_addr = uint8_t(touch_io_config.dev_addr),
+  };
+
+  esp_lcd_touch_config_t tp_cfg = {
+      .x_max = 720,
+      .y_max = 720,
+      .rst_gpio_num = GPIO_NUM_23,
+      .int_gpio_num = GPIO_NUM_NC,
+      .levels = {
+          .reset = 0,
+          .interrupt = 0,
+      },
+      .flags = {
+          .swap_xy = 0,
+          .mirror_x = 0,
+          .mirror_y = 0,
+      },
+      .driver_data = &tp_gt911_config,
+  };
+
+  i2c_config_t i2c_conf = {};
+  i2c_conf.mode = I2C_MODE_MASTER;
+  i2c_conf.sda_io_num = HW_PIN_SDA;
+  i2c_conf.scl_io_num = HW_PIN_SCL;
+  i2c_conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+  i2c_conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+  i2c_conf.master.clk_speed = 400000;
+  i2c_conf.clk_flags = 0;
+
+  esp_err_t err = i2c_param_config(I2C_NUM_1, &i2c_conf);
+  if (err != ESP_OK) {
+    ESP_LOGE("I2C_INIT", "I2C param config failed: %s", esp_err_to_name(err));
+    return; // or handle error
+  }
+
+  err = i2c_driver_install(I2C_NUM_1, i2c_conf.mode, 0, 0, 0); // No buffers needed for master mode
+  if (err != ESP_OK) {
+    ESP_LOGE("I2C_INIT", "I2C driver install failed: %s", esp_err_to_name(err));
+    return; // or handle error
+  }
+
+  ESP_LOGI("I2C_INIT", "I2C driver installed successfully");
+
+  esp_lcd_new_panel_io_i2c(1, &touch_io_config, &touch_io_handle);
+  esp_lcd_touch_new_i2c_gt911(touch_io_handle, &tp_cfg, &tp);
+
+  void* fb0_ptr = NULL;
+  ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+  uint8_t* fb0 = (uint8_t*)fb0_ptr;
+
+  if (!fb0) {
+    USER_PRINTLN("FATAL: Failed to get frame buffer pointer!");
+    while (1);
+  }
+  USER_PRINTF("Got frame buffer pointer: %p\n", fb0);
+
+  const int bytes_per_pixel = 3;
+  uint16_t h_res = 720;
+  uint16_t v_res = 720;
+  uint32_t buffer_size = h_res * v_res * bytes_per_pixel;
+
+  for (uint16_t y = 0; y < v_res; y++) {
+    uint8_t line_r = 0;
+    uint8_t line_g = 0;
+    uint8_t line_b = 0;
+
+    uint16_t line_block = y / 32;
+
+    line_r = beatsin8(60, 0, 255, line_block * 32, 0);
+    line_g = beatsin8(60, 0, 255, line_block * 32, 85);
+    line_b = beatsin8(60, 0, 255, line_block * 32, 170);
+
+    for (uint16_t x = 0; x < h_res; x++) {
+
+      uint32_t pixel_index = (uint32_t)y * h_res + x;
+      uint32_t byte_offset = pixel_index * bytes_per_pixel;
+
+      fb0[byte_offset + 0] = line_r; // Red
+      fb0[byte_offset + 1] = line_g; // Green
+      fb0[byte_offset + 2] = line_b; // Blue
+
+    }
+  }
+  
+  // Ensure the data written by the CPU is visible in PSRAM for the DMA
+  // Doesn't seem to be needed?
+  ESP_ERROR_CHECK(esp_cache_msync((void*)fb0, buffer_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M));
 
   USER_PRINT(F("Free heap ")); USER_PRINTLN(ESP.getFreeHeap());USER_PRINTLN();
   USER_PRINTLN(F("WLED initialization done.\n"));
-  
+
   serial_drain();
   Serial.flush();
 
@@ -1420,7 +1709,7 @@ void WLED::setup() {
 
   //#endif
   // WLEDMM end
-}
+} // endsetup
 
 void WLED::beginStrip() {
   // Initialize NeoPixel Strip and button
@@ -1713,7 +2002,7 @@ void WLED::initConnection() {
   USER_PRINTF("Network.isEthernet = %d\n", Network.isEthernet());
 #endif
 
-  // ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+  // USER_PRINTLN("ESP_WIFI_MODE_STA");
   // wifi_init_sta();
 
 #if defined(LOLIN_WIFI_FIX) && (defined(ARDUINO_ARCH_ESP32C3) || defined(ARDUINO_ARCH_ESP32C6) || defined(ARDUINO_ARCH_ESP32S2) || defined(ARDUINO_ARCH_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4))

@@ -310,10 +310,13 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 
 #ifdef CONFIG_SOC_PPA_SUPPORTED
 #include "esp_heap_caps.h"
+#include "driver/i2c.h"
 #include "driver/ppa.h"
 #include "driver/jpeg_decode.h"
 #include "esp_h264_dec_sw.h"
 #include "ImageCacheManager.h"
+#include "esp_lcd_types.h"
+#include "esp_lcd_touch_gt911.h"
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
@@ -322,6 +325,14 @@ WLED_GLOBAL ppa_client_handle_t ppa_srm_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
 WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
+WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);
+WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
+WLED_GLOBAL uint16_t touchscreen_x[1];
+WLED_GLOBAL uint16_t touchscreen_y[1];
+WLED_GLOBAL uint16_t touchscreen_strength[1];
+WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
+WLED_GLOBAL bool touchpad_pressed _INIT(false);
 #endif
 
 // Global Variable definitions
