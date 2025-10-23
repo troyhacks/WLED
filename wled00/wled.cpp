@@ -1524,7 +1524,7 @@ void WLED::setup() {
       .bus_id = 0,
       .num_data_lanes = 2, // this is important, and I think we need 2.
       .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
-      .lane_bit_rate_mbps = 360, // this is tied to FPS and BPP and the magic values
+      .lane_bit_rate_mbps = 720, // this is tied to FPS and BPP and the magic values
   };
   ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
@@ -1546,7 +1546,7 @@ void WLED::setup() {
   esp_lcd_dpi_panel_config_t dpi_config = {};
 
   dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-  dpi_config.dpi_clock_freq_mhz = 30; // important: your "FPS" 
+  dpi_config.dpi_clock_freq_mhz = 60; // important: your "FPS" 
   dpi_config.virtual_channel = 0;
 
   dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
