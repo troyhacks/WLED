@@ -836,8 +836,13 @@ uint8_t IRAM_ATTR __attribute__((hot)) realtimeBroadcast(uint8_t type, IPAddress
           #ifdef WLEDMM_REMAP_AT_OUTPUT
           uint16_t packetNumPixels = packetSize / my_bytes_per_pixel;
           uint32_t startPixel = bufferOffset / my_bytes_per_pixel;
+          uint32_t mappedIdx;
           for (uint_fast16_t i = 0; i < packetNumPixels; ++i) {
-            uint32_t mappedIdx = mappingTable[startPixel + i];
+            if (mappingTable != nullptr) {
+              mappedIdx = mappingTable[startPixel + i];
+            } else {
+              mappedIdx = startPixel + i;
+            }
             uint32_t sourceOffset = mappedIdx * my_bytes_per_pixel;
             uint32_t destOffset = 18 + (i * my_bytes_per_pixel);
 

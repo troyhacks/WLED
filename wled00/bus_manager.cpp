@@ -578,7 +578,9 @@ uint32_t IRAM_ATTR_YN BusNetwork::getPixelColor(uint32_t pix) const {
 }
 
 void IRAM_ATTR BusNetwork::show() {
+  if (!WLED_CONNECTED) return;
   if (!_valid || !canShow()) return;
+  if (_len != _outputs * _leds_per_output) return;
   _broadcastLock = true;
   realtimeBroadcast(_UDPtype, _client, _len, _data, _bri, _rgbw, _outputs, _leds_per_output, _fps_limit, _colorOrder);
   _broadcastLock = false;

@@ -1003,40 +1003,65 @@ void WLED::disableWatchdog() {
 }
 
 int retry_num=0;
-static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id,void *event_data){
-  if(event_id == WIFI_EVENT_STA_START) {
-    USER_PRINTLN("WiFi Started");
-    interfacesInited = false;
-    wifi_is_connected = false;
-  } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
-    USER_PRINTLN("WiFi Connected");
-    interfacesInited = false;
-    wifi_is_connected = false;
-  } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-    USER_PRINTLN("WiFi Lost Connection");
-    interfacesInited = false;
-    wifi_is_connected = false;
-    if(retry_num<5){esp_wifi_connect();retry_num++;USER_PRINTLN("Retrying to Connect...\n");}
-  } else if (event_id == WIFI_EVENT_HOME_CHANNEL_CHANGE){
-    // USER_PRINTLN("WiFi HOME CHANNEL CHAANGED");
-  } else if (event_id == WIFI_EVENT_STA_STOP){
-    USER_PRINTLN("WiFi Stopped");
-    interfacesInited = false;
-    wifi_is_connected = false;
-  } else if (event_id == IP_EVENT_STA_GOT_IP) {
-    USER_PRINTLN("WiFi Got IP");
-    interfacesInited = false;
-    wifi_is_connected = true;
-  } else if (event_id == WIFI_EVENT_AP_START) {
-    USER_PRINTLN("SoftAP Started");
-    interfacesInited = false;
-    wifi_is_connected = false;
-  } else if (event_id == WIFI_EVENT_AP_STOP) {
-    USER_PRINTLN("SoftAP Stopped");
-    interfacesInited = false;
-    wifi_is_connected = false;
-  } else {
-    USER_PRINTF("WiFi threw unidentified code %d\n",event_id);
+
+static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+
+  if (event_base == WIFI_EVENT) {
+
+    if (event_id == WIFI_EVENT_STA_START) {
+      USER_PRINTLN("Event: WiFi Started");
+      interfacesInited = false;
+      wifi_is_connected = false;
+    } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+      USER_PRINTLN("Event: WiFi Connected");
+      interfacesInited = false;
+      wifi_is_connected = false;
+    } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+      USER_PRINTLN("Event: WiFi Lost Connection");
+      interfacesInited = false;
+      wifi_is_connected = false;
+      if (retry_num < 5 && !apActive) {
+        esp_wifi_connect();
+        retry_num++;
+        USER_PRINTLN("Retrying to Connect...\n");
+      }
+    } else if (event_id == WIFI_EVENT_HOME_CHANNEL_CHANGE) {
+      // USER_PRINTLN("Event: WiFi HOME CHANNEL CHANGED");
+    } else if (event_id == WIFI_EVENT_STA_STOP) {
+      USER_PRINTLN("Event: WiFi Stopped");
+      interfacesInited = false;
+      wifi_is_connected = false;
+    } else if (event_id == WIFI_EVENT_AP_START) {
+      USER_PRINTLN("Event: SoftAP Started");
+      interfacesInited = false;
+      wifi_is_connected = false;
+      g_ap_client_count = 0; // Reset count when AP starts
+    } else if (event_id == WIFI_EVENT_AP_STOP) {
+      USER_PRINTLN("Event: SoftAP Stopped");
+      interfacesInited = false;
+      wifi_is_connected = false;
+      g_ap_client_count = 0; // Reset count when AP stops
+    } else if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+      USER_PRINTLN("Event: AP Client Connected");
+      portENTER_CRITICAL(&g_ap_client_mux);
+      g_ap_client_count++;
+      portEXIT_CRITICAL(&g_ap_client_mux);
+    } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+      USER_PRINTLN("Event: AP Client Disconnected");
+      portENTER_CRITICAL(&g_ap_client_mux);
+      g_ap_client_count--;
+      portEXIT_CRITICAL(&g_ap_client_mux);
+    } else {
+      USER_PRINTF("Event: WiFi threw unidentified code %d\n", event_id);
+    }
+
+  } else if (event_base == IP_EVENT) {
+
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+      USER_PRINTLN("Event: WiFi Got IP");
+      interfacesInited = false;
+      wifi_is_connected = true;
+    }
   }
 }
 
@@ -1044,16 +1069,16 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
 
 static void eth_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
   if (event_id == ETHERNET_EVENT_CONNECTED) {
-    USER_PRINTLN("Ethernet Link Up");
+    USER_PRINTLN("Event: Ethernet Link Up");
     eth_is_connected = false;
   } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
-    USER_PRINTLN("Ethernet Link Down");
+    USER_PRINTLN("Event: Ethernet Link Down");
     eth_is_connected = false;
   } else if (event_id == ETHERNET_EVENT_START) {
     eth_is_connected = false;
-    // USER_PRINTLN("Ethernet Started");
+    // USER_PRINTLN("Event: Ethernet Started");
   } else {
-    USER_PRINTF("Ethernet Undeclared Error %d\n", event_id);
+    USER_PRINTF("Event: Ethernet Undeclared Error %d\n", event_id);
   }
 }
 
@@ -1878,6 +1903,7 @@ void WLED::beginStrip() {
 
 void WLED::initAP(bool resetAP)
 {
+  USER_PRINTLN("In initAP!");
   if (apBehavior == AP_BEHAVIOR_BUTTON_ONLY && !resetAP)
     return;
 
@@ -2198,8 +2224,7 @@ void WLED::initInterfaces()
   wasConnected = true;
 }
 
-void WLED::handleConnection()
-{
+void WLED::handleConnection() {
   static byte stacO = 0;
   static uint32_t lastHeap = UINT32_MAX;
   static unsigned long heapTime = 0;
@@ -2215,58 +2240,28 @@ void WLED::handleConnection()
   }
 
   static unsigned retryCount = 0;  // WLEDMM
-  // reconnect WiFi to clear stale allocations if heap gets too low
-//   if ((!strip.isUpdating()) && (now - heapTime > 5000)) { // WLEDMM: updated with better logic for small heap available by block, not total. // WLEDMM trying to use a moment when the strip is idle
-// #if defined(ARDUINO_ARCH_ESP32S2) || defined(WLED_ENABLE_HUB75MATRIX) // || defined(CONFIG_IDF_TARGET_ESP32P4)
-//     uint32_t heap = ESP.getFreeHeap(); // WLEDMM works better on -S2
-// #else
-//     uint32_t heap = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL); // was (MALLOC_CAP_INTERNAL|MALLOC_CAP_DEFAULT) WLEDMM: This is a better metric for free heap.
-// #endif
-//     if (heap < MIN_HEAP_SIZE && lastHeap < MIN_HEAP_SIZE) {
-//       if (retryCount < 5) {  // WLEDMM avoid repeated disconnects
-//         USER_PRINT(F("Heap too low! (step 2, force reconnect): "));
-//         USER_PRINTLN(heap);
-//         forceReconnect = true;
-//         strip.purgeSegments(true); // remove all but one segments from memory
-//         // WLEDMM
-//         errorFlag = ERR_LOW_MEM;
-//         retryCount ++;
-//       }
-//       errorFlag = ERR_LOW_MEM;
-//     } else if (heap < MIN_HEAP_SIZE) {
-//       USER_PRINT(F("Heap too low! (step 1, flush unread UDP): "));
-//       USER_PRINTLN(heap);      
-//       strip.purgeSegments();
-//       notifierUdp.flush();
-//       rgbUdp.flush();
-//       notifier2Udp.flush();
-//       ntpUdp.flush();
-//       // WLEDMM
-//       errorFlag = ERR_LOW_MEM;
-//       retryCount = 1;
-//     } else retryCount = 0;  // WLEDMM memory OK - reset counter
-//     lastHeap = heap;
-//     heapTime = now;
-//   }
 
-  byte stac = 0;
-  if (apActive) {
-    wifi_sta_list_t stationList;
-    esp_wifi_ap_get_sta_list(&stationList);
-    stac = stationList.num;
-    if (stac != stacO) {
-      stacO = stac;
-      DEBUG_PRINT(F("Connected AP clients: "));
-      DEBUG_PRINTLN(stac);
-      if (!WLED_CONNECTED && WLED_WIFI_CONFIGURED) {        // trying to connect, but not connected
-        if (stac) {
-          // WiFi.disconnect();        // disable search so that AP can work
-        } else {
-          initConnection();         // restart search
-        }
+  // --- START REFACTOR ---
+  // This block replaces the crashing esp_wifi_ap_get_sta_list() call.
+  // We now safely read the client count from the global variable
+  // that is updated by the Wi-Fi event handler.
+  byte stac = g_ap_client_count;
+
+  if (stac != stacO) {
+    stacO = stac;
+    USER_PRINT(F("Connected AP clients: "));
+    USER_PRINTLN(stac);
+    if (!WLED_CONNECTED && WLED_WIFI_CONFIGURED) {
+      if (stac) {
+        // WiFi.disconnect();
+      } else {
+        initConnection();
+        return; // CRITICAL: Return immediately after state change
       }
     }
   }
+  // --- END REFACTOR ---
+
   if (forceReconnect) {
     USER_PRINTLN(F("Forcing reconnect."));
     initConnection();
@@ -2280,6 +2275,7 @@ void WLED::handleConnection()
       USER_PRINTLN(F("Disconnected!"));
       interfacesInited = false;
       initConnection();
+      return; // CRITICAL: Return immediately after state change
     }
     //send improv failed 6 seconds after second init attempt (24 sec. after provisioning)
     if (improvActive > 2 && now - lastReconnectAttempt > 6000) {
@@ -2290,6 +2286,7 @@ void WLED::handleConnection()
       if (improvActive == 2) improvActive = 3;
       DEBUG_PRINTLN(F("Last reconnect too old."));
       initConnection();
+      return; // CRITICAL: Return immediately after state change
     }
     if (!apActive && now - lastReconnectAttempt > 12000 && (!wasConnected || apBehavior == AP_BEHAVIOR_NO_CONN)) {
       DEBUG_PRINTLN(F("Not connected AP."));
@@ -2318,14 +2315,15 @@ void WLED::handleConnection()
     lastMqttReconnectAttempt = 0; // force immediate update
 
   } else {
-  #ifndef WLED_USE_ETHERNET_ONLY
-    wifi_mode_t mode;
-    esp_wifi_get_mode(&mode);
-    if (mode == WIFI_MODE_APSTA) {
-      esp_wifi_stop();
-      forceReconnect = true;
-    }
-  #endif
+    // #ifndef WLED_USE_ETHERNET_ONLY
+    //   wifi_mode_t mode;
+    //   esp_wifi_get_mode(&mode);
+    //   if (mode != WIFI_MODE_APSTA) {
+    //     esp_wifi_stop();
+    //     USER_PRINTLN("handleConnection() forcing reconnect.");
+    //     forceReconnect = true;
+    //   }
+    // #endif
   }
 }
 

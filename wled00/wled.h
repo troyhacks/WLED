@@ -730,6 +730,9 @@ WLED_GLOBAL time_t sunrise _INIT(0);
 WLED_GLOBAL time_t sunset _INIT(0);
 WLED_GLOBAL Toki toki _INIT(Toki());
 
+WLED_GLOBAL uint8_t g_ap_client_count _INIT(0);
+WLED_GLOBAL portMUX_TYPE g_ap_client_mux _INIT(portMUX_INITIALIZER_UNLOCKED);
+
 // Temp buffer
 WLED_GLOBAL char* obuf;
 WLED_GLOBAL uint16_t olen _INIT(0);
