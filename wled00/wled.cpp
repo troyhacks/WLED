@@ -486,7 +486,7 @@ void background_loop_blocking(void* pvParameters) {
         myFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
         myFramebuffer.setTextColor(TFT_GREEN);
         myFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
-        
+
         String presetname;
 
         String fullMessage = String(serverDescription) +
@@ -830,8 +830,14 @@ void WLED::loop() {
           return;
         }
 
+        
         ppa_srm_oper_config_t srm_config = {};
-        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+        if (strip.hasWhiteChannel()) {
+          // This works well to just discard the white channel:
+          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_ARGB8888;
+        } else {
+          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+        }
         srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
         srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
         srm_config.in.block_offset_x = 0;
@@ -871,6 +877,8 @@ void WLED::loop() {
           last_us = now_us;
           ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
         }
+
+        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
 
         static unsigned long fpslastDisplayTime = 0;
 
