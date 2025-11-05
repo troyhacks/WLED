@@ -233,6 +233,7 @@ static const char *TAG = "WLED";
   static void usb_task(void *args)
   {
       usb_host_config_t host_config = {};
+      host_config.root_port_unpowered = false;
       host_config.intr_flags = ESP_INTR_FLAG_LEVEL1;
       host_config.peripheral_map = BIT(0); // <--- this may be a bug of the current IDFv5.5 with USB High-Speed devices.
 
@@ -445,26 +446,6 @@ void background_loop_blocking(void* pvParameters) {
     static uint16_t avgStripMillis = 0;
     #endif
 
-    static unsigned long fpslastDisplayTime = 0;
-
-    unsigned long now = millis();
-
-    // Check if 1000ms (1 second) have passed
-    if (now - fpslastDisplayTime >= 1000) {
-      fpslastDisplayTime = now; // Update the last run time
-
-      // --- Your code only runs here, once per second ---
-      myFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
-      myFramebuffer.setTextColor(TFT_GREEN);
-      myFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
-      // myFramebuffer.setCursor(20, 20);
-      String fullMessage = String(serverDescription) +
-        "    FPS: " + String(strip.getFps()) +
-        "    IP: " + Network.localIP().toString() + "\n";
-      myFramebuffer.drawCenterString(fullMessage,720/2,20);
-
-    }
-
     static uint8_t buttonpreset = 0;
 
     if (buttonpreset != currentPreset) {
@@ -478,17 +459,63 @@ void background_loop_blocking(void* pvParameters) {
       int radius = 20;
       int y = (totalHeight - rectHeight) / 2; // center vertically
 
-      buttonFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
-      buttonFramebuffer.setTextColor(TFT_WHITE);
-      buttonFramebuffer.setFont(&fonts::Font4);    // Use a built-in font
-
-      for (int i = 0; i < numRects; ++i) {
-        int x = i * (rectWidth + padding);
-        buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, (i + 1 == currentPreset) ? TFT_RED : TFT_BLUE);
-        String buttonval = String(i+1);
-        buttonFramebuffer.drawCenterString(buttonval, x + (rectWidth / 2), y - 5 + (rectHeight / 2));
+      if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+        buttonFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
+        buttonFramebuffer.setTextColor(TFT_WHITE);
+        buttonFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
+        
+        for (int i = 0; i < numRects; ++i) {
+          int x = i * (rectWidth + padding);
+          buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, (i + 1 == currentPreset) ? TFT_RED : TFT_BLUE);
+          String buttonval = String(i + 1);
+          buttonFramebuffer.drawCenterString(buttonval, x + (rectWidth / 2), y - (buttonFramebuffer.fontHeight()/2) +(rectHeight / 2));
+        }
+        update_screen = true;
+        xSemaphoreGive(busMutex);
       }
-      update_screen = true;
+    }
+
+    static unsigned long fpslastDisplayTime = 0;
+
+    unsigned long now = millis();
+
+    // Check if 1000ms (1 second) have passed
+    if (now - fpslastDisplayTime >= 1000 || update_screen) {
+      if (!update_screen) fpslastDisplayTime = now; // Update the last run time
+      if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+        myFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
+        myFramebuffer.setTextColor(TFT_GREEN);
+        myFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
+        
+        String presetname;
+
+        String fullMessage = String(serverDescription) +
+          "    FPS: " + String(strip.getFps()) +
+          "    IP: " + Network.localIP().toString();
+        myFramebuffer.drawCenterString(fullMessage, 720 / 2, 20);
+
+        CacheStatus status = ImageCacheManager::getInstance().getStatus();
+        String cachestatus = "";
+
+        switch (status) {
+        case CacheStatus::PRELOADING_BG:
+          cachestatus = " (USB Caching)";
+          break;
+        case CacheStatus::LOADING_DEMAND:
+          cachestatus = "(USB On-Demand Load)";
+          break;
+        }
+      
+        if (getPresetName(currentPreset, presetname)) {
+          myFramebuffer.setTextColor(TFT_RED);
+          myFramebuffer.drawCenterString(presetname + cachestatus, 720 / 2, 65);
+        } else {
+          String effectname = strip.getEffectName(effectCurrent,true);
+          myFramebuffer.setTextColor(TFT_BLUE);
+          myFramebuffer.drawCenterString(effectname + cachestatus, 720 / 2, 65);
+        }
+        xSemaphoreGive(busMutex);
+      }
     }
 
     if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
@@ -803,10 +830,6 @@ void WLED::loop() {
           return;
         }
 
-        void* fb0_ptr = NULL;
-        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
-        uint8_t* fb0 = (uint8_t*)fb0_ptr;
-
         ppa_srm_oper_config_t srm_config = {};
         srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
         srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
@@ -814,7 +837,6 @@ void WLED::loop() {
         srm_config.in.block_offset_x = 0;
         srm_config.in.block_offset_y = 0;
         srm_config.in.buffer = busPixelData;
-        srm_config.out.buffer = fb0;
         srm_config.out.buffer_size = 720 * 720 * 3;
         srm_config.in.pic_w = SEGMENT.maxWidth;
         srm_config.in.pic_h = SEGMENT.maxHeight;
@@ -838,15 +860,25 @@ void WLED::loop() {
         srm_config.mode = PPA_TRANS_MODE_BLOCKING;
         srm_config.in.block_w = SEGMENT.maxWidth;
         srm_config.in.block_h = SEGMENT.maxHeight;
-        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+        void* fb0_ptr = NULL;
+        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+        uint8_t* fb0 = (uint8_t*)fb0_ptr;
+        srm_config.out.buffer = fb0;
+
+        static int64_t last_us = 0;
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_us >= 33333) {
+          last_us = now_us;
+          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+        }
 
         static unsigned long fpslastDisplayTime = 0;
 
         unsigned long now = millis();
 
         // Check if 1000ms (1 second) have passed
-        if (now - fpslastDisplayTime >= 1000) {
-          fpslastDisplayTime = now; // Update the last run time
+        if (now - fpslastDisplayTime >= 1000 || update_screen) {
+          if (!update_screen) fpslastDisplayTime = now; // Update the last run time
           srm_config.in.buffer = (uint8_t*)myFramebuffer.getBuffer();
           srm_config.in.pic_w = myFramebuffer.width();
           srm_config.in.pic_h = myFramebuffer.height();
@@ -1821,7 +1853,7 @@ void WLED::setup() {
   buttonFramebuffer.setColorDepth(24);
   
   // --- 2. Allocate the Buffer ---
-  if (!myFramebuffer.createSprite(720,60)) {
+  if (!myFramebuffer.createSprite(720,100)) {
     Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
     while (1);
   }
