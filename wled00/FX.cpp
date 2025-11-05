@@ -9768,6 +9768,30 @@ void WS2812FX::addEffect(uint8_t id, mode_ptr mode_fn, const char *mode_name) {
   }
 }
 
+String WS2812FX::getEffectName(uint8_t id, bool stripUnicode) {
+  if (id >= _modeData.size() || _modeData[id] == _data_RESERVED) return "";
+
+  const char* raw = _modeData[id];
+  const char* at = strchr(raw, '@');
+  size_t len = at ? (size_t)(at - raw) : strlen(raw);
+
+  String name(raw, len);
+
+  if (stripUnicode) {
+    String clean;
+    for (size_t i = 0; i < name.length(); i++) {
+      char c = name[i];
+      // keep only ASCII printable
+      if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
+        clean += c;
+      }
+    }
+    return clean;
+  }
+
+  return name;
+}
+
 void WS2812FX::setupEffectData() {
   // Solid must be first! (assuming vector is empty upon call to setup)
   _mode.push_back(&mode_static);
