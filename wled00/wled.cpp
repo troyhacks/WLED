@@ -10,7 +10,10 @@ static const char *TAG = "WLED";
   #include "esp_lcd_mipi_dsi.h"
   #include "esp_lcd_st7703.h"
   #include "esp_cache.h"
-  
+  #include <LovyanGFX.hpp>
+  static LGFX_Sprite myFramebuffer;
+  static LGFX_Sprite buttonFramebuffer;
+
   #include "esp_ldo_regulator.h" // ESP32-P4 for higher GPIOS.
   esp_ldo_channel_handle_t ldo2 = NULL;
   esp_ldo_channel_handle_t ldo3 = NULL;
@@ -442,13 +445,58 @@ void background_loop_blocking(void* pvParameters) {
     static uint16_t avgStripMillis = 0;
     #endif
 
+    static unsigned long fpslastDisplayTime = 0;
+
+    unsigned long now = millis();
+
+    // Check if 1000ms (1 second) have passed
+    if (now - fpslastDisplayTime >= 1000) {
+      fpslastDisplayTime = now; // Update the last run time
+
+      // --- Your code only runs here, once per second ---
+      myFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
+      myFramebuffer.setTextColor(TFT_GREEN);
+      myFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
+      // myFramebuffer.setCursor(20, 20);
+      String fullMessage = String(serverDescription) +
+        "    FPS: " + String(strip.getFps()) +
+        "    IP: " + Network.localIP().toString() + "\n";
+      myFramebuffer.drawCenterString(fullMessage,720/2,20);
+
+    }
+
+    static uint8_t buttonpreset = 0;
+
+    if (buttonpreset != currentPreset) {
+      buttonpreset = currentPreset;
+      int totalWidth = 720;
+      int totalHeight = 180;
+      int numRects = 8;
+      int padding = 20;
+      int rectWidth = (totalWidth - (numRects - 1) * padding) / numRects; // ≈111
+      int rectHeight = 120;
+      int radius = 20;
+      int y = (totalHeight - rectHeight) / 2; // center vertically
+
+      buttonFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
+      buttonFramebuffer.setTextColor(TFT_WHITE);
+      buttonFramebuffer.setFont(&fonts::Font4);    // Use a built-in font
+
+      for (int i = 0; i < numRects; ++i) {
+        int x = i * (rectWidth + padding);
+        buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, (i + 1 == currentPreset) ? TFT_RED : TFT_BLUE);
+        String buttonval = String(i+1);
+        buttonFramebuffer.drawCenterString(buttonval, x + (rectWidth / 2), y - 5 + (rectHeight / 2));
+      }
+      update_screen = true;
+    }
 
     if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
       usermods.loop();
       xSemaphoreGive(busMutex);
     }
 
-    #ifdef WLED_DEBUG
+    #ifdef WLED_DEBUGX
     usermodMillis = millis() - usermodMillis;
     avgUsermodMillis += usermodMillis;
     if (usermodMillis > maxUsermodMillis) maxUsermodMillis = usermodMillis;
@@ -572,12 +620,34 @@ void background_loop_nonblocking(void* pvParameters) {
           USER_PRINTF("TOUCH: cnt=%d x=%d y=%d strength=%d\n", cur_cnt, cur_x, cur_y, cur_strength);
           // USER_PRINTF("  touch buffer idx0: x0=%d y0=%d str0=%d\n", touchscreen_x[0], touchscreen_y[0], touchscreen_strength[0]);
 
-          USER_PRINTF("Current Preset = %d trying %d last requested %d\n", currentPreset, currentPreset + 1, requested_preset);
-          requested_preset = currentPreset + 1;
-          applyPreset(requested_preset);
-          handlePresets();
-          if (currentPreset != requested_preset) {
-            applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+          if (cur_y > 540) {
+            // Special case: touch in preset zone
+            uint8_t buttons = 8;
+            int zoneWidth = 720 / buttons; // assuming screen width is 720
+
+            int zoneIndex = cur_x / zoneWidth; // 0-based index
+            uint8_t requested_preset = zoneIndex + 1; // convert to 1-based preset
+
+            USER_PRINTF("Touch in preset zone %d → applying preset %d\n", zoneIndex, requested_preset);
+            applyPreset(requested_preset);
+            handlePresets();
+
+            // if (currentPreset != requested_preset) {
+            //   applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+            // }
+          } else {
+            // Standard fallback logic
+            uint8_t requested_preset = currentPreset + 1;
+
+            USER_PRINTF("Current Preset = %d trying %d last requested %d\n",
+              currentPreset, requested_preset, requested_preset);
+
+            applyPreset(requested_preset);
+            handlePresets();
+
+            if (currentPreset != requested_preset) {
+              applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+            }
           }
         }
       }
@@ -769,6 +839,40 @@ void WLED::loop() {
         srm_config.in.block_w = SEGMENT.maxWidth;
         srm_config.in.block_h = SEGMENT.maxHeight;
         ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+
+        static unsigned long fpslastDisplayTime = 0;
+
+        unsigned long now = millis();
+
+        // Check if 1000ms (1 second) have passed
+        if (now - fpslastDisplayTime >= 1000) {
+          fpslastDisplayTime = now; // Update the last run time
+          srm_config.in.buffer = (uint8_t*)myFramebuffer.getBuffer();
+          srm_config.in.pic_w = myFramebuffer.width();
+          srm_config.in.pic_h = myFramebuffer.height();
+          srm_config.scale_x = 1;
+          srm_config.scale_y = 1;
+          srm_config.in.block_w = srm_config.in.pic_w;
+          srm_config.in.block_h = srm_config.in.pic_h;
+          srm_config.out.block_offset_x = 0;
+          srm_config.out.block_offset_y = 0;
+          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+
+        }
+
+        if (update_screen) {
+          update_screen = false;
+          srm_config.in.buffer = (uint8_t*)buttonFramebuffer.getBuffer();
+          srm_config.in.pic_w = buttonFramebuffer.width();
+          srm_config.in.pic_h = buttonFramebuffer.height();
+          srm_config.scale_x = 1;
+          srm_config.scale_y = 1;
+          srm_config.in.block_w = srm_config.in.pic_w;
+          srm_config.in.block_h = srm_config.in.pic_h;
+          srm_config.out.block_offset_x = 0;
+          srm_config.out.block_offset_y = 540;
+          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+        }
 
         xSemaphoreGive(busMutex);
       }
@@ -1565,6 +1669,16 @@ void WLED::setup() {
   dpi_config.video_timing.vsync_pulse_width = 4;      // magic value
   dpi_config.video_timing.vsync_front_porch = 20;     // magic value
 
+  // // Use Standard Timings (from JD9365_800_1280_PANEL_60HZ_DPI_CONFIG)
+  // dpi_config.dpi_clock_freq_mhz = 80; // important: your "FPS" 
+  // dpi_config.video_timing.h_size = 800;
+  // dpi_config.video_timing.v_size = 1280;
+  // dpi_config.video_timing.hsync_back_porch = 20;
+  // dpi_config.video_timing.hsync_pulse_width = 20;
+  // dpi_config.video_timing.hsync_front_porch = 40;
+  // dpi_config.video_timing.vsync_back_porch = 10;
+  // dpi_config.video_timing.vsync_pulse_width = 4;
+  // dpi_config.video_timing.vsync_front_porch = 30;
 
   dpi_config.flags.use_dma2d = false;
   dpi_config.flags.disable_lp = true;
@@ -1645,37 +1759,56 @@ void WLED::setup() {
   }
   USER_PRINTF("Got frame buffer pointer: %p\n", fb0);
 
-  const int bytes_per_pixel = 3;
-  uint16_t h_res = 720;
-  uint16_t v_res = 720;
-  uint32_t buffer_size = h_res * v_res * bytes_per_pixel;
+  // const int bytes_per_pixel = 3;
+  // uint16_t h_res = 720;
+  // uint16_t v_res = 720;
+  // uint32_t buffer_size = h_res * v_res * bytes_per_pixel;
 
-  for (uint16_t y = 0; y < v_res; y++) {
-    uint8_t line_r = 0;
-    uint8_t line_g = 0;
-    uint8_t line_b = 0;
+  // for (uint16_t y = 0; y < v_res; y++) {
+  //   uint8_t line_r = 0;
+  //   uint8_t line_g = 0;
+  //   uint8_t line_b = 0;
 
-    uint16_t line_block = y / 32;
+  //   uint16_t line_block = y / 32;
 
-    line_r = beatsin8(60, 0, 255, line_block * 32, 0);
-    line_g = beatsin8(60, 0, 255, line_block * 32, 85);
-    line_b = beatsin8(60, 0, 255, line_block * 32, 170);
+  //   line_r = beatsin8(60, 0, 255, line_block * 32, 0);
+  //   line_g = beatsin8(60, 0, 255, line_block * 32, 85);
+  //   line_b = beatsin8(60, 0, 255, line_block * 32, 170);
 
-    for (uint16_t x = 0; x < h_res; x++) {
+  //   for (uint16_t x = 0; x < h_res; x++) {
 
-      uint32_t pixel_index = (uint32_t)y * h_res + x;
-      uint32_t byte_offset = pixel_index * bytes_per_pixel;
+  //     uint32_t pixel_index = (uint32_t)y * h_res + x;
+  //     uint32_t byte_offset = pixel_index * bytes_per_pixel;
 
-      fb0[byte_offset + 0] = line_r; // Red
-      fb0[byte_offset + 1] = line_g; // Green
-      fb0[byte_offset + 2] = line_b; // Blue
+  //     fb0[byte_offset + 0] = line_r; // Red
+  //     fb0[byte_offset + 1] = line_g; // Green
+  //     fb0[byte_offset + 2] = line_b; // Blue
 
-    }
-  }
+  //   }
+  // }
   
+  myFramebuffer.setPsram(true);
+  buttonFramebuffer.setPsram(true);
+
+  // Set the color depth to 24-bit RGB888
+  // You can also use 32 for ARGB8888, which is often faster
+  myFramebuffer.setColorDepth(24);
+  buttonFramebuffer.setColorDepth(24);
+  
+  // --- 2. Allocate the Buffer ---
+  if (!myFramebuffer.createSprite(720,60)) {
+    Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
+    while (1);
+  }
+
+  if (!buttonFramebuffer.createSprite(720, 180)) {
+    Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
+    while (1);
+  }
+
   // Ensure the data written by the CPU is visible in PSRAM for the DMA
   // Doesn't seem to be needed?
-  ESP_ERROR_CHECK(esp_cache_msync((void*)fb0, buffer_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M));
+  // ESP_ERROR_CHECK(esp_cache_msync((void*)fb0, buffer_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M));
 
   USER_PRINT(F("Free heap ")); USER_PRINTLN(ESP.getFreeHeap());USER_PRINTLN();
   USER_PRINTLN(F("WLED initialization done.\n"));

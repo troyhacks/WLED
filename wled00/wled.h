@@ -333,6 +333,7 @@ WLED_GLOBAL uint16_t touchscreen_y[1];
 WLED_GLOBAL uint16_t touchscreen_strength[1];
 WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
 WLED_GLOBAL bool touchpad_pressed _INIT(false);
+WLED_GLOBAL bool update_screen _INIT(false);
 #endif
 
 // Global Variable definitions
