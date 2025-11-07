@@ -9,6 +9,7 @@ static const char *TAG = "WLED";
   #include "esp_lcd_panel_io.h"
   #include "esp_lcd_mipi_dsi.h"
   #include "esp_lcd_st7703.h"
+  #include "troyhacks_lcd_jd9365_10_1.h"
   #include "esp_cache.h"
   #include <LovyanGFX.hpp>
   static LGFX_Sprite myFramebuffer;
@@ -450,7 +451,7 @@ void background_loop_blocking(void* pvParameters) {
 
     if (buttonpreset != currentPreset) {
       buttonpreset = currentPreset;
-      int totalWidth = 720;
+      int totalWidth = buttonFramebuffer.width();
       int totalHeight = 180;
       int numRects = 8;
       int padding = 20;
@@ -492,7 +493,7 @@ void background_loop_blocking(void* pvParameters) {
         String fullMessage = String(serverDescription) +
           "    FPS: " + String(strip.getFps()) +
           "    IP: " + Network.localIP().toString();
-        myFramebuffer.drawCenterString(fullMessage, 720 / 2, 20);
+        myFramebuffer.drawCenterString(fullMessage, WLEDMM_DISPLAY_W / 2, 20);
 
         CacheStatus status = ImageCacheManager::getInstance().getStatus();
         String cachestatus = "";
@@ -508,11 +509,11 @@ void background_loop_blocking(void* pvParameters) {
       
         if (getPresetName(currentPreset, presetname)) {
           myFramebuffer.setTextColor(TFT_RED);
-          myFramebuffer.drawCenterString(presetname + cachestatus, 720 / 2, 65);
+          myFramebuffer.drawCenterString(presetname + cachestatus, WLEDMM_DISPLAY_W / 2, 65);
         } else {
           String effectname = strip.getEffectName(effectCurrent,true);
           myFramebuffer.setTextColor(TFT_BLUE);
-          myFramebuffer.drawCenterString(effectname + cachestatus, 720 / 2, 65);
+          myFramebuffer.drawCenterString(effectname + cachestatus, WLEDMM_DISPLAY_W / 2, 65);
         }
         xSemaphoreGive(busMutex);
       }
@@ -843,21 +844,21 @@ void WLED::loop() {
         srm_config.in.block_offset_x = 0;
         srm_config.in.block_offset_y = 0;
         srm_config.in.buffer = busPixelData;
-        srm_config.out.buffer_size = 720 * 720 * 3;
+        srm_config.out.buffer_size = WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
         srm_config.in.pic_w = SEGMENT.maxWidth;
         srm_config.in.pic_h = SEGMENT.maxHeight;
-        srm_config.out.pic_w = 720;
-        srm_config.out.pic_h = 720;
+        srm_config.out.pic_w = WLEDMM_DISPLAY_W;
+        srm_config.out.pic_h = WLEDMM_DISPLAY_H;
 
-        float reference_size = 720.0f; // or whatever your target size is
+        float reference_size = float(WLEDMM_DISPLAY_W); // or whatever your target size is
         float dominant_dim = (SEGMENT.maxWidth > SEGMENT.maxHeight) ? SEGMENT.maxWidth : SEGMENT.maxHeight;
         float scale = reference_size / dominant_dim;
 
         srm_config.scale_x = scale;
         srm_config.scale_y = scale;
 
-        srm_config.out.block_offset_x = (720 - (SEGMENT.maxWidth * scale)) / 2;
-        srm_config.out.block_offset_y = (720 - (SEGMENT.maxHeight * scale)) / 2;
+        srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (SEGMENT.maxWidth * scale)) / 2;
+        srm_config.out.block_offset_y = (WLEDMM_DISPLAY_H - (SEGMENT.maxHeight * scale)) / 2;
 
         srm_config.mirror_x = false;
         srm_config.mirror_y = false;
@@ -910,7 +911,7 @@ void WLED::loop() {
           srm_config.in.block_w = srm_config.in.pic_w;
           srm_config.in.block_h = srm_config.in.pic_h;
           srm_config.out.block_offset_x = 0;
-          srm_config.out.block_offset_y = 540;
+          srm_config.out.block_offset_y = WLEDMM_DISPLAY_H - buttonFramebuffer.height();
           ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
         }
 
@@ -1043,6 +1044,48 @@ void WLED::disableWatchdog() {
 }
 
 int retry_num=0;
+
+void scan_i2c_bus(i2c_port_t port) {
+  USER_PRINTF("Scanning I2C bus %d...\n", port);
+  uint8_t address;
+  for (address = 1; address < 127; address++) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (address << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_stop(cmd);
+
+    esp_err_t ret = i2c_master_cmd_begin(port, cmd, 100 / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+
+    if (ret == ESP_OK) {
+      USER_PRINTF("Found device at I2C address 0x%02X\n", address);
+    }
+  }
+  USER_PRINTLN("I2C scan complete.");
+}
+
+void scan_i2c_bus_arduino(TwoWire& bus) {
+
+  uint8_t address;
+  uint8_t ret;
+
+  for (address = 1; address < 127; address++) {
+    // Start a transmission to the I2C address
+    bus.beginTransmission(address);
+
+    // endTransmission() sends a STOP and returns:
+    // 0: Success (device acknowledged the address)
+    // 2: NACK on address (no device at this address)
+    // 4: Other error
+    ret = bus.endTransmission();
+
+    if (ret == 0) {
+      USER_PRINTF("Found device at I2C address 0x%02X\n", address);
+    }
+  }
+
+  USER_PRINTLN("I2C scan complete.");
+}
 
 static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 
@@ -1686,14 +1729,50 @@ void WLED::setup() {
   };
   ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
 
+  esp_lcd_dpi_panel_config_t dpi_config;
+  memset(&dpi_config, 0, sizeof(dpi_config));
+  dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+  dpi_config.dpi_clock_freq_mhz = 80; // Use 80MHz for JD9365 800x1280 60Hz panel
+  dpi_config.virtual_channel = 0;
+
+  dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
+  dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
+  dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
+
+  dpi_config.num_fbs = 1;
+
+  dpi_config.video_timing.h_size = WLEDMM_DISPLAY_W;
+  dpi_config.video_timing.v_size = WLEDMM_DISPLAY_H;
+
+  dpi_config.video_timing.hsync_front_porch = 40;
+  dpi_config.video_timing.hsync_pulse_width = 20;
+  dpi_config.video_timing.hsync_back_porch = 20;
+
+  dpi_config.video_timing.vsync_front_porch = 30;
+  dpi_config.video_timing.vsync_pulse_width = 4;
+  dpi_config.video_timing.vsync_back_porch = 10;
+
+  dpi_config.flags.use_dma2d = false;
+  dpi_config.flags.disable_lp = true;
+
+  // H total = h_size + dpi_config.video_timing.hsync_front_porch + hsync_pulse_width + hsync_back_porch
+  // V Total = v_size + vsync_front_porch + vsync_pulse_width + vsync_back_porch
+  // lane_bit_rate_mbps = (H Total * V Total * FPS * BPP) / (num_data_lanes * 1000000)
+
   USER_PRINTLN("Initialize MIPI DSI bus");
   esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
 
+  // esp_lcd_dsi_bus_config_t bus_config = {
+  //     .bus_id = 0,
+  //     .num_data_lanes = 2, // this is important, and I think we need 2.
+  //     .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+  //     .lane_bit_rate_mbps = 720, // this is tied to FPS and BPP and the magic values
+  // };
   esp_lcd_dsi_bus_config_t bus_config = {
-      .bus_id = 0,
-      .num_data_lanes = 2, // this is important, and I think we need 2.
-      .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
-      .lane_bit_rate_mbps = 720, // this is tied to FPS and BPP and the magic values
+    .bus_id = 0,
+    .num_data_lanes = 2, 
+    .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT, 
+    .lane_bit_rate_mbps = 960,  // JD9365 requires 800MHz lane bit rate // TroyHacks calculator says 960
   };
   ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
@@ -1703,79 +1782,104 @@ void WLED::setup() {
 
   USER_PRINTLN("Install panel IO");
   esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
-  esp_lcd_dbi_io_config_t dbi_config = {
-      .virtual_channel = 0,
-      .lcd_cmd_bits = 8,
-      .lcd_param_bits = 8,
-  };
+  // esp_lcd_dbi_io_config_t dbi_config = {
+  //     .virtual_channel = 0,
+  //     .lcd_cmd_bits = 8,
+  //     .lcd_param_bits = 8,
+  // };
+  esp_lcd_dbi_io_config_t dbi_config = JD9365_PANEL_IO_DBI_CONFIG();
   ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io));
 
-  USER_PRINTLN("Install ST7703 panel driver");
+  // USER_PRINTLN("Install ST7703 panel driver");
+  USER_PRINTLN("Install JD9365S panel driver");
 
-  esp_lcd_dpi_panel_config_t dpi_config = {};
+  // esp_lcd_dpi_panel_config_t dpi_config = {};
 
-  dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-  dpi_config.dpi_clock_freq_mhz = 60; // important: your "FPS" 
-  dpi_config.virtual_channel = 0;
+  // dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+  // dpi_config.dpi_clock_freq_mhz = 60; // important: your "FPS" 
+  // dpi_config.virtual_channel = 0;
 
-  dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
-  dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
-  dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
+  // dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
+  // dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
+  // dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
 
-  dpi_config.num_fbs = 1;
+  // dpi_config.num_fbs = 1;
 
-  // Use Standard Timings (from ST7703_720_720_PANEL_60HZ_DPI_CONFIG)
-  dpi_config.video_timing.h_size = 720;
-  dpi_config.video_timing.v_size = 720;
-  dpi_config.video_timing.hsync_back_porch = 120;     // magic value
-  dpi_config.video_timing.hsync_pulse_width = 60;     // magic value
-  dpi_config.video_timing.hsync_front_porch = 106;    // magic value
-  dpi_config.video_timing.vsync_back_porch = 20;      // magic value
-  dpi_config.video_timing.vsync_pulse_width = 4;      // magic value
-  dpi_config.video_timing.vsync_front_porch = 20;     // magic value
+  // // Use Standard Timings (from ST7703_720_720_PANEL_60HZ_DPI_CONFIG)
+  // dpi_config.video_timing.h_size = 720;
+  // dpi_config.video_timing.v_size = 720;
+  // dpi_config.video_timing.hsync_back_porch = 120;     // magic value
+  // dpi_config.video_timing.hsync_pulse_width = 60;     // magic value
+  // dpi_config.video_timing.hsync_front_porch = 106;    // magic value
+  // dpi_config.video_timing.vsync_back_porch = 20;      // magic value
+  // dpi_config.video_timing.vsync_pulse_width = 4;      // magic value
+  // dpi_config.video_timing.vsync_front_porch = 20;     // magic value
 
-  // // Use Standard Timings (from JD9365_800_1280_PANEL_60HZ_DPI_CONFIG)
-  // dpi_config.dpi_clock_freq_mhz = 80; // important: your "FPS" 
-  // dpi_config.video_timing.h_size = 800;
-  // dpi_config.video_timing.v_size = 1280;
-  // dpi_config.video_timing.hsync_back_porch = 20;
-  // dpi_config.video_timing.hsync_pulse_width = 20;
-  // dpi_config.video_timing.hsync_front_porch = 40;
-  // dpi_config.video_timing.vsync_back_porch = 10;
-  // dpi_config.video_timing.vsync_pulse_width = 4;
-  // dpi_config.video_timing.vsync_front_porch = 30;
+  // // // Use Standard Timings (from JD9365_800_1280_PANEL_60HZ_DPI_CONFIG)
+  // // dpi_config.dpi_clock_freq_mhz = 80; // important: your "FPS" 
+  // // dpi_config.video_timing.h_size = 800;
+  // // dpi_config.video_timing.v_size = 1280;
+  // // dpi_config.video_timing.hsync_back_porch = 20;
+  // // dpi_config.video_timing.hsync_pulse_width = 20;
+  // // dpi_config.video_timing.hsync_front_porch = 40;
+  // // dpi_config.video_timing.vsync_back_porch = 10;
+  // // dpi_config.video_timing.vsync_pulse_width = 4;
+  // // dpi_config.video_timing.vsync_front_porch = 30;
 
-  dpi_config.flags.use_dma2d = false;
-  dpi_config.flags.disable_lp = true;
+  // dpi_config.flags.use_dma2d = false;
+  // dpi_config.flags.disable_lp = true;
 
-  st7703_vendor_config_t vendor_config = {};
+  jd9365_vendor_config_t vendor_config;
+  memset(&vendor_config, 0, sizeof(vendor_config));
   vendor_config.flags.use_mipi_interface = 1;
+  vendor_config.mipi_config.lane_num = 2;
   vendor_config.mipi_config.dsi_bus = mipi_dsi_bus;
   vendor_config.mipi_config.dpi_config = &dpi_config;
+  
+  // st7703_vendor_config_t vendor_config = {};
+  // vendor_config.flags.use_mipi_interface = 1;
+  // vendor_config.mipi_config.dsi_bus = mipi_dsi_bus;
+  // vendor_config.mipi_config.dpi_config = &dpi_config;
+
+  // const esp_lcd_panel_dev_config_t panel_config = {
+  //     .reset_gpio_num = 27,
+  //     .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+  //     .bits_per_pixel = 24, // important: your bits per pixel. 24 for RGB888
+  //     .vendor_config = &vendor_config,
+  // };
 
   const esp_lcd_panel_dev_config_t panel_config = {
-      .reset_gpio_num = 27,
-      .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
-      .bits_per_pixel = 24, // important: your bits per pixel. 24 for RGB888
-      .vendor_config = &vendor_config,
+    .reset_gpio_num = -1,           // Set to -1 if not use
+    .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR, // needed for jd9365
+    .bits_per_pixel = 24,    // Implemented by LCD command `3Ah` (16/18/24)
+    .vendor_config = &vendor_config,
   };
 
-  ESP_ERROR_CHECK(esp_lcd_new_panel_st7703(mipi_dbi_io, &panel_config, &panel_handle));
+  // ESP_ERROR_CHECK(esp_lcd_new_panel_st7703(mipi_dbi_io, &panel_config, &panel_handle));
+  ESP_ERROR_CHECK(esp_lcd_new_panel_jd9365(mipi_dbi_io, &panel_config, &panel_handle));
+  USER_PRINTLN("Install JD9365S panel resert");
   ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+  USER_PRINTLN("Install JD9365S panel init");
   ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle)); // Uses default init now
+  USER_PRINTLN("Install JD9365S panel display_on");
   ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-  esp_lcd_panel_io_i2c_config_t touch_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
-
-  esp_lcd_touch_io_gt911_config_t tp_gt911_config = {
-      .dev_addr = uint8_t(touch_io_config.dev_addr),
+  esp_lcd_panel_io_i2c_config_t touch_io_config = {
+    .dev_addr = 0x45,              // The touch chip address
+    .control_phase_bytes = 1,
+    .dc_bit_offset = 0,
+    .lcd_cmd_bits = 16,            // 16-bit registers for GT9xxx
+    .flags = {
+        .disable_control_phase = 0 // GT9xxx needs this
+    },
   };
 
+  // 2. Set up the touch panel config
   esp_lcd_touch_config_t tp_cfg = {
-      .x_max = 720,
-      .y_max = 720,
-      .rst_gpio_num = GPIO_NUM_23,
-      .int_gpio_num = GPIO_NUM_NC,
+      .x_max = WLEDMM_DISPLAY_W,
+      .y_max = WLEDMM_DISPLAY_H,
+      .rst_gpio_num = GPIO_NUM_NC, // Correct, it's not on the connector
+      .int_gpio_num = GPIO_NUM_NC, // Correct
       .levels = {
           .reset = 0,
           .interrupt = 0,
@@ -1785,34 +1889,51 @@ void WLED::setup() {
           .mirror_x = 0,
           .mirror_y = 0,
       },
-      .driver_data = &tp_gt911_config,
   };
 
-  i2c_config_t i2c_conf = {};
-  i2c_conf.mode = I2C_MODE_MASTER;
-  i2c_conf.sda_io_num = HW_PIN_SDA;
-  i2c_conf.scl_io_num = HW_PIN_SCL;
-  i2c_conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-  i2c_conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-  i2c_conf.master.clk_speed = 400000;
-  i2c_conf.clk_flags = 0;
+  scan_i2c_bus_arduino(Wire);
 
-  esp_err_t err = i2c_param_config(I2C_NUM_1, &i2c_conf);
-  if (err != ESP_OK) {
-    ESP_LOGE("I2C_INIT", "I2C param config failed: %s", esp_err_to_name(err));
-    return; // or handle error
+  Wire.beginTransmission(touch_io_config.dev_addr);
+  Wire.write(0x95);   // register address
+  Wire.write(0x11);   // data
+  Wire.endTransmission();
+
+  // Write 0x17 to register 0x95
+  Wire.beginTransmission(touch_io_config.dev_addr);
+  Wire.write(0x95);
+  Wire.write(0x17);
+  Wire.endTransmission();
+
+  // Write 0x00 to register 0x96
+  Wire.beginTransmission(touch_io_config.dev_addr);
+  Wire.write(0x96);
+  Wire.write(0x00);
+  Wire.endTransmission();
+
+  delay(100);  // vTaskDelay(pdMS_TO_TICKS(100))
+
+  // Write 0xFF to register 0x96
+  Wire.beginTransmission(touch_io_config.dev_addr);
+  Wire.write(0x96);
+  Wire.write(0xFF);
+  Wire.endTransmission();
+
+  delay(1000);
+
+  // 3. Create the I/O handle.
+  // This will NOT fail. It will find the existing driver 
+  // on port 1 and "attach" to it.
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_new_panel_io_i2c(I2S_NUM_0, &touch_io_config, &touch_io_handle));
+
+  // 4. Create the touch driver
+  // Use the GT911 driver, which works for the GT9271
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_touch_new_i2c_gt911(touch_io_handle, &tp_cfg, &tp));
+
+  if (tp) {
+    USER_PRINTF("Successfully initialized touch panel %p\n", tp);
+  } else {
+    USER_PRINTLN("FATAL: Failed to initialize touch panel!");
   }
-
-  err = i2c_driver_install(I2C_NUM_1, i2c_conf.mode, 0, 0, 0); // No buffers needed for master mode
-  if (err != ESP_OK) {
-    ESP_LOGE("I2C_INIT", "I2C driver install failed: %s", esp_err_to_name(err));
-    return; // or handle error
-  }
-
-  ESP_LOGI("I2C_INIT", "I2C driver installed successfully");
-
-  esp_lcd_new_panel_io_i2c(1, &touch_io_config, &touch_io_handle);
-  esp_lcd_touch_new_i2c_gt911(touch_io_handle, &tp_cfg, &tp);
 
   void* fb0_ptr = NULL;
   ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
@@ -1824,33 +1945,33 @@ void WLED::setup() {
   }
   USER_PRINTF("Got frame buffer pointer: %p\n", fb0);
 
-  // const int bytes_per_pixel = 3;
-  // uint16_t h_res = 720;
-  // uint16_t v_res = 720;
-  // uint32_t buffer_size = h_res * v_res * bytes_per_pixel;
+  const int bytes_per_pixel = 3;
+  uint16_t h_res = WLEDMM_DISPLAY_W;
+  uint16_t v_res = WLEDMM_DISPLAY_H;
+  uint32_t buffer_size = h_res * v_res * bytes_per_pixel;
 
-  // for (uint16_t y = 0; y < v_res; y++) {
-  //   uint8_t line_r = 0;
-  //   uint8_t line_g = 0;
-  //   uint8_t line_b = 0;
+  for (uint16_t y = 0; y < v_res; y++) {
+    uint8_t line_r = 0;
+    uint8_t line_g = 0;
+    uint8_t line_b = 0;
 
-  //   uint16_t line_block = y / 32;
+    uint16_t line_block = y / 32;
 
-  //   line_r = beatsin8(60, 0, 255, line_block * 32, 0);
-  //   line_g = beatsin8(60, 0, 255, line_block * 32, 85);
-  //   line_b = beatsin8(60, 0, 255, line_block * 32, 170);
+    line_r = beatsin8(60, 0, 255, line_block * 32, 0);
+    line_g = beatsin8(60, 0, 255, line_block * 32, 85);
+    line_b = beatsin8(60, 0, 255, line_block * 32, 170);
 
-  //   for (uint16_t x = 0; x < h_res; x++) {
+    for (uint16_t x = 0; x < h_res; x++) {
 
-  //     uint32_t pixel_index = (uint32_t)y * h_res + x;
-  //     uint32_t byte_offset = pixel_index * bytes_per_pixel;
+      uint32_t pixel_index = (uint32_t)y * h_res + x;
+      uint32_t byte_offset = pixel_index * bytes_per_pixel;
 
-  //     fb0[byte_offset + 0] = line_r; // Red
-  //     fb0[byte_offset + 1] = line_g; // Green
-  //     fb0[byte_offset + 2] = line_b; // Blue
+      fb0[byte_offset + 0] = line_r; // Red
+      fb0[byte_offset + 1] = line_g; // Green
+      fb0[byte_offset + 2] = line_b; // Blue
 
-  //   }
-  // }
+    }
+  }
   
   myFramebuffer.setPsram(true);
   buttonFramebuffer.setPsram(true);
@@ -1861,12 +1982,12 @@ void WLED::setup() {
   buttonFramebuffer.setColorDepth(24);
   
   // --- 2. Allocate the Buffer ---
-  if (!myFramebuffer.createSprite(720,100)) {
+  if (!myFramebuffer.createSprite(WLEDMM_DISPLAY_W, 100)) {
     Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
     while (1);
   }
 
-  if (!buttonFramebuffer.createSprite(720, 180)) {
+  if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, 180)) {
     Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
     while (1);
   }

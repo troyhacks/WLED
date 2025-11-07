@@ -317,6 +317,12 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 #include "ImageCacheManager.h"
 #include "esp_lcd_types.h"
 #include "esp_lcd_touch_gt911.h"
+#ifndef WLEDMM_DISPLAY_W
+  #define WLEDMM_DISPLAY_W 720
+#endif
+#ifndef WLEDMM_DISPLAY_H
+  #define WLEDMM_DISPLAY_H 720
+#endif
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
