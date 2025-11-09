@@ -9,7 +9,7 @@
 
 #include "wled.h"
 #include <Arduino.h>
-#include <Wire.h>
+// #include <Wire.h>
 #include <BME280I2C.h>               // BME280 sensor
 #include <EnvironmentCalculations.h> // BME280 extended measurements
 

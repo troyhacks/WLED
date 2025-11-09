@@ -28,7 +28,7 @@
 #else
 #include "WiFi.h"
 #endif
-#include <Wire.h>
+// #include <Wire.h>
 
 #ifndef TFT_DISPOFF
 #define TFT_DISPOFF 0x28

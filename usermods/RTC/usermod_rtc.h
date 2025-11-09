@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>   // WLEDMM: make sure that I2C drivers have the "right" Wire Object
-#include <Wire.h>
+// #include <Wire.h>
 
 #include "src/dependencies/time/DS1307RTC.h"
 #include "wled.h"

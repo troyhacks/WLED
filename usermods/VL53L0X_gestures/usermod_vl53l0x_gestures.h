@@ -17,7 +17,7 @@
 
 #include "wled.h"
 
-#include <Wire.h>
+// #include <Wire.h>
 #include <VL53L0X.h>
 
 #ifndef VL53L0X_MAX_RANGE_MM

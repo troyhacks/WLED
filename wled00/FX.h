@@ -20,7 +20,7 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FASTLED_INTERNAL //remove annoying pragma messages
 #define USE_GET_MILLISECOND_TIMER
 #include "FastLED.h"
-
+#include "esp_gmf_video_dec.h"
 #define DEFAULT_BRIGHTNESS (uint8_t)127
 #define DEFAULT_MODE       (uint8_t)0
 #define DEFAULT_SPEED      (uint8_t)128

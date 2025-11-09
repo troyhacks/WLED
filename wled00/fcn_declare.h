@@ -229,6 +229,10 @@ void savePreset(byte index, const char* pname = nullptr, JsonObject saveobj = Js
 inline void saveTemporaryPreset() {savePreset(255);};
 void deletePreset(byte index);
 bool getPresetName(byte index, String& name);
+bool getCachedPresetMetadata(byte index, String& name, bool& isPlaylist);
+void buildPresetCache();
+String strip_unicode(const String& name);
+bool getCachedPresetExists(int id);
 
 //remote.cpp
 void handleRemote();

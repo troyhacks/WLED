@@ -6,7 +6,7 @@
 
 #include "wled.h"
 #include <Arduino.h>
-#include <Wire.h>
+// #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 #include <Adafruit_CCS811.h>

@@ -16,6 +16,14 @@ static char quickLoad[9];
 static char saveName[33];
 static bool includeBri = true, segBounds = true, selectedOnly = false, playlistSave = false;
 
+struct PresetMetadata {
+  char name[33];   // 32 chars + null terminator
+  bool isPlaylist;
+  bool exists;     // Flag to know if the slot is used
+};
+
+static PresetMetadata* presetCache = nullptr;
+
 static const char *getFileName(bool persist = true) {
   return persist ? "/presets.json" : "/tmp.json";
 }
@@ -332,6 +340,13 @@ void savePreset(byte index, const char* pname, JsonObject sObj)
       playlistSave = true;
     }
   }
+  if (presetCache != nullptr && index > 0 && index <= 250) {
+    presetCache[index].exists = true;
+    presetCache[index].isPlaylist = playlistSave; // playlistSave is set earlier
+    String safeName = strip_unicode(saveName);
+    strlcpy(presetCache[index].name, safeName.c_str(), sizeof(presetCache[index].name));
+    update_screen_background = true;
+  }
 }
 
 void deletePreset(byte index) {
@@ -339,4 +354,102 @@ void deletePreset(byte index) {
   writeObjectToFileUsingId(getFileName(), index, &empty);
   presetsModifiedTime = toki.second(); //unix time
   updateFSInfo();
+  if (presetCache != nullptr && index > 0 && index <= 250) {
+    presetCache[index].exists = false;
+    presetCache[index].isPlaylist = false;
+    presetCache[index].name[0] = '\0';
+    update_screen_background = true;
+  }
+}
+
+bool getCachedPresetMetadata(byte index, String& name, bool& isPlaylist) {
+  if (presetCache == nullptr) {
+    return false;
+  }
+
+  if (index == 0 || index > 250) {
+    return false;
+  }
+
+  if (presetCache[index].exists) {
+    name = presetCache[index].name;
+    isPlaylist = presetCache[index].isPlaylist;
+    return true;
+  }
+
+  // Preset does not exist
+  name = "";
+  isPlaylist = false;
+  return false;
+}
+
+// IN: presets.cpp
+
+void buildPresetCache() {
+  if (presetCache == nullptr) {
+    USER_PRINTLN(F("Allocating preset cache..."));
+
+    // Use heap_caps_calloc to get zero-initialized memory from PSRAM
+    // MALLOC_CAP_SPIRAM is the flag for PSRAM
+    presetCache = (PresetMetadata*)heap_caps_calloc_prefer(251, sizeof(PresetMetadata), 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_DEFAULT, MALLOC_CAP_DEFAULT);
+
+    // If it's *still* null, we're out of memory.
+    if (presetCache == nullptr) {
+      USER_PRINTLN(F("FATAL: Failed to allocate preset cache."));
+      return; // Can't continue
+    }
+  }
+  // --- End allocation ---
+
+  USER_PRINTLN(F("Building preset cache..."));
+  // Clear the old cache
+  memset(presetCache, 0, sizeof(presetCache));
+
+  if (!requestJSONBufferLock(20)) {
+    USER_PRINTLN(F("Preset cache build failed (lock)."));
+    return; // Failed to get lock
+  }
+
+  if (!readObjectFromFile(getFileName(), nullptr, &doc)) {
+    releaseJSONBufferLock();
+    USER_PRINTLN(F("Preset cache build failed (read)."));
+    return; // File not found or corrupt
+  }
+
+  JsonObject root = doc.as<JsonObject>();
+  for (int i = 1; i <= 250; i++) {
+    char id_str[4];
+    sprintf(id_str, "%d", i);
+
+    if (root.containsKey(id_str)) {
+      JsonObject presetObj = root[id_str];
+      presetCache[i].exists = true; // Mark as existing
+
+      presetCache[i].isPlaylist = !presetObj[F("playlist")].isNull();
+
+      if (presetObj["n"]) {
+        // sanitize the JSON string before copying
+        String safeName = strip_unicode((const char*)presetObj["n"]);
+        strlcpy(presetCache[i].name, safeName.c_str(), sizeof(presetCache[i].name));
+      }
+      
+      // else: name is already blank from memset
+    }
+  }
+  releaseJSONBufferLock(); // Unlock
+  USER_PRINTLN(F("Preset cache build complete."));
+}
+
+bool getCachedPresetExists(int id) {
+  // valid range is 1..250
+  if (id < 1 || id > 250) {
+    return false;
+  }
+
+  // if cache hasn’t been allocated yet, nothing exists
+  if (presetCache == nullptr) {
+    return false;
+  }
+
+  return presetCache[id].exists;
 }

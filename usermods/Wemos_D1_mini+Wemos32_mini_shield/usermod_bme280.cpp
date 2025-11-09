@@ -1,7 +1,7 @@
 #include "wled.h"
 #include <Arduino.h>
 #include <U8x8lib.h> // from https://github.com/olikraus/u8g2/
-#include <Wire.h>
+// #include <Wire.h>
 #include <BME280I2C.h> //BME280 sensor
 
 void UpdateBME280Data();

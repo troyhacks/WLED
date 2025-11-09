@@ -1,5 +1,5 @@
 #include <Arduino.h>              // WLEDMM: make sure that I2C drivers have the "right" Wire Object
-#include <Wire.h>
+// #include <Wire.h>
 
 #include "wled.h"
 #include "wled_ethernet.h"
@@ -340,7 +340,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   PinManagerPinType i2c[2] = { { i2c_sda, true }, { i2c_scl, true } };
   if (i2c_scl >= 0 && i2c_sda >= 0 && pinManager.allocateMultiplePins(i2c, 2, PinOwner::HW_I2C)) {
     #ifdef ESP32
-    Wire.setPins(i2c_sda, i2c_scl); // this will fail if Wire is initialised (Wire.begin() called prior)
+    // Wire.setPins(i2c_sda, i2c_scl); // this will fail if Wire is initialised (Wire.begin() called prior)
     #endif
     // Wire.begin(); // WLEDMM moved into pinManager
     DEBUG_PRINTF("pinmgr success for global i2c %d %d\n", i2c_sda, i2c_scl);

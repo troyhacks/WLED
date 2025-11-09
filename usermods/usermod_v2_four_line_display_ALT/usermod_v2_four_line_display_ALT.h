@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>              // WLEDMM: make sure that I2C drivers have the "right" Wire Object
-#include <Wire.h>
+// #include <Wire.h>
 #include <SPI.h>
 #undef U8X8_NO_HW_I2C             // WLEDMM: we do want I2C hardware drivers - if possible
 //#define WIRE_INTERFACES_COUNT 2 // experimental - tell U8x8Lib that there is a second Wire unit

@@ -449,29 +449,216 @@ void background_loop_blocking(void* pvParameters) {
 
     static uint8_t buttonpreset = 0;
 
-    if (buttonpreset != currentPreset) {
-      buttonpreset = currentPreset;
-      int totalWidth = buttonFramebuffer.width();
-      int totalHeight = 180;
-      int numRects = 8;
-      int padding = 20;
-      int rectWidth = (totalWidth - (numRects - 1) * padding) / numRects; // ≈111
-      int rectHeight = 120;
-      int radius = 20;
-      int y = (totalHeight - rectHeight) / 2; // center vertically
+    // if (buttonpreset != currentPreset) {
+    //   buttonpreset = currentPreset;
+    //   int totalWidth = buttonFramebuffer.width();
+    //   int totalHeight = buttonFramebuffer.height();
+    //   int numRects = 8;
+    //   int padding = 20;
+    //   int rectWidth = (totalWidth - (numRects - 1) * padding) / numRects; // ≈111
+    //   int rectHeight = 120;
+    //   int radius = 20;
+    //   int y = (totalHeight - rectHeight) / 2; // center vertically
 
-      if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
-        buttonFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
-        buttonFramebuffer.setTextColor(TFT_WHITE);
-        buttonFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
+    //   if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+    //     buttonFramebuffer.fillScreen(TFT_BLACK);     // Fill with black
+    //     buttonFramebuffer.setTextColor(TFT_WHITE);
+    //     buttonFramebuffer.setFont(&fonts::FreeSans18pt7b);    // Use a built-in font
         
-        for (int i = 0; i < numRects; ++i) {
-          int x = i * (rectWidth + padding);
-          buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, (i + 1 == currentPreset) ? TFT_RED : TFT_BLUE);
-          String buttonval = String(i + 1);
-          buttonFramebuffer.drawCenterString(buttonval, x + (rectWidth / 2), y - (buttonFramebuffer.fontHeight()/2) +(rectHeight / 2));
+    //     for (int i = 0; i < numRects; ++i) {
+    //       int x = i * (rectWidth + padding);
+    //       buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, (i + 1 == currentPreset) ? TFT_RED : TFT_BLUE);
+    //       String buttonval = String(i + 1);
+    //       buttonFramebuffer.drawCenterString(buttonval, x + (rectWidth / 2), y - (buttonFramebuffer.fontHeight()/2) +(rectHeight / 2));
+    //     }
+    //     update_screen = true;
+    //     xSemaphoreGive(busMutex);
+    //   }
+    // }
+
+    uint8_t testCurrentPreset;
+    // USER_PRINTF("Current preset = %d  Current playlist = %d\n", currentPreset, currentPlaylist);
+
+    // Determine what's "active": the playlist (if running) or the preset
+    if (currentPlaylist > 0) {
+      testCurrentPreset = currentPlaylist;
+    } else {
+      testCurrentPreset = currentPreset;
+    }
+
+    // Only redraw the entire button grid if the active preset/playlist has changed
+    if (buttonpreset != testCurrentPreset || update_screen_background) {
+      update_screen_background = false;
+      buttonpreset = testCurrentPreset;
+
+      int totalWidth = buttonFramebuffer.width();
+      int totalHeight = buttonFramebuffer.height();
+
+      // --- Grid Calculations ---
+      const int totalButtons = WLEDMM_DISPLAY_BUTTONS; // Get total button count
+      const int cols = WLEDMM_DISPLAY_BUTTONS_COLS;   // Get column count (e.g., 4 or 8)
+      const int padding = 5;  // Uniform padding
+      const int radius = 20;  // Corner radius
+
+      // 1. Calculate the number of rows needed
+      int rows = (int)ceil((float)totalButtons / (float)cols);
+      if (rows == 0) rows = 1; // Prevent division by zero
+
+      // 2. Calculate the width of one rectangle
+      int rectWidth = (totalWidth - (cols + 1) * padding) / cols;
+
+      // 3. Calculate the height of one rectangle
+      //    (This must match your framebuffer creation logic!)
+      float aspectRatio = 8.0f / (float)cols; // 8-col=1:1, 4-col=2:1
+      int rectHeight = (int)((float)rectWidth / aspectRatio);
+
+      // --- End Calculations ---
+
+      // Don't try to draw if the dimensions are too small
+      if (rows <= 0 || rectWidth <= 0 || rectHeight <= 0) {
+        return;
+      }
+
+      // Take the mutex to safely draw to the framebuffer
+      if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+
+        buttonFramebuffer.fillScreen(TFT_BLACK);     // Clear buffer
+        buttonFramebuffer.setTextColor(TFT_WHITE);
+
+        int buttonNumber = 1;
+        for (int r = 0; r < rows; ++r) {
+          // Calculate the y-coordinate using the new rectHeight
+          int y = padding + r * (rectHeight + padding);
+
+          for (int c = 0; c < cols; ++c) {
+            if (buttonNumber > totalButtons) break; // Stop after last button
+
+            // Calculate the x-coordinate using the new rectWidth
+            int x = padding + c * (rectWidth + padding);
+
+            String presetName;
+            bool isPlaylist = false;
+            uint16_t color;
+            String buttonLabel; // The text to be drawn
+
+            // Get metadata from our fast in-memory cache
+            if (getCachedPresetMetadata(buttonNumber, presetName, isPlaylist)) {
+              // --- Preset Exists ---
+              buttonFramebuffer.setFont(&fonts::FreeSansBold9pt7b);
+              buttonLabel = (presetName.length() > 0) ? presetName : String(buttonNumber);
+
+              if (isPlaylist) {
+                color = (buttonNumber == testCurrentPreset) ? TFT_ORANGE : TFT_PURPLE;
+              } else {
+                color = (buttonNumber == testCurrentPreset) ? TFT_RED : TFT_BLUE;
+              }
+
+            } else {
+              // --- Preset Does NOT Exist ---
+              buttonFramebuffer.setFont(&fonts::FreeSans18pt7b);
+              buttonLabel = String(buttonNumber);
+              color = TFT_DARKGREY;
+            }
+
+            // Draw the button (using rectWidth and rectHeight)
+            buttonFramebuffer.fillRoundRect(x, y, rectWidth, rectHeight, radius, color);
+
+            // --- Start Multi-line & Truncation Text Logic ---
+
+            std::vector<String> lines;
+            int fontHeight = buttonFramebuffer.fontHeight();
+
+            // 1. Split buttonLabel into words
+            std::vector<String> words;
+            int lastSpace = -1;
+            int currentSpace = buttonLabel.indexOf(' ');
+            if (currentSpace == -1) {
+              words.push_back(buttonLabel); // Only one word
+            } else {
+              while (currentSpace != -1) {
+                words.push_back(buttonLabel.substring(lastSpace + 1, currentSpace));
+                lastSpace = currentSpace;
+                currentSpace = buttonLabel.indexOf(' ', lastSpace + 1);
+              }
+              words.push_back(buttonLabel.substring(lastSpace + 1)); // Add the last word
+            }
+
+            // 2. Build lines, wrapping and truncating as needed
+            String currentLine = "";
+            int ellipsisWidth = buttonFramebuffer.textWidth("...");
+
+            for (const String& word : words) {
+              String testWord = word;
+
+              // --- This handles "colortwinkles" ---
+              // If a single word is too wide, truncate it
+              if (buttonFramebuffer.textWidth(testWord) > rectWidth) {
+                String truncatedWord = "";
+                // Find the cut-off point
+                for (int i = 1; i <= testWord.length(); ++i) {
+                  String sub = testWord.substring(0, i);
+                  if (buttonFramebuffer.textWidth(sub) + ellipsisWidth > rectWidth) {
+                    // We went one char too far
+                    truncatedWord = testWord.substring(0, i - 1) + "...";
+                    break;
+                  }
+                }
+                testWord = truncatedWord;
+              }
+              // --- End "colortwinkles" fix ---
+
+              // Check if the new word fits on the current line
+              String testLine = currentLine.length() > 0 ? (currentLine + " " + testWord) : testWord;
+
+              if (buttonFramebuffer.textWidth(testLine) <= rectWidth) {
+                // It fits, add it to the current line
+                currentLine = testLine;
+              } else {
+                // It doesn't fit, push the old line and start a new one
+                lines.push_back(currentLine);
+                currentLine = testWord;
+              }
+            }
+            lines.push_back(currentLine); // Add the final line
+
+            // 3. Center and draw the lines
+            int numLines = lines.size();
+            if (numLines > 0) {
+              buttonFramebuffer.setTextDatum(MC_DATUM); // Middle-Center datum
+
+              int totalTextHeight = numLines * fontHeight;
+              int buttonCenterX = x + (rectWidth / 2);
+              int buttonCenterY = y + (rectHeight / 2);
+
+              // 4. Check if text block is too TALL for the button
+              if (totalTextHeight > rectHeight) {
+                // Text is too tall, just draw the first line truncated
+                String line = lines[0];
+                if (buttonFramebuffer.textWidth(line) > rectWidth) {
+                  // This was already truncated, but just in case
+                  line = line.substring(0, line.length() - 3) + "...";
+                }
+                buttonFramebuffer.drawString(line, buttonCenterX, buttonCenterY);
+              } else {
+                // Text fits vertically, draw all lines
+                int startY = buttonCenterY - (totalTextHeight / 2) + (fontHeight / 2);
+
+                for (int i = 0; i < numLines; ++i) {
+                  int currentY = startY + (i * fontHeight);
+                  buttonFramebuffer.drawString(lines[i], buttonCenterX, currentY);
+                }
+              }
+
+              buttonFramebuffer.setTextDatum(TL_DATUM); // Reset datum to default
+            }
+            // --- End Multi-line Text Logic ---
+
+            buttonNumber++;
+          }
+          if (buttonNumber > totalButtons) break;
         }
-        update_screen = true;
+
+        update_screen = true; // Flag that the screen needs updating
         xSemaphoreGive(busMutex);
       }
     }
@@ -493,7 +680,7 @@ void background_loop_blocking(void* pvParameters) {
         String fullMessage = String(serverDescription) +
           "    FPS: " + String(strip.getFps()) +
           "    IP: " + Network.localIP().toString();
-        myFramebuffer.drawCenterString(fullMessage, WLEDMM_DISPLAY_W / 2, 20);
+        myFramebuffer.drawCenterString(fullMessage, WLEDMM_DISPLAY_W / 2, 10);
 
         CacheStatus status = ImageCacheManager::getInstance().getStatus();
         String cachestatus = "";
@@ -509,11 +696,11 @@ void background_loop_blocking(void* pvParameters) {
       
         if (getPresetName(currentPreset, presetname)) {
           myFramebuffer.setTextColor(TFT_RED);
-          myFramebuffer.drawCenterString(presetname + cachestatus, WLEDMM_DISPLAY_W / 2, 65);
+          myFramebuffer.drawCenterString(presetname + cachestatus, WLEDMM_DISPLAY_W / 2, 60);
         } else {
           String effectname = strip.getEffectName(effectCurrent,true);
           myFramebuffer.setTextColor(TFT_BLUE);
-          myFramebuffer.drawCenterString(effectname + cachestatus, WLEDMM_DISPLAY_W / 2, 65);
+          myFramebuffer.drawCenterString(effectname + cachestatus, WLEDMM_DISPLAY_W / 2, 60);
         }
         xSemaphoreGive(busMutex);
       }
@@ -645,24 +832,105 @@ void background_loop_nonblocking(void* pvParameters) {
           lastTouchPrint = millis();
           last_x = cur_x; last_y = cur_y; last_strength = cur_strength; last_cnt = cur_cnt;
 
-          USER_PRINTF("TOUCH: cnt=%d x=%d y=%d strength=%d\n", cur_cnt, cur_x, cur_y, cur_strength);
+          // USER_PRINTF("TOUCH: cnt=%d x=%d y=%d strength=%d\n", cur_cnt, cur_x, cur_y, cur_strength);
           // USER_PRINTF("  touch buffer idx0: x0=%d y0=%d str0=%d\n", touchscreen_x[0], touchscreen_y[0], touchscreen_strength[0]);
 
-          if (cur_y > 540) {
-            // Special case: touch in preset zone
-            uint8_t buttons = 8;
-            int zoneWidth = 720 / buttons; // assuming screen width is 720
+          // if (cur_y > WLEDMM_DISPLAY_H-buttonFramebuffer.height()) {
+          //   // Special case: touch in preset zone
+          //   uint8_t buttons = 8;
+          //   int zoneWidth = WLEDMM_DISPLAY_W / buttons; // assuming screen width is 720
 
-            int zoneIndex = cur_x / zoneWidth; // 0-based index
-            uint8_t requested_preset = zoneIndex + 1; // convert to 1-based preset
+          //   int zoneIndex = cur_x / zoneWidth; // 0-based index
+          //   uint8_t requested_preset = zoneIndex + 1; // convert to 1-based preset
 
-            USER_PRINTF("Touch in preset zone %d → applying preset %d\n", zoneIndex, requested_preset);
-            applyPreset(requested_preset);
-            handlePresets();
+          //   USER_PRINTF("Touch in preset zone %d → applying preset %d\n", zoneIndex, requested_preset);
+          //   applyPreset(requested_preset);
+          //   handlePresets();
 
-            // if (currentPreset != requested_preset) {
-            //   applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
-            // }
+          //   // if (currentPreset != requested_preset) {
+          //   //   applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+          //   // }
+          // } else {
+          //   // Standard fallback logic
+          //   uint8_t requested_preset = currentPreset + 1;
+
+          //   USER_PRINTF("Current Preset = %d trying %d last requested %d\n",
+          //     currentPreset, requested_preset, requested_preset);
+
+          //   applyPreset(requested_preset);
+          //   handlePresets();
+
+          //   if (currentPreset != requested_preset) {
+          //     applyPresetWithFallback(1, CALL_MODE_BUTTON_PRESET, 9, 11);
+          //   }
+          // }
+          if (cur_y > WLEDMM_DISPLAY_H - buttonFramebuffer.height()) {
+            // --- Refactored Button Grid Touch Logic ---
+
+            // 1. Define layout constants (these MUST match your drawing code)
+            const int totalButtons = WLEDMM_DISPLAY_BUTTONS;
+            const int cols = WLEDMM_DISPLAY_BUTTONS_COLS;
+            const int padding = 5;
+
+            // 2. Calculate the square size (must be same as drawing code)
+            int squareSize = (WLEDMM_DISPLAY_W - (cols + 1) * padding) / cols;
+
+            // 3. Calculate total rows (for bounds checking)
+            int rows = (int)ceil((float)totalButtons / (float)cols);
+
+            // 4. Translate screen coordinates to local framebuffer coordinates
+            int fb_x = cur_x;
+            int fb_y = cur_y - (WLEDMM_DISPLAY_H - buttonFramebuffer.height());
+
+            // 5. Calculate which column and row was hit
+
+            // Find the position *relative* to the top-left padding
+            int x_offset = fb_x - padding;
+            int y_offset = fb_y - padding;
+
+            // Calculate the total size of one button + its padding
+            int block_size = squareSize + padding;
+
+            // Check if we are in a valid (non-padding) area
+            if (x_offset >= 0 && y_offset >= 0) {
+
+              // Get the 0-based column and row index
+              int col_index = x_offset / block_size;
+              int row_index = y_offset / block_size;
+
+              // Check if the touch was inside the square (not the padding)
+              bool in_button_x = (x_offset % block_size) < squareSize;
+              bool in_button_y = (y_offset % block_size) < squareSize;
+
+              // Check if the indices are within the valid grid
+              if (in_button_x && in_button_y && col_index < cols && row_index < rows) {
+
+                // 6. Calculate the 1-based button number
+                uint8_t requested_preset = (row_index * cols) + col_index + 1;
+
+                // 7. Final check: does this button exist?
+                //    (e.g., if totalButtons=32, button 33 is an empty cell)
+                if (requested_preset <= totalButtons) {
+                  USER_PRINTF("Touch in button grid: (col %d, row %d) -> preset %d\n", col_index + 1, row_index + 1, requested_preset);
+                  if (getCachedPresetExists(requested_preset)) {
+                    unloadPlaylist();
+                    applyPreset(requested_preset);
+                    handlePresets();
+                  }
+                } else {
+                  // Touched an empty grid cell past the last button
+                  USER_PRINTLN("Touch in empty grid cell.");
+                }
+              } else {
+                // Touched in the padding *between* buttons
+                USER_PRINTLN("Touch in button padding area.");
+              }
+            } else {
+              // Touched in the outer padding (top/left edge)
+              USER_PRINTLN("Touch in button outer padding.");
+            }
+            // --- End Refactor ---
+
           } else {
             // Standard fallback logic
             uint8_t requested_preset = currentPreset + 1;
@@ -670,6 +938,7 @@ void background_loop_nonblocking(void* pvParameters) {
             USER_PRINTF("Current Preset = %d trying %d last requested %d\n",
               currentPreset, requested_preset, requested_preset);
 
+            unloadPlaylist();
             applyPreset(requested_preset);
             handlePresets();
 
@@ -850,15 +1119,62 @@ void WLED::loop() {
         srm_config.out.pic_w = WLEDMM_DISPLAY_W;
         srm_config.out.pic_h = WLEDMM_DISPLAY_H;
 
-        float reference_size = float(WLEDMM_DISPLAY_W); // or whatever your target size is
-        float dominant_dim = (SEGMENT.maxWidth > SEGMENT.maxHeight) ? SEGMENT.maxWidth : SEGMENT.maxHeight;
-        float scale = reference_size / dominant_dim;
+        // --- Start Refactor: Proportional "Fit" Scaling ---
 
+        // 1. Define the dimensions of the "box" we must fit into.
+        int topBarHeight = myFramebuffer.height();
+        int bottomBarHeight = buttonFramebuffer.height();
+
+        int availableMiddleWidth = WLEDMM_DISPLAY_W;
+        int availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight;
+
+        // 2. Calculate both possible scaling factors
+        //    (Add (float) to ensure floating-point division)
+        float scale_by_width = (float)availableMiddleWidth / (float)SEGMENT.maxWidth;
+        float scale_by_height = (float)availableMiddleHeight / (float)SEGMENT.maxHeight;
+
+        // 3. Choose the SMALLER scale factor. This guarantees it will fit
+        //    in both width AND height.
+        float scale = min(scale_by_width, scale_by_height);
+
+        // Apply the single, correct scale
         srm_config.scale_x = scale;
         srm_config.scale_y = scale;
 
-        srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (SEGMENT.maxWidth * scale)) / 2;
-        srm_config.out.block_offset_y = (WLEDMM_DISPLAY_H - (SEGMENT.maxHeight * scale)) / 2;
+        // 4. Calculate the final scaled dimensions
+        int scaledContentWidth = (int)(SEGMENT.maxWidth * scale);
+        int scaledContentHeight = (int)(SEGMENT.maxHeight * scale);
+
+
+
+        // 5. Calculate offsets to center the newly-scaled content
+
+        // Center horizontally within the full display width
+        srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledContentWidth) / 2;
+
+        // Center vertically within the "middle" area, adding the top bar's height
+        srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - scaledContentHeight) / 2;
+
+        // --- End Refactor ---
+
+        // float reference_size = float(WLEDMM_DISPLAY_W); // or whatever your target size is
+        // float dominant_dim = (SEGMENT.maxWidth > SEGMENT.maxHeight) ? SEGMENT.maxWidth : SEGMENT.maxHeight;
+        // float scale = reference_size / dominant_dim;
+
+        // srm_config.scale_x = scale;
+        // srm_config.scale_y = scale;
+
+        // int topBarHeight = myFramebuffer.height();
+        // int bottomBarHeight = buttonFramebuffer.height();
+        
+        // // Calculate the height of the content you want to center
+        // int contentHeight = (SEGMENT.maxHeight * scale);
+
+        // // Calculate the height of the space *between* the bars
+        // int availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight;
+
+        // srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (SEGMENT.maxWidth * scale)) / 2;
+        // srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - contentHeight) / 2;
 
         srm_config.mirror_x = false;
         srm_config.mirror_y = false;
@@ -898,7 +1214,6 @@ void WLED::loop() {
           srm_config.out.block_offset_x = 0;
           srm_config.out.block_offset_y = 0;
           ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-
         }
 
         if (update_screen) {
@@ -1044,48 +1359,6 @@ void WLED::disableWatchdog() {
 }
 
 int retry_num=0;
-
-void scan_i2c_bus(i2c_port_t port) {
-  USER_PRINTF("Scanning I2C bus %d...\n", port);
-  uint8_t address;
-  for (address = 1; address < 127; address++) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (address << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_stop(cmd);
-
-    esp_err_t ret = i2c_master_cmd_begin(port, cmd, 100 / portTICK_PERIOD_MS);
-    i2c_cmd_link_delete(cmd);
-
-    if (ret == ESP_OK) {
-      USER_PRINTF("Found device at I2C address 0x%02X\n", address);
-    }
-  }
-  USER_PRINTLN("I2C scan complete.");
-}
-
-void scan_i2c_bus_arduino(TwoWire& bus) {
-
-  uint8_t address;
-  uint8_t ret;
-
-  for (address = 1; address < 127; address++) {
-    // Start a transmission to the I2C address
-    bus.beginTransmission(address);
-
-    // endTransmission() sends a STOP and returns:
-    // 0: Success (device acknowledged the address)
-    // 2: NACK on address (no device at this address)
-    // 4: Other error
-    ret = bus.endTransmission();
-
-    if (ret == 0) {
-      USER_PRINTF("Found device at I2C address 0x%02X\n", address);
-    }
-  }
-
-  USER_PRINTLN("I2C scan complete.");
-}
 
 static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 
@@ -1574,9 +1847,10 @@ void WLED::setup() {
   else deEEP();
 #else
   initPresetsFile();
+  buildPresetCache();
 #endif
   updateFSInfo();
-
+  
   USER_PRINT(F("done Mounting FS; "));
   USER_PRINT(((fsBytesTotal-fsBytesUsed)/1024)); USER_PRINTLN(F(" kB free.\n"));
 
@@ -1732,7 +2006,7 @@ void WLED::setup() {
   esp_lcd_dpi_panel_config_t dpi_config;
   memset(&dpi_config, 0, sizeof(dpi_config));
   dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-  dpi_config.dpi_clock_freq_mhz = 80; // Use 80MHz for JD9365 800x1280 60Hz panel
+  dpi_config.dpi_clock_freq_mhz = 40; // Use 80MHz for JD9365 800x1280 60Hz panel
   dpi_config.virtual_channel = 0;
 
   dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
@@ -1752,7 +2026,7 @@ void WLED::setup() {
   dpi_config.video_timing.vsync_pulse_width = 4;
   dpi_config.video_timing.vsync_back_porch = 10;
 
-  dpi_config.flags.use_dma2d = false;
+  dpi_config.flags.use_dma2d = true;
   dpi_config.flags.disable_lp = true;
 
   // H total = h_size + dpi_config.video_timing.hsync_front_porch + hsync_pulse_width + hsync_back_porch
@@ -1772,7 +2046,7 @@ void WLED::setup() {
     .bus_id = 0,
     .num_data_lanes = 2, 
     .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT, 
-    .lane_bit_rate_mbps = 960,  // JD9365 requires 800MHz lane bit rate // TroyHacks calculator says 960
+    .lane_bit_rate_mbps = 480,  // JD9365 requires 800MHz lane bit rate // TroyHacks calculator says 960
   };
   ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
@@ -1864,14 +2138,22 @@ void WLED::setup() {
   USER_PRINTLN("Install JD9365S panel display_on");
   ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-  esp_lcd_panel_io_i2c_config_t touch_io_config = {
-    .dev_addr = 0x45,              // The touch chip address
-    .control_phase_bytes = 1,
-    .dc_bit_offset = 0,
-    .lcd_cmd_bits = 16,            // 16-bit registers for GT9xxx
-    .flags = {
-        .disable_control_phase = 0 // GT9xxx needs this
-    },
+  // esp_lcd_panel_io_i2c_config_t touch_io_config = {
+  //   .dev_addr = 0x45,              // The touch chip address
+  //   .control_phase_bytes = 1,
+  //   .dc_bit_offset = 0,
+  //   .lcd_cmd_bits = 16,            // 16-bit registers for GT9xxx
+  //   .flags = {
+  //       .disable_control_phase = 0, // GT9xxx needs this
+  //   },
+  //   .scl_speed_hz = 100000,
+  // };
+  esp_lcd_panel_io_i2c_config_t touch_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+  touch_io_config.scl_speed_hz = 400000;
+  // touch_io_config.flags.disable_control_phase = 0;
+
+  esp_lcd_touch_io_gt911_config_t tp_gt911_config = {
+    .dev_addr = touch_io_config.dev_addr,
   };
 
   // 2. Set up the touch panel config
@@ -1879,7 +2161,7 @@ void WLED::setup() {
       .x_max = WLEDMM_DISPLAY_W,
       .y_max = WLEDMM_DISPLAY_H,
       .rst_gpio_num = GPIO_NUM_NC, // Correct, it's not on the connector
-      .int_gpio_num = GPIO_NUM_NC, // Correct
+      .int_gpio_num = GPIO_NUM_NC, // Correct, it's not on the connector
       .levels = {
           .reset = 0,
           .interrupt = 0,
@@ -1889,41 +2171,10 @@ void WLED::setup() {
           .mirror_x = 0,
           .mirror_y = 0,
       },
+      .driver_data = &tp_gt911_config,
   };
 
-  scan_i2c_bus_arduino(Wire);
-
-  Wire.beginTransmission(touch_io_config.dev_addr);
-  Wire.write(0x95);   // register address
-  Wire.write(0x11);   // data
-  Wire.endTransmission();
-
-  // Write 0x17 to register 0x95
-  Wire.beginTransmission(touch_io_config.dev_addr);
-  Wire.write(0x95);
-  Wire.write(0x17);
-  Wire.endTransmission();
-
-  // Write 0x00 to register 0x96
-  Wire.beginTransmission(touch_io_config.dev_addr);
-  Wire.write(0x96);
-  Wire.write(0x00);
-  Wire.endTransmission();
-
-  delay(100);  // vTaskDelay(pdMS_TO_TICKS(100))
-
-  // Write 0xFF to register 0x96
-  Wire.beginTransmission(touch_io_config.dev_addr);
-  Wire.write(0x96);
-  Wire.write(0xFF);
-  Wire.endTransmission();
-
-  delay(1000);
-
-  // 3. Create the I/O handle.
-  // This will NOT fail. It will find the existing driver 
-  // on port 1 and "attach" to it.
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_new_panel_io_i2c(I2S_NUM_0, &touch_io_config, &touch_io_handle));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &touch_io_config, &touch_io_handle));
 
   // 4. Create the touch driver
   // Use the GT911 driver, which works for the GT9271
@@ -1987,10 +2238,42 @@ void WLED::setup() {
     while (1);
   }
 
-  if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, 180)) {
+  // --- Define your layout constants ---
+  const int totalButtons = WLEDMM_DISPLAY_BUTTONS;
+  const int totalWidth = WLEDMM_DISPLAY_W;
+  const int cols = WLEDMM_DISPLAY_BUTTONS_COLS;
+  const int padding = 5; // Must be the same padding as your drawing logic
+
+  // --- 1. Calculate the number of rows ---
+  // We use ceiling division to ensure all buttons fit.
+  int rows = (int)ceil((float)totalButtons / (float)cols);
+  if (rows == 0) rows = 1; // Prevent 0 rows if 0 buttons
+
+  // --- 2. Calculate the width of one rectangle ---
+  // (Based on your previous refactor logic)
+  // totalWidth = (cols * rectWidth) + ((cols + 1) * padding)
+  int rectWidth = (totalWidth - (cols + 1) * padding) / cols;
+
+  // --- 3. Calculate the height of one rectangle ---
+  // We base the aspect ratio on "8 columns = 1:1 (square)"
+  // So, 4 columns will be 2:1 (width:height)
+  float aspectRatio = 8.0f / (float)cols;
+  int rectHeight = (int)((float)rectWidth / aspectRatio);
+
+  // --- 4. Calculate the required framebuffer height ---
+  // The total height is (rows * rectHeight) + ((rows + 1) * padding)
+  // This accounts for the height of all rectangles + all vertical padding.
+  int buttonFramebufferHeight = (rows * rectHeight) + ((rows + 1) * padding);
+
+  // --- 5. Create the sprite with the correct dimensions ---
+  if (!buttonFramebuffer.createSprite(totalWidth, buttonFramebufferHeight)) {
     Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
     while (1);
   }
+  // if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_W)) {
+  //   Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
+  //   while (1);
+  // }
 
   // Ensure the data written by the CPU is visible in PSRAM for the DMA
   // Doesn't seem to be needed?

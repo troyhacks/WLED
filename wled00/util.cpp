@@ -625,6 +625,42 @@ uint8_t get_random_wheel_index(uint8_t pos) {
   return r;
 }
 
+String strip_unicode(const String& name) {
+  String clean;
+  clean.reserve(name.length()); // pre‑allocate for efficiency
+
+  // Step 1: keep only ASCII printable characters (32..126)
+  for (size_t i = 0; i < name.length(); i++) {
+    char c = name[i];
+    if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
+      clean += c;
+    }
+  }
+
+  // Step 2: remove newlines, carriage returns, tabs
+  clean.replace("\n", "");
+  clean.replace("\r", "");
+  clean.replace("\t", "");
+
+  // Step 3: trim leading/trailing spaces
+  // Arduino String has no built‑in trim, so implement manually
+  int start = 0;
+  while (start < clean.length() && isspace((unsigned char)clean[start])) {
+    start++;
+  }
+  int end = clean.length() - 1;
+  while (end >= start && isspace((unsigned char)clean[end])) {
+    end--;
+  }
+
+  if (start > 0 || end < (int)clean.length() - 1) {
+    clean = clean.substring(start, end + 1);
+  }
+
+  return clean;
+}
+
+
 // WLEDMM extended "trim string" function to support enumerateLedmaps
 // The function takes char* as input, and removes all leading and trailing "decorations" like spaces, tabs, line endings, quotes, colons
 // The conversion is "in place" (destructive).

@@ -141,7 +141,7 @@
     #include <esp_now.h>
   #endif
 #endif
-#include <Wire.h>
+#include "driver/i2c_master.h"
 #include <SPI.h>
 
 #include "src/dependencies/network/Network.h"
@@ -323,6 +323,12 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 #ifndef WLEDMM_DISPLAY_H
   #define WLEDMM_DISPLAY_H 720
 #endif
+#ifndef WLEDMM_DISPLAY_BUTTONS
+  #define WLEDMM_DISPLAY_BUTTONS 8
+#endif
+#ifndef WLEDMM_DISPLAY_BUTTONS_COLS
+  #define WLEDMM_DISPLAY_BUTTONS_COLS 8
+#endif
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
@@ -340,6 +346,12 @@ WLED_GLOBAL uint16_t touchscreen_strength[1];
 WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
 WLED_GLOBAL bool touchpad_pressed _INIT(false);
 WLED_GLOBAL bool update_screen _INIT(true);
+WLED_GLOBAL bool update_screen_background _INIT(true);
+WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
+WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
+WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
+WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
+WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
 #endif
 
 // Global Variable definitions

@@ -1,5 +1,6 @@
 #include "pin_manager.h"
 #include "wled.h"
+#include "driver/i2c_master.h"
 
 #ifdef ARDUINO_ARCH_ESP32
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 2, 0)
@@ -602,6 +603,41 @@ bool PinManagerClass::joinWire() {    // shortcut in case no parameters provided
     return joinWire(i2c_sda, i2c_scl);
 }
 
+void scan_i2c_bus_new_api(i2c_master_bus_handle_t bus_handle) {
+
+  if (bus_handle == NULL) {
+    USER_PRINTLN("I2C SCAN: Failed. Bus handle is NULL.");
+    return;
+  }
+
+  USER_PRINTLN("I2C SCAN: Scanning I2C bus for devices...");
+
+  uint8_t address;
+  esp_err_t ret;
+  int devices_found = 0;
+
+  for (address = 1; address < 127; address++) {
+    // i2c_master_probe() is the non-blocking function to check for an ACK.
+    // We give it a short 10ms timeout.
+    ret = i2c_master_probe(bus_handle, address, 10);
+
+    if (ret == ESP_OK) {
+      USER_PRINTF("I2C SCAN: Found device at address 0x%02X\n", address);
+      devices_found++;
+    } else if (ret != ESP_ERR_TIMEOUT) {
+      // Log if we get an unexpected error (like bus wedged)
+      // USER_PRINTF("I2C SCAN: Error probing 0x%02X: %s\n", address, esp_err_to_name(ret));
+    }
+    // No else: ESP_ERR_TIMEOUT is the normal "no device" response
+  }
+
+  if (devices_found == 0) {
+    USER_PRINTLN("I2C SCAN: Complete. No devices found.");
+  } else {
+    USER_PRINTF("I2C SCAN: Complete. Found %d device(s).\n", devices_found);
+  }
+}
+
 bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
   // reject PIN = -1, reject SDA=SCL, reject "forbidden" pins
   if (  (pinSDA < 0) || (pinSCL < 0) 
@@ -641,7 +677,7 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
 
   bool wireIsOK = true;
   #ifdef ARDUINO_ARCH_ESP32         // ESP32 - i2c pins can be mapped to any GPIO
-    wireIsOK = Wire.setPins(pinSDA, pinSCL);   // this will fail if Wire is initialised already (i.e. Wire.begin() called prior)
+    // wireIsOK = Wire.setPins(pinSDA, pinSCL);   // this will fail if Wire is initialised already (i.e. Wire.begin() called prior)
   #else // 8266 - I2C pins are fixed -> actually they are not.
     //if((pinSDA != 4) || (pinSCL != 5)) {     // fixed PINS: SDA = 4, SCL = 5
     // DEBUG_PRINT(F("PIN Manager: warning ESP8266 I2C pins are fixed. please use SDA="));
@@ -655,18 +691,75 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
 
   #ifdef ARDUINO_ARCH_ESP32
   #if defined(WLEDMM_FASTPATH)  // wledMM set I2C to 400Khz, to minimize I2C communication delays
-    wireIsOK = Wire.begin(pinSDA, pinSCL, 400000UL);  // this will fail if wire is already running
+  // wireIsOK = Wire.begin(pinSDA, pinSCL, 400000UL);  // this will fail if wire is already running
+  wireIsOK = false; // This is your original status variable
+
+  i2c_master_bus_config_t i2c_mst_config = {};
+  i2c_mst_config.clk_source = I2C_CLK_SRC_DEFAULT;
+  i2c_mst_config.i2c_port = GLOBAL_I2C_PORT;
+  i2c_mst_config.scl_io_num = gpio_num_t(HW_PIN_SCL);
+  i2c_mst_config.sda_io_num = gpio_num_t(HW_PIN_SDA);
+  i2c_mst_config.glitch_ignore_cnt = 7;
+  i2c_mst_config.flags.enable_internal_pullup = false;
+
+  USER_PRINTF("Installing Global I2C driver for port %d (SDA:%d, SCL:%d)\n", GLOBAL_I2C_PORT, HW_PIN_SDA, HW_PIN_SCL);
+
+  esp_err_t ret = i2c_new_master_bus(&i2c_mst_config, &global_i2c_bus_handle);
+  wireIsOK = (ret == ESP_OK);
+  if (!wireIsOK) {
+    USER_PRINTF("I2C: Failed to create master bus: %s\n", esp_err_to_name(ret));
+  }
+
+  if (wireIsOK) {
+    scan_i2c_bus_new_api(global_i2c_bus_handle);
+  }
+
+  // 2. ADD THE PANEL CHIP (0x45) FIRST
+  i2c_device_config_t panel_dev_cfg = {};
+  panel_dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+  panel_dev_cfg.device_address = 0x45; // Touch chip address
+  panel_dev_cfg.scl_speed_hz = 100000; // Touch can run at 400kHz
+
+  ret = i2c_master_bus_add_device(global_i2c_bus_handle, &panel_dev_cfg, &panel_i2c_handle);
+  if (ret != ESP_OK) {
+    USER_PRINTF("I2C: Failed to add panel device (0x45): %s\n", esp_err_to_name(ret));
+    return false;
+  }
+  USER_PRINTLN("I2C: Panel device (0x45) added.");
+
+  // 3. SEND THE MAGIC INIT SEQUENCE to the touch_handle
+  // This is the code from the old driver, now using the new API.
+  USER_PRINTLN("I2C: Sending init sequence to panel chip...");
+  uint8_t cmd_buf[2];
+
+  cmd_buf[0] = 0x95; cmd_buf[1] = 0x11;
+  i2c_master_transmit(panel_i2c_handle, cmd_buf, 2, 100);
+
+  cmd_buf[0] = 0x95; cmd_buf[1] = 0x17;
+  i2c_master_transmit(panel_i2c_handle, cmd_buf, 2, 100);
+
+  cmd_buf[0] = 0x96; cmd_buf[1] = 0x00;
+  i2c_master_transmit(panel_i2c_handle, cmd_buf, 2, 100);
+
+  vTaskDelay(pdMS_TO_TICKS(100)); // Delay 100ms
+
+  cmd_buf[0] = 0x96; cmd_buf[1] = 0xFF;
+  i2c_master_transmit(panel_i2c_handle, cmd_buf, 2, 100);
+
+  vTaskDelay(pdMS_TO_TICKS(200)); // Give it time to settle
+  USER_PRINTLN("I2C: Panel chip init sequence sent.");
+
   #else
-    wireIsOK = Wire.begin(pinSDA, pinSCL);  // this will fail if wire is already running
+  wireIsOK = Wire.begin(pinSDA, pinSCL);  // this will fail if wire is already running
   #endif
   #else
-    Wire.begin(pinSDA, pinSCL);  // returns void on 8266
+    // Wire.begin(pinSDA, pinSCL);  // returns void on 8266
   #endif
 
   if (wireIsOK == false) {
-    USER_PRINTLN(F("PIN Manager: warning - wire.begin failed!"));
+    USER_PRINTLN(F("PIN Manager: warning - Global I2C driverfailed!"));
   } else {
-    USER_PRINT(F("PIN Manager: wire.begin successfull! "));
+    USER_PRINT(F("PIN Manager: Global I2C driver successfull! "));
     USER_PRINT(F("I2C bus is active. SDA="));
     USER_PRINTF("%d SCL=%d.\n", pinSDA, pinSCL);
   }
