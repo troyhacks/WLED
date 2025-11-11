@@ -1097,20 +1097,6 @@ void WLED::loop() {
 
   if (!interfacesInited || strip.getBrightness() == 0) delay(10); // TroyHacks: burn some loop in case there's nothing else to do.
 
-  if (e131Port == ARTNET_DEFAULT_PORT) {
-    artnet.processNewFrame();
-
-    if (realtimeMode == REALTIME_MODE_ARTNET && newArtNetData) {
-      if (!offMode || strip.isOffRefreshRequired()) {
-        if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
-          strip.show();
-          xSemaphoreGive(busMutex);
-        }
-      }
-      newArtNetData = false;
-    }
-  }
-
   #ifdef WLED_DEBUG
   unsigned long stripMillis = millis();
   #endif
@@ -1242,6 +1228,21 @@ void WLED::loop() {
 
       xSemaphoreGive(busMutex);
     }
+
+    if (e131Port == ARTNET_DEFAULT_PORT) {
+      artnet.processNewFrame();
+
+      if (realtimeMode == REALTIME_MODE_ARTNET && newArtNetData) {
+        if (!offMode || strip.isOffRefreshRequired()) {
+          if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+            strip.show();
+            xSemaphoreGive(busMutex);
+          }
+        }
+        newArtNetData = false;
+      }
+    }
+
   }
 
   #ifdef WLED_DEBUG
