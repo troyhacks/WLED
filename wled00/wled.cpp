@@ -694,7 +694,33 @@ void background_loop_blocking(void* pvParameters) {
           break;
         }
       
-        if (getPresetName(currentPreset, presetname)) {
+        if (realtimeMode) {
+          switch (realtimeMode) {
+            case REALTIME_MODE_GENERIC:
+              presetname = "Real-Time Mode Generic";
+              break;
+            case REALTIME_MODE_UDP:
+              presetname = "Real-Time Mode UDP";
+              break;
+            case REALTIME_MODE_E131:
+              presetname = "Real-Time Mode E1.31";
+              break;
+            case REALTIME_MODE_ARTNET:
+              presetname = "Real-Time Mode Art-Net";
+              break;
+            case REALTIME_MODE_DDP:
+              presetname = "Real-Time Mode DDP";
+              break;
+            case REALTIME_MODE_DMX:
+              presetname = "Real-Time Mode DMX";
+              break;
+            default:
+              presetname = "Real-Time Mode ???";
+              break;
+          } // end switch
+          myFramebuffer.setTextColor(TFT_ORANGE);
+          myFramebuffer.drawCenterString(presetname + cachestatus, WLEDMM_DISPLAY_W / 2, 60);
+        } else if (getPresetName(currentPreset, presetname)) {
           myFramebuffer.setTextColor(TFT_RED);
           myFramebuffer.drawCenterString(presetname + cachestatus, WLEDMM_DISPLAY_W / 2, 60);
         } else {
@@ -1071,176 +1097,6 @@ void WLED::loop() {
 
   if (!interfacesInited || strip.getBrightness() == 0) delay(10); // TroyHacks: burn some loop in case there's nothing else to do.
 
-  if (!realtimeMode || realtimeOverride || (realtimeMode && useMainSegmentOnly)) {
-
-    #ifdef WLED_DEBUG
-    unsigned long stripMillis = millis();
-    #endif
-
-    if (!offMode || strip.isOffRefreshRequired()) {
-      if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
-        strip.service();
-
-        byte* busPixelData = nullptr;
-        uint32_t busPixelSize = 0;
-        Bus* bus = busses.getBus(0);
-        if (bus) {
-          busPixelData = bus->getPixelData();
-          busPixelSize = SEGMENT.maxWidth * SEGMENT.maxHeight * 3;
-          if (busPixelData == NULL) {
-            USER_PRINTLN("No Bus Pixel Data");
-            return;
-          } else if (busPixelSize == 0) {
-            USER_PRINT("Bad Bus Pixel Length: ");
-            USER_PRINTLN(busPixelSize);
-            return;
-          }
-        } else {
-          USER_PRINTLN("No Bus.");
-          return;
-        }
-
-        
-        ppa_srm_oper_config_t srm_config = {};
-        if (strip.hasWhiteChannel()) {
-          // This works well to just discard the white channel:
-          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_ARGB8888;
-        } else {
-          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-        }
-        srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-        srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
-        srm_config.in.block_offset_x = 0;
-        srm_config.in.block_offset_y = 0;
-        srm_config.in.buffer = busPixelData;
-        srm_config.out.buffer_size = WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
-        srm_config.in.pic_w = SEGMENT.maxWidth;
-        srm_config.in.pic_h = SEGMENT.maxHeight;
-        srm_config.out.pic_w = WLEDMM_DISPLAY_W;
-        srm_config.out.pic_h = WLEDMM_DISPLAY_H;
-
-        // --- Start Refactor: Proportional "Fit" Scaling ---
-
-        // 1. Define the dimensions of the "box" we must fit into.
-        int topBarHeight = myFramebuffer.height();
-        int bottomBarHeight = buttonFramebuffer.height();
-
-        int availableMiddleWidth = WLEDMM_DISPLAY_W;
-        int availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight;
-
-        // 2. Calculate both possible scaling factors
-        //    (Add (float) to ensure floating-point division)
-        float scale_by_width = (float)availableMiddleWidth / (float)SEGMENT.maxWidth;
-        float scale_by_height = (float)availableMiddleHeight / (float)SEGMENT.maxHeight;
-
-        // 3. Choose the SMALLER scale factor. This guarantees it will fit
-        //    in both width AND height.
-        float scale = min(scale_by_width, scale_by_height);
-
-        // Apply the single, correct scale
-        srm_config.scale_x = scale;
-        srm_config.scale_y = scale;
-
-        // 4. Calculate the final scaled dimensions
-        int scaledContentWidth = (int)(SEGMENT.maxWidth * scale);
-        int scaledContentHeight = (int)(SEGMENT.maxHeight * scale);
-
-
-
-        // 5. Calculate offsets to center the newly-scaled content
-
-        // Center horizontally within the full display width
-        srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledContentWidth) / 2;
-
-        // Center vertically within the "middle" area, adding the top bar's height
-        srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - scaledContentHeight) / 2;
-
-        // --- End Refactor ---
-
-        // float reference_size = float(WLEDMM_DISPLAY_W); // or whatever your target size is
-        // float dominant_dim = (SEGMENT.maxWidth > SEGMENT.maxHeight) ? SEGMENT.maxWidth : SEGMENT.maxHeight;
-        // float scale = reference_size / dominant_dim;
-
-        // srm_config.scale_x = scale;
-        // srm_config.scale_y = scale;
-
-        // int topBarHeight = myFramebuffer.height();
-        // int bottomBarHeight = buttonFramebuffer.height();
-        
-        // // Calculate the height of the content you want to center
-        // int contentHeight = (SEGMENT.maxHeight * scale);
-
-        // // Calculate the height of the space *between* the bars
-        // int availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight;
-
-        // srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (SEGMENT.maxWidth * scale)) / 2;
-        // srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - contentHeight) / 2;
-
-        srm_config.mirror_x = false;
-        srm_config.mirror_y = false;
-        srm_config.rgb_swap = 0;
-        srm_config.byte_swap = 0;
-        srm_config.mode = PPA_TRANS_MODE_BLOCKING;
-        srm_config.in.block_w = SEGMENT.maxWidth;
-        srm_config.in.block_h = SEGMENT.maxHeight;
-        void* fb0_ptr = NULL;
-        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
-        uint8_t* fb0 = (uint8_t*)fb0_ptr;
-        srm_config.out.buffer = fb0;
-
-        static int64_t last_us = 0;
-        int64_t now_us = esp_timer_get_time();
-        if (now_us - last_us >= 33333) {
-          last_us = now_us;
-          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-        }
-
-        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-
-        static unsigned long fpslastDisplayTime = 0;
-
-        unsigned long now = millis();
-
-        // Check if 1000ms (1 second) have passed
-        if (now - fpslastDisplayTime >= 1000 || update_screen) {
-          if (!update_screen) fpslastDisplayTime = now; // Update the last run time
-          srm_config.in.buffer = (uint8_t*)myFramebuffer.getBuffer();
-          srm_config.in.pic_w = myFramebuffer.width();
-          srm_config.in.pic_h = myFramebuffer.height();
-          srm_config.scale_x = 1;
-          srm_config.scale_y = 1;
-          srm_config.in.block_w = srm_config.in.pic_w;
-          srm_config.in.block_h = srm_config.in.pic_h;
-          srm_config.out.block_offset_x = 0;
-          srm_config.out.block_offset_y = 0;
-          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-        }
-
-        if (update_screen) {
-          update_screen = false;
-          srm_config.in.buffer = (uint8_t*)buttonFramebuffer.getBuffer();
-          srm_config.in.pic_w = buttonFramebuffer.width();
-          srm_config.in.pic_h = buttonFramebuffer.height();
-          srm_config.scale_x = 1;
-          srm_config.scale_y = 1;
-          srm_config.in.block_w = srm_config.in.pic_w;
-          srm_config.in.block_h = srm_config.in.pic_h;
-          srm_config.out.block_offset_x = 0;
-          srm_config.out.block_offset_y = WLEDMM_DISPLAY_H - buttonFramebuffer.height();
-          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-        }
-
-        xSemaphoreGive(busMutex);
-      }
-    }
-
-    #ifdef WLED_DEBUG
-    stripMillis = millis() - stripMillis;
-    avgStripMillis += stripMillis;
-    if (stripMillis > maxStripMillis) maxStripMillis = stripMillis;
-    #endif
-  }
-
   if (e131Port == ARTNET_DEFAULT_PORT) {
     artnet.processNewFrame();
 
@@ -1254,6 +1110,145 @@ void WLED::loop() {
       newArtNetData = false;
     }
   }
+
+  #ifdef WLED_DEBUG
+  unsigned long stripMillis = millis();
+  #endif
+
+  if (!offMode || strip.isOffRefreshRequired()) {
+    if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+      if (!realtimeMode) strip.service();
+
+      byte* busPixelData = nullptr;
+      uint32_t busPixelSize = 0;
+      Bus* bus = busses.getBus(0);
+      if (bus) {
+        busPixelData = bus->getPixelData();
+        busPixelSize = SEGMENT.maxWidth * SEGMENT.maxHeight * 3;
+        if (busPixelData == NULL) {
+          USER_PRINTLN("No Bus Pixel Data");
+          return;
+        } else if (busPixelSize == 0) {
+          USER_PRINT("Bad Bus Pixel Length: ");
+          USER_PRINTLN(busPixelSize);
+          return;
+        }
+      } else {
+        USER_PRINTLN("No Bus.");
+        return;
+      }
+
+      ppa_srm_oper_config_t srm_config = {};
+      if (strip.hasWhiteChannel()) {
+        // This works well to just discard the white channel:
+        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_ARGB8888;
+      } else {
+        srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+      }
+      srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+      srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
+      srm_config.in.block_offset_x = 0;
+      srm_config.in.block_offset_y = 0;
+      srm_config.in.buffer = busPixelData;
+      srm_config.out.buffer_size = WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+      srm_config.in.pic_w = SEGMENT.maxWidth;
+      srm_config.in.pic_h = SEGMENT.maxHeight;
+      srm_config.out.pic_w = WLEDMM_DISPLAY_W;
+      srm_config.out.pic_h = WLEDMM_DISPLAY_H;
+
+      // Define the dimensions of the "box" we must fit into.
+      int topBarHeight = myFramebuffer.height();
+      int bottomBarHeight = buttonFramebuffer.height();
+
+      int availableMiddleWidth = WLEDMM_DISPLAY_W;
+      int availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight;
+
+      // Calculate both possible scaling factors
+      //    (Add (float) to ensure floating-point division)
+      float scale_by_width = (float)availableMiddleWidth / (float)SEGMENT.maxWidth;
+      float scale_by_height = (float)availableMiddleHeight / (float)SEGMENT.maxHeight;
+
+      // Choose the SMALLER scale factor. This guarantees it will fit
+      //    in both width AND height.
+      float scale = min(scale_by_width, scale_by_height);
+
+      // Apply the single, correct scale
+      srm_config.scale_x = scale;
+      srm_config.scale_y = scale;
+
+      // Calculate the final scaled dimensions
+      int scaledContentWidth = (int)(SEGMENT.maxWidth * scale);
+      int scaledContentHeight = (int)(SEGMENT.maxHeight * scale);
+
+      // Center horizontally within the full display width
+      srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledContentWidth) / 2;
+
+      // Center vertically within the "middle" area, adding the top bar's height
+      srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - scaledContentHeight) / 2;
+
+      srm_config.mirror_x = false;
+      srm_config.mirror_y = false;
+      srm_config.rgb_swap = 0;
+      srm_config.byte_swap = 0;
+      srm_config.mode = PPA_TRANS_MODE_BLOCKING;
+      srm_config.in.block_w = SEGMENT.maxWidth;
+      srm_config.in.block_h = SEGMENT.maxHeight;
+      void* fb0_ptr = NULL;
+      ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+      uint8_t* fb0 = (uint8_t*)fb0_ptr;
+      srm_config.out.buffer = fb0;
+
+      static int64_t last_us = 0;
+      int64_t now_us = esp_timer_get_time();
+      if (now_us - last_us >= 33333) {
+        last_us = now_us;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+      }
+
+      srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+
+      static unsigned long fpslastDisplayTime = 0;
+
+      unsigned long now = millis();
+
+      // Check if 1000ms (1 second) have passed
+      if (now - fpslastDisplayTime >= 1000 || update_screen) {
+        if (!update_screen) fpslastDisplayTime = now; // Update the last run time
+        srm_config.in.buffer = (uint8_t*)myFramebuffer.getBuffer();
+        srm_config.in.pic_w = myFramebuffer.width();
+        srm_config.in.pic_h = myFramebuffer.height();
+        srm_config.scale_x = 1;
+        srm_config.scale_y = 1;
+        srm_config.in.block_w = srm_config.in.pic_w;
+        srm_config.in.block_h = srm_config.in.pic_h;
+        srm_config.out.block_offset_x = 0;
+        srm_config.out.block_offset_y = 0;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+      }
+
+      if (update_screen) {
+        update_screen = false;
+        srm_config.in.buffer = (uint8_t*)buttonFramebuffer.getBuffer();
+        srm_config.in.pic_w = buttonFramebuffer.width();
+        srm_config.in.pic_h = buttonFramebuffer.height();
+        srm_config.scale_x = 1;
+        srm_config.scale_y = 1;
+        srm_config.in.block_w = srm_config.in.pic_w;
+        srm_config.in.block_h = srm_config.in.pic_h;
+        srm_config.out.block_offset_x = 0;
+        srm_config.out.block_offset_y = WLEDMM_DISPLAY_H - buttonFramebuffer.height();
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+      }
+
+      xSemaphoreGive(busMutex);
+    }
+  }
+
+  #ifdef WLED_DEBUG
+  stripMillis = millis() - stripMillis;
+  avgStripMillis += stripMillis;
+  if (stripMillis > maxStripMillis) maxStripMillis = stripMillis;
+  #endif
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
   if (millis() - debugTime > 29999) {
