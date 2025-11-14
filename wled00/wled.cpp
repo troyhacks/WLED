@@ -1132,6 +1132,7 @@ void WLED::loop() {
         srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
       }
       srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+      srm_config.mode = PPA_TRANS_MODE_NON_BLOCKING;
       srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
       srm_config.in.block_offset_x = 0;
       srm_config.in.block_offset_y = 0;
@@ -1170,7 +1171,7 @@ void WLED::loop() {
       srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledContentWidth) / 2;
 
       // Center vertically within the "middle" area, adding the top bar's height
-      srm_config.out.block_offset_y = topBarHeight + (availableMiddleHeight - scaledContentHeight) / 2;
+      srm_config.out.block_offset_y = topBarHeight; //  + (availableMiddleHeight - scaledContentHeight) / 2;
 
       srm_config.mirror_x = false;
       srm_config.mirror_y = false;
@@ -1210,6 +1211,26 @@ void WLED::loop() {
         srm_config.out.block_offset_x = 0;
         srm_config.out.block_offset_y = 0;
         ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+        if (camera_framebuffer_local && 0) {
+
+          availableMiddleWidth = WLEDMM_DISPLAY_W;
+          availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight - scaledContentHeight;
+
+          srm_config.in.buffer = camera_framebuffer_local;
+          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+          srm_config.out.block_offset_x = 0;
+          srm_config.out.block_offset_y = 0;
+          srm_config.in.pic_w = camera_w;
+          srm_config.in.pic_h = camera_h;
+          srm_config.scale_x = (float)availableMiddleHeight / (float)camera_h;
+          srm_config.scale_y = srm_config.scale_x;
+          srm_config.in.block_w = srm_config.in.pic_w;
+          srm_config.in.block_h = srm_config.in.pic_h;
+          srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (srm_config.scale_x * float(camera_w))) / 2;
+          srm_config.out.block_offset_y = topBarHeight + scaledContentHeight;
+          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+        }
       }
 
       if (update_screen) {
@@ -1225,24 +1246,22 @@ void WLED::loop() {
         srm_config.out.block_offset_y = WLEDMM_DISPLAY_H - buttonFramebuffer.height();
         ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
       }
-
-      xSemaphoreGive(busMutex);
     }
+    xSemaphoreGive(busMutex);
+  }
 
-    if (e131Port == ARTNET_DEFAULT_PORT) {
-      artnet.processNewFrame();
+  if (e131Port == ARTNET_DEFAULT_PORT) {
+    artnet.processNewFrame();
 
-      if (realtimeMode == REALTIME_MODE_ARTNET && newArtNetData) {
-        if (!offMode || strip.isOffRefreshRequired()) {
-          if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
-            strip.show();
-            xSemaphoreGive(busMutex);
-          }
+    if (realtimeMode == REALTIME_MODE_ARTNET && newArtNetData) {
+      if (!offMode || strip.isOffRefreshRequired()) {
+        if (xSemaphoreTake(busMutex, portMAX_DELAY)) {
+          strip.show();
+          xSemaphoreGive(busMutex);
         }
-        newArtNetData = false;
       }
+      newArtNetData = false;
     }
-
   }
 
   #ifdef WLED_DEBUG
@@ -1449,6 +1468,22 @@ IRAM_ATTR static bool test_notify_refresh_ready(esp_lcd_panel_handle_t panel, es
   xSemaphoreGiveFromISR(refresh_finish, &need_yield);
 
   return (need_yield == pdTRUE);
+}
+
+static bool s_camera_get_new_vb(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t* trans, void* user_data) {
+  // user_data now points to the global 's_new_trans'
+  esp_cam_ctlr_trans_t* cam_trans = (esp_cam_ctlr_trans_t*)user_data;
+  trans->buffer = cam_trans->buffer;
+  trans->buflen = cam_trans->buflen;
+  return false;
+}
+
+static bool s_camera_get_finished_trans(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t* trans, void* user_data) {
+  return true;
+}
+
+static bool s_isp_awb_on_statistics_done_cb(isp_awb_ctlr_t awb_ctlr, const esp_isp_awb_evt_data_t* edata, void* user_data) {
+  return true;
 }
 
 void WLED::setup() {
@@ -2149,7 +2184,7 @@ void WLED::setup() {
   // touch_io_config.flags.disable_control_phase = 0;
 
   esp_lcd_touch_io_gt911_config_t tp_gt911_config = {
-    .dev_addr = touch_io_config.dev_addr,
+    .dev_addr = uint8_t(touch_io_config.dev_addr),
   };
 
   // 2. Set up the touch panel config
@@ -2187,10 +2222,10 @@ void WLED::setup() {
   uint8_t* fb0 = (uint8_t*)fb0_ptr;
 
   if (!fb0) {
-    USER_PRINTLN("FATAL: Failed to get frame buffer pointer!");
+    USER_PRINTLN("FATAL: Failed to get display frame buffer pointer!");
     while (1);
   }
-  USER_PRINTF("Got frame buffer pointer: %p\n", fb0);
+  USER_PRINTF("Got display frame buffer pointer: %p\n", fb0);
 
   const int bytes_per_pixel = 3;
   uint16_t h_res = WLEDMM_DISPLAY_W;
@@ -2266,14 +2301,231 @@ void WLED::setup() {
     Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
     while (1);
   }
-  // if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_W)) {
-  //   Serial.println("Failed to allocate sprite buffer! (PSRAM not enabled?)");
-  //   while (1);
-  // }
 
-  // Ensure the data written by the CPU is visible in PSRAM for the DMA
-  // Doesn't seem to be needed?
-  // ESP_ERROR_CHECK(esp_cache_msync((void*)fb0, buffer_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M));
+  /*
+    MIPI_2lane_24Minput_RAW8_800x1280_50fps
+    MIPI_2lane_24Minput_RAW8_800x640_50fps
+    MIPI_2lane_24Minput_RAW8_800x800_50fps
+    MIPI_2lane_24Minput_RAW10_1920x1080_30fps
+    MIPI_2lane_24Minput_RAW10_1280x960_binning_45fps
+  */
+
+  /*
+  .name = "MIPI_2lane_24Minput_YUV422_1280x960_30fps",
+  .format = ESP_CAM_SENSOR_PIXFORMAT_YUV422,
+  .port = ESP_CAM_SENSOR_MIPI_CSI,
+  .xclk = 24000000,
+  .width = 1280,
+  .height = 960,
+  .regs = ov5645_MIPI_2lane_yuv422_960p_30fps,
+  .regs_size = ARRAY_SIZE(ov5645_MIPI_2lane_yuv422_960p_30fps),
+  .fps = 30,
+  .isp_info = NULL,
+  .mipi_info = {
+      .mipi_clk = OV5645_LINE_RATE_16BITS_1280x960_30FPS,
+      .lane_num = 2,
+      .line_sync_en = CONFIG_CAMERA_OV5645_CSI_LINESYNC_ENABLE ? true : false,
+  },
+  .reserved = NULL,
+  */
+ 
+  esp_cam_sensor_port_t cam_sensor_port = ESP_CAM_SENSOR_MIPI_CSI;
+  const char* format_name = "MIPI_2lane_24Minput_RAW8_800x640_50fps";
+
+  sccb_i2c_config_t sccb_config = {
+    .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+    .device_address = 0x36,
+    .scl_speed_hz = 100000,
+  };
+
+  ESP_ERROR_CHECK_WITHOUT_ABORT(sccb_new_i2c_io(global_i2c_bus_handle, &sccb_config, &sccb_handle));
+
+  esp_cam_sensor_config_t cam0_config = {
+    .sccb_handle = sccb_handle,
+    .reset_pin = GPIO_NUM_NC,
+    .pwdn_pin = GPIO_NUM_NC,
+    .xclk_pin = GPIO_NUM_NC,
+    .sensor_port = cam_sensor_port,
+  };
+
+  sensor = ov5647_detect(&cam0_config);
+  if (sensor) {
+    printf("OV5647 detected successfully!\n");
+  } else {
+    printf("Failed to detect OV5647 sensor.\n");
+  }
+
+  esp_cam_sensor_format_array_t cam_fmt_array = { 0 };
+  esp_cam_sensor_query_format(sensor, &cam_fmt_array);
+  const esp_cam_sensor_format_t* parray = cam_fmt_array.format_array;
+
+  for (int i = 0; i < cam_fmt_array.count; i++) {
+    USER_PRINTF("fmt[%d].name:%s\n", i, parray[i].name);
+  }
+
+  esp_cam_sensor_format_t* cam_cur_fmt = NULL;
+  for (int i = 0; i < cam_fmt_array.count; i++) {
+    if (!strcmp(parray[i].name, format_name)) {
+      cam_cur_fmt = (esp_cam_sensor_format_t*)&(parray[i]);
+    }
+  }
+  if (!cam_cur_fmt) {
+    USER_PRINTLN("Unsupported format");
+    ESP_ERROR_CHECK(ESP_ERR_INVALID_ARG);
+  }
+
+  esp_err_t ret = esp_cam_sensor_set_format(sensor, (const esp_cam_sensor_format_t*)cam_cur_fmt);
+  if (ret != ESP_OK) {
+    USER_PRINTLN("Format set fail");
+  } else {
+    USER_PRINTF("Format in use: %s\n", cam_cur_fmt->name);
+    camera_w = cam_cur_fmt->width;
+    camera_h = cam_cur_fmt->height;
+  }
+  int enable_flag = 1;
+  int disable_flag = 0;
+  
+  // ret = esp_sccb_transmit_reg_a16v8(sccb_handle, 0x3406, 0x00);
+  // if (ret != ESP_OK) {
+  //   USER_PRINTF("Failed to manually disable sensor AWB: %s\n", esp_err_to_name(ret));
+  //   // This is not fatal, but ISP AWB might not work well
+  // } else {
+  //   USER_PRINTLN("Sensor internal AWB disabled. ISP can take over.");
+  // }
+  
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b11111111); // Enable AWB, all control bits active
+  // // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b11101111);
+  // // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b00000000); // entirely disable
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5181, 0b11110010); // AWB gain control
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5182, 0b00000000); // Start index
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5183, 0b00010100); // Stop index
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5184, 0b00100101); // Red gain upper limit
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5185, 0b00100100); // Red gain lower limit
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5186, 0b00001001); // Green gain upper limit
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5187, 0b00001001); // Green gain lower limit
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5188, 0b00001001); // Blue gain upper limit
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5189, 0b01110101); // Blue gain lower limit
+
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518A, 0b01010100); // Zone weight
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518B, 0b11100000); // Bias control
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518C, 0b10110010); // Red bias
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518D, 0b01000010); // Green bias
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518E, 0b00111101); // Blue bias
+
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518F, 0b01010110); // Red gain
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5190, 0b01000110); // Green gain
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5191, 0b11111000); // Blue gain
+
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5192, 0b00000100); // Low threshold
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5193, 0b01110000); // High threshold
+
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5194, 0b11110000); // Enable mask
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5195, 0b11110000); // Reset mask
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5196, 0b00000001); // AWB mode select - Simple average mode
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5197, 0b00000001); // Update trigger
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5198, 0b00000001); // Update interval was 0b00000100
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5199, 0b00010010); // Convergence speed
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519A, 0b00000100); // Lock threshold
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519B, 0b00000000); // Lock disable
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519C, 0b00000010); // Window size
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519D, 0b10000010); // Debug flags
+  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519E, 0b00111000); // Final control
+
+  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0x00); // entirely disable
+  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5197, 0x00); // Disable AWB update trigger
+  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519B, 0x01); // Lock AWB (if supported)
+
+  ret = esp_cam_sensor_ioctl(sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag);
+  if (ret != ESP_OK) {
+    USER_PRINTLN("Start stream fail");
+    ESP_ERROR_CHECK(ret);
+  } else if (ret == ESP_OK) {
+    USER_PRINTLN("Start stream OK!"); 
+  }
+
+  esp_cam_ctlr_csi_config_t csi_config = {};
+  csi_config.ctlr_id = 0;
+  csi_config.h_res = camera_w;
+  csi_config.v_res = camera_h;
+  csi_config.lane_bit_rate_mbps = 200;
+  csi_config.input_data_color_type = CAM_CTLR_COLOR_RAW8;
+  csi_config.output_data_color_type = CAM_CTLR_COLOR_RGB565;
+  csi_config.data_lane_num = cam_cur_fmt->mipi_info.lane_num;
+  csi_config.byte_swap_en = false;
+  csi_config.bk_buffer_dis = false;
+  csi_config.queue_items = 1;
+
+  USER_PRINTF("csi_config.lane_bit_rate_mbps = %d\n", csi_config.lane_bit_rate_mbps);
+
+  ESP_ERROR_CHECK(esp_cam_new_csi_ctlr(&csi_config, &cam_handle));
+
+  esp_cam_ctlr_evt_cbs_t cbs = {
+    .on_trans_finished = s_camera_get_finished_trans,
+  };
+
+  ESP_ERROR_CHECK(esp_cam_ctlr_register_event_callbacks(cam_handle, &cbs, &s_trans));
+
+  ESP_ERROR_CHECK(esp_cam_ctlr_enable(cam_handle));
+
+  esp_isp_processor_cfg_t isp_config = {
+    .clk_hz = 160 * 1000 * 1000,
+    .input_data_source = ISP_INPUT_DATA_SOURCE_CSI,
+    .input_data_color_type = ISP_COLOR_RAW8,
+    .output_data_color_type = ISP_COLOR_RGB565,
+    .has_line_start_packet = false,
+    .has_line_end_packet = false,
+    .h_res = camera_w,
+    .v_res = camera_h,
+    .bayer_order = COLOR_RAW_ELEMENT_ORDER_GRBG,     // COLOR_RAW_ELEMENT_ORDER_GBRG <-- not this one
+    .flags = {
+      .bypass_isp = false,
+      .byte_swap_en = true,
+    }
+  };
+
+  ESP_ERROR_CHECK(esp_isp_new_processor(&isp_config, &isp_proc));
+  ESP_ERROR_CHECK(esp_isp_enable(isp_proc));
+
+  esp_isp_awb_config_t awb_config = {
+      .sample_point = ISP_AWB_SAMPLE_POINT_AFTER_CCM,
+      .window = {
+        .top_left = {
+          .x = 100,
+          .y = 100,
+        },
+        .btm_right = {
+          .x = camera_w - 100,
+          .y = camera_h - 100,
+        },
+      },
+      .white_patch = {
+        .luminance = {
+          .min = 0,
+          .max = 255*2,
+        },
+        .red_green_ratio = {
+          .min = 0.8,
+          .max = 1.2,
+        },
+        .blue_green_ratio = {
+          .min = 0.8,
+          .max = 1.2,
+        },
+      },
+  };
+
+  ESP_ERROR_CHECK(esp_isp_new_awb_controller(isp_proc, &awb_config, &awb_ctlr));
+  esp_isp_awb_cbs_t awb_cb = {
+    .on_statistics_done = s_isp_awb_on_statistics_done_cb,
+  };
+  ESP_ERROR_CHECK(esp_isp_awb_register_event_callbacks(awb_ctlr, &awb_cb, NULL));
+  ESP_ERROR_CHECK(esp_isp_awb_controller_enable(awb_ctlr));
+  isp_awb_stat_result_t stat_res = {};
+  ESP_ERROR_CHECK(esp_isp_awb_controller_get_oneshot_statistics(awb_ctlr, -1, &stat_res));
+  ESP_ERROR_CHECK(esp_isp_awb_controller_start_continuous_statistics(awb_ctlr));
+
+  ESP_ERROR_CHECK(esp_cam_ctlr_start(cam_handle));
+  esp_cam_ctlr_get_frame_buffer(cam_handle, 1, &camera_framebuffer_local);
 
   USER_PRINT(F("Free heap ")); USER_PRINTLN(ESP.getFreeHeap());USER_PRINTLN();
   USER_PRINTLN(F("WLED initialization done.\n"));

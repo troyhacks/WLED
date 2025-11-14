@@ -317,6 +317,39 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 #include "ImageCacheManager.h"
 #include "esp_lcd_types.h"
 #include "esp_lcd_touch_gt911.h"
+#include "esp_cam_ctlr_csi.h"
+#include "esp_cam_ctlr.h"
+#include "driver/isp.h"
+extern "C" {
+  #include "esp_sccb_intf.h"
+  #include "esp_sccb_i2c.h"
+}  
+#include "esp_cam_sensor.h"
+#include "esp_cam_sensor_detect.h"
+#include "esp_cam_sensor_types.h"
+#include <ov5647.h>
+// #include "esp32p4/include/espressif__esp_cam_sensor/sensors/ov5645/include/ov5645.h"
+// #include "esp_sccb_i2c.h"
+WLED_GLOBAL esp_cam_ctlr_handle_t cam_handle _INIT(NULL);
+WLED_GLOBAL esp_sccb_io_handle_t sccb_handle _INIT(NULL);
+WLED_GLOBAL uint32_t camera_w _INIT(0);
+WLED_GLOBAL uint32_t camera_h _INIT(0);
+WLED_GLOBAL void* camera_framebuffer_1 _INIT(NULL);
+WLED_GLOBAL void* camera_framebuffer_2 _INIT(NULL);
+WLED_GLOBAL size_t camera_framebuffer_size _INIT(-1);
+WLED_GLOBAL const void* camera_framebuffer_local _INIT(NULL);
+WLED_GLOBAL esp_cam_ctlr_trans_t s_trans;
+WLED_GLOBAL volatile bool g_request_new_frame _INIT(false);
+WLED_GLOBAL esp_cam_sensor_device_t* sensor _INIT(NULL);
+WLED_GLOBAL isp_proc_handle_t isp_proc _INIT(NULL);
+WLED_GLOBAL isp_awb_ctlr_t awb_ctlr _INIT(NULL);
+
+#ifndef WLED_CAM_W
+  #define WLED_CAM_W 800
+#endif
+#ifndef WLED_CAM_H
+  #define WLED_CAM_H 640
+#endif
 #ifndef WLEDMM_DISPLAY_W
   #define WLEDMM_DISPLAY_W 720
 #endif
@@ -334,7 +367,7 @@ WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPE
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_fill_config _INIT_N((({ .oper_type = PPA_OPERATION_FILL, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL ppa_client_handle_t ppa_srm_handle _INIT(NULL);
-WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
+WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 10, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
 WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
 WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);

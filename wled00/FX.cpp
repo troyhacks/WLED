@@ -9339,128 +9339,142 @@ uint16_t IRAM_ATTR mode_PPA_TESTBED() {
     return 1;
   }
 
-  static uint16_t frame = 0;
-  std::string folder_path;
-  static std::string last_folder_path;
-
-  if (get_sequence_folder("/usb0", folder_path, SEGMENT.speed, rescan_source) != 0) {
-    DEBUG_PRINTLN("No sequence folders found — skipping");
-    delay(500);
-    return 1;
-  }
-
-  static uint16_t folder_size = 0;
-
-  if (folder_path != last_folder_path) {
-    last_folder_path = folder_path;
-    folder_size = ImageCacheManager::getInstance().getFolderSize(folder_path); 
-    USER_PRINTF("Playing Sequence: %s\n", folder_path.c_str());
-  }
-
-  if (folder_size == 1) {
-    frame = 0;  // Always use frame 0
-  } else {
-    if (frame >= folder_size) frame = 0;
-  }
-
-  ImageData* img = ImageCacheManager::getInstance().getImage(folder_path, frame);
-
-  uint8_t* file_jpeg = NULL;
-  size_t file_jpeg_size = 0;
-
-  if (img) {
-
-    file_jpeg = img->buffer;
-    file_jpeg_size = img->size;
-
-    if (img && folder_size > 1) {
-      frame++;
-      if (frame >= folder_size) frame = 0;
-    } else if (folder_size == 1) {
-      frame = 0;
-    }
-    
-  } else {
-    DEBUG_PRINTF("Could not get image %d from %s.", frame, folder_path.c_str());
-  }
-  
-  if (!file_jpeg || file_jpeg_size == 0) {
-    DEBUG_PRINTF("Cached image data missing for frame %d\n", frame);
-    frame = 0;
-    delay(500);
-    return 1;
-  }
-
-  if (file_jpeg == NULL) {
-    DEBUG_PRINTLN("NULL at JPEG pointer!");
-    delay(500);
-    return 0;
-  }
-
-  // jpeg_decoder_handle_t jpgd_handle;
-
-  // jpeg_decode_engine_cfg_t decode_eng_cfg = {
-  //   .timeout_ms = 40,
-  // };
-
-  // ESP_ERROR_CHECK(jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle));
-
-  jpeg_decode_cfg_t decode_cfg_rgb = {
-    .output_format = JPEG_DECODE_OUT_FORMAT_RGB888,
-    .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
-  };
-
-  jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = {
-    .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER,
-  };
-
+  jpeg_decode_picture_info_t header_info;
+  static uint8_t* rx_bitmap = NULL;
+  static uint32_t blackbuffer_size = 0;
+  static uint8_t* blackbuffer = NULL;
+  static uint32_t scalebuffer_size = 0;
+  static uint8_t* scalebuffer = NULL;
   static uint32_t pre_jpeg_height = 0;
   static uint32_t pre_jpeg_width = 0;
   static uint32_t pre_height = 0;
   static uint32_t pre_width = 0;
   static size_t rx_bitmap_size = 0;
-  static uint8_t* rx_bitmap = NULL;
-  static uint32_t blackbuffer_size = 0;
-  static uint8_t* blackbuffer = NULL;
-
-  jpeg_decode_picture_info_t header_info;
-  ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_decoder_get_info(file_jpeg, file_jpeg_size, &header_info));
-
-  if (header_info.width != pre_jpeg_width || header_info.height != pre_jpeg_height) {
-  
-    USER_PRINTF("IP JPEG Size %u x %u\n", header_info.width, header_info.height);
-
-    if (rx_bitmap != NULL) free(rx_bitmap);
-
-    rx_bitmap = (uint8_t*)jpeg_alloc_decoder_mem(header_info.width * header_info.height * 3, &rx_mem_cfg, &rx_bitmap_size);
-
-    pre_jpeg_height = header_info.height;
-    pre_jpeg_width = header_info.width;
-
-  }
 
   if (width != pre_width || height != pre_height) {
 
     if (blackbuffer != NULL) free(blackbuffer);
+    if (scalebuffer != NULL) free(scalebuffer);
 
     blackbuffer_size = width * height * 4;
+    scalebuffer_size = width * height * 3;
 
     blackbuffer = (uint8_t*)heap_caps_calloc(blackbuffer_size, sizeof(byte), MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
+    scalebuffer = (uint8_t*)heap_caps_calloc(scalebuffer_size, sizeof(byte), MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
 
     pre_height = height;
     pre_width = width;
 
   }
-  
-  if (rx_bitmap == NULL) {
-    USER_PRINTLN("Can't allocate received bitmap buffer!");
-    return 1;
+
+  if (SEGMENT.check2 && camera_framebuffer_local) {
+
+    header_info.height = camera_h;
+    header_info.width = camera_w;
+
+  } else {
+
+    static uint16_t frame = 0;
+    std::string folder_path;
+    static std::string last_folder_path;
+
+    if (get_sequence_folder("/usb0", folder_path, SEGMENT.speed, rescan_source) != 0) {
+      DEBUG_PRINTLN("No sequence folders found — skipping");
+      delay(500);
+      return 1;
+    }
+
+    static uint16_t folder_size = 0;
+
+    if (folder_path != last_folder_path) {
+      last_folder_path = folder_path;
+      folder_size = ImageCacheManager::getInstance().getFolderSize(folder_path);
+      USER_PRINTF("Playing Sequence: %s\n", folder_path.c_str());
+    }
+
+    if (folder_size == 1) {
+      frame = 0;  // Always use frame 0
+    } else {
+      if (frame >= folder_size) frame = 0;
+    }
+
+    ImageData* img = ImageCacheManager::getInstance().getImage(folder_path, frame);
+
+    uint8_t* file_jpeg = NULL;
+    size_t file_jpeg_size = 0;
+
+    if (img) {
+
+      file_jpeg = img->buffer;
+      file_jpeg_size = img->size;
+
+      if (img && folder_size > 1) {
+        frame++;
+        if (frame >= folder_size) frame = 0;
+      } else if (folder_size == 1) {
+        frame = 0;
+      }
+
+    } else {
+      DEBUG_PRINTF("Could not get image %d from %s.", frame, folder_path.c_str());
+    }
+
+    if (!file_jpeg || file_jpeg_size == 0) {
+      DEBUG_PRINTF("Cached image data missing for frame %d\n", frame);
+      frame = 0;
+      delay(500);
+      return 1;
+    }
+
+    if (file_jpeg == NULL) {
+      DEBUG_PRINTLN("NULL at JPEG pointer!");
+      delay(500);
+      return 0;
+    }
+
+    // jpeg_decoder_handle_t jpgd_handle;
+
+    // jpeg_decode_engine_cfg_t decode_eng_cfg = {
+    //   .timeout_ms = 40,
+    // };
+
+    // ESP_ERROR_CHECK(jpeg_new_decoder_engine(&decode_eng_cfg, &jpgd_handle));
+
+    jpeg_decode_cfg_t decode_cfg_rgb = {
+      .output_format = JPEG_DECODE_OUT_FORMAT_RGB888,
+      .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
+    };
+
+    jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = {
+      .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER,
+    };
+
+    ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_decoder_get_info(file_jpeg, file_jpeg_size, &header_info));
+
+    if (header_info.width != pre_jpeg_width || header_info.height != pre_jpeg_height) {
+
+      USER_PRINTF("IP JPEG Size %u x %u\n", header_info.width, header_info.height);
+
+      if (rx_bitmap != NULL) free(rx_bitmap);
+
+      rx_bitmap = (uint8_t*)jpeg_alloc_decoder_mem(header_info.width * header_info.height * 3, &rx_mem_cfg, &rx_bitmap_size);
+
+      pre_jpeg_height = header_info.height;
+      pre_jpeg_width = header_info.width;
+
+    }
+
+    if (rx_bitmap == NULL) {
+      USER_PRINTLN("Can't allocate received bitmap buffer!");
+      return 1;
+    }
+
+    uint32_t out_size = 0; // we don't use this anywhere but need to catch it. PPA may need this depending on the operation.
+
+    ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_decoder_process(jpgd_handle, &decode_cfg_rgb, file_jpeg, file_jpeg_size, rx_bitmap, rx_bitmap_size, &out_size));
+    // ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_del_decoder_engine(jpgd_handle));
+
   }
-
-  uint32_t out_size = 0; // we don't use this anywhere but need to catch it. PPA may need this depending on the operation.
-
-  ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_decoder_process(jpgd_handle, &decode_cfg_rgb, file_jpeg, file_jpeg_size, rx_bitmap, rx_bitmap_size, &out_size));
-  // ESP_ERROR_CHECK_WITHOUT_ABORT(jpeg_del_decoder_engine(jpgd_handle));
 
   um_data_t* um_data = getAudioData();
   uint8_t fftResult[NUM_GEQ_CHANNELS] = { 0 };
@@ -9505,35 +9519,110 @@ uint16_t IRAM_ATTR mode_PPA_TESTBED() {
 
   }
 
+  // --- Start of Parameter-Controlled "Aggressive Crop" Logic ---
+
+  // 1. Get dimensions as floats
+  float in_w = (float)header_info.width;   // e.g., 800
+  float in_h = (float)header_info.height;  // e.g., 640
+  float out_w = (float)width;              // e.g., 128
+  float out_h = (float)height;             // e.g., 64
+
+  // 2. Find the ideal aspect-correct crop
+  float in_aspect = in_w / in_h;
+  float out_aspect = out_w / out_h;
+
+  float ideal_block_w, ideal_block_h;
+
+  if (in_aspect > out_aspect) {
+    // Input is WIDER than output (e.g., 16:9 -> 4:3)
+    // We will use the full height and crop the sides
+    ideal_block_h = in_h;
+    ideal_block_w = in_h * out_aspect;
+  } else {
+    // Input is TALLER than output (e.g., 4:3 -> 16:9)
+    // We will use the full width and crop the top/bottom
+    ideal_block_w = in_w;
+    ideal_block_h = in_w / out_aspect;
+  }
+
+  // 3. Calculate ideal scale and the required hardware scale
+  float ideal_scale = out_w / ideal_block_w; // (or out_h / ideal_block_h)
+  const float hardware_step = 1.0f / 16.0f;  // 0.0625
+
+  // This finds the smallest hardware-supported scale that is >= our ideal scale
+  float final_scale = ceilf(ideal_scale / hardware_step) * hardware_step;
+  // e.g., ceilf(0.16 / 0.0625) * 0.0625
+  //     = ceilf(2.56) * 0.0625
+  //     = 3.0f * 0.0625 = 0.1875
+
+  // 4. Calculate the final "aggressive" crop block needed for a perfect output
+  // We use ceilf() to find the smallest integer block that will
+  // truncate to our *exact* output dimension.
+  uint32_t final_block_w = (uint32_t)ceilf(out_w / final_scale); // e.g., 683
+  uint32_t final_block_h = (uint32_t)ceilf(out_h / final_scale); // e.g., 342
+
+  // 5. Center this new block within the full input frame
+  uint32_t final_offset_x = (uint32_t)((in_w - final_block_w) / 2.0f); // e.g., 58
+  uint32_t final_offset_y = (uint32_t)((in_h - final_block_h) / 2.0f); // e.g., 149
+
+  // --- End of new logic ---
+
   ppa_srm_oper_config_t srm_config = {};
   srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
   srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
   srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
-  srm_config.in.block_offset_x = 0;
-  srm_config.in.block_offset_y = 0;
+
+  // Set the input block offsets and size
+  srm_config.in.block_offset_x = final_offset_x;
+  srm_config.in.block_offset_y = final_offset_y;
+  srm_config.in.pic_w = header_info.width;
+  srm_config.in.pic_h = header_info.height;
+  srm_config.in.block_w = final_block_w;
+  srm_config.in.block_h = final_block_h;
+
+  // Set the output config
   srm_config.out.buffer = busPixelData;
   srm_config.out.buffer_size = busPixelSize;
   srm_config.out.pic_w = width;
   srm_config.out.pic_h = height;
   srm_config.out.block_offset_x = 0;
   srm_config.out.block_offset_y = 0;
-  srm_config.scale_x = 1;
-  srm_config.scale_y = 1;
-  srm_config.mirror_x = xmirror;
+
+  // Set the chosen hardware scale
+  srm_config.scale_x = final_scale;
+  srm_config.scale_y = final_scale;
+
+  srm_config.mirror_x = false;
   srm_config.mirror_y = false;
   srm_config.rgb_swap = 0;
   srm_config.byte_swap = 0;
   srm_config.alpha_update_mode = PPA_ALPHA_NO_CHANGE;
-  srm_config.mode = PPA_TRANS_MODE_BLOCKING;
+  // srm_config.mode = PPA_TRANS_MODE_BLOCKING;
 
-  srm_config.in.buffer = rx_bitmap;
-  srm_config.in.pic_w = header_info.width;
-  srm_config.in.pic_h = header_info.height;
-  srm_config.in.block_w = header_info.width;
-  srm_config.in.block_h = header_info.height;
+  if (SEGMENT.check2 && camera_framebuffer_local) {
+    srm_config.in.buffer = camera_framebuffer_local;
+    srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+    srm_config.mirror_x = true; // user preference. We like seeing mirrors of ourselves.
+    srm_config.out.buffer = scalebuffer;
+    srm_config.out.buffer_size = scalebuffer_size;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+    srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
+    srm_config.mirror_x = false;
+    srm_config.in.buffer = scalebuffer;
+    srm_config.in.pic_w = width;
+    srm_config.in.pic_h = height;
+    srm_config.scale_x = 1.0f;
+    srm_config.scale_y = 1.0f;
+    srm_config.in.block_offset_x = 0;
+    srm_config.in.block_offset_y = 0;
+    srm_config.in.block_w = width;
+    srm_config.in.block_h = height;
+  } else {
+    srm_config.in.buffer = rx_bitmap;
+  }
 
-  srm_config.scale_x = float(float(width) / float(header_info.width));
-  srm_config.scale_y = float(float(height) / float(header_info.height));
+  srm_config.out.buffer = busPixelData;
+  srm_config.out.buffer_size = busPixelSize;
 
   if (SEGMENT.check1) {
 
@@ -9590,10 +9679,10 @@ uint16_t IRAM_ATTR mode_PPA_TESTBED() {
 
   }
 
-  if (SEGMENT.check2 && fftResult[0] > bass_peak * 0.9) {
-    xmirror = !xmirror;
-    srm_config.mirror_x = xmirror;
-  }
+  // if (SEGMENT.check2 && fftResult[0] > bass_peak * 0.9) {
+  //   xmirror = !xmirror;
+  //   srm_config.mirror_x = xmirror;
+  // }
 
   if (SEGMENT.custom3 > 0) {
 
@@ -9655,12 +9744,14 @@ uint16_t IRAM_ATTR mode_PPA_TESTBED() {
       srm_config.out.block_offset_y = 0;
       srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
     }
+    srm_config.mode = PPA_TRANS_MODE_BLOCKING;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
   } else {
+    srm_config.mode = PPA_TRANS_MODE_BLOCKING;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
   }
 
-  if (!SEGMENT.check2) xmirror = false;
+  // if (!SEGMENT.check2) xmirror = false;
 
   if (SEGMENT.check3) {
 
@@ -9742,7 +9833,7 @@ uint16_t IRAM_ATTR mode_PPA_TESTBED() {
   return FRAMETIME;
 
 } // mode_PPA_TESTBED)
-static const char _data_FX_MODE_PPA_TESTBED[] PROGMEM = "Image Player ☾🐺@Folder Picker,Fill (0==Bass),FPS Limit,Fade Colour,Transforms,Bass Scaler,Bass Flip,Enable Fill;!,,Peaks;!;2f;sx=0,ix=0,c1=30,c2=0,c3=0,o1=0,o2=0,o3=0";
+static const char _data_FX_MODE_PPA_TESTBED[] PROGMEM = "Image Player ☾🐺@Folder Picker,Fill (0==Bass),FPS Limit,Fade Colour,Transforms,Bass Scaler,Use Camera,Enable Fill;!,,Peaks;!;2f;sx=0,ix=0,c1=30,c2=0,c3=0,o1=0,o2=0,o3=0";
 
 #endif // WLED_DISABLE_2D
 
