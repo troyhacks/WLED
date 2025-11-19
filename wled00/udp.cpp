@@ -779,7 +779,7 @@ uint8_t IRAM_ATTR __attribute__((hot)) realtimeBroadcast(uint8_t type, IPAddress
       #endif
       unsigned long timer = micros();
 
-      AsyncUDP artnetudp;// AsyncUDP so we can just blast packets.
+      static AsyncUDP artnetudp;// AsyncUDP so we can just blast packets.
 
       const uint_fast16_t ARTNET_CHANNELS_PER_PACKET = isRGBW?512:510; // 512/4=128 RGBW LEDs, 510/3=170 RGB LEDs
 
@@ -912,7 +912,7 @@ uint8_t IRAM_ATTR __attribute__((hot)) realtimeBroadcast(uint8_t type, IPAddress
         // packet_buffer[13] = 0x00; // Aux2 - Transmit as 0 - this should be 0 anyway in the packet already
         
         #ifdef ARTNET_SYNC_STRICT
-        WiFiUDP artnetsync;
+        static WiFiUDP artnetsync;
         artnetsync.begin(ETH.localIP(), ARTNET_DEFAULT_PORT);
         artnetsync.beginPacket(IPADDR_BROADCAST,ARTNET_DEFAULT_PORT);
         artnetsync.write(packet_buffer,14);

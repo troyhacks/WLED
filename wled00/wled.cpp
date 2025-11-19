@@ -1211,26 +1211,6 @@ void WLED::loop() {
         srm_config.out.block_offset_x = 0;
         srm_config.out.block_offset_y = 0;
         ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-        if (camera_framebuffer_local && 0) {
-
-          availableMiddleWidth = WLEDMM_DISPLAY_W;
-          availableMiddleHeight = WLEDMM_DISPLAY_H - topBarHeight - bottomBarHeight - scaledContentHeight;
-
-          srm_config.in.buffer = camera_framebuffer_local;
-          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
-          srm_config.out.block_offset_x = 0;
-          srm_config.out.block_offset_y = 0;
-          srm_config.in.pic_w = camera_w;
-          srm_config.in.pic_h = camera_h;
-          srm_config.scale_x = (float)availableMiddleHeight / (float)camera_h;
-          srm_config.scale_y = srm_config.scale_x;
-          srm_config.in.block_w = srm_config.in.pic_w;
-          srm_config.in.block_h = srm_config.in.pic_h;
-          srm_config.out.block_offset_x = (WLEDMM_DISPLAY_W - (srm_config.scale_x * float(camera_w))) / 2;
-          srm_config.out.block_offset_y = topBarHeight + scaledContentHeight;
-          ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-          srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-        }
       }
 
       if (update_screen) {
@@ -2375,6 +2355,7 @@ void WLED::setup() {
   }
 
   esp_err_t ret = esp_cam_sensor_set_format(sensor, (const esp_cam_sensor_format_t*)cam_cur_fmt);
+
   if (ret != ESP_OK) {
     USER_PRINTLN("Format set fail");
   } else {
@@ -2382,59 +2363,10 @@ void WLED::setup() {
     camera_w = cam_cur_fmt->width;
     camera_h = cam_cur_fmt->height;
   }
+
   int enable_flag = 1;
   int disable_flag = 0;
   
-  // ret = esp_sccb_transmit_reg_a16v8(sccb_handle, 0x3406, 0x00);
-  // if (ret != ESP_OK) {
-  //   USER_PRINTF("Failed to manually disable sensor AWB: %s\n", esp_err_to_name(ret));
-  //   // This is not fatal, but ISP AWB might not work well
-  // } else {
-  //   USER_PRINTLN("Sensor internal AWB disabled. ISP can take over.");
-  // }
-  
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b11111111); // Enable AWB, all control bits active
-  // // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b11101111);
-  // // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0b00000000); // entirely disable
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5181, 0b11110010); // AWB gain control
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5182, 0b00000000); // Start index
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5183, 0b00010100); // Stop index
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5184, 0b00100101); // Red gain upper limit
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5185, 0b00100100); // Red gain lower limit
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5186, 0b00001001); // Green gain upper limit
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5187, 0b00001001); // Green gain lower limit
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5188, 0b00001001); // Blue gain upper limit
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5189, 0b01110101); // Blue gain lower limit
-
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518A, 0b01010100); // Zone weight
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518B, 0b11100000); // Bias control
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518C, 0b10110010); // Red bias
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518D, 0b01000010); // Green bias
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518E, 0b00111101); // Blue bias
-
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x518F, 0b01010110); // Red gain
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5190, 0b01000110); // Green gain
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5191, 0b11111000); // Blue gain
-
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5192, 0b00000100); // Low threshold
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5193, 0b01110000); // High threshold
-
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5194, 0b11110000); // Enable mask
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5195, 0b11110000); // Reset mask
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5196, 0b00000001); // AWB mode select - Simple average mode
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5197, 0b00000001); // Update trigger
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5198, 0b00000001); // Update interval was 0b00000100
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5199, 0b00010010); // Convergence speed
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519A, 0b00000100); // Lock threshold
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519B, 0b00000000); // Lock disable
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519C, 0b00000010); // Window size
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519D, 0b10000010); // Debug flags
-  // esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519E, 0b00111000); // Final control
-
-  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5180, 0x00); // entirely disable
-  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x5197, 0x00); // Disable AWB update trigger
-  esp_sccb_transmit_reg_a16v8(sccb_handle, 0x519B, 0x01); // Lock AWB (if supported)
-
   ret = esp_cam_sensor_ioctl(sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag);
   if (ret != ESP_OK) {
     USER_PRINTLN("Start stream fail");
