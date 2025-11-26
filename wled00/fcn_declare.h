@@ -233,6 +233,7 @@ bool getCachedPresetMetadata(byte index, String& name, bool& isPlaylist);
 void buildPresetCache();
 String strip_unicode(const String& name);
 bool getCachedPresetExists(int id);
+byte getRandomPresetId();
 
 //remote.cpp
 void handleRemote();

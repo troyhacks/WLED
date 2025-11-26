@@ -453,3 +453,33 @@ bool getCachedPresetExists(int id) {
 
   return presetCache[id].exists;
 }
+
+byte getRandomPresetId() {
+  // 1. Safety check: Ensure cache exists
+  if (presetCache == nullptr) return 0;
+
+  // 2. Temporary storage for eligible preset IDs
+  // We use a size of 250 because that is the max number of presets WLED supports
+  byte validCandidates[250];
+  byte count = 0;
+
+  // 3. Iterate through all possible slots
+  for (byte i = 1; i <= 250; i++) {
+    // Constraint Check:
+    // 1. presetCache[i].exists must be true
+    // 2. presetCache[i].isPlaylist must be false
+    if (presetCache[i].exists && !presetCache[i].isPlaylist) {
+      validCandidates[count++] = i;
+    }
+  }
+
+  // 4. If no valid presets found, return 0
+  if (count == 0) return 0;
+
+  // 5. Pick a random index from the list of candidates
+  // random(max) returns a number from 0 to max-1
+  byte randomIndex = random(count);
+
+  // 6. Return the actual Preset ID
+  return validCandidates[randomIndex];
+}
