@@ -165,6 +165,11 @@ void WS2812FX::setUpMatrix() {
       DEBUG_PRINTLN();
       USER_FLUSH();  // wait until serial buffer is written out - to avoid loss/corruption of future debug messages
       #endif
+
+      if (bakeMap && customMappingTable != nullptr && customMappingTableSize > 0) {
+        saveBakedLedMap("Panel_Map", Segment::maxWidth, Segment::maxHeight, customMappingTable, customMappingTableSize);
+      }
+
     } else { // memory allocation error
       customMappingTableSize = 0;
       USER_PRINTLN(F("Ledmap alloc error."));

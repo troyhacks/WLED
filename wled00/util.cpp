@@ -9,6 +9,45 @@ int getNumVal(const String* req, uint16_t pos)
   return req->substring(pos+3).toInt();
 }
 
+bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint16_t* mappingTable, uint32_t tableSize, const char* filename) {
+  if (!mappingTable || tableSize == 0) return false;
+  bakeMap = false;
+  File f = WLED_FS.open(filename, "w");
+  if (!f) {
+    USER_PRINTLN(F("Failed to open file for writing"));
+    return false;
+  }
+
+  // Write header
+  f.print(F("{\"n\":\""));
+  f.print(name);
+  f.print(F("\"\n,\"width\":"));
+  f.print(width);
+  f.print(F("\n,\"height\":"));
+  f.print(height);
+  f.print(F("\n,\"map\":[\n"));
+
+  // Write map data - format as rows for readability (optional)
+  const uint16_t valuesPerRow = width > 0 ? width : 48;  // Match width or default
+
+  for (uint32_t i = 0; i < tableSize; i++) {
+    f.print(mappingTable[i]);
+
+    if (i < tableSize - 1) {
+      f.print(',');
+      // Newline after each row for readability
+      if ((i + 1) % valuesPerRow == 0) {
+        f.print('\n');
+      }
+    }
+  }
+
+  f.print(F("\n]}"));
+  f.close();
+
+  USER_PRINTF("Saved LED map '%s' (%u values) to %s\n", name, tableSize, filename);
+  return true;
+}
 
 //helper to get int value with in/decrementing support via ~ syntax
 void parseNumber(const char* str, byte* val, byte minv, byte maxv)

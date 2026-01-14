@@ -354,6 +354,9 @@ WLED_GLOBAL bool noWifiSleep _INIT(false);
 #endif
 WLED_GLOBAL bool force802_3g _INIT(false);
 
+WLED_GLOBAL bool bakeMap         _INIT(false); // global to trigger baking (saving) our panel-based LED map.
+bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint16_t* mappingTable, uint32_t tableSize, const char* filename = "/panel_map.json");
+
 #ifdef WLED_USE_ETHERNET
   #ifdef WLED_ETH_DEFAULT                                          // default ethernet board type if specified
     WLED_GLOBAL int ethernetType _INIT(WLED_ETH_DEFAULT);          // ethernet board type

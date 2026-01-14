@@ -788,6 +788,7 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
         pO[l] = 'H'; p.height      = request->arg(pO).toInt();
         strip.panel.push_back(p);
       }
+      bakeMap = true;
       strip.setUpMatrix(); // will check limits
       strip.resetSegments(true);  //WLEDMM not makeAutoSegments(true) as we only want to change bounds
       strip.deserializeMap();
