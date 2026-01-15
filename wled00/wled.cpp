@@ -1047,7 +1047,7 @@ bool WLED::initEthernet()
     delayMicroseconds(10);
   }
   #endif
-
+  
   if (es.eth_type == ETH_PHY_W5500) {
     managed_pin_type pinsToAllocate[6] = {
       { (int8_t)es.eth_miso_pin,  false },  // MISO is input
@@ -1111,9 +1111,9 @@ bool WLED::initEthernet()
     if (!ETH.begin(
       (eth_phy_type_t)es.eth_type,
       (uint8_t)es.eth_address,
-      (int)es.eth_power,
       (int)es.eth_mdc,
       (int)es.eth_mdio,
+      (int)es.eth_power,
       (eth_clock_mode_t)es.eth_clk_mode
     )) {
       DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
