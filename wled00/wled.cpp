@@ -1048,6 +1048,10 @@ bool WLED::initEthernet()
   }
   #endif
   
+  #if !defined(SPI3_HOST)
+    #define SPI3_HOST SPI2_HOST // at a minimum thgere's 2 SPI Hosts
+  #endif
+
   if (es.eth_type == ETH_PHY_W5500) {
     managed_pin_type pinsToAllocate[6] = {
       { (int8_t)es.eth_miso_pin,  false },  // MISO is input
