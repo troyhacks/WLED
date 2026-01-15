@@ -1085,14 +1085,25 @@ bool WLED::initEthernet()
   }
   #endif
 
+  // if (!ETH.begin(ETH_PHY_W5500, ETH_ADDR, ETH_CS_PIN, ETH_INT_PIN, ETH_RST_PIN, SPI3_HOST, ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN)) {
+  //   DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
+  //   // de-allocate the allocated pins
+  //   for (managed_pin_type mpt : pinsToAllocate) {
+  //     pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+  //   }
+  //   return false;
+  // } else {
+  //   Serial.println("ETH initialized W5500!");
+  // }
+
   if (!ETH.begin(
-                (uint8_t) es.eth_address,
-                (int)     es.eth_power,
-                (int)     es.eth_mdc,
-                (int)     es.eth_mdio,
-                (eth_phy_type_t)   es.eth_type,
-                (eth_clock_mode_t) es.eth_clk_mode
-                )) {
+    (uint8_t)es.eth_address,
+    (int)es.eth_power,
+    (int)es.eth_mdc,
+    (int)es.eth_mdio,
+    (eth_phy_type_t)es.eth_type,
+    (eth_clock_mode_t)es.eth_clk_mode
+  )) {
     DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
     // de-allocate the allocated pins
     for (managed_pin_type mpt : pinsToAllocate) {
