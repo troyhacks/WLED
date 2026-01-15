@@ -108,7 +108,8 @@
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
   #include <WiFi.h>
-  #include <ETH.h>
+  // #include <ETH.h>
+  #include "ETHClass2.h"
   #include "esp_wifi.h"
   #include <ESPmDNS.h>
   #include <AsyncTCP.h>
@@ -352,7 +353,7 @@ WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 #endif
 
 //WLED_GLOBAL byte presetToApply _INIT(0);
-
+WLED_GLOBAL ETHClass2 ETH;
 WLED_GLOBAL char ntpServerName[33] _INIT("0.wled.pool.ntp.org");   // NTP server to use
 
 // WiFi CONFIG (all these can be changed via web UI, no need to set them here)

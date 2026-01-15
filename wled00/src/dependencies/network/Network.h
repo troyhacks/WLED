@@ -2,7 +2,8 @@
   #include <ESP8266WiFi.h>
 #else // ESP32
   #include <WiFi.h>
-  #include <ETH.h>
+  // #include <ETH.h>
+  #include "ETHClass2.h"
 #endif
 
 #ifndef Network_h
