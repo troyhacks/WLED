@@ -1072,6 +1072,7 @@ bool WLED::initEthernet()
       Serial.println("ETH initialized W5500!");
     }
   } else {
+    #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
     managed_pin_type pinsToAllocate[10] = {
       // first six pins are non-configurable
       esp32_nonconfigurable_ethernet_pins[0],
@@ -1108,6 +1109,7 @@ bool WLED::initEthernet()
       DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
       return false;
     }
+    
     if (!ETH.begin(
       (eth_phy_type_t)es.eth_type,
       (uint8_t)es.eth_address,
@@ -1123,6 +1125,9 @@ bool WLED::initEthernet()
       }
       return false;
     }
+    #else
+    return false;
+    #endif
   }
 
   successfullyConfiguredEthernet = true;

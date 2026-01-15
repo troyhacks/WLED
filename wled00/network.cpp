@@ -9,6 +9,8 @@
 // The following six pins are neither configurable nor
 // can they be re-assigned through IOMUX / GPIO matrix.
 // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
+
+#ifdef CONFIG_ETH_PHY_INTERFACE_RMII
 const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] = {
     { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
     { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
@@ -17,6 +19,9 @@ const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_CO
     { 26, false }, // RMII EMAC RXD1   == Second bit of received data
     { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
 };
+#else 
+const managed_pin_type esp32_nonconfigurable_ethernet_pins[] = {};
+#endif
 
 const ethernet_settings ethernetBoards[] = {
   // None
@@ -252,22 +257,7 @@ const ethernet_settings ethernetBoards[] = {
     ETH_CLOCK_GPIO17_OUT	// eth_clk_mode
   },
 
-  //WLEDMM: WaveShare ESP32-S3-ETH
-  {
-    1,			              // eth_address,
-    GPIO_NUM_NC,			    // eth_power,
-    GPIO_NUM_NC,			    // eth_mdc,
-    GPIO_NUM_NC,			    // eth_mdio,
-    12,                   // eth_miso_pin,
-    11,                   // eth_mosi_pin,
-    14,                   // eth_cs_pin,
-    9,                    // eth_rst_pin,
-    10,                   // eth_int_pin;
-    13,                   // eth_sclk_pin;
-    ETH_PHY_W5500,        // eth_type,
-    ETH_CLOCK_GPIO0_OUT	  // eth_clk_mode (ignored for W5500)
-  },
-  
+  // WLEDMM: TTGO T-ETH-Lite S3 (W5500) ☾
   {
     1,			              // eth_address,
     GPIO_NUM_NC,			    // eth_power,
@@ -283,6 +273,23 @@ const ethernet_settings ethernetBoards[] = {
     ETH_CLOCK_GPIO0_OUT	  // eth_clk_mode (ignored for W5500)
   },
 
+  // WaveShare ESP32-S3-ETH (W5500) ☾
+  {
+    1,			              // eth_address,
+    GPIO_NUM_NC,			    // eth_power,
+    GPIO_NUM_NC,			    // eth_mdc,
+    GPIO_NUM_NC,			    // eth_mdio,
+    12,                   // eth_miso_pin,
+    11,                   // eth_mosi_pin,
+    14,                   // eth_cs_pin,
+    9,                    // eth_rst_pin,
+    10,                   // eth_int_pin;
+    13,                   // eth_sclk_pin;
+    ETH_PHY_W5500,        // eth_type,
+    ETH_CLOCK_GPIO0_OUT	  // eth_clk_mode (ignored for W5500)
+  },
+
+  // W5500 Generic, based on some ESP32 Troy had lying around ☾
   {
     1,			              // eth_address,
     GPIO_NUM_NC,          // eth_power,
@@ -362,7 +369,7 @@ void WiFiEvent(WiFiEvent_t event)
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
-      USER_PRINTF("Ethernet link is up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex() ? "" : "not ");
+      USER_PRINTF("Ethernet link is %sup. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkUp() ? "" : "not ", ETH.linkSpeed(), ETH.fullDuplex() ? "" : "not ");
       USER_PRINT(ETH.macAddress());
       USER_PRINTLN(")");
       escapedMac = ETH.macAddress();
