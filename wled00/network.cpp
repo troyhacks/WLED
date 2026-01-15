@@ -355,13 +355,19 @@ void WiFiEvent(WiFiEvent_t event)
       if (staticIP != (uint32_t)0x00000000 && staticGateway != (uint32_t)0x00000000) {
         ETH.config(staticIP, staticGateway, staticSubnet, IPAddress(8, 8, 8, 8));
       } else {
-        // ETH.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+        ETH.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
       }
       // convert the "serverDescription" into a valid DNS hostname (alphanumeric)
       char hostname[64];
       prepareHostname(hostname);
       ETH.setHostname(hostname);
       showWelcomePage = false;
+      USER_PRINTF("Ethernet link is up. Speed is %u mbit and link is %sfull duplex! (MAC: ", ETH.linkSpeed(), ETH.fullDuplex() ? "" : "not ");
+      USER_PRINT(ETH.macAddress());
+      USER_PRINTLN(")");
+      escapedMac = ETH.macAddress();
+      escapedMac.replace(":", "");
+      escapedMac.toLowerCase();
       break;
       }
     case SYSTEM_EVENT_ETH_DISCONNECTED:
@@ -375,6 +381,7 @@ void WiFiEvent(WiFiEvent_t event)
       break;
 #endif
     default:
+      DEBUG_PRINTF("Unhandled Network event: %d\n", (int)event);
       break;
   }
 }

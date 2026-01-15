@@ -4,6 +4,7 @@
   #include <WiFi.h>
   // #include <ETH.h>
   #include "ETHClass2.h"
+  extern ETHClass2 ETH;
 #endif
 
 #ifndef Network_h
