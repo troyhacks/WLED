@@ -355,6 +355,7 @@ void WiFiEvent(WiFiEvent_t event)
       } else {
         DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
       }
+      interfacesInited = false;
       break;
     case SYSTEM_EVENT_ETH_CONNECTED:
       {
