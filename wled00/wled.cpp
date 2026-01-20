@@ -1135,7 +1135,6 @@ bool WLED::initEthernet()
     }
   #else
     // Ethernet initialization should only succeed once -- else reboot required
-    ethernet_settings es = ethernetBoards[ethernetType];
     managed_pin_type pinsToAllocate[10] = {
       // first six pins are non-configurable
       esp32_nonconfigurable_ethernet_pins[0],
