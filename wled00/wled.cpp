@@ -1048,35 +1048,94 @@ bool WLED::initEthernet()
   }
   #endif
   
-  #if !defined(SPI3_HOST)
-    #define SPI3_HOST SPI2_HOST // at a minimum thgere's 2 SPI Hosts
-  #endif
-
-  if (es.eth_type == ETH_PHY_W5500) {
-    managed_pin_type pinsToAllocate[6] = {
-      { (int8_t)es.eth_miso_pin,  false },  // MISO is input
-      { (int8_t)es.eth_mosi_pin,  true  },  // MOSI is output
-      { (int8_t)es.eth_cs_pin,    true  },  // CS is output
-      { (int8_t)es.eth_rst_pin,   true  },  // RST is output
-      { (int8_t)es.eth_int_pin,   false },  // INT is input
-      { (int8_t)es.eth_sclk_pin,  true  },  // SCLK is output
-    };
-    if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
-      DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
-      return false;
-    }
-    if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
-      DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
-      // de-allocate the allocated pins
-      for (managed_pin_type mpt : pinsToAllocate) {
-        pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+    #if !defined(SPI3_HOST)
+      #define SPI3_HOST SPI2_HOST // at a minimum there are 2 SPI Hosts
+    #endif
+    if (es.eth_type == ETH_PHY_W5500) {
+      managed_pin_type pinsToAllocate[6] = {
+        { (int8_t)es.eth_miso_pin,  false },  // MISO is input
+        { (int8_t)es.eth_mosi_pin,  true  },  // MOSI is output
+        { (int8_t)es.eth_cs_pin,    true  },  // CS is output
+        { (int8_t)es.eth_rst_pin,   true  },  // RST is output
+        { (int8_t)es.eth_int_pin,   false },  // INT is input
+        { (int8_t)es.eth_sclk_pin,  true  },  // SCLK is output
+      };
+      if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
+        DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
+        return false;
       }
-      return false;
+      if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
+        DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
+        // de-allocate the allocated pins
+        for (managed_pin_type mpt : pinsToAllocate) {
+          pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+        }
+        return false;
+      } else {
+        Serial.println("ETH initialized W5500!");
+      }
     } else {
-      Serial.println("ETH initialized W5500!");
+      #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+      managed_pin_type pinsToAllocate[10] = {
+        // first six pins are non-configurable
+        esp32_nonconfigurable_ethernet_pins[0],
+        esp32_nonconfigurable_ethernet_pins[1],
+        esp32_nonconfigurable_ethernet_pins[2],
+        esp32_nonconfigurable_ethernet_pins[3],
+        esp32_nonconfigurable_ethernet_pins[4],
+        esp32_nonconfigurable_ethernet_pins[5],
+        { (int8_t)es.eth_mdc,   true },  // [6] = MDC  is output and mandatory
+        { (int8_t)es.eth_mdio,  true },  // [7] = MDIO is bidirectional and mandatory
+        { (int8_t)es.eth_power, true },  // [8] = optional pin, not all boards use
+        { ((int8_t)0xFE),       false }, // [9] = replaced with eth_clk_mode, mandatory
+      };
+      // update the clock pin....
+      if (es.eth_clk_mode == ETH_CLOCK_GPIO0_IN) {
+        pinsToAllocate[9].pin = 0;
+        pinsToAllocate[9].isOutput = false;
+      } else if (es.eth_clk_mode == ETH_CLOCK_GPIO0_OUT) {
+        pinsToAllocate[9].pin = 0;
+        pinsToAllocate[9].isOutput = true;
+      } else if (es.eth_clk_mode == ETH_CLOCK_GPIO16_OUT) {
+        pinsToAllocate[9].pin = 16;
+        pinsToAllocate[9].isOutput = true;
+      } else if (es.eth_clk_mode == ETH_CLOCK_GPIO17_OUT) {
+        pinsToAllocate[9].pin = 17;
+        pinsToAllocate[9].isOutput = true;
+      } else {
+        DEBUG_PRINT(F("initE: Failing due to invalid eth_clk_mode ("));
+        DEBUG_PRINT(es.eth_clk_mode);
+        DEBUG_PRINTLN(")");
+        return false;
+      }
+      if (!pinManager.allocateMultiplePins(pinsToAllocate, 10, PinOwner::Ethernet)) {
+        DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
+        return false;
+      }
+      
+      if (!ETH.begin(
+        (eth_phy_type_t)es.eth_type,
+        (uint8_t)es.eth_address,
+        (int)es.eth_mdc,
+        (int)es.eth_mdio,
+        (int)es.eth_power,
+        (eth_clock_mode_t)es.eth_clk_mode
+      )) {
+        DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
+        // de-allocate the allocated pins
+        for (managed_pin_type mpt : pinsToAllocate) {
+          pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+        }
+        return false;
+      }
+      #else
+      return false;
+      #endif
     }
-  } else {
-    #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+  #else
+    // Ethernet initialization should only succeed once -- else reboot required
+    ethernet_settings es = ethernetBoards[ethernetType];
     managed_pin_type pinsToAllocate[10] = {
       // first six pins are non-configurable
       esp32_nonconfigurable_ethernet_pins[0],
@@ -1109,17 +1168,18 @@ bool WLED::initEthernet()
       DEBUG_PRINTLN(")");
       return false;
     }
+
     if (!pinManager.allocateMultiplePins(pinsToAllocate, 10, PinOwner::Ethernet)) {
       DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
       return false;
     }
     
     if (!ETH.begin(
-      (eth_phy_type_t)es.eth_type,
       (uint8_t)es.eth_address,
+      (int)es.eth_power,
       (int)es.eth_mdc,
       (int)es.eth_mdio,
-      (int)es.eth_power,
+      (eth_phy_type_t)es.eth_type,
       (eth_clock_mode_t)es.eth_clk_mode
     )) {
       DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
@@ -1129,11 +1189,7 @@ bool WLED::initEthernet()
       }
       return false;
     }
-    #else
-    return false;
-    #endif
-  }
-
+  #endif
   successfullyConfiguredEthernet = true;
   USER_PRINTLN(F("initC: *** Ethernet successfully configured! ***"));  // WLEDMM
   return true;
