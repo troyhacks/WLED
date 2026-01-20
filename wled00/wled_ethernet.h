@@ -42,12 +42,12 @@ typedef struct EthernetSettings {
   eth_clock_mode_t eth_clk_mode;
 } ethernet_settings;
 #else
-#define ETH_PHY_LAN8720 1
-#define ETH_CLOCK_GPIO0_IN 2
-#define ETH_CLOCK_GPIO0_OUT 3
-#define ETH_CLOCK_GPIO17_OUT 4
-#define ETH_CLOCK_GPIO16_OUT 5
-#define ETH_PHY_IP101 6
+#define ETH_PHY_LAN8720 0
+#define ETH_CLOCK_GPIO0_IN 0
+#define ETH_CLOCK_GPIO0_OUT 1
+#define ETH_CLOCK_GPIO17_OUT 3
+#define ETH_CLOCK_GPIO16_OUT 2
+#define ETH_PHY_IP101 1
 
 typedef struct EthernetSettings {
   uint8_t        eth_address;
