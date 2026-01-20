@@ -23,7 +23,7 @@
 #endif
 
 #ifndef ETH_PHY_W5500
-  #define ETH_PHY_W5500 69
+  #define ETH_PHY_W5500 1
 #endif
 
 #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
