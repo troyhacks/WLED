@@ -18,6 +18,10 @@
 //              ETH_CLOCK_GPIO16_OUT  == ESP32 provides 50MHz clock output via GPIO16
 //              ETH_CLOCK_GPIO17_OUT  == ESP32 provides 50MHz clock output via GPIO17
 
+#ifndef GPIO_NUM_NC
+  #define GPIO_NUM_NC -1
+#endif
+
 #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
 typedef struct EthernetSettings {
   uint8_t        eth_address;
