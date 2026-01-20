@@ -353,7 +353,9 @@ WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 #endif
 
 //WLED_GLOBAL byte presetToApply _INIT(0);
+#ifndef ESP8266
 WLED_GLOBAL ETHClass2 ETH;
+#endif
 WLED_GLOBAL char ntpServerName[33] _INIT("0.wled.pool.ntp.org");   // NTP server to use
 
 // WiFi CONFIG (all these can be changed via web UI, no need to set them here)
