@@ -65,7 +65,7 @@ typedef struct EthernetSettings {
 extern const ethernet_settings ethernetBoards[];
 
 #define WLED_ETH_RSVD_PINS_COUNT 0
-extern managed_pin_type esp32_nonconfigurable_ethernet_pins;
+extern managed_pin_type esp32_nonconfigurable_ethernet_pins[];
 #endif
 
 #endif
