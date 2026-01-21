@@ -23,6 +23,10 @@ const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_CO
 const managed_pin_type esp32_nonconfigurable_ethernet_pins[] = {};
 #endif
 
+#ifndef CONFIG_ETH_SPI_ETHERNET_W5500
+  #define ETH_PHY_W5500 ETH_PHY_MAX
+#endif
+
 const ethernet_settings ethernetBoards[] = {
   // None
   {
