@@ -11,7 +11,7 @@
 // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
 
 #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
-managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] = {
+managed_pin_type esp32_nonconfigurable_ethernet_pins[6] = {
     { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
     { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
     { 22, true  }, // RMII EMAC TXD1   == Second bit of transmitted data
@@ -20,7 +20,7 @@ managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] =
     { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
 };
 #else 
-managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT];
+managed_pin_type esp32_nonconfigurable_ethernet_pins;;
 #endif
 
 #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
