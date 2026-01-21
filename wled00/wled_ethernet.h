@@ -22,10 +22,6 @@
   #define GPIO_NUM_NC -1
 #endif
 
-// #ifndef ETH_PHY_W5500
-//   #define ETH_PHY_W5500 ETH_PHY_MAX 
-// #endif
-
 #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
 typedef struct EthernetSettings {
   uint8_t        eth_address;
