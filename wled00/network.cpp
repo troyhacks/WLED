@@ -20,7 +20,7 @@ const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_CO
     { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
 };
 #else 
-const managed_pin_type esp32_nonconfigurable_ethernet_pins[];
+managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT];
 #endif
 
 #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
