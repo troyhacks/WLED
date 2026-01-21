@@ -10,7 +10,7 @@
 // can they be re-assigned through IOMUX / GPIO matrix.
 // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
 
-#ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || (defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR == 3)
 managed_pin_type esp32_nonconfigurable_ethernet_pins[6] = {
     { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
     { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
