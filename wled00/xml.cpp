@@ -240,22 +240,30 @@ void appendGPIOinfo() {
   #endif
 
   #ifdef WLED_USE_ETHERNET
-  if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
-    for (uint8_t p=0; p<WLED_ETH_RSVD_PINS_COUNT; p++) { oappend(","); oappend(itoa(esp32_nonconfigurable_ethernet_pins[p].pin,nS,10)); }
-    if (ethernetBoards[ethernetType].eth_power>=0)     { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_power,nS,10)); }
-    if (ethernetBoards[ethernetType].eth_mdc>=0)       { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_mdc,nS,10)); }
-    if (ethernetBoards[ethernetType].eth_mdio>=0)      { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_mdio,nS,10)); }
-    switch (ethernetBoards[ethernetType].eth_clk_mode) {
-      case ETH_CLOCK_GPIO0_IN:
-      case ETH_CLOCK_GPIO0_OUT:
-        oappend(SET_F(",0"));
-        break;
-      case ETH_CLOCK_GPIO16_OUT:
-        oappend(SET_F(",16"));
-        break;
-      case ETH_CLOCK_GPIO17_OUT:
-        oappend(SET_F(",17"));
-        break;
+    if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
+      for (uint8_t p = 0; p < WLED_ETH_RSVD_PINS_COUNT; p++)  { oappend(","); oappend(itoa(esp32_nonconfigurable_ethernet_pins[p].pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_power >= 0)        { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_power, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_mdc >= 0)          { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_mdc, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_mdio >= 0)         { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_mdio, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_miso_pin >= 0)     { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_miso_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_mosi_pin >= 0)     { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_mosi_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_cs_pin >= 0)       { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_cs_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_rst_pin >= 0)      { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_rst_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_int_pin >= 0)      { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_int_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_sclk_pin >= 0)     { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_sclk_pin, nS, 10)); }
+      if (ethernetBoards[ethernetType].eth_type != ETH_PHY_W5500) {
+      switch (ethernetBoards[ethernetType].eth_clk_mode) {
+        case ETH_CLOCK_GPIO0_IN:
+        case ETH_CLOCK_GPIO0_OUT:
+          oappend(SET_F(",0"));
+          break;
+        case ETH_CLOCK_GPIO16_OUT:
+          oappend(SET_F(",16"));
+          break;
+        case ETH_CLOCK_GPIO17_OUT:
+          oappend(SET_F(",17"));
+          break;
+      }
     }
   }
   #endif

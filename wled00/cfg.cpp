@@ -746,21 +746,29 @@ void serializeConfig() {
   ethernet["type"] = ethernetType;
   if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
     JsonArray pins = ethernet.createNestedArray("pin");
-    for (uint8_t p=0; p<WLED_ETH_RSVD_PINS_COUNT; p++) pins.add(esp32_nonconfigurable_ethernet_pins[p].pin);
-    if (ethernetBoards[ethernetType].eth_power>=0)     pins.add(ethernetBoards[ethernetType].eth_power);
-    if (ethernetBoards[ethernetType].eth_mdc>=0)       pins.add(ethernetBoards[ethernetType].eth_mdc);
-    if (ethernetBoards[ethernetType].eth_mdio>=0)      pins.add(ethernetBoards[ethernetType].eth_mdio);
-    switch (ethernetBoards[ethernetType].eth_clk_mode) {
-      case ETH_CLOCK_GPIO0_IN:
-      case ETH_CLOCK_GPIO0_OUT:
-        pins.add(0);
-        break;
-      case ETH_CLOCK_GPIO16_OUT:
-        pins.add(16);
-        break;
-      case ETH_CLOCK_GPIO17_OUT:
-        pins.add(17);
-        break;
+    for (uint8_t p = 0; p < WLED_ETH_RSVD_PINS_COUNT; p++)  pins.add(esp32_nonconfigurable_ethernet_pins[p].pin);
+    if (ethernetBoards[ethernetType].eth_power >= 0)        pins.add(ethernetBoards[ethernetType].eth_power);
+    if (ethernetBoards[ethernetType].eth_mdc >= 0)          pins.add(ethernetBoards[ethernetType].eth_mdc);
+    if (ethernetBoards[ethernetType].eth_mdio >= 0)         pins.add(ethernetBoards[ethernetType].eth_mdio);
+    if (ethernetBoards[ethernetType].eth_miso_pin >= 0)     pins.add(ethernetBoards[ethernetType].eth_miso_pin);
+    if (ethernetBoards[ethernetType].eth_mosi_pin >= 0)     pins.add(ethernetBoards[ethernetType].eth_mosi_pin);
+    if (ethernetBoards[ethernetType].eth_cs_pin >= 0)       pins.add(ethernetBoards[ethernetType].eth_cs_pin);
+    if (ethernetBoards[ethernetType].eth_rst_pin >= 0)      pins.add(ethernetBoards[ethernetType].eth_rst_pin);
+    if (ethernetBoards[ethernetType].eth_int_pin >= 0)      pins.add(ethernetBoards[ethernetType].eth_int_pin);
+    if (ethernetBoards[ethernetType].eth_sclk_pin >= 0)     pins.add(ethernetBoards[ethernetType].eth_sclk_pin);
+    if (ethernetBoards[ethernetType].eth_type != ETH_PHY_W5500) {
+      switch (ethernetBoards[ethernetType].eth_clk_mode) {
+        case ETH_CLOCK_GPIO0_IN:
+        case ETH_CLOCK_GPIO0_OUT:
+          pins.add(0);
+          break;
+        case ETH_CLOCK_GPIO16_OUT:
+          pins.add(16);
+          break;
+        case ETH_CLOCK_GPIO17_OUT:
+          pins.add(17);
+          break;
+      }
     }
   }
   #endif
