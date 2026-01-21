@@ -23,6 +23,7 @@
 #endif
 
 #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+#define WLED_ETH_RSVD_PINS_COUNT 6
 typedef struct EthernetSettings {
   uint8_t        eth_address;
   int            eth_power;
