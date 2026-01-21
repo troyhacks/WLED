@@ -742,6 +742,11 @@ void serializeConfig() {
   wifi[F("phy")] = force802_3g;
 
   #ifdef WLED_USE_ETHERNET
+
+  #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
+  #define ETH_PHY_W5500 ETH_PHY_MAX
+  #endif
+  
   JsonObject ethernet = doc.createNestedObject("eth");
   ethernet["type"] = ethernetType;
   if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {

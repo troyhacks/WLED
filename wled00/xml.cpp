@@ -240,6 +240,11 @@ void appendGPIOinfo() {
   #endif
 
   #ifdef WLED_USE_ETHERNET
+
+    #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
+    #define ETH_PHY_W5500 ETH_PHY_MAX
+    #endif
+    
     if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
       for (uint8_t p = 0; p < WLED_ETH_RSVD_PINS_COUNT; p++)  { oappend(","); oappend(itoa(esp32_nonconfigurable_ethernet_pins[p].pin, nS, 10)); }
       if (ethernetBoards[ethernetType].eth_power >= 0)        { oappend(","); oappend(itoa(ethernetBoards[ethernetType].eth_power, nS, 10)); }
