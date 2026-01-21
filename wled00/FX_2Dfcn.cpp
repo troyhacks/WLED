@@ -368,7 +368,7 @@ void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM:
 
 // WLEDMM setPixelColorXY(float x, float y, uint32_t col, ..) is depricated. use wu_pixel(x,y,col) instead.
 // anti-aliased version of setPixelColorXY()
-void Segment::setPixelColorXY(float x, float y, uint32_t col, bool aa, bool fast) // WLEDMM some speedups due to fast int and faster sqrt16
+void Segment::setPixelColorXY(float x, float y, uint32_t col, bool aa, bool fast) // WLEDMM some speedups due to fast int and faster sqrt32_bw
 {
   if (Segment::maxHeight==1) return; // not a matrix set-up
   if (x<0.0f || x>1.0f || y<0.0f || y>1.0f) return; // not normalized
@@ -400,10 +400,10 @@ void Segment::setPixelColorXY(float x, float y, uint32_t col, bool aa, bool fast
         setPixelColorXY(xL, yB, color_blend(col, cXLYB, uint8_t(sqrtf(dL*dB)*255.0f))); // blend BL pixel
         setPixelColorXY(xR, yB, color_blend(col, cXRYB, uint8_t(sqrtf(dR*dB)*255.0f))); // blend BR pixel
       } else {
-        setPixelColorXY(xL, yT, color_blend(col, cXLYT, uint8_t(sqrt16(dL*dT*65025.0f)))); // blend TL pixel     // WLEDMM: use faster sqrt16 for integer; perform multiplication by 255^2 before sqrt
-        setPixelColorXY(xR, yT, color_blend(col, cXRYT, uint8_t(sqrt16(dR*dT*65025.0f)))); // blend TR pixel     //         this is possible because sqrt(a) * sqrt(b)  =  sqrt(a * b)
-        setPixelColorXY(xL, yB, color_blend(col, cXLYB, uint8_t(sqrt16(dL*dB*65025.0f)))); // blend BL pixel
-        setPixelColorXY(xR, yB, color_blend(col, cXRYB, uint8_t(sqrt16(dR*dB*65025.0f)))); // blend BR pixel
+        setPixelColorXY(xL, yT, color_blend(col, cXLYT, uint8_t(sqrt32_bw(dL*dT*65025.0f)))); // blend TL pixel     // WLEDMM: use faster sqrt32_bw for integer; perform multiplication by 255^2 before sqrt
+        setPixelColorXY(xR, yT, color_blend(col, cXRYT, uint8_t(sqrt32_bw(dR*dT*65025.0f)))); // blend TR pixel     //         this is possible because sqrt(a) * sqrt(b)  =  sqrt(a * b)
+        setPixelColorXY(xL, yB, color_blend(col, cXLYB, uint8_t(sqrt32_bw(dL*dB*65025.0f)))); // blend BL pixel
+        setPixelColorXY(xR, yB, color_blend(col, cXRYB, uint8_t(sqrt32_bw(dR*dB*65025.0f)))); // blend BR pixel
       }
     } else if (xR!=xL && yT==yB) {
       setPixelColorXY(xR, yT, color_blend(col, cXLYT, uint8_t(dL*255.0f))); // blend L pixel

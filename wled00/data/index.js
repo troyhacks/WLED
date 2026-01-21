@@ -708,7 +708,7 @@ function populateInfo(i)
 	if (i.ver.includes("0.14.3-b")) vcn = "Fried Chicken";
 	if (i.ver.includes("14.5.")) vcn = "Small Step";
 	if (i.ver.includes("14.6.")) vcn = "New Light";
-	if (i.ver.includes("14.7.")) vcn = "Next Step";
+	if ((i.ver.includes("14.7."))||(i.ver.includes("14.8."))) vcn = "Next Step";
 
 	cn += `v${i.ver} &nbsp;<i>"${vcn}"</i><p>(WLEDMM ${i.rel}.bin)</p><p><em>build ${i.vid}</em></p><table>
 ${urows}

@@ -6179,15 +6179,15 @@ uint16_t mode_2Dmetaballs(void) {   // Metaballs by Stefan Petrick. Cannot have 
       // and add them together with weightening
       uint16_t dx = abs(x - x1);
       uint16_t dy = abs(y - y1);
-      uint16_t dist = 2 * sqrt16((dx * dx) + (dy * dy));
+      uint16_t dist = 2 * sqrt32_bw((dx * dx) + (dy * dy));
 
       dx = abs(x - x2);
       dy = abs(y - y2);
-      dist += sqrt16((dx * dx) + (dy * dy));
+      dist += sqrt32_bw((dx * dx) + (dy * dy));
 
       dx = abs(x - x3);
       dy = abs(y - y3);
-      dist += sqrt16((dx * dx) + (dy * dy));
+      dist += sqrt32_bw((dx * dx) + (dy * dy));
 
       // inverse result
       byte color = dist ? 1000 / dist : 255;
@@ -9555,6 +9555,7 @@ uint16_t mode_particlefire(void) {
   PartSys->updateSystem(); // update system properties (dimensions and data pointers)
   PartSys->setWrapX(SEGMENT.check2);
   PartSys->setMotionBlur(SEGMENT.check1 * 170); // anable/disable motion blur
+  PartSys->setSmearBlur(!SEGMENT.check1 * 60);  // enable smear blur if motion blur is not enabled
 
   uint32_t firespeed = max((uint8_t)100, SEGMENT.speed); //limit speed to 100 minimum, reduce frame rate to make it slower (slower speeds than 100 do not look nice)
   if (SEGMENT.speed < 100) { //slow, limit FPS
@@ -9606,6 +9607,20 @@ uint16_t mode_particlefire(void) {
           int32_t curl = ((int32_t)perlin8(PartSys->particles[i].x, PartSys->particles[i].y, SEGENV.step << 4) - 127);
           PartSys->particles[i].vx += (curl * (firespeed + 10)) >> 9;
         }
+      }
+    }
+  }
+
+  // emit faster sparks at first flame position, amount and speed mostly dependends on intensity
+  if(hw_random8() < 10 + (SEGMENT.intensity >> 2)) {
+    for (i = 0; i < PartSys->usedParticles; i++) {
+      if (PartSys->particles[i].ttl == 0) { // find a dead particle
+        PartSys->particles[i].ttl = hw_random16(SEGMENT.vHeight()) + 30;
+        PartSys->particles[i].x = PartSys->sources[0].source.x;
+        PartSys->particles[i].y = PartSys->sources[0].source.y;
+        PartSys->particles[i].vx = PartSys->sources[0].source.vx;
+        PartSys->particles[i].vy = (SEGMENT.vHeight() >> 1) + (firespeed >> 4) + ((30 + (SEGMENT.intensity >> 1) + SEGMENT.custom1) >> 4); // emitting speed (upwards)
+        break; // emit only one particle
       }
     }
   }
@@ -9673,8 +9688,10 @@ uint16_t mode_particlepit(void) {
           PartSys->setParticleSize(1); // set global size to 1 for advanced rendering (no single pixel particles)
           PartSys->advPartProps[i].size = hw_random16(SEGMENT.custom1); // set each particle to random size
         } else {
+          //PartSys->perParticleSize = false;
           PartSys->setParticleSize(SEGMENT.custom1); // set global size
           PartSys->advPartProps[i].size = 0; // use global size
+          //PartSys->advPartProps[i].size = SEGMENT.custom1; // also set individual size for consistency
         }
         break; // emit only one particle per round
       }
@@ -9916,7 +9933,6 @@ static const char _data_FX_MODE_PARTICLEPERLIN[] PROGMEM = "PS Fuzzy Noise@Speed
 #define NUMBEROFSOURCES 8
 uint16_t mode_particleimpact(void) {
   ParticleSystem2D *PartSys = nullptr;
-  uint32_t i = 0;
   uint32_t numMeteors;
   PSsettings2D meteorsettings;
   meteorsettings.asByte = 0b00101000; // PS settings for meteors: bounceY and gravity enabled
@@ -9951,7 +9967,7 @@ uint16_t mode_particleimpact(void) {
   numMeteors = min(PartSys->numSources, (uint32_t)NUMBEROFSOURCES);
   uint32_t emitparticles; // number of particles to emit for each rocket's state
 
-  for (i = 0; i < numMeteors; i++) {
+  for (uint32_t i = 0; i < numMeteors; i++) {
     // determine meteor state by its speed:
     if ( PartSys->sources[i].source.vy < 0) // moving down, emit sparks
       emitparticles = 1;
@@ -9967,7 +9983,7 @@ uint16_t mode_particleimpact(void) {
   }
 
   // update the meteors, set the speed state
-  for (i = 0; i < numMeteors; i++) {
+  for (uint32_t i = 0; i < numMeteors; i++) {
     if (PartSys->sources[i].source.ttl) {
       PartSys->sources[i].source.ttl--; // note: this saves an if statement, but moving down particles age twice
       if (PartSys->sources[i].source.vy < 0) { // move down
@@ -10442,6 +10458,7 @@ uint16_t mode_particleblobs(void) {
     PartSys->setWallHardness(255);
     PartSys->setWallRoughness(255);
     PartSys->setCollisionHardness(255);
+    //PartSys->perParticleSize = true; // enable per particle size control
   }
   else
     PartSys = reinterpret_cast<ParticleSystem2D *>(SEGENV.data); // if not first call, just set the pointer to the PS
@@ -10501,6 +10518,106 @@ uint16_t mode_particleblobs(void) {
   return FRAMETIME;
 }
 static const char _data_FX_MODE_PARTICLEBLOBS[] PROGMEM = "PS Blobs@Speed,Blobs,Size,Life,Blur,Wobble,Collide,Pulsate;;!;2v;sx=30,ix=64,c1=200,c2=130,c3=0,o3=1";
+
+/*
+  Particle Galaxy, particles spiral like in a galaxy
+  Uses palette for particle color
+  by DedeHai (Damian Schneider)
+*/
+uint16_t mode_particlegalaxy(void) {
+  ParticleSystem2D *PartSys = nullptr;
+  PSsettings2D sourcesettings;
+  sourcesettings.asByte = 0b00001100; // PS settings for bounceY, bounceY used for source movement (it always bounces whereas particles do not)
+  if (SEGMENT.call == 0) { // initialization
+    if (!initParticleSystem2D(PartSys, 1, 0, true)) // init using 1 source and advanced particle settings
+      return mode_oops(); // allocation failed or not 2D
+    PartSys->sources[0].source.vx = -4; // will collide with wall and get random bounce direction
+    PartSys->sources[0].source.x =  PartSys->maxX >> 1; // start in the center
+    PartSys->sources[0].source.y =  PartSys->maxY >> 1;
+    PartSys->sources[0].sourceFlags.perpetual = true; //source does not age
+    PartSys->sources[0].maxLife = 4000; // lifetime in frames
+    PartSys->sources[0].minLife = 800;
+    PartSys->sources[0].source.hue = hw_random16(); // start with random color
+    PartSys->setWallHardness(255);  //bounce forever
+    PartSys->setWallRoughness(200); //randomize wall bounce
+  }
+  else {
+    PartSys = reinterpret_cast<ParticleSystem2D *>(SEGENV.data); // if not first call, just set the pointer to the PS
+  }
+  if (PartSys == nullptr)
+    return mode_oops(); // something went wrong, no data!
+  // Particle System settings
+  PartSys->updateSystem(); // update system properties (dimensions and data pointers)
+  uint8_t particlesize = SEGMENT.custom1;
+  PartSys->setParticleSize(particlesize); // set size globally
+  PartSys->setMotionBlur(250 * SEGMENT.check3); // adds trails to single/quad pixel particles, no effect if size > 1
+
+  if ((SEGMENT.call % ((33 - SEGMENT.custom3) >> 1)) == 0) // change hue of emitted particles
+    PartSys->sources[0].source.hue+=2;
+
+  if (hw_random8() < (10 + (SEGMENT.intensity >> 1))) // 5%-55% chance to emit a particle in this frame
+    PartSys->sprayEmit(PartSys->sources[0]);
+
+  if ((SEGMENT.call & 0x3) == 0) // every 4th frame, move the emitter
+    PartSys->particleMoveUpdate(PartSys->sources[0].source, PartSys->sources[0].sourceFlags, &sourcesettings);
+
+  // move alive particles in a spiral motion (or almost straight in fast starfield mode)
+  int32_t centerx = PartSys->maxX >> 1; // center of matrix in subpixel coordinates
+  int32_t centery = PartSys->maxY >> 1;
+  if (SEGMENT.check2) { // starfield mode
+    PartSys->setKillOutOfBounds(true);
+    PartSys->sources[0].var = 7; // emiting variation
+    PartSys->sources[0].source.x =  centerx; // set emitter to center
+    PartSys->sources[0].source.y =  centery;
+  }
+  else {
+    PartSys->setKillOutOfBounds(false);
+    PartSys->sources[0].var = 1; // emiting variation
+  }
+  for (uint32_t i = 0; i < PartSys->usedParticles; i++) { //check all particles
+    if (PartSys->particles[i].ttl == 0) continue; //skip dead particles
+    // (dx/dy): vector pointing from particle to center
+    int32_t dx = centerx - PartSys->particles[i].x;
+    int32_t dy = centery - PartSys->particles[i].y;
+    //speed towards center:
+    int32_t distance = sqrt32_bw(dx * dx + dy * dy); // absolute distance to center
+    if (distance < 20) distance = 20; // avoid division by zero, keep a minimum
+    int32_t speedfactor;
+    if (SEGMENT.check2) { // starfield mode
+      speedfactor = 1 + (1 + (SEGMENT.speed >> 1)) * distance; // speed increases towards edge
+      //apply velocity
+      PartSys->particles[i].x += (-speedfactor * dx) / 400000 - (dy >> 6);
+      PartSys->particles[i].y += (-speedfactor * dy) / 400000 + (dx >> 6);
+    }
+    else {
+      speedfactor = 2 + (((50 + SEGMENT.speed) << 6) / distance); // speed increases towards center
+      // rotate clockwise
+      int32_t tempVx = (-speedfactor * dy); // speed is orthogonal to center vector
+      int32_t tempVy =  (speedfactor * dx);
+      //add speed towards center to make particles spiral in
+      int vxc = (dx << 9) / (distance - 19); // subtract value from distance to make the pull-in force a bit stronger (helps on faster speeds)
+      int vyc = (dy << 9) / (distance - 19);
+      //apply velocity
+      PartSys->particles[i].x += (tempVx + vxc) / 1024; // note: cannot use bit shift as that causes asymmetric rounding
+      PartSys->particles[i].y += (tempVy + vyc) / 1024;
+
+      if (distance < 128) { // close to center
+        if (PartSys->particles[i].ttl > 3)
+          PartSys->particles[i].ttl -= 4; //age fast
+        PartSys->particles[i].sat = distance << 1; // turn white towards center
+      }
+    }
+    if(SEGMENT.custom3 == 31) // color by age but mapped to 1024 as particles have a long life, since age is random, this gives more or less random colors
+      PartSys->particles[i].hue = PartSys->particles[i].ttl >> 2;
+    else if(SEGMENT.custom3 == 0) // color by distance
+      PartSys->particles[i].hue = map(distance, 20, (PartSys->maxX + PartSys->maxY) >> 2, 0, 180); // color by distance to center
+  }
+
+  PartSys->update(); // update and render
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_PARTICLEGALAXY[] PROGMEM = "PS Galaxy@!,!,Size,,Color,,Starfield,Trace;;!;2;pal=59,sx=80,c1=1,c3=4";
+
 #endif //WLED_DISABLE_PARTICLESYSTEM2D
 #endif // WLED_DISABLE_2D
 
@@ -11642,7 +11759,7 @@ uint16_t mode_particle1DsonicStream(void) {
       else PartSys->particles[i].ttl = 0;
     }
     if (SEGMENT.check1) { // modulate colors by mid frequencies
-      int mids = sqrt16((int)fftResult[5] + (int)fftResult[6] + (int)fftResult[7] + (int)fftResult[8] + (int)fftResult[9] + (int)fftResult[10]); // average the mids, bin 5 is ~500Hz, bin 10 is ~2kHz (see audio_reactive.h)
+      int mids = sqrt32_bw((int)fftResult[5] + (int)fftResult[6] + (int)fftResult[7] + (int)fftResult[8] + (int)fftResult[9] + (int)fftResult[10]); // average the mids, bin 5 is ~500Hz, bin 10 is ~2kHz (see audio_reactive.h)
       PartSys->particles[i].hue += (mids * perlin8(PartSys->particles[i].x << 2, SEGMENT.step << 2)) >> 9; // color by perlin noise from mid frequencies
     }
   }
@@ -11730,7 +11847,7 @@ uint16_t mode_particle1DsonicBoom(void) {
   // particle manipulation
   for (uint32_t i = 0; i < PartSys->usedParticles; i++) {
     if (SEGMENT.check1) { // modulate colors by mid frequencies
-      int mids = sqrt16((int)fftResult[5] + (int)fftResult[6] + (int)fftResult[7] + (int)fftResult[8] + (int)fftResult[9] + (int)fftResult[10]); // average the mids, bin 5 is ~500Hz, bin 10 is ~2kHz (see audio_reactive.h)
+      int mids = sqrt32_bw((int)fftResult[5] + (int)fftResult[6] + (int)fftResult[7] + (int)fftResult[8] + (int)fftResult[9] + (int)fftResult[10]); // average the mids, bin 5 is ~500Hz, bin 10 is ~2kHz (see audio_reactive.h)
       PartSys->particles[i].hue += (mids * perlin8(PartSys->particles[i].x << 2, SEGMENT.step << 2)) >> 9; // color by perlin noise from mid frequencies
     }
     if (PartSys->particles[i].ttl > 16) {
@@ -12235,6 +12352,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_PARTICLECENTERGEQ, &mode_particlecenterGEQ, _data_FX_MODE_PARTICLECIRCULARGEQ);
   addEffect(FX_MODE_PARTICLEGHOSTRIDER, &mode_particleghostrider, _data_FX_MODE_PARTICLEGHOSTRIDER);
   addEffect(FX_MODE_PARTICLEBLOBS, &mode_particleblobs, _data_FX_MODE_PARTICLEBLOBS);
+  addEffect(FX_MODE_PARTICLEGALAXY, &mode_particlegalaxy, _data_FX_MODE_PARTICLEGALAXY);
 #endif // WLED_DISABLE_PARTICLESYSTEM2D
 #endif // WLED_DISABLE_2D
 

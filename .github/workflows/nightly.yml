@@ -10,6 +10,8 @@ on:
 jobs:
   wled_build:
     uses: ./.github/workflows/build.yml
+    with:
+      nightly_build: true
   nightly:
     name: Deploy nightly
     runs-on: ubuntu-latest
@@ -23,21 +25,22 @@ jobs:
         run: ls -la
       - name: "✏️ Generate release changelog"
         id: changelog
-        uses: janheinrichmerker/action-github-changelog-generator@v2.3
+        uses: janheinrichmerker/action-github-changelog-generator@v2.4
         with:
           token: ${{ secrets.GITHUB_TOKEN }} 
           sinceTag: v14.7.1
+          output: CHANGELOG_NIGHTLY.md
           # Exclude issues that were closed without resolution from changelog
-          exclude-labels: 'stale,wontfix,duplicate,invalid'
+          excludeLabels: 'stale,wontfix,duplicate,invalid,question,use-as-is,not_planned'
       - name: Update Nightly Release
         uses: andelf/nightly-release@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: nightly
-          name: 'Nightly Release $$'
+          name: 'Nightly mdev Build $$'
           prerelease: true
-          body: ${{ steps.changelog.outputs.changelog }}
+          body_path: CHANGELOG_NIGHTLY.md
           files: |
             *.bin
             *.bin.gz

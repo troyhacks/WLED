@@ -1,6 +1,6 @@
 {
   "name": "wled",
-  "version": "14.7.1",
+  "version": "14.7.2-mdev",
   "description": "Tools for WLED-MM project",
   "main": "tools/cdata.js",
   "directories": {

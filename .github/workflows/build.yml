@@ -3,6 +3,12 @@ name: PlatformIO CI
 # Only included into other workflows
 on:
   workflow_call:
+    inputs:
+      nightly_build:
+        description: 'Flag to indicate this is a nightly build'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
 
@@ -62,6 +68,7 @@ jobs:
     - name: Build firmware
       env:
         WLED_RELEASE: True
+        WLED_NIGHTLY_BUILD: ${{ inputs.nightly_build && 'true' || 'false' }}
       run: pio run -e ${{ matrix.environment }}
     - name: Rename Bin
       run: mv -v .pio/build/${{ matrix.environment }}/firmware.bin firmware-${{ matrix.environment }}.bin

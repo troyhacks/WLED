@@ -14,6 +14,11 @@ A good description helps us to review and understand your proposed changes. For 
 
 ## Your Pull Request (PR)
 
+### PR from a branch in your own repository
+
+Start your pull request (PR) in a branch of your own fork; avoid making a PR directly from your `main` branch.
+This allows you to update your PR if needed, while continuing to work on unrelated tasks in `main` or in other branches.
+
 ### Target branch for pull requests
 
 Please make all PRs against the `mdev` branch.
@@ -23,6 +28,8 @@ Please make all PRs against the `mdev` branch.
 While the PR is open - and under review by maintainers - you may be asked to modify your PR source code.
 You can simply update your own branch, and push changes in response to reviewer recommendations. 
 Github will pick up the changes so your PR stays up-to-date.
+
+You don't need to provide us with a single-commit 'squashed' PR; you can simply add commits while your pull request (PR) is open.
 
 > [!CAUTION]
 > Do not use "force-push" while your PR is open!
