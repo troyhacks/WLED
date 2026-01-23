@@ -22,19 +22,20 @@
   #define GPIO_NUM_NC -1
 #endif
 
-#ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || ESP_IDF_VERSION_MAJOR == 3
 #define WLED_ETH_RSVD_PINS_COUNT 6
+extern managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT];
 typedef struct EthernetSettings {
   uint8_t        eth_address;
   int            eth_power;
   int            eth_mdc;
   int            eth_mdio;
-  int            eth_miso_pin;
   int            eth_mosi_pin;
-  int            eth_cs_pin;
-  int            eth_rst_pin;
-  int            eth_int_pin;
+  int            eth_miso_pin;
   int            eth_sclk_pin;
+  int            eth_cs_pin;
+  int            eth_int_pin;
+  int            eth_rst_pin;
   eth_phy_type_t eth_type;
   eth_clock_mode_t eth_clk_mode;
 } ethernet_settings;
@@ -51,21 +52,21 @@ typedef struct EthernetSettings {
   int            eth_power;
   int            eth_mdc;
   int            eth_mdio;
-  int            eth_miso_pin;
   int            eth_mosi_pin;
-  int            eth_cs_pin;
-  int            eth_rst_pin;
-  int            eth_int_pin;
+  int            eth_miso_pin;
   int            eth_sclk_pin;
+  int            eth_cs_pin;
+  int            eth_int_pin;
+  int            eth_rst_pin;
   int            eth_type;
   int            eth_clk_mode;
 } ethernet_settings;
-#endif
-
-extern const ethernet_settings ethernetBoards[];
-
 #define WLED_ETH_RSVD_PINS_COUNT 0
 extern managed_pin_type esp32_nonconfigurable_ethernet_pins[];
 #endif
 
-#endif
+extern const ethernet_settings ethernetBoards[];
+
+#endif // WLED_USE_ETHERNET
+
+#endif // WLED_ETHERNET_H
