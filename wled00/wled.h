@@ -114,7 +114,8 @@
   #include <WiFi.h>
   #if defined(CONFIG_ETH_SPI_ETHERNET_W5500)
     #include "ETHClass2.h"
-  #else
+    #warning Using the new ETHClass2 for this build as W5500 is available.
+    #else
     #include <ETH.h>
   #endif
   #include "esp_wifi.h"
