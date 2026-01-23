@@ -323,10 +323,10 @@ void WLED::loop()
       delete busConfigs[i]; busConfigs[i] = nullptr;
     }
     strip.finalizeInit();
-    busses.setBrightness(bri); // fix re-initialised bus' brightness #4005
     loadLedmap = true;
     if (aligned) strip.makeAutoSegments();
     else strip.fixInvalidSegments();
+    busses.setBrightness(scaledBri(bri)); // fix re-initialised bus' brightness #4005 and #4824
     yield();
     serializeConfig();
   }
@@ -1211,6 +1211,7 @@ void WLED::initConnection()
 #endif
 
   WiFi.disconnect(true);        // close old connections
+  delay(5);                     // wait for hardware to be ready
 #ifdef ESP8266
   WiFi.setPhyMode(force802_3g ? WIFI_PHY_MODE_11G : WIFI_PHY_MODE_11N);
 #endif

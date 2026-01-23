@@ -13,6 +13,8 @@
 #ifdef WLED_ENABLE_DMX
 #pragma message "DMX network output enabled"
 
+#define MAX_DMX_RATE 44 // max DMX update rate in Hz
+
 // WLEDMM: seems that DMX output triggers watchdog resets when compiling for IDF 4.4.x
 #ifdef ARDUINO_ARCH_ESP32
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 2, 0)
@@ -32,7 +34,20 @@ void handleDMXOutput()
   // don't act, when in DMX Proxy mode
   if (e131ProxyUniverse != 0) return;
 
+  // Ensure segments exist before accessing strip data
+  if (strip.getSegmentsNum() == 0) return;
+
+  // Rate limiting
+  static unsigned long last_dmx_time = 0;
+  constexpr unsigned long dmxFrameTime = (1000UL + MAX_DMX_RATE - 1) / MAX_DMX_RATE; // Ceiling division to round up
+  if (millis() - last_dmx_time < dmxFrameTime) return;
+
   uint8_t brightness = strip.getBrightness();
+
+  // Skip DMX entirely if strip is off
+  //if (brightness == 0) return; // WLEDMM not sure about this line - it possibly prevents that the final "black" color gets transmitted
+
+  last_dmx_time = millis();
 
   bool calc_brightness = true;
 

@@ -932,7 +932,7 @@ uint16_t Segment::calc_virtualLength() const {
         break;
       case M12_pArc:
         { unsigned vLen2 = vW * vW + vH * vH;            // length ^2
-          if (vLen2 < UINT16_MAX) vLen = sqrt16(vLen2);  // use faster function for 16bit values
+          if (vLen2 < UINT16_MAX) vLen = sqrt32_bw(vLen2);  // use faster function for 16bit values
           else vLen = sqrtf(vLen2);                      // fall-back to float if bigger
           if (vW != vH) vLen++; // round up
         }
