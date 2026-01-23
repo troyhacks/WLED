@@ -112,7 +112,8 @@
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
   #include <WiFi.h>
-  #if defined(CONFIG_ETH_SPI_ETHERNET_W5500)
+  #if defined(CONFIG_ETH_SPI_ETHERNET_W5500) && !defined(ETHCLASS_WARNING_DONE)
+    #define ETHCLASS_WARNING_DONE
     #include "ETHClass2.h"
     #warning Using the new ETHClass2 for this build as W5500 is available.
     #else
