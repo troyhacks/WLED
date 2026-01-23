@@ -1009,49 +1009,70 @@ void WLED::initAP(bool resetAP)
 
 bool WLED::initEthernet()
 {
-#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
-
-  static bool successfullyConfiguredEthernet = false;
-
-  if (successfullyConfiguredEthernet) {
-    // DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
-    return false;
-  }
-  if (ethernetType == WLED_ETH_NONE) {
-    return false;
-  }
-  if (ethernetType >= WLED_NUM_ETH_TYPES) {
-    DEBUG_PRINT(F("initE: Ignoring attempt for invalid ethernetType ")); DEBUG_PRINTLN(ethernetType);
-    return false;
-  }
-
-  DEBUG_PRINT(F("initE: Attempting ETH config: ")); DEBUG_PRINTLN(ethernetType);
-
-  // Ethernet initialization should only succeed once -- else reboot required
-  ethernet_settings es = ethernetBoards[ethernetType];
-
-  /*
-  For LAN8720 the most correct way is to perform clean reset each time before init
-  applying LOW to power or nRST pin for at least 100 us (please refer to datasheet, page 59)
-  ESP_IDF > V4 implements it (150 us, lan87xx_reset_hw(esp_eth_phy_t *phy) function in 
-  /components/esp_eth/src/esp_eth_phy_lan87xx.c, line 280)
-  but ESP_IDF < V4 does not. Lets do it:
-  [not always needed, might be relevant in some EMI situations at startup and for hot resets]
-  */
-  #if ESP_IDF_VERSION_MAJOR==3
-  if(es.eth_power>0 && es.eth_type==ETH_PHY_LAN8720) {
-    pinMode(es.eth_power, OUTPUT);
-    digitalWrite(es.eth_power, 0);
-    delayMicroseconds(150);
-    digitalWrite(es.eth_power, 1);
-    delayMicroseconds(10);
-  }
-  #endif
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_USE_ETHERNET)
   
+  static bool successfullyConfiguredEthernet = false;
+  ethernet_settings es = {};
+
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  if (!spi_use_for_w5500 || ethernetType > 0) {
+  #endif
+
+    if (successfullyConfiguredEthernet) {
+      // DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
+      return false;
+    }
+    if (ethernetType == WLED_ETH_NONE) {
+      return false;
+    }
+    if (ethernetType >= WLED_NUM_ETH_TYPES) {
+      DEBUG_PRINT(F("initE: Ignoring attempt for invalid ethernetType ")); DEBUG_PRINTLN(ethernetType);
+      return false;
+    }
+
+    DEBUG_PRINT(F("initE: Attempting ETH config: ")); DEBUG_PRINTLN(ethernetType);
+
+    // Ethernet initialization should only succeed once -- else reboot required
+    es = ethernetBoards[ethernetType];
+
+    /*
+    For LAN8720 the most correct way is to perform clean reset each time before init
+    applying LOW to power or nRST pin for at least 100 us (please refer to datasheet, page 59)
+    ESP_IDF > V4 implements it (150 us, lan87xx_reset_hw(esp_eth_phy_t *phy) function in
+    /components/esp_eth/src/esp_eth_phy_lan87xx.c, line 280)
+    but ESP_IDF < V4 does not. Lets do it:
+    [not always needed, might be relevant in some EMI situations at startup and for hot resets]
+    */
+    #if ESP_IDF_VERSION_MAJOR==3
+    if (es.eth_power > 0 && es.eth_type == ETH_PHY_LAN8720) {
+      pinMode(es.eth_power, OUTPUT);
+      digitalWrite(es.eth_power, 0);
+      delayMicroseconds(150);
+      digitalWrite(es.eth_power, 1);
+      delayMicroseconds(10);
+    }
+    #endif
+
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  }
+
+  if (spi_use_for_w5500 && ethernetType == WLED_ETH_NONE) {
+    es.eth_type = ETH_PHY_W5500;
+    es.eth_address = 1;
+    es.eth_miso_pin = spi_miso;
+    es.eth_mosi_pin = spi_mosi;
+    es.eth_cs_pin = spi_cs;
+    es.eth_rst_pin = spi_rst;
+    es.eth_int_pin = spi_int;
+    es.eth_sclk_pin = spi_sclk;
+  } else {
+    spi_use_for_w5500 = false;
+  }
+
     #if !defined(SPI3_HOST)
       #define SPI3_HOST SPI2_HOST // at a minimum there are 2 SPI Hosts
     #endif
+
     if (es.eth_type == ETH_PHY_W5500) {
       managed_pin_type pinsToAllocate[6] = {
         { (int8_t)es.eth_miso_pin,  false },  // MISO is input
@@ -1061,15 +1082,31 @@ bool WLED::initEthernet()
         { (int8_t)es.eth_int_pin,   false },  // INT is input
         { (int8_t)es.eth_sclk_pin,  true  },  // SCLK is output
       };
-      if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
-        DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
-        return false;
+
+      if (spi_use_for_w5500 == false) {
+        if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
+          DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
+          return false;
+        }
+      } else {
+        for (int i = 0; i < 6; i++) {
+          int8_t pin = pinsToAllocate[i].pin;
+          if (pinManager.getPinOwner(pin) == PinOwner::Ethernet || pinManager.getPinOwner(pin) == PinOwner::HW_SPI) {
+            // noop
+          } else {
+            USER_PRINTF("initEthernet: FAIL: pin %d is not owned by Ethernet or SPI\n", pin);
+            return false;
+          }
+        }
       }
+
       if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
-        DEBUG_PRINTLN(F("initC: ETH.begin() [SPI Ethernet] failed"));
+        DEBUG_PRINTLN(F("initC: ETHClass2 SPI ETH.begin() failed"));
         // de-allocate the allocated pins
-        for (managed_pin_type mpt : pinsToAllocate) {
-          pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+        if (!spi_use_for_w5500) {
+          for (managed_pin_type mpt : pinsToAllocate) {
+            pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+          }
         }
         return false;
       } else {
@@ -1122,7 +1159,7 @@ bool WLED::initEthernet()
         (int)es.eth_power,
         (eth_clock_mode_t)es.eth_clk_mode
       )) {
-        DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
+        DEBUG_PRINTLN(F("initC: ETHClass2 RMII ETH.begin() failed"));
         // de-allocate the allocated pins
         for (managed_pin_type mpt : pinsToAllocate) {
           pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
@@ -1181,7 +1218,7 @@ bool WLED::initEthernet()
       (eth_phy_type_t)es.eth_type,
       (eth_clock_mode_t)es.eth_clk_mode
     )) {
-      DEBUG_PRINTLN(F("initC: ETH.begin() failed"));
+      DEBUG_PRINTLN(F("initC: original ETH.begin() failed"));
       // de-allocate the allocated pins
       for (managed_pin_type mpt : pinsToAllocate) {
         pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);

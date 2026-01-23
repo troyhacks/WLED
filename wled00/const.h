@@ -611,6 +611,15 @@
 #ifndef HW_PIN_MISOSPI
   #define HW_PIN_MISOSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
 #endif
+#ifndef HW_PIN_CSSPI
+  #define HW_PIN_CSSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+#endif
+#ifndef HW_PIN_INTSPI
+  #define HW_PIN_INTSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+#endif
+#ifndef HW_PIN_RSTSPI
+  #define HW_PIN_RSTSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+#endif
 
 // WLEDMM: IRAM_ATTR for 8266 causes error: section `.text1' will not fit in region `iram1_0_seg'
 //         error only in MM, not in upstream... tbd: find out why

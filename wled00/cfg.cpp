@@ -351,6 +351,35 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   CJSON(spi_mosi, hw_if_spi[0]);
   CJSON(spi_sclk, hw_if_spi[1]);
   CJSON(spi_miso, hw_if_spi[2]);
+
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  CJSON(spi_cs, hw_if_spi[3]);
+  CJSON(spi_int, hw_if_spi[4]);
+  CJSON(spi_rst, hw_if_spi[5]);
+
+  JsonObject hw_if_spi_use = hw[F("if")][F("spi-use")];
+  if (!hw_if_spi_use[F("use-for-w5500")].isNull()) {
+    spi_use_for_w5500 = hw_if_spi_use[F("use-for-w5500")].as<bool>();
+    if (spi_use_for_w5500) USER_PRINTLN("use-for-w5500 is TRUE");
+    if (!spi_use_for_w5500) USER_PRINTLN("use-for-w5500 is FALSE");
+  } else {
+    USER_PRINTLN("use-for-w5500 was not found");
+  }
+
+  PinManagerPinType spi[6] = { { spi_mosi, true }, { spi_miso, true }, { spi_sclk, true } , { spi_cs, true } , { spi_int, true } , { spi_rst, true } };
+  if (spi_mosi >= 0 && spi_sclk >= 0 && pinManager.allocateMultiplePins(spi, 6, PinOwner::HW_SPI)) {
+    if (!spi_use_for_w5500) {
+      #ifdef ESP32
+      SPI.begin(spi_sclk, spi_miso, spi_mosi);  // SPI global uses VSPI on ESP32 and FSPI on C3, S3
+      #else
+      SPI.begin();
+      #endif
+    }
+    DEBUG_PRINTF("pinmgr success for global spi %d %d %d %d %d %d\n", spi_mosi, spi_miso, spi_sclk, spi_cs, spi_int, spi_rst);
+  } else {
+    DEBUG_PRINTF("pinmgr not success for global spi %d %d %d %d %d %d\n", spi_mosi, spi_miso, spi_sclk, spi_cs, spi_int, spi_rst);
+  }
+  #else
   PinManagerPinType spi[3] = { { spi_mosi, true }, { spi_miso, true }, { spi_sclk, true } };
   if (spi_mosi >= 0 && spi_sclk >= 0 && pinManager.allocateMultiplePins(spi, 3, PinOwner::HW_SPI)) {
     #ifdef ESP32
@@ -362,7 +391,12 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   } else {
     DEBUG_PRINTF("pinmgr not success for global spi %d %d %d\n", spi_mosi, spi_miso, spi_sclk);
   }
+  #endif
 
+  // NOTE: Ethernet initialization must be deferred until after deserializeConfigFromFS() releases the JSON buffer lock
+  // and completes. Calling initEthernet() here can trigger async events that may try to serialize config while
+  // the lock is held, potentially corrupting cfg.json. The fromFS parameter signals this case.
+    
   //int hw_status_pin = hw[F("status")]["pin"]; // -1
 
   JsonObject light = doc[F("light")];
@@ -682,6 +716,14 @@ void deserializeConfigFromFS() {
   bool needsSave = deserializeConfig(doc.as<JsonObject>(), true);
   releaseJSONBufferLock();
 
+  // Initialize Ethernet AFTER releasing the JSON buffer lock to prevent race conditions.
+  // Ethernet events can trigger async operations that may try to serialize config.
+  #if defined(WLED_USE_ETHERNET) && defined(CONFIG_ETH_SPI_ETHERNET_W5500)
+  if (spi_use_for_w5500 && spi_mosi >= 0 && spi_sclk >= 0) {
+    WLED::instance().initEthernet();
+  }
+  #endif
+
   if (needsSave) serializeConfig(); // usermods required new parameters
 }
 
@@ -746,7 +788,7 @@ void serializeConfig() {
   #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
   #define ETH_PHY_W5500 ETH_PHY_MAX
   #endif
-  
+
   JsonObject ethernet = doc.createNestedObject("eth");
   ethernet["type"] = ethernetType;
   if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {
@@ -902,6 +944,14 @@ void serializeConfig() {
   hw_if_spi.add(spi_mosi);
   hw_if_spi.add(spi_sclk);
   hw_if_spi.add(spi_miso);
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  hw_if_spi.add(spi_cs);
+  hw_if_spi.add(spi_int);
+  hw_if_spi.add(spi_rst);
+
+  JsonObject spi_use = hw_if.createNestedObject(F("spi-use"));
+  spi_use[F("use-for-w5500")] = (spi_use_for_w5500) ? spi_use_for_w5500 : false;
+  #endif
 
   //JsonObject hw_status = hw.createNestedObject("status");
   //hw_status["pin"] = -1;

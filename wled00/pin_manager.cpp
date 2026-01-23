@@ -105,9 +105,18 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
   if (isPinAllocated(gpio)) {
     if ((gpio == i2c_sda)  && (getPinOwner(gpio) == PinOwner::HW_I2C)) return(F("I2C SDA"));
     if ((gpio == i2c_scl)  && (getPinOwner(gpio) == PinOwner::HW_I2C)) return(F("I2C SCL"));
-    if ((gpio == spi_sclk) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return(F("SPI SLK  / SCK"));
-    if ((gpio == spi_mosi) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return(F("SPI PICO / MOSI"));
-    if ((gpio == spi_miso) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return(F("SPI POCI / MISO"));
+    #if defined(CONFIG_ETH_SPI_ETHERNET_W5500)
+      if ((gpio == spi_mosi) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet MOSI / PICO") : F("SPI MOSI / PICO");
+      if ((gpio == spi_miso) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet MISO / POCI") : F("SPI MISO / POCI");
+      if ((gpio == spi_sclk) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet SCLK / SCK")  : F("SPI SCLK / SCK");
+      if ((gpio == spi_cs)   && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet CS   / SS")   : F("SPI CS   / SS");
+      if ((gpio == spi_int)  && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet INT  / IRQ")  : F("SPI INT  / IRQ");
+      if ((gpio == spi_rst)  && (getPinOwner(gpio) == PinOwner::HW_SPI)) return spi_use_for_w5500 ? F("SPI Ethernet RST  / RSET") : F("SPI RST  / RSET");
+    #else 
+      if ((gpio == spi_mosi) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return F("SPI MOSI / PICO");
+      if ((gpio == spi_miso) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return F("SPI MISO / POCI");
+      if ((gpio == spi_sclk) && (getPinOwner(gpio) == PinOwner::HW_SPI)) return F("SPI SCLK / SCK");
+    #endif
   }
   // MCU special PINS
   #ifdef ARDUINO_ARCH_ESP32
@@ -167,9 +176,9 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
   // hardware special purpose PINS. part2 - default pins
   if (gpio == i2c_sda)   return(F("(default) I2C SDA"));
   if (gpio == i2c_scl)   return(F("(default) I2C SCL"));
-  if (gpio == spi_sclk)  return(F("(default) SPI SLK  / SCK"));
-  if (gpio == spi_mosi)  return(F("(default) SPI PICO / MOSI"));
-  if (gpio == spi_miso)  return(F("(default) SPI POCI / MISO"));
+  if (gpio == spi_mosi)  return(F("(default) SPI MOSI / PICO"));
+  if (gpio == spi_miso)  return(F("(default) SPI MISO / POCI"));
+  if (gpio == spi_sclk)  return(F("(default) SPI SCLK / SCK"));
   //if ((gpio == spi_cs)   || ((gpio == HW_PIN_CS) && (spi_cs < 0)))         return(F("(default) SPI CS   / SS"));
 #if defined(WLED_USE_SD_MMC) || defined(WLED_USE_SD_SPI) || defined(SD_ADAPTER)
   if ((gpio == HW_PIN_CSSPI)) return(F("(default) SPI CS  / SS"));  // no part of usermod default settings, currently only needed by SD_CARD usermod

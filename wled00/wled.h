@@ -847,18 +847,46 @@ WLED_GLOBAL int8_t spi_mosi  _INIT(-1);
 #else
 WLED_GLOBAL int8_t spi_mosi  _INIT(HW_PIN_MOSISPI);
 #endif
+
 // global SPI DATA/MISO pin (used for usermods)
 #ifndef HW_PIN_MISOSPI //WLEDMM not SPIMISOPIN
 WLED_GLOBAL int8_t spi_miso  _INIT(-1);
 #else
 WLED_GLOBAL int8_t spi_miso  _INIT(HW_PIN_MISOSPI);
 #endif
+
 // global SPI CLOCK/SCLK pin (used for usermods)
 #ifndef HW_PIN_CLOCKSPI //WLEDMM not SPISCLKPIN
 WLED_GLOBAL int8_t spi_sclk  _INIT(-1);
 #else
 WLED_GLOBAL int8_t spi_sclk  _INIT(HW_PIN_CLOCKSPI);
 #endif
+
+#ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+#ifndef HW_PIN_CSSPI
+WLED_GLOBAL int8_t spi_cs  _INIT(-1);
+#else
+WLED_GLOBAL int8_t spi_cs _INIT(HW_PIN_CSSPI);
+#endif
+
+#ifndef HW_PIN_INTSPI
+WLED_GLOBAL int8_t spi_int  _INIT(-1);
+#else
+WLED_GLOBAL int8_t spi_int  _INIT(HW_PIN_INTSPI);
+#endif
+
+#ifndef HW_PIN_RSTSPI
+WLED_GLOBAL int8_t spi_rst  _INIT(-1);
+#else
+WLED_GLOBAL int8_t spi_rst  _INIT(HW_PIN_RSTSPI);
+#endif
+
+#ifndef USE_HW_SPI_FOR_W5500
+WLED_GLOBAL bool spi_use_for_w5500  _INIT(0);
+#else
+WLED_GLOBAL BOOL spi_use_for_w5500  _INIT(USE_HW_SPI_FOR_W5500);
+#endif
+#endif // CONFIG_ETH_SPI_ETHERNET_W5500
 
 // global ArduinoJson buffer
 #if defined(ALL_JSON_TO_PSRAM) && (defined(WLED_USE_PSRAM_JSON) || defined(WLED_USE_PSRAM))
