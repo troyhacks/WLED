@@ -383,6 +383,13 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     oappend(SET_F("document.getElementById('ethd').style.display='none';"));
     #endif
 
+    #ifdef WLED_USE_ETHERNET
+      #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
+      // Remove W5500 ethernet board options when W5500 support is not compiled
+      oappend(SET_F("var s=gId('ETH');for(var i=s.options.length-1;i>=0;i--){if(s.options[i].text.indexOf('W5500')>=0)s.remove(i);}"));
+      #endif
+    #endif
+
     if (Network.isConnected()) //is connected
     {
       char s[32];
@@ -850,7 +857,12 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
       oappend(SET_F("d.getElementsByName(\"if:MOSI:pin\")[1].value=")); oappendi(spi_mosi); oappend(";"); 
       oappend(SET_F("d.getElementsByName(\"if:MISO:pin\")[1].value=")); oappendi(spi_miso); oappend(";"); 
       oappend(SET_F("d.getElementsByName(\"if:SCLK:pin\")[1].value=")); oappendi(spi_sclk); oappend(";"); 
+      oappend(SET_F("d.getElementsByName(\"if:CS:pin\")[1].value=")); oappendi(spi_cs); oappend(";");
+      oappend(SET_F("d.getElementsByName(\"if:INT:pin\")[1].value=")); oappendi(spi_int); oappend(";");
+      oappend(SET_F("d.getElementsByName(\"if:RST:pin\")[1].value=")); oappendi(spi_rst); oappend(";");
+
       //WLEDMM: add help info showing defaults
+      oappend(SET_F("addInfo('if:use_for_w5500:use',0,'','SPI for W5500 Ethernet');"));
       oappend(SET_F("addInfo('if:SDA:pin',0,'', 'SDA');"));
       oappend(SET_F("xOpt('if:SDA:pin',1,' ⍼',")); oappendi(SDA); oappend(");");
     #ifdef HW_PIN_SDA
@@ -877,6 +889,23 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
       oappend(SET_F("dRO('if:SCLK:pin',1);")); // disable read only pins
     #ifdef HW_PIN_CLOCKSPI
       oappend(SET_F("xOpt('if:SCLK:pin',1,' ⎌',")); oappendi(HW_PIN_CLOCKSPI); oappend(");"); 
+    #endif
+      oappend(SET_F("addInfo('if:CS:pin',0,'', 'CS');"));
+      oappend(SET_F("xOpt('if:CS:pin',1,' ⍼',")); oappendi(HW_PIN_CSSPI); oappend(");");
+      oappend(SET_F("dRO('if:CS:pin',1);")); // disable read only pins
+    #ifdef HW_PIN_CSSPI
+      oappend(SET_F("xOpt('if:CS:pin',1,' ⎌',")); oappendi(HW_PIN_CSSPI); oappend(");");
+    #endif
+      oappend(SET_F("addInfo('if:INT:pin',0,'', 'INT');"));
+      oappend(SET_F("xOpt('if:INT:pin',1,' ⍼',")); oappendi(HW_PIN_INTSPI); oappend(");");
+    #ifdef HW_PIN_INTSPI
+      oappend(SET_F("xOpt('if:INT:pin',1,' ⎌',")); oappendi(HW_PIN_INTSPI); oappend(");");
+    #endif
+      oappend(SET_F("addInfo('if:RST:pin',0,'', 'RST');"));
+      oappend(SET_F("xOpt('if:RST:pin',1,' ⍼',")); oappendi(HW_PIN_RSTSPI); oappend(");");
+      oappend(SET_F("dRO('if:RST:pin',1);")); // disable read only pins
+    #ifdef HW_PIN_RSTSPI
+      oappend(SET_F("xOpt('if:RST:pin',1,' ⎌',")); oappendi(HW_PIN_RSTSPI); oappend(");");
     #endif
     }
     else {
