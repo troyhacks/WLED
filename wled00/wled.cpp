@@ -1015,6 +1015,7 @@ bool WLED::initEthernet()
   ethernet_settings es = {};
 
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  #pragma message "ETHClass2 in use?"
   if (!spi_use_for_w5500 || ethernetType > 0) {
   #endif
 
