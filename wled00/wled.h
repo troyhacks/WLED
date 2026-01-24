@@ -361,7 +361,7 @@ WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 
 //WLED_GLOBAL byte presetToApply _INIT(0);
 #ifndef ESP8266
-  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 5)
+  #if defined(CONFIG_ETH_SPI_ETHERNET_W5500) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 5)
     WLED_GLOBAL ETHClass2 ETH;
   #endif
 #endif
