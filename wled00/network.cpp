@@ -5,6 +5,9 @@
 
 #ifdef WLED_USE_ETHERNET
 #pragma message "Ethernet support enabled"
+#ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+#pragma message "W5500 support should be enabled"
+#endif
 
 // The following six pins are neither configurable nor
 // can they be re-assigned through IOMUX / GPIO matrix.
