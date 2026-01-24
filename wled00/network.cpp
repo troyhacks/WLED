@@ -22,6 +22,8 @@ managed_pin_type esp32_nonconfigurable_ethernet_pins[6] = {
     { 26, false }, // RMII EMAC RXD1   == Second bit of received data
     { 27, true  }, // RMII EMAC CRS_DV == Carrier Sense and RX Data Valid
 };
+#else
+managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT] = {};
 #endif
 
 #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
