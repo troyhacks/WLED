@@ -1172,6 +1172,7 @@ bool WLED::initEthernet()
       #endif
     }
   #else
+    #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
     // Ethernet initialization should only succeed once -- else reboot required
     managed_pin_type pinsToAllocate[10] = {
       // first six pins are non-configurable
@@ -1210,7 +1211,7 @@ bool WLED::initEthernet()
       DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
       return false;
     }
-    
+
     if (!ETH.begin(
       (uint8_t)es.eth_address,
       (int)es.eth_power,
@@ -1226,6 +1227,9 @@ bool WLED::initEthernet()
       }
       return false;
     }
+    #else
+    return false;
+    #endif
   #endif
   successfullyConfiguredEthernet = true;
   USER_PRINTLN(F("initC: *** Ethernet successfully configured! ***"));  // WLEDMM
