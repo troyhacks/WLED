@@ -11,7 +11,7 @@
  */
 
 #ifdef WLED_ENABLE_DMX
-#pragma message "DMX network output enabled"
+#pragma message "DMX output enabled"
 
 #define MAX_DMX_RATE 44 // max DMX update rate in Hz
 
@@ -99,7 +99,7 @@ void handleDMXOutput()
 }
 
 void initDMXOutput() {
- #ifdef ESP8266
+ #if defined(ESP8266) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S2)
   dmx.init(512);        // initialize with bus length
  #else
   dmx.initWrite(512);  // initialize with bus length
