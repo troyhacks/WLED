@@ -352,11 +352,15 @@ void WiFiEvent(WiFiEvent_t event)
       DEBUG_PRINTLN(F("ETH Started"));
       break;
     case SYSTEM_EVENT_ETH_GOT_IP:
-      DEBUG_PRINTLN(F("ETH Got IP"));
-      // Disconnect WiFi here in event context (original behavior that worked)
-      if (!apActive && WiFi.status() == WL_CONNECTED) {
-        DEBUG_PRINTLN(F("Disabling WiFi from event handler"));
-        WiFi.disconnect(true);
+      if (Network.isEthernet()) {
+        if (!apActive) {
+          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Disabling WIFi"));
+          WiFi.disconnect(true);
+        } else {
+          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Leaving AP WiFi active"));
+        }
+      } else {
+        DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
       }
       forceReconnect = true;
       break;
