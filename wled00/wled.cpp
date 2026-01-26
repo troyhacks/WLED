@@ -1015,7 +1015,7 @@ bool WLED::initEthernet()
   ethernet_settings es = {};
 
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
-  #pragma message "ETHClass2 in use?"
+  #pragma message "ETHClass2 in use"
   if (!spi_use_for_w5500 || ethernetType > 0) {
   #endif
 
@@ -1056,8 +1056,10 @@ bool WLED::initEthernet()
 
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
   }
+  #endif
 
-  if (spi_use_for_w5500 && ethernetType == WLED_ETH_NONE) {
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
+  if (spi_use_for_w5500) {
     es.eth_type = ETH_PHY_W5500;
     es.eth_address = 1;
     es.eth_miso_pin = spi_miso;
@@ -1086,32 +1088,33 @@ bool WLED::initEthernet()
 
       if (spi_use_for_w5500 == false) {
         if (!pinManager.allocateMultiplePins(pinsToAllocate, 6, PinOwner::Ethernet)) {
-          DEBUG_PRINTLN(F("initE: Failed to allocate ethernet pins"));
+          USER_PRINTLN(F("initE: Failed to allocate ethernet pins"));
           return false;
         }
-      } else {
-        for (int i = 0; i < 6; i++) {
-          int8_t pin = pinsToAllocate[i].pin;
-          if (pinManager.getPinOwner(pin) == PinOwner::Ethernet || pinManager.getPinOwner(pin) == PinOwner::HW_SPI) {
-            // noop
-          } else {
-            USER_PRINTF("initEthernet: FAIL: pin %d is not owned by Ethernet or SPI\n", pin);
-            return false;
-          }
-        }
-      }
+      } // else {
+      //   for (int i = 0; i < 6; i++) {
+      //     int8_t pin = pinsToAllocate[i].pin;
+      //     if (pinManager.getPinOwner(pin) == PinOwner::Ethernet || pinManager.getPinOwner(pin) == PinOwner::HW_SPI) {
+      //       // noop
+      //     } else {
+      //       USER_PRINTF("initEthernet: FAIL: pin %d is not owned by Ethernet or SPI\n", pin);
+      //       return false;
+      //     }
+      //   }
+      // }
 
       if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
         DEBUG_PRINTLN(F("initC: ETHClass2 SPI ETH.begin() failed"));
         // de-allocate the allocated pins
-        if (!spi_use_for_w5500) {
+        // if (!spi_use_for_w5500) {
           for (managed_pin_type mpt : pinsToAllocate) {
             pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
           }
-        }
+        // }
         return false;
       } else {
         Serial.println("ETH initialized W5500!");
+        spi_use_for_w5500 = true;
       }
     } else {
       #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
@@ -1172,7 +1175,7 @@ bool WLED::initEthernet()
       #endif
     }
   #else
-    #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
+  #if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || defined(CONFIG_EMAC_TASK_PRIORITY) // this seems to be in IDF v3 sdkconfig
     // Ethernet initialization should only succeed once -- else reboot required
     managed_pin_type pinsToAllocate[10] = {
       // first six pins are non-configurable
@@ -1252,7 +1255,7 @@ void WLED::initConnection()
   //if (strip.isUpdating()) USER_PRINTLN("WLED::initConnection: strip still updating.");
 #endif
 
-  WiFi.disconnect(true);        // close old connections
+  if (WiFi.isConnected()) WiFi.disconnect(true);        // close old connections
   delay(5);                     // wait for hardware to be ready
 #ifdef ESP8266
   WiFi.setPhyMode(force802_3g ? WIFI_PHY_MODE_11G : WIFI_PHY_MODE_11N);
@@ -1540,8 +1543,8 @@ void WLED::handleConnection()
     USER_PRINT(Network.localIP());
     if (Network.isEthernet()) {
      #if ESP32
-     USER_PRINTLN(" via Ethernet (disabling WiFi)");
-     WiFi.disconnect(true);
+     USER_PRINTLN(" via Ethernet (disabled WiFi)");
+     WiFi.disconnect();
      #endif
     } else {
      USER_PRINTLN(" via WiFi");

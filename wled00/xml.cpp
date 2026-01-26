@@ -384,9 +384,23 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     #endif
 
     #ifdef WLED_USE_ETHERNET
-      #ifndef CONFIG_ETH_SPI_ETHERNET_W5500
+      #if !defined(CONFIG_ETH_SPI_ETHERNET_W5500)
       // Remove W5500 ethernet board options when W5500 support is not compiled
       oappend(SET_F("var s=gId('eth_boards');for(var i=s.options.length-1;i>=0;i--){if(s.options[i].text.indexOf('W5500')>=0)s.remove(i);}"));
+      #endif
+      #if !defined(CONFIG_IDF_TARGET_ESP32S3)
+      // Remove S3-specific board definitions
+      oappend(SET_F("var s = gId('eth_boards');for (var i = s.options.length - 1; i >= 0; i--) {if (s.options[i].text != 'None' && (s.options[i].text.indexOf(' S3 ') >= 0 || s.options[i].text.indexOf('-S3') >= 0)) s.remove(i);}"));
+      #endif
+      #if !defined(CONFIG_ETH_PHY_INTERFACE_RMII) && !defined(CONFIG_EMAC_TASK_PRIORITY)
+      // Remove RMII definitions when not available on build
+      oappend(SET_F("var s = gId('eth_boards');for (var i = s.options.length - 1; i >= 0; i--) {if (s.options[i].text != 'None' && s.options[i].text.indexOf('W5500') == -1) s.remove(i);}"));
+      #endif
+      #if defined(CONFIG_ETH_SPI_ETHERNET_W5500)
+      if (Network.isEthernet() && spi_use_for_w5500) {
+      // Change "None" to "Set via pins"
+        oappend(SET_F("var s = gId('eth_boards');for (var i = s.options.length - 1; i >= 0; i--) {if (s.options[i].text == 'None') s.options[i].text = 'W5500 enabled via Global SPI Pins';}"));
+      }
       #endif
     #endif
 

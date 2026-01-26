@@ -328,7 +328,6 @@
 #define WLED_ETH_OLIMEX_GTW      14
 #define WLED_ETH_TTGO_T_ETH_LITE_S3 15
 #define WLED_ETH_WAVESHARE_ESP32_S3_ETH 16
-#define WLED_ETH_W5500_GENERIC    17
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0

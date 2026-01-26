@@ -13,7 +13,7 @@
 // can they be re-assigned through IOMUX / GPIO matrix.
 // See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-ethernet-kit-v1.1.html#ip101gri-phy-interface
 
-#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || (defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR == 3)
+#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || defined(CONFIG_EMAC_TASK_PRIORITY) // this seems to be in IDF v3 sdkconfig
 managed_pin_type esp32_nonconfigurable_ethernet_pins[6] = {
     { 21, true  }, // RMII EMAC TX EN  == When high, clocks the data on TXD0 and TXD1 to transmitter
     { 19, true  }, // RMII EMAC TXD0   == First bit of transmitted data
@@ -355,7 +355,7 @@ void WiFiEvent(WiFiEvent_t event)
       if (Network.isEthernet()) {
         if (!apActive) {
           DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Disabling WIFi"));
-          WiFi.disconnect(true);
+          // WiFi.disconnect(true);
         } else {
           DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Leaving AP WiFi active"));
         }

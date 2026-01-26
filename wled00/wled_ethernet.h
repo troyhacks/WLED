@@ -22,7 +22,7 @@
   #define GPIO_NUM_NC -1
 #endif
 
-#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || ESP_IDF_VERSION_MAJOR == 3
+#if defined(CONFIG_ETH_PHY_INTERFACE_RMII) || defined(CONFIG_EMAC_TASK_PRIORITY) // this seems to be in IDF v3 sdkconfig
 #define WLED_ETH_RSVD_PINS_COUNT 6
 extern managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT];
 typedef struct EthernetSettings {
