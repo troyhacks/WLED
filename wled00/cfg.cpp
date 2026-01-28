@@ -360,10 +360,10 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   JsonObject hw_if_spi_use = hw[F("if")][F("spi-use")];
   if (!hw_if_spi_use[F("use-for-w5500")].isNull()) {
     spi_use_for_w5500 = hw_if_spi_use[F("use-for-w5500")].as<bool>();
-    if (spi_use_for_w5500) USER_PRINTLN("use-for-w5500 is TRUE");
-    if (!spi_use_for_w5500) USER_PRINTLN("use-for-w5500 is FALSE");
+    if (spi_use_for_w5500) DEBUG_PRINTLN("use-for-w5500 is TRUE");
+    if (!spi_use_for_w5500) DEBUG_PRINTLN("use-for-w5500 is FALSE");
   } else {
-    USER_PRINTLN("use-for-w5500 was not found");
+    DEBUG_PRINTLN("use-for-w5500 was not found");
   }
 
   PinManagerPinType spi[6] = { { spi_mosi, true }, { spi_miso, true }, { spi_sclk, true } , { spi_cs, true } , { spi_int, true } , { spi_rst, true } };
