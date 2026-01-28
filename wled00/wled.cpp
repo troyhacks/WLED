@@ -655,9 +655,16 @@ void WLED::setup()
   //managed_pin_type pins[] = { {12, true}, {13, true}, {14, true}, {15, true}, {16, true}, {17, true} };
   //pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #else
-  // GPIO16/GPIO17 reserved for SPI RAM
-  managed_pin_type pins[] = { {16, true}, {17, true} };
-  pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+  // GPIO16/GPIO17 reserved for SPI RAM on classic ESP32
+  // Skip PICO variants - their reserved pins are already protected by isPinOk()
+  {
+    const char* model = ESP.getChipModel();
+    bool isPico = (strncmp("ESP32-PICO", model, 10) == 0) || (strncmp("ESP32-U4WDH", model, 11) == 0);
+    if (!isPico) {
+      managed_pin_type pins[] = { {16, true}, {17, true} };
+      pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
+    }
+  }
   #endif
   #if defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))       // WLEDMM
   if (psramFound()) {
@@ -668,14 +675,8 @@ void WLED::setup()
     DEBUG_PRINTLN(F("PSRAM not used."));
   #endif
 #endif
-#if defined(ARDUINO_ARCH_ESP32)
-  if ((strncmp("ESP32-PICO", ESP.getChipModel(), 10) == 0) || (strncmp("ESP32-U4WDH", ESP.getChipModel(), 11) == 0))
-  { // WLEDMM detect pico board and esp32-mini1 board at runtime
-    // special handling for PICO-D4: gpio16+17 are in use for onboard SPI FLASH (not PSRAM)
-    managed_pin_type pins[] = { {16, true}, {17, true} };
-    pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
-  }
-#endif
+// Note: PICO variants (D4, V3, V3-02) have their reserved pins already protected
+// by isPinOk() in pin_manager.cpp - no explicit allocation needed here.
 
   //DEBUG_PRINT(F("LEDs inited. heap usage ~"));
   //DEBUG_PRINTLN(heapPreAlloc - ESP.getFreeHeap());
