@@ -354,15 +354,17 @@ void WiFiEvent(WiFiEvent_t event)
     case SYSTEM_EVENT_ETH_GOT_IP:
       if (Network.isEthernet()) {
         if (!apActive) {
-          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Disabling WIFi"));
+          DEBUG_PRINTLN(F("ETH got IP. Disabling WiFi"));
           // WiFi.disconnect(true);
         } else {
-          DEBUG_PRINTLN(F("WiFi Connected *and* ETH Connected. Leaving AP WiFi active"));
+          DEBUG_PRINTLN(F("ETH got IP. Leaving AP WiFi active"));
         }
       } else {
-        DEBUG_PRINTLN(F("WiFi Connected. No ETH"));
+        DEBUG_PRINTLN(F("ETH got IP but Network.isEthernet() is false?")); // this shouldn't happen. 
       }
-      forceReconnect = true;
+      // Only force reconnect if this is a reconnect (interfaces already initialized),
+      // not on initial boot where the normal flow handles initialization
+      if (interfacesInited) forceReconnect = true;
       break;
     case SYSTEM_EVENT_ETH_CONNECTED:
       {
