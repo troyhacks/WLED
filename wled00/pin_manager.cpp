@@ -7,6 +7,11 @@
 #endif
 #include <esp_system.h>  // for esp_chip_info() and CHIP_FEATURE_EMB_PSRAM
 
+// CHIP_FEATURE_EMB_PSRAM was added in IDF 4.4+ - define it for older versions
+#ifndef CHIP_FEATURE_EMB_PSRAM
+#define CHIP_FEATURE_EMB_PSRAM BIT(7)
+#endif
+
 /*
  * ESP32-PICO variant detection and pin compatibility:
  *
