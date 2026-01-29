@@ -207,7 +207,6 @@
 #include "../usermods/usermod_v2_auto_playlist/usermod_v2_auto_playlist.h"
 #endif
 #ifdef USERMOD_VOICE_CONTROL
-#define USERMOD_VOICE_CONTROL
 #include "../usermods/usermod_v2_voice_control/usermod_v2_voice_control.h"
 #endif
 

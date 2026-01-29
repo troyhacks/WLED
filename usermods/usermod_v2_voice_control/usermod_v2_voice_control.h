@@ -252,7 +252,7 @@ public:
     oappend(SET_F("dfD('cmd_Previous_Effect');"));
     // Startup_Sound left as number input for testing different command IDs
 
-    // Volume dropdown (separate, only 1-7)
+    // Volume dropdown (0-20, higher values may distort on some speakers)
     oappend(SET_F("dd=addDropdown('DF2301Q','Volume');"));
     oappend(SET_F("for(var i=0;i<=20;i++)addOption(dd,i,i);"));
 
@@ -303,7 +303,7 @@ public:
 
     enabled = top[FPSTR(_enabled)] | enabled;
     moduleVolume = top[FPSTR(_moduleVolume)] | moduleVolume;
-    moduleVolume = constrain(moduleVolume, 0, 20);  // DF2301Q volume range is 1-7 or 0-20?
+    moduleVolume = constrain(moduleVolume, 0, 20);  // 0-20, higher values may distort
     wakeTime = top[FPSTR(_wakeTime)] | wakeTime;
     pollInterval = top[FPSTR(_pollInterval)] | pollInterval;
     cmdPowerOn = top[FPSTR(_cmdPowerOn)] | cmdPowerOn;
@@ -396,7 +396,9 @@ private:
       USER_PRINTLN(F("DF2301Q: Next Preset"));
 
     } else if (cmdPrevPreset > 0 && cmdID == cmdPrevPreset) {
-      applyPreset(currentPreset - 1, CALL_MODE_BUTTON);
+      if (currentPreset > 0) {
+        applyPreset(currentPreset - 1, CALL_MODE_BUTTON);
+      }
       USER_PRINTLN(F("DF2301Q: Previous Preset"));
 
     } else if (cmdNextEffect > 0 && cmdID == cmdNextEffect) {
@@ -405,7 +407,7 @@ private:
       USER_PRINTLN(F("DF2301Q: Next Effect"));
 
     } else if (cmdPrevEffect > 0 && cmdID == cmdPrevEffect) {
-      uint8_t mode = strip.getMainSegment().mode;
+      uint16_t mode = strip.getMainSegment().mode;
       strip.setMode(strip.getMainSegmentId(), mode > 0 ? mode - 1 : strip.getModeCount() - 1);
       stateUpdated(CALL_MODE_BUTTON);
       USER_PRINTLN(F("DF2301Q: Previous Effect"));

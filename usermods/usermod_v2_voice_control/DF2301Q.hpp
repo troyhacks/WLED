@@ -18,8 +18,13 @@
 
 #define DF2301Q_TASK_STACK_SIZE    2048
 #define DF2301Q_TASK_PRIORITY      1
-#define DF2301Q_TASK_CORE          1
 #define DF2301Q_POLL_INTERVAL_MS   100
+
+#ifdef CONFIG_FREERTOS_UNICORE
+  #define DF2301Q_TASK_CORE        0  // Single-core: use PRO_CPU (core 0)
+#else
+  #define DF2301Q_TASK_CORE        1  // Dual-core: use APP_CPU (core 1)
+#endif
 
 class DF2301Q {
 public:
