@@ -606,12 +606,12 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     //WLEDMM: :pin values have 2 occurrences: the type and the value, we need the value
     int paramsNr = request->params();
     AsyncWebParameter* p_prev = nullptr;
-    for (int i = 0;i < paramsNr;i++) {
+    for (int i=0; i < paramsNr; i++) {
       AsyncWebParameter* p = request->getParam(i);
       if (p_prev != nullptr && p->name() == p_prev->name()) {
-        USER_PRINT(p->name());
-        USER_PRINT("=");
-        USER_PRINTLN(p->value());
+        DEBUG_PRINT(p->name());
+        DEBUG_PRINT("=");
+        DEBUG_PRINTLN(p->value());
         if (p->name() == "if:SDA:pin") hw_sda_pin = p->value().toInt();
         if (p->name() == "if:SCL:pin") hw_scl_pin = p->value().toInt();
         if (p->name() == "if:MOSI:pin") hw_mosi_pin = p->value().toInt();
@@ -622,8 +622,9 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
         if (p->name() == "if:INT:pin") hw_int_pin = p->value().toInt();
         if (p->name() == "if:RST:pin") hw_rst_pin = p->value().toInt();
         if (p->name() == "if:use_for_w5500:use") {
-          use_spi_for_w5500 = p->value();
-          USER_PRINTF("**** use_spi_for_w5500 == %d\n", use_spi_for_w5500);
+          const String & v = p->value();
+          use_spi_for_w5500 = (v == "1" || v == "true" || v == "on");
+          DEBUG_PRINTF("**** use_spi_for_w5500 == %d\n", use_spi_for_w5500);
         }
         #endif
       }
@@ -670,23 +671,18 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     spi_sclk = hw_sclk_pin;
 
     #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
-    PinManagerPinType spi[6] = { { hw_mosi_pin, true }, { hw_miso_pin, true }, { hw_sclk_pin, true }, { hw_cs_pin, true }, { hw_int_pin, false }, { hw_rst_pin, true } };
-
+    PinManagerPinType spi[6] = { { hw_mosi_pin, true }, { hw_miso_pin, true }, { hw_sclk_pin, true }, { hw_cs_pin, true }, { hw_int_pin, false  }, { hw_rst_pin, true } };
     USER_PRINTF("spi_use_for_w5500 = %d   use_spi_for_w5500 = %d\n", spi_use_for_w5500, use_spi_for_w5500);
-
     spi_cs = hw_cs_pin;
     spi_int = hw_int_pin;
     spi_rst = hw_rst_pin;
-
     if (hw_mosi_pin >= 0 && hw_sclk_pin >= 0 && use_spi_for_w5500 == true) {
       spi_use_for_w5500 = use_spi_for_w5500;
       USER_PRINTLN("Trying to start W5500 SPI Ethernet");
       WLED::instance().initEthernet();
-    } else if (hw_mosi_pin >= 0 && hw_sclk_pin >= 0 && use_spi_for_w5500 == false) {
-      pinManager.allocateMultiplePins(spi, 6, PinOwner::HW_SPI);
+    } else if (hw_mosi_pin >= 0 && hw_sclk_pin >= 0 && !use_spi_for_w5500 && pinManager.allocateMultiplePins(spi, 6, PinOwner::HW_SPI)) {
       spi_use_for_w5500 = false;
     } else {
-      //SPI.end();
       if (hw_mosi_pin == -1 || hw_sclk_pin == -1) { // WLEDMM bugfix allow pin = -1
         spi_use_for_w5500 = false;
       }

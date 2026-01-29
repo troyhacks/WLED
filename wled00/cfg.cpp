@@ -366,7 +366,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
     DEBUG_PRINTLN("use-for-w5500 was not found");
   }
 
-  PinManagerPinType spi[6] = { { spi_mosi, true }, { spi_miso, true }, { spi_sclk, true } , { spi_cs, true } , { spi_int, true } , { spi_rst, true } };
+  PinManagerPinType spi[6] = { { spi_mosi, true }, { spi_miso, true }, { spi_sclk, true }, { spi_cs, true }, { spi_int, false }, { spi_rst, true } };
   if (spi_mosi >= 0 && spi_sclk >= 0 && pinManager.allocateMultiplePins(spi, 6, PinOwner::HW_SPI)) {
     if (!spi_use_for_w5500) {
       #ifdef ESP32

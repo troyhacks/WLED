@@ -119,23 +119,27 @@ class PWMFanUsermod : public Usermod {
     // https://randomnerdtutorials.com/esp32-pwm-arduino-ide/
     void initPWMfan(void) {
       if (pwmPin < 0) {
+        deinitTacho();
         enabled = false;
         return;
       }
       // Validate pin before attempting allocation to prevent conflicts with Ethernet, etc.
       if (!pinManager.isPinOk(pwmPin, true)) {
         DEBUG_PRINTLN(F("PWM-fan: PWM pin not valid for this board."));
+        deinitTacho();
         enabled = false;
         pwmPin = -1;
         return;
       }
       if (pinManager.isPinAllocated(pwmPin)) {
         DEBUG_PRINTF("PWM-fan: PWM pin %d already in use.\n", pwmPin);
+        deinitTacho();
         enabled = false;
         pwmPin = -1;
         return;
       }
       if (!pinManager.allocatePin(pwmPin, true, PinOwner::UM_Unspecified)) {
+        deinitTacho();
         enabled = false;
         pwmPin = -1;
         return;

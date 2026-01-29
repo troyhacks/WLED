@@ -5,6 +5,7 @@
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 2, 0)
 #include <soc/soc_caps.h> // WLEDMM
 #endif
+#include <esp_system.h>  // for esp_chip_info() and CHIP_FEATURE_EMB_PSRAM
 
 /*
  * ESP32-PICO variant detection and pin compatibility:
@@ -54,12 +55,17 @@ static ESP32PicoVariant detectPicoVariant() {
     return cachedVariant;
   }
 
-  // Distinguish variants by flash size and PSRAM presence
+  // Distinguish variants by flash size and embedded PSRAM feature
   uint32_t flashSizeBytes = ESP.getFlashChipSize();
-  bool hasPsram = psramFound();
 
-  if (hasPsram) {
-    // V3-02 has embedded PSRAM
+  // Use chip feature flags to detect embedded PSRAM reliably
+  // This works even when build-time PSRAM support is disabled
+  esp_chip_info_t chipInfo;
+  esp_chip_info(&chipInfo);
+  bool hasEmbeddedPsram = (chipInfo.features & CHIP_FEATURE_EMB_PSRAM) != 0;
+
+  if (hasEmbeddedPsram) {
+    // V3-02 has embedded PSRAM (detected via chip feature flag)
     cachedVariant = ESP32PicoVariant::PicoV3_02;
   } else if (flashSizeBytes >= 8 * 1024 * 1024) {
     // V3 has 8MB flash but no PSRAM

@@ -1015,15 +1015,16 @@ bool WLED::initEthernet()
   static bool successfullyConfiguredEthernet = false;
   ethernet_settings es = {};
 
+  if (successfullyConfiguredEthernet) {
+    DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
+    return false;
+  }
+
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
   #pragma message "ETHClass2 in use"
   if (!spi_use_for_w5500 || ethernetType > 0) {
   #endif
 
-    if (successfullyConfiguredEthernet) {
-      // DEBUG_PRINTLN(F("initE: ETH already successfully configured, ignoring"));
-      return false;
-    }
     if (ethernetType == WLED_ETH_NONE) {
       return false;
     }
@@ -1069,8 +1070,6 @@ bool WLED::initEthernet()
     es.eth_rst_pin = spi_rst;
     es.eth_int_pin = spi_int;
     es.eth_sclk_pin = spi_sclk;
-  } else {
-    spi_use_for_w5500 = false;
   }
 
     #if !defined(SPI3_HOST)
@@ -1092,29 +1091,18 @@ bool WLED::initEthernet()
           USER_PRINTLN(F("initE: Failed to allocate ethernet pins"));
           return false;
         }
-      } // else {
-      //   for (int i = 0; i < 6; i++) {
-      //     int8_t pin = pinsToAllocate[i].pin;
-      //     if (pinManager.getPinOwner(pin) == PinOwner::Ethernet || pinManager.getPinOwner(pin) == PinOwner::HW_SPI) {
-      //       // noop
-      //     } else {
-      //       USER_PRINTF("initEthernet: FAIL: pin %d is not owned by Ethernet or SPI\n", pin);
-      //       return false;
-      //     }
-      //   }
-      // }
+      }
 
       if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
         DEBUG_PRINTLN(F("initC: ETHClass2 SPI ETH.begin() failed"));
-        // de-allocate the allocated pins
-        // if (!spi_use_for_w5500) {
-          for (managed_pin_type mpt : pinsToAllocate) {
-            pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
-          }
-        // }
+
+        for (managed_pin_type mpt : pinsToAllocate) {
+          pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+        }
+
         return false;
       } else {
-        Serial.println("ETH initialized W5500!");
+        USER_PRINTLN("ETH initialized W5500!");
         spi_use_for_w5500 = true;
       }
     } else {
@@ -1239,6 +1227,7 @@ bool WLED::initEthernet()
   USER_PRINTLN(F("initC: *** Ethernet successfully configured! ***"));  // WLEDMM
   return true;
 #else
+  DEBUG_PRINTLN(F("initE: RMII not available for this board type"));
   return false; // Ethernet not enabled for build
 #endif
 

@@ -906,18 +906,24 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
         oappend(SET_F("d.getElementsByName(\"if:RST:pin\")[1].value=")); oappendi(spi_rst); oappend(";");
         oappend(SET_F("addInfo('if:use_for_w5500:use',0,'','SPI for W5500 Ethernet');"));
         oappend(SET_F("addInfo('if:CS:pin',0,'', 'CS');"));
+      #ifdef HW_PIN_CSSPI
         oappend(SET_F("xOpt('if:CS:pin',1,' ⍼',")); oappendi(HW_PIN_CSSPI); oappend(");");
+      #endif
         oappend(SET_F("dRO('if:CS:pin',1);")); // disable read only pins
       #ifdef HW_PIN_CSSPI
         oappend(SET_F("xOpt('if:CS:pin',1,' ⎌',")); oappendi(HW_PIN_CSSPI); oappend(");");
       #endif
         oappend(SET_F("addInfo('if:INT:pin',0,'', 'INT');"));
+      #ifdef HW_PIN_INTSPI
         oappend(SET_F("xOpt('if:INT:pin',1,' ⍼',")); oappendi(HW_PIN_INTSPI); oappend(");");
+      #endif
       #ifdef HW_PIN_INTSPI
         oappend(SET_F("xOpt('if:INT:pin',1,' ⎌',")); oappendi(HW_PIN_INTSPI); oappend(");");
       #endif
         oappend(SET_F("addInfo('if:RST:pin',0,'', 'RST');"));
+      #ifdef HW_PIN_RSTSPI
         oappend(SET_F("xOpt('if:RST:pin',1,' ⍼',")); oappendi(HW_PIN_RSTSPI); oappend(");");
+      #endif
         oappend(SET_F("dRO('if:RST:pin',1);")); // disable read only pins
       #ifdef HW_PIN_RSTSPI
         oappend(SET_F("xOpt('if:RST:pin',1,' ⎌',")); oappendi(HW_PIN_RSTSPI); oappend(");");

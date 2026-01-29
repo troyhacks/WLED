@@ -884,7 +884,7 @@ WLED_GLOBAL int8_t spi_rst  _INIT(HW_PIN_RSTSPI);
 #ifndef USE_HW_SPI_FOR_W5500
 WLED_GLOBAL bool spi_use_for_w5500  _INIT(0);
 #else
-WLED_GLOBAL BOOL spi_use_for_w5500  _INIT(USE_HW_SPI_FOR_W5500);
+WLED_GLOBAL bool spi_use_for_w5500  _INIT(USE_HW_SPI_FOR_W5500);
 #endif
 #endif // CONFIG_ETH_SPI_ETHERNET_W5500
 

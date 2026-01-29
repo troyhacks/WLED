@@ -309,7 +309,7 @@
 #define BTN_TYPE_TOUCH_SWITCH     9    //WLEDMM not yet supported
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       18 //WLEDMM +1 for Olimex ESP32-Gateway + 3 for W5500
+#define WLED_NUM_ETH_TYPES       17
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
@@ -605,19 +605,19 @@
   #define HW_PIN_CLOCKSPI -1 //WLEDMM if not defined -1 will be used (not SCK/18)
 #endif
 #ifndef HW_PIN_MOSISPI  //WLEDMM renamed from HW_PIN_DATASPI
-  #define HW_PIN_MOSISPI -1 //WLEDMM if not defined -1 will be used (not MOSI/23)
+  #define HW_PIN_MOSISPI -1 //WLEDMM if not defined -1 will be used
 #endif
 #ifndef HW_PIN_MISOSPI
-  #define HW_PIN_MISOSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+  #define HW_PIN_MISOSPI -1 //WLEDMM if not defined -1 will be used
 #endif
 #ifndef HW_PIN_CSSPI
-  #define HW_PIN_CSSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+  #define HW_PIN_CSSPI -1 //WLEDMM if not defined -1 will be used
 #endif
 #ifndef HW_PIN_INTSPI
-  #define HW_PIN_INTSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+  #define HW_PIN_INTSPI -1 //WLEDMM if not defined -1 will be used
 #endif
 #ifndef HW_PIN_RSTSPI
-  #define HW_PIN_RSTSPI -1 //WLEDMM if not defined -1 will be used (not MISO/19)
+  #define HW_PIN_RSTSPI -1 //WLEDMM if not defined -1 will be used
 #endif
 
 // WLEDMM: IRAM_ATTR for 8266 causes error: section `.text1' will not fit in region `iram1_0_seg'
