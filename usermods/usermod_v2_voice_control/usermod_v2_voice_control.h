@@ -110,9 +110,7 @@ public:
         USER_PRINTF("DF2301Q: Played startup sound %d\n", startupSound);
       }
     } else {
-      USER_PRINTLN(F("DF2301Q: Module not found on I2C bus"));
-      delete voiceModule;
-      voiceModule = nullptr;
+      USER_PRINTLN(F("DF2301Q: Module not found on I2C bus - will retry in loop()"));
     }
 
     initDone = true;
