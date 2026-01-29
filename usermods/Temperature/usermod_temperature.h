@@ -214,7 +214,7 @@ void UsermodTemperature::setup() {
     // Validate pin before attempting allocation to prevent conflicts with Ethernet, etc.
     if (temperaturePin < 0) {
       DEBUG_PRINTLN(F("Temperature: no pin configured."));
-    } else if (!pinManager.isPinOk(temperaturePin, false)) {
+    } else if (!pinManager.isPinOk(temperaturePin, true)) {
       DEBUG_PRINTLN(F("Temperature: pin not valid for this board."));
       temperaturePin = -1;
     } else if (pinManager.isPinAllocated(temperaturePin)) {
@@ -394,7 +394,7 @@ bool UsermodTemperature::readFromConfig(JsonObject &root) {
 
   newTemperaturePin = top["pin"] | newTemperaturePin;
   // Early validation - reject obviously invalid pins (setup() does full conflict check)
-  if (newTemperaturePin >= 0 && !pinManager.isPinOk(newTemperaturePin, false)) {
+  if (newTemperaturePin >= 0 && !pinManager.isPinOk(newTemperaturePin, true)) {
     DEBUG_PRINTLN(F("Temperature: configured pin is not valid for this board."));
     newTemperaturePin = -1;
   }
