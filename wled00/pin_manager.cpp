@@ -105,6 +105,20 @@ static bool isPicoReservedPin(byte gpio) {
   }
 }
 
+// Check if PSRAM is actually present at runtime (cached for performance)
+// This allows builds with BOARD_HAS_PSRAM to correctly handle boards without physical PSRAM
+static bool hasPsramRuntime() {
+  static int8_t cachedResult = -1;
+  if (cachedResult < 0) {
+    #if defined(BOARD_HAS_PSRAM)
+      cachedResult = psramFound() ? 1 : 0;
+    #else
+      cachedResult = 0;
+    #endif
+  }
+  return cachedResult == 1;
+}
+
 #endif // ARDUINO_ARCH_ESP32
 
 #ifdef WLED_DEBUG
@@ -223,8 +237,9 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       // ESP32-S3
       if (gpio > 18 && gpio < 21) return (F("USB (CDC) or JTAG"));
-      #if CONFIG_ESPTOOLPY_FLASHMODE_OPI || (CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM))
-        if (gpio > 32 && gpio < 38)  return (F("(reserved) Octal PSRAM or Octal Flash"));
+      #if CONFIG_ESPTOOLPY_FLASHMODE_OPI || CONFIG_SPIRAM_MODE_OCT
+        // Use runtime check - only show as reserved if PSRAM is actually present
+        if (gpio > 32 && gpio < 38 && hasPsramRuntime()) return (F("(reserved) Octal PSRAM or Octal Flash"));
       #endif
       //if (gpio == 0 || gpio == 3 || gpio == 45 || gpio == 46) return (F("(strapping pin)"));
       #ifdef ARDUINO_TTGO_T7_S3
@@ -269,19 +284,20 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
         }
       }
 
-      #if defined(BOARD_HAS_PSRAM)
-        // On non-PICO ESP32 with external PSRAM, GPIO 16/17 are used for PSRAM
-        // PICO variants use different pins (handled above)
-        if (detectPicoVariant() == ESP32PicoVariant::NotPico) {
-          if (gpio == 16 || gpio == 17) return (F("(reserved) PSRAM"));
-        }
-      #endif
+      // On non-PICO ESP32 with external PSRAM, GPIO 16/17 are used for PSRAM
+      // PICO variants use different pins (handled above)
+      // Use runtime check to avoid reserving pins when PSRAM isn't actually present
+      if (hasPsramRuntime() && detectPicoVariant() == ESP32PicoVariant::NotPico) {
+        if (gpio == 16 || gpio == 17) return (F("(reserved) PSRAM"));
+      }
       #if defined(ARDUINO_TTGO_T7_V14_Mini32) || defined(ARDUINO_LOLIN_D32_PRO) || defined(ARDUINO_ADAFRUIT_FEATHER_ESP32_V2)
         if (gpio == 35) return (F("(reserved) _VBAT voltage monitoring"));  // WLEDMM experimental
       #endif
-      #if (defined(ARDUINO_TTGO_T7_V14_Mini32) || defined(ARDUINO_TTGO_T7_V15_Mini32)) && defined(BOARD_HAS_PSRAM)
-        if (gpio == 25) return (F("cross-connected to pin 16")); // WLEDMM experimental
-        if (gpio == 27) return (F("Cross-connected to pin 17")); // WLEDMM experimental
+      #if defined(ARDUINO_TTGO_T7_V14_Mini32) || defined(ARDUINO_TTGO_T7_V15_Mini32)
+        if (hasPsramRuntime()) {
+          if (gpio == 25) return (F("cross-connected to pin 16")); // WLEDMM experimental
+          if (gpio == 27) return (F("Cross-connected to pin 17")); // WLEDMM experimental
+        }
       #endif
     #endif
   #else
@@ -874,9 +890,11 @@ bool PinManagerClass::isPinOk(byte gpio, bool output) const
     if (gpio > 18 && gpio < 21) return false;     // 19 + 20 = USB-JTAG. Not recommended for other uses.
     #endif
     if (gpio > 21 && gpio < 33) return false;     // 22 to 32: not connected + SPI FLASH
-    // #if CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM)
-    //   if (gpio > 32 && gpio < 38) return !psramFound(); // 33 to 37: not available if using _octal_ SPI Flash or _octal_ PSRAM
-    // #endif
+    #if CONFIG_SPIRAM_MODE_OCT || CONFIG_ESPTOOLPY_FLASHMODE_OPI
+      // 33 to 37: not available if using octal SPI Flash or octal PSRAM
+      // Use runtime check to allow these pins when PSRAM isn't actually present
+      if (gpio > 32 && gpio < 38 && hasPsramRuntime()) return false;
+    #endif
     // 38 to 48 are for general use. Be careful about straping pins GPIO45 and GPIO46 - these may be pull-up or pulled-down on your board.
   #elif defined(CONFIG_IDF_TARGET_ESP32S2)
     // strapping pins: 0, 45 & 46
