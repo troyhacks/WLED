@@ -1,13 +1,11 @@
 /*!
  * @file DF2301Q.hpp
- * @brief I2C interface for DF2301Q voice recognition module with background task
+ * @brief I2C interface for DF2301Q voice recognition module
  * @note Uses Arduino Wire library for I2C communication
  */
 #pragma once
 
 #include <Wire.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #define DF2301Q_I2C_ADDR           0x64
 #define DF2301Q_I2C_REG_CMDID      0x02
@@ -16,27 +14,12 @@
 #define DF2301Q_I2C_REG_SET_VOLUME 0x05
 #define DF2301Q_I2C_REG_WAKE_TIME  0x06
 
-#define DF2301Q_TASK_STACK_SIZE    2048
-#define DF2301Q_TASK_PRIORITY      1
 #define DF2301Q_POLL_INTERVAL_MS   100
-
-#ifdef CONFIG_FREERTOS_UNICORE
-  #define DF2301Q_TASK_CORE        0  // Single-core: use PRO_CPU (core 0)
-#else
-  #define DF2301Q_TASK_CORE        1  // Dual-core: use APP_CPU (core 1)
-#endif
 
 class DF2301Q {
 public:
-  typedef void (*CommandCallback)(uint8_t cmdID);
-
   DF2301Q(uint8_t addr = DF2301Q_I2C_ADDR)
-    : _addr(addr), _detected(false), _taskHandle(NULL),
-      _callback(NULL), _lastCmd(0), _failCount(0) { }
-
-  ~DF2301Q() {
-    stopTask();
-  }
+    : _addr(addr), _detected(false), _lastCmd(0), _failCount(0) { }
 
   // Check if device is present on I2C bus (with retry)
   bool detect(uint8_t retries = 3, uint16_t delayMs = 100) {
@@ -67,55 +50,32 @@ public:
   // Mark module as lost (called when communication fails repeatedly)
   void markLost() {
     _detected = false;
-    stopTask();
   }
 
   bool isDetected() const { return _detected; }
 
-  // Start background task to poll for voice commands
-  bool startTask(CommandCallback callback, uint32_t pollIntervalMs = DF2301Q_POLL_INTERVAL_MS) {
-    if (!_detected || _taskHandle != NULL) return false;
-
-    _callback = callback;
-    _pollInterval = pollIntervalMs;
-
-    BaseType_t result = xTaskCreatePinnedToCore(
-      taskFunction,
-      "DF2301Q",
-      DF2301Q_TASK_STACK_SIZE,
-      this,
-      DF2301Q_TASK_PRIORITY,
-      &_taskHandle,
-      DF2301Q_TASK_CORE
-    );
-
-    return (result == pdPASS);
-  }
-
-  // Stop background task
-  void stopTask() {
-    if (_taskHandle != NULL) {
-      vTaskDelete(_taskHandle);
-      _taskHandle = NULL;
-    }
-  }
-
-  bool isTaskRunning() const { return _taskHandle != NULL; }
-
-  uint8_t getCMDID() {
+  // Poll for a voice command - call this from loop()
+  // Returns command ID if a new command was detected, 0 otherwise
+  uint8_t poll() {
     if (!_detected) return 0;
 
     uint8_t cmdID = 0;
     if (readReg(DF2301Q_I2C_REG_CMDID, &cmdID)) {
       _failCount = 0;  // Reset on successful read
-      vTaskDelay(pdMS_TO_TICKS(50)); // Prevent interference with voice module
-      return cmdID;
-    }
 
-    // Track consecutive failures
-    _failCount++;
-    if (_failCount >= 10) {
-      _detected = false;  // Mark as lost after 10 consecutive failures
+      if (cmdID > 0 && cmdID != _lastCmd) {
+        _lastCmd = cmdID;
+        return cmdID;
+      } else if (cmdID == 0) {
+        // Reset lastCmd when no command pending, so same command can repeat
+        _lastCmd = 0;
+      }
+    } else {
+      // Track consecutive failures
+      _failCount++;
+      if (_failCount >= 10) {
+        _detected = false;  // Mark as lost after 10 consecutive failures
+      }
     }
     return 0;
   }
@@ -125,7 +85,6 @@ public:
   void playByCMDID(uint8_t cmdID) {
     if (!_detected) return;
     writeReg(DF2301Q_I2C_REG_PLAY_CMDID, cmdID);
-    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 
   uint8_t getWakeTime() {
@@ -153,27 +112,6 @@ public:
   uint8_t getLastCommand() const { return _lastCmd; }
 
 private:
-  static void taskFunction(void* parameter) {
-    DF2301Q* instance = static_cast<DF2301Q*>(parameter);
-
-    while (true) {
-      uint8_t cmdID = instance->getCMDID();
-
-      if (cmdID > 0 && cmdID != instance->_lastCmd) {
-        instance->_lastCmd = cmdID;
-
-        if (instance->_callback) {
-          instance->_callback(cmdID);
-        }
-      } else if (cmdID == 0) {
-        // Reset lastCmd when no command pending, so same command can repeat
-        instance->_lastCmd = 0;
-      }
-
-      vTaskDelay(pdMS_TO_TICKS(instance->_pollInterval));
-    }
-  }
-
   bool writeReg(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(_addr);
     Wire.write(reg);
@@ -198,9 +136,6 @@ private:
 
   uint8_t _addr;
   bool _detected;
-  TaskHandle_t _taskHandle;
-  CommandCallback _callback;
   uint8_t _lastCmd;
-  uint32_t _pollInterval;
   uint8_t _failCount;
 };

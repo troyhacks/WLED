@@ -20,7 +20,7 @@ private:
 
   bool initDone = false;
   DF2301Q* voiceModule = nullptr;
-  volatile uint8_t pendingCommand = 0;  // Command to process in loop()
+  unsigned long lastPollTime = 0;  // For polling interval timing
 
   // Configuration parameters
   uint8_t moduleVolume = 10;
@@ -104,17 +104,10 @@ public:
       voiceModule->setVolume(moduleVolume);
       voiceModule->setWakeTime(wakeTime);
 
-      // Start background polling task with static callback
-      if (voiceModule->startTask(voiceCommandCallback, pollInterval)) {
-        USER_PRINTLN(F("DF2301Q: Background task started"));
-
-        // Play startup sound if configured
-        if (startupSound > 0) {
-          voiceModule->playByCMDID(startupSound);
-          USER_PRINTF("DF2301Q: Played startup sound %d\n", startupSound);
-        }
-      } else {
-        USER_PRINTLN(F("DF2301Q: Failed to start task"));
+      // Play startup sound if configured
+      if (startupSound > 0) {
+        voiceModule->playByCMDID(startupSound);
+        USER_PRINTF("DF2301Q: Played startup sound %d\n", startupSound);
       }
     } else {
       USER_PRINTLN(F("DF2301Q: Module not found on I2C bus"));
@@ -143,19 +136,20 @@ public:
           USER_PRINTLN(F("DF2301Q: Module reconnected!"));
           voiceModule->setVolume(moduleVolume);
           voiceModule->setWakeTime(wakeTime);
-          if (!voiceModule->isTaskRunning()) {
-            voiceModule->startTask(voiceCommandCallback, pollInterval);
-          }
         }
       }
       return;
     }
 
-    // Process any pending command from the background task
-    if (pendingCommand > 0) {
-      uint8_t cmdID = pendingCommand;
-      pendingCommand = 0;
-      handleVoiceCommand(cmdID);
+    // Poll for voice commands at configured interval
+    unsigned long now = millis();
+    if (now - lastPollTime >= pollInterval) {
+      lastPollTime = now;
+
+      uint8_t cmdID = voiceModule->poll();
+      if (cmdID > 0) {
+        handleVoiceCommand(cmdID);
+      }
     }
   }
 
@@ -336,23 +330,6 @@ public:
   }
 
 private:
-
-  // Static callback that gets called from the DF2301Q task
-  // NOTE: Only stores the command - actual processing happens in loop() to avoid stack overflow
-  static void voiceCommandCallback(uint8_t cmdID) {
-    DF2301QUsermod* instance = getUsermodInstance();
-    if (instance) {
-      instance->pendingCommand = cmdID;
-    }
-  }
-
-  // Helper to get the usermod instance (WLED provides access via usermods manager)
-  static DF2301QUsermod* getUsermodInstance() {
-    // Access through WLED's usermod manager
-    return (DF2301QUsermod*)usermods.lookup(USERMOD_ID_VOICE_CONTROL);
-  }
-
-  // ========== Voice Command Handler ==========
 
   void handleVoiceCommand(uint8_t cmdID) {
     // Log wake words with friendly names
