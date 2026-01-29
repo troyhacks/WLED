@@ -33,7 +33,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   JsonObject ethernet = doc[F("eth")];
   CJSON(ethernetType, ethernet["type"]);
   // NOTE: Ethernet configuration takes priority over other use of pins
-  WLED::instance().initEthernet();
+  // When fromFS==true, defer initEthernet() until after JSON buffer lock is released
+  // to prevent reentrancy issues with W5500 async events
+  if (!fromFS) WLED::instance().initEthernet();
   #endif
 
   JsonObject id = doc["id"];
@@ -718,10 +720,8 @@ void deserializeConfigFromFS() {
 
   // Initialize Ethernet AFTER releasing the JSON buffer lock to prevent race conditions.
   // Ethernet events can trigger async operations that may try to serialize config.
-  #if defined(WLED_USE_ETHERNET) && defined(CONFIG_ETH_SPI_ETHERNET_W5500)
-  if (spi_use_for_w5500 && spi_mosi >= 0 && spi_sclk >= 0) {
-    WLED::instance().initEthernet();
-  }
+  #ifdef WLED_USE_ETHERNET
+  WLED::instance().initEthernet();
   #endif
 
   if (needsSave) serializeConfig(); // usermods required new parameters

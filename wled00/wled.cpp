@@ -1096,8 +1096,11 @@ bool WLED::initEthernet()
       if (!ETH.begin(ETH_PHY_W5500, es.eth_address, es.eth_cs_pin, es.eth_int_pin, es.eth_rst_pin, SPI3_HOST, es.eth_sclk_pin, es.eth_miso_pin, es.eth_mosi_pin)) {
         DEBUG_PRINTLN(F("initC: ETHClass2 SPI ETH.begin() failed"));
 
-        for (managed_pin_type mpt : pinsToAllocate) {
-          pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+        // Only deallocate pins if we allocated them (when not using global SPI)
+        if (!spi_use_for_w5500) {
+          for (managed_pin_type mpt : pinsToAllocate) {
+            pinManager.deallocatePin(mpt.pin, PinOwner::Ethernet);
+          }
         }
 
         return false;
