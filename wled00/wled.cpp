@@ -1021,49 +1021,24 @@ bool WLED::initEthernet()
     return false;
   }
 
+  // Validate ethernetType unconditionally before any board-specific logic
+  if (ethernetType == WLED_ETH_NONE) {
+    return false;
+  }
+  if (ethernetType >= WLED_NUM_ETH_TYPES) {
+    DEBUG_PRINT(F("initE: Ignoring attempt for invalid ethernetType ")); DEBUG_PRINTLN(ethernetType);
+    return false;
+  }
+
+  DEBUG_PRINT(F("initE: Attempting ETH config: ")); DEBUG_PRINTLN(ethernetType);
+
+  // Ethernet initialization should only succeed once -- else reboot required
+  es = ethernetBoards[ethernetType];
+
   #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
   #pragma message "ETHClass2 in use"
-  if (!spi_use_for_w5500 || ethernetType > 0) {
-  #endif
-
-    if (ethernetType == WLED_ETH_NONE) {
-      return false;
-    }
-    if (ethernetType >= WLED_NUM_ETH_TYPES) {
-      DEBUG_PRINT(F("initE: Ignoring attempt for invalid ethernetType ")); DEBUG_PRINTLN(ethernetType);
-      return false;
-    }
-
-    DEBUG_PRINT(F("initE: Attempting ETH config: ")); DEBUG_PRINTLN(ethernetType);
-
-    // Ethernet initialization should only succeed once -- else reboot required
-    es = ethernetBoards[ethernetType];
-
-    /*
-    For LAN8720 the most correct way is to perform clean reset each time before init
-    applying LOW to power or nRST pin for at least 100 us (please refer to datasheet, page 59)
-    ESP_IDF > V4 implements it (150 us, lan87xx_reset_hw(esp_eth_phy_t *phy) function in
-    /components/esp_eth/src/esp_eth_phy_lan87xx.c, line 280)
-    but ESP_IDF < V4 does not. Lets do it:
-    [not always needed, might be relevant in some EMI situations at startup and for hot resets]
-    */
-    #if ESP_IDF_VERSION_MAJOR==3
-    if (es.eth_power > 0 && es.eth_type == ETH_PHY_LAN8720) {
-      pinMode(es.eth_power, OUTPUT);
-      digitalWrite(es.eth_power, 0);
-      delayMicroseconds(150);
-      digitalWrite(es.eth_power, 1);
-      delayMicroseconds(10);
-    }
-    #endif
-
-  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
-  }
-  #endif
-
-  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
-  if (spi_use_for_w5500) {
-    es.eth_type = ETH_PHY_W5500;
+  // Only override with global SPI settings if the selected board is actually a W5500
+  if (spi_use_for_w5500 && es.eth_type == ETH_PHY_W5500) {
     es.eth_address = 1;
     es.eth_miso_pin = spi_miso;
     es.eth_mosi_pin = spi_mosi;
@@ -1072,7 +1047,27 @@ bool WLED::initEthernet()
     es.eth_int_pin = spi_int;
     es.eth_sclk_pin = spi_sclk;
   }
+  #endif
 
+  /*
+  For LAN8720 the most correct way is to perform clean reset each time before init
+  applying LOW to power or nRST pin for at least 100 us (please refer to datasheet, page 59)
+  ESP_IDF > V4 implements it (150 us, lan87xx_reset_hw(esp_eth_phy_t *phy) function in
+  /components/esp_eth/src/esp_eth_phy_lan87xx.c, line 280)
+  but ESP_IDF < V4 does not. Lets do it:
+  [not always needed, might be relevant in some EMI situations at startup and for hot resets]
+  */
+  #if ESP_IDF_VERSION_MAJOR==3
+  if (es.eth_power > 0 && es.eth_type == ETH_PHY_LAN8720) {
+    pinMode(es.eth_power, OUTPUT);
+    digitalWrite(es.eth_power, 0);
+    delayMicroseconds(150);
+    digitalWrite(es.eth_power, 1);
+    delayMicroseconds(10);
+  }
+  #endif
+
+  #ifdef CONFIG_ETH_SPI_ETHERNET_W5500
     #if !defined(SPI3_HOST)
       #define SPI3_HOST SPI2_HOST // at a minimum there are 2 SPI Hosts
     #endif
