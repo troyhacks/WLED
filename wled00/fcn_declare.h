@@ -147,10 +147,10 @@ void invalidateFileNameCache();   // WLEDMM call when new files were uploaded
 //hue.cpp
 void handleHue();
 void reconnectHue();
-void onHueError(void* arg, AsyncClient* client, int8_t error);
-void onHueConnect(void* arg, AsyncClient* client);
-void sendHuePoll();
-void onHueData(void* arg, AsyncClient* client, void *data, size_t len);
+//void onHueError(void* arg, AsyncClient* client, int8_t error);
+//void onHueConnect(void* arg, AsyncClient* client);
+//void sendHuePoll();
+//void onHueData(void* arg, AsyncClient* client, void *data, size_t len);
 
 #include "FX.h" // must be below colors.cpp declarations (potentially due to duplicate declarations of e.g. color_blend)
 

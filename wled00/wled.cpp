@@ -963,6 +963,7 @@ void WLED::beginStrip()
   if (rlyPin>=0) {
     if (strip.isUpdating()) delay(FRAMETIME_FIXED); // WLEDMM ensure that no background led communication is happening while powering on the strip
     digitalWrite(rlyPin, (rlyMde ? bri : !bri));
+    offMode = !bri; // WLEDMM quickfix for sporadic "relay does not turn on" problems
     delay(75); // wait for relay to switch and power to stabilize
     strip.show(); // update LEDs
     delay(5);

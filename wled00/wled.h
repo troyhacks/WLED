@@ -8,7 +8,7 @@
 
 // version code in format yymmddb (b = daily build)
 #ifndef WLED_BUILD_VERSION // WLEDMM allow override by nightly build script
-  #define VERSION 2601151
+  #define VERSION 2601281
 #else
   #define VERSION WLED_BUILD_VERSION
 #endif
@@ -769,7 +769,7 @@ WLED_GLOBAL AsyncWebServer server _INIT_N(((80)));
 #ifdef WLED_ENABLE_WEBSOCKETS
 WLED_GLOBAL AsyncWebSocket ws _INIT_N((("/ws")));
 #endif
-WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL);
+//WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL); // WLEDMM moved into hue.cpp
 WLED_GLOBAL AsyncWebHandler *editHandler _INIT(nullptr);
 
 // udp interface objects
