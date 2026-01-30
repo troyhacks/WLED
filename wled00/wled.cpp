@@ -1102,7 +1102,6 @@ bool WLED::initEthernet()
         return false;
       } else {
         USER_PRINTLN("ETH initialized W5500!");
-        spi_use_for_w5500 = true;
       }
     } else {
       #ifdef CONFIG_ETH_PHY_INTERFACE_RMII
