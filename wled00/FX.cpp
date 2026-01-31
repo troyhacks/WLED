@@ -95,11 +95,6 @@ static int8_t tristate_square8(uint8_t x, uint8_t pulsewidth, uint8_t attdec) {
   return 0;
 }
 
-// float version of map()  // WLEDMM moved here so it is available for all effects
-static float mapf(float x, float in_min, float in_max, float out_min, float out_max){
-  if (in_max == in_min) return (out_min);  // WLEDMM avoid div/0
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
 
 // more accurate integer version of map() - based on map3() proposed in https://forum.arduino.cc/t/how-map-loses-precision-and-how-to-fix-it/371026/3
 // rounding instead of truncation, better handling of inverted ranges
