@@ -300,6 +300,30 @@ void appendGPIOinfo() {
   char a_pins[64]  = { '\0' }; // fix warning: output 45 bytes into a destination of size 30
   snprintf(a_pins, 64, "d.a_pins=[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d];", pinManager.getADCPin(PM_ADC1, 0), pinManager.getADCPin(PM_ADC1, 1), pinManager.getADCPin(PM_ADC1, 2), pinManager.getADCPin(PM_ADC1, 3), pinManager.getADCPin(PM_ADC1, 4), pinManager.getADCPin(PM_ADC1, 5), pinManager.getADCPin(PM_ADC1, 6), pinManager.getADCPin(PM_ADC1, 7), pinManager.getADCPin(PM_ADC1, 8), pinManager.getADCPin(PM_ADC1, 9), pinManager.getADCPin(PM_ADC1, 10));
   oappend(a_pins);
+
+  // WLEDMM add HUB75 pins, as they are not stored directly in cfg.json
+  strcpy(ro_gpio, "d.h_pins=["); // WLEDMM we re-use this array, instead of creating an addition one; 140 bytes is more than enough for 14 pins.
+  bool isFirstPin = true;
+  for(int pinNr = 0; pinNr < WLED_NUM_PINS; pinNr++) {
+    if ((pinManager.isPinOk(pinNr)) && (pinManager.getPinOwner(pinNr) == PinOwner::HUB75)) {
+      sprintf(pinString, "%s%d", isFirstPin ? "" : ",", pinNr);
+      strcat(ro_gpio, pinString); isFirstPin = false;
+    }
+  }
+  oappend(ro_gpio);
+  oappend(SET_F("];"));
+
+  // WLEDMM same procedure for DMX pins
+  strcpy(ro_gpio, "d.x_pins=["); // WLEDMM we re-use this array, instead of creating an addition one; 140 bytes is more than enough for max 4 pins.
+  isFirstPin = true;
+  for(int pinNr = 0; pinNr < WLED_NUM_PINS; pinNr++) {
+    if ((pinManager.isPinOk(pinNr)) && (pinManager.getPinOwner(pinNr) == PinOwner::DMX || pinManager.getPinOwner(pinNr) == PinOwner::DMX_INPUT)) {
+      sprintf(pinString, "%s%d", isFirstPin ? "" : ",", pinNr);
+      strcat(ro_gpio, pinString); isFirstPin = false;
+    }
+  }
+  oappend(ro_gpio);
+  oappend(SET_F("];"));
 }
 
 //get values for settings form in javascript

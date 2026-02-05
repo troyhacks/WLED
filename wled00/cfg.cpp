@@ -69,7 +69,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   //int ap_pskl = ap[F("pskl")];
 
   CJSON(apChannel, ap[F("chan")]);
-  if (apChannel > 13 || apChannel < 1) apChannel = 1;
+  if (apChannel > 13 || apChannel < 1) apChannel = 6; // reset to default if invalid
 
   CJSON(apHide, ap[F("hide")]);
   if (apHide > 1) apHide = 1;

@@ -10,23 +10,9 @@
 #define UDP_IN_MAXSIZE 1472
 #define PRESUMED_NETWORK_DELAY 3 //how many ms could it take on avg to reach the receiver? This will be added to transmitted times
 
-void notify(byte callMode, bool followUp)
-{
-  if (!udpConnected) return;
-  if (!syncGroups) return;
-  switch (callMode)
-  {
-    case CALL_MODE_INIT:          return;
-    case CALL_MODE_DIRECT_CHANGE: if (!notifyDirect) return; break;
-    case CALL_MODE_BUTTON:        if (!notifyButton) return; break;
-    case CALL_MODE_BUTTON_PRESET: if (!notifyButton) return; break;
-    case CALL_MODE_NIGHTLIGHT:    if (!notifyDirect) return; break;
-    case CALL_MODE_HUE:           if (!notifyHue)    return; break;
-    case CALL_MODE_PRESET_CYCLE:  if (!notifyDirect) return; break;
-    case CALL_MODE_ALEXA:         if (!notifyAlexa)  return; break;
-    default: return;
-  }
-  byte udpOut[WLEDPACKETSIZE];
+static void do_notify(byte callMode, bool followUp) { // WLEDMM split into two functions, to avoid stack smashing - do_notify needs 1200 bytes on stack
+  // DEBUG_PRINTF("[%8u %s]\tnotify(%d, %s)\tmin stack %d\n", millis(), pcTaskGetTaskName(NULL), callMode, followUp?"true ":"false", uxTaskGetStackHighWaterMark(NULL));
+  byte udpOut[WLEDPACKETSIZE] = {0};
   Segment& mainseg = strip.getMainSegment();
   udpOut[0] = 0; //0: wled notifier protocol 1: WARLS protocol
   udpOut[1] = callMode;
@@ -149,6 +135,27 @@ void notify(byte callMode, bool followUp)
   notificationSentTime = millis();
   notificationCount = followUp ? notificationCount + 1 : 0;
 }
+
+// WLEDMM wrapper function to avoid stack smashing - do_notify needs 1200 bytes on stack, but its not actually sending anything on most notify() calls
+void notify(byte callMode, bool followUp)
+{
+  if (!udpConnected) return;
+  if (!syncGroups) return;
+  switch (callMode)
+  {
+    case CALL_MODE_INIT:          return;
+    case CALL_MODE_DIRECT_CHANGE: if (!notifyDirect) return; break;
+    case CALL_MODE_BUTTON:        if (!notifyButton) return; break;
+    case CALL_MODE_BUTTON_PRESET: if (!notifyButton) return; break;
+    case CALL_MODE_NIGHTLIGHT:    if (!notifyDirect) return; break;
+    case CALL_MODE_HUE:           if (!notifyHue)    return; break;
+    case CALL_MODE_PRESET_CYCLE:  if (!notifyDirect) return; break;
+    case CALL_MODE_ALEXA:         if (!notifyAlexa)  return; break;
+    default: return;
+  }
+  do_notify(callMode, followUp);
+}
+
 
 // WLEDMM cache current main segment: updated in realtimeLock, reset in exitRealtime, used in setRealTimePixel
 static Segment* theMainSeg = nullptr;
@@ -736,6 +743,7 @@ void refreshNodeList()
 void sendSysInfoUDP()
 {
   if (!udp2Connected) return;
+  // DEBUG_PRINTF("[%8u %s]\tsendSysInfoUDP()\tmin stack %d\n", millis(), pcTaskGetTaskName(NULL), uxTaskGetStackHighWaterMark(NULL));
 
   IPAddress ip = Network.localIP();
   if (!ip || ip == IPAddress(255,255,255,255)) ip = IPAddress(4,3,2,1);

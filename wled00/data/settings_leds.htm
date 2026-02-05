@@ -17,6 +17,7 @@
 		function gId(n){return d.getElementById(n);}
 		function hideNoIR(){gId("irOnOff2").style.display="none";} //WLEDMM
 		function hideHub75() {
+			window.hub75Hidden = true; // Track that Hub75 should be hidden
 			var s = d.getElementsByTagName("select");
 			for (i=0; i<s.length; i++) {
 				// is the field a LED type?
@@ -464,6 +465,7 @@ ${i+1}:
 <div id="dig${i}a" style="display:inline"><br>Auto-calculate white channel from RGB:<br><select name="AW${i}"><option value=0>None</option><option value=1>Brighter</option><option value=2>Accurate</option><option value=3>Dual</option><option value=4>Max</option></select>&nbsp;</div>
 </div>`;
 				f.insertAdjacentHTML("beforeend", cn);
+				if (window.hub75Hidden) hideHub75(); // remove Hub75 options if not supported
 			}
 			if (n==-1) {
 				o[--i].remove();--i;
