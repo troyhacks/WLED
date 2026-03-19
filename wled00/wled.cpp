@@ -26,7 +26,128 @@ static const char *TAG = "WLED";
   // ESP-ROM:esp32p4-eco2-20240710 // Wireless Tag Fancy C5 board that's weird.
   // ESP-ROM:esp32p4-eco2-20240710 // WaveShare ESP32-P4-WIFI6-POE-ETH
 
-#endif
+#endif // CONFIG_IDF_TARGET_ESP32P4
+
+// === CEA-861 / LT8912B HDMI video timing — file scope so WLEDMM_DISPLAY_MODE can be used as a compile flag ===
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+
+// Aspect ratio values for HDMI AVI InfoFrame PB2 (matches LT8912B driver constants)
+#define HDMI_AR_NONE  0x00  // No data / no standard mapping (e.g. 16:10)
+#define HDMI_AR_4_3   0x01
+#define HDMI_AR_16_9  0x02
+
+// X-macro table — single source of truth for all HDMI modes.
+// To add/remove a mode: edit only this list.
+// Columns: name, vic, fps, width, height, pclk_khz, hfp, hsw, hbp, vfp, vsw, vbp, aspect_ratio
+//          Verified: (width+hfp+hsw+hbp) * (height+vfp+vsw+vbp) * fps = pclk_khz*1000
+#define HDMI_MODE_LIST \
+  /* --- CEA-861 standard modes (vic > 0) --- */ \
+  X(HDMI_720P_24HZ,             60, 24, 1280,  720,  59400, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
+  X(HDMI_720P_25HZ,             61, 25, 1280,  720,  74250, 2420, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3960 Vtot=750  */ \
+  X(HDMI_720P_30HZ,             62, 30, 1280,  720,  74250, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
+  X(HDMI_720P_50HZ,             19, 50, 1280,  720,  74250,  440, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1980 Vtot=750  */ \
+  X(HDMI_720P_60HZ,              4, 60, 1280,  720,  74250,  110, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1650 Vtot=750  */ \
+  X(HDMI_1080P_24HZ,            32, 24, 1920, 1080,  74250,  638, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2750 Vtot=1125 */ \
+  X(HDMI_1080P_25HZ,            33, 25, 1920, 1080,  74250,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
+  X(HDMI_1080P_30HZ,            34, 30, 1920, 1080,  74250,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
+  X(HDMI_1080P_50HZ,            31, 50, 1920, 1080, 148500,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
+  X(HDMI_1080P_60HZ,            16, 60, 1920, 1080, 148500,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
+  /* --- VESA DMT standard modes (vic=0) --- */ \
+  X(VESA_800x600_60HZ,           0, 60,  800,  600,  40000,   40,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  */ \
+  X(VESA_1024x768_60HZ,          0, 60, 1024,  768,  65000,   24,136, 160,  3,  6, 29, HDMI_AR_4_3 ) /* Htot=1344 Vtot=806  */ \
+  /* --- LT8912B reference timings (vic=0, non-standard reduced blanking) --- */ \
+  X(LT8912B_800x600_60HZ,        0, 60,  800,  600,  40000,   48,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1064 Vtot=628  */ \
+  X(LT8912B_1024x768_60HZ,       0, 60, 1024,  768,  56000,   48, 32,  80,  3,  4, 15, HDMI_AR_4_3 ) /* Htot=1184 Vtot=790  */ \
+  X(LT8912B_720P_60HZ,           0, 60, 1280,  720,  64000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741  */ \
+  X(LT8912B_720P_60HZ_TROYHACKS, 0, 60, 1280,  720,  60000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741 experimental */ \
+  X(LT8912B_1280x800_60HZ,       0, 60, 1280,  800,  70000,   48, 32,  80,  3,  6, 14, HDMI_AR_NONE) /* Htot=1440 Vtot=823 16:10 */ \
+  X(LT8912B_1080P_30HZ,          0, 30, 1920, 1080,  70000,   48, 32,  80,  3,  5,  8, HDMI_AR_16_9) /* Htot=2080 Vtot=1096 */ \
+  X(LT8912B_1080P_60HZ,          0, 60, 1920, 1080, 120000,   48, 32,  80,  3,  5, 19, HDMI_AR_16_9) /* Htot=2080 Vtot=1107 NOT WORKING per Espressif */
+
+enum hdmi_mode_t : uint8_t {
+#define X(name, ...) name,
+  HDMI_MODE_LIST
+#undef X
+  HDMI_MODE_COUNT
+};
+
+struct hdmi_cea861_entry_t {
+  uint8_t  vic;
+  uint8_t  fps;
+  uint16_t width;
+  uint16_t height;
+  uint32_t pixel_clock_khz;
+  uint16_t hfp;  // hsync_front_porch
+  uint16_t hsw;  // hsync_pulse_width
+  uint16_t hbp;  // hsync_back_porch
+  uint8_t  vfp;  // vsync_front_porch
+  uint8_t  vsw;  // vsync_pulse_width
+  uint8_t  vbp;  // vsync_back_porch
+  uint8_t  aspect_ratio;  // HDMI_AR_NONE/4_3/16_9
+};
+
+static const char* const hdmi_mode_names[HDMI_MODE_COUNT] = {
+#define X(name, ...) #name,
+  HDMI_MODE_LIST
+#undef X
+};
+
+static const hdmi_cea861_entry_t hdmi_cea861_table[HDMI_MODE_COUNT] = {
+#define X(name, vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar) \
+  { vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar },
+  HDMI_MODE_LIST
+#undef X
+};
+
+struct hdmi_dpi_config_t {
+  uint8_t  vic;
+  uint8_t  fps;
+  uint16_t width;
+  uint16_t height;
+  uint32_t dpi_clock_freq_mhz;  // rounded to nearest MHz for ESP-IDF
+  uint16_t hsync_front_porch;
+  uint16_t hsync_pulse_width;
+  uint16_t hsync_back_porch;
+  uint8_t  vsync_front_porch;
+  uint8_t  vsync_pulse_width;
+  uint8_t  vsync_back_porch;
+  uint16_t hsync_total;         // width + hfp + hsw + hbp
+  uint16_t vsync_total;         // height + vfp + vsw + vbp
+  uint32_t lane_bit_rate_mbps;  // 2x minimum for DSI lane overhead, rounded to next 50 Mbps
+  uint8_t  aspect_ratio;        // HDMI_AR_NONE/4_3/16_9
+};
+
+static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_config_t &out) {
+  if (mode >= HDMI_MODE_COUNT) return false;
+  const hdmi_cea861_entry_t &t = hdmi_cea861_table[mode];
+  out.vic                = t.vic;
+  out.fps                = t.fps;
+  out.width           = t.width;
+  out.height           = t.height;
+  out.dpi_clock_freq_mhz = (t.pixel_clock_khz + 500) / 1000;  // round to nearest MHz
+  out.hsync_front_porch  = t.hfp;
+  out.hsync_pulse_width  = t.hsw;
+  out.hsync_back_porch   = t.hbp;
+  out.vsync_front_porch  = t.vfp;
+  out.vsync_pulse_width  = t.vsw;
+  out.vsync_back_porch   = t.vbp;
+  out.hsync_total        = t.width + t.hfp + t.hsw + t.hbp;
+  out.vsync_total        = t.height + t.vfp + t.vsw + t.vbp;
+  // lane_bit_rate: minimum = pixel_clock × bpp / num_lanes
+  out.lane_bit_rate_mbps = (uint32_t)((uint64_t)t.pixel_clock_khz * 24 / dsi_lanes / 1000);
+  out.aspect_ratio       = t.aspect_ratio;
+  return true;
+}
+
+// Runtime display dimensions — set at init from WLEDMM_DISPLAY_MODE, replacing compile-time W/H defines
+uint16_t wledmm_display_w = 0;
+uint16_t wledmm_display_h = 0;
+#define WLEDMM_DISPLAY_W   wledmm_display_w
+#define WLEDMM_DISPLAY_H   wledmm_display_h
+#define WLEDMM_DISPLAY_DEPTH 24  // RGB888 always for HDMI
+
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
+
 #ifdef SOC_USB_OTG_SUPPORTED
   #ifndef CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED
     #error "USB Hardware Buffer Bias must be set to 'Balanced' via USB-OTG or CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED=y."
@@ -803,7 +924,7 @@ void WLED::loop() { // loopTask
     }
   }
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_W) && defined(CONFIG_SOC_PPA_SUPPORTED)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
   // HDMI blit — runs every loop regardless of realtimeMode or Art-Net input state
   if (display_framebuffer && panel_handle) {
     static uint32_t last_blit_us = 0;
@@ -916,7 +1037,7 @@ void WLED::loop() { // loopTask
       }
     }
   }
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_W && CONFIG_SOC_PPA_SUPPORTED
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE && CONFIG_SOC_PPA_SUPPORTED
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
   if (millis() - debugTime > 29999) {
@@ -1982,8 +2103,9 @@ void WLED::setup() {
 
     strip.createLedmapBinaryCache();
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_W)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
   busNetworkDummyMode = true;  // P4/HDMI build: fill pixel buffer but skip Art-Net transmit
+
   // === HDMI Display Initialization: Olimex ESP32-P4-PC via LT8912B bridge ===
   {
     // Power on MIPI DSI PHY (LDO channel 3 at 2500mV)
@@ -2003,25 +2125,55 @@ void WLED::setup() {
     bus_config.bus_id             = 0;
     bus_config.num_data_lanes     = 2;
     bus_config.phy_clk_src        = (mipi_dsi_phy_clock_source_t)4; // MIPI_DSI_PHY_CLK_SRC_DEFAULT
-    bus_config.lane_bit_rate_mbps = 721;
+    
+
+    // --- Runtime HDMI mode selection via Serial ---
+    {
+      int selected = (int)WLEDMM_DISPLAY_MODE;
+      Serial.println("\n=== HDMI Mode Selection (30s timeout) ===");
+      for (int i = 0; i < (int)HDMI_MODE_COUNT; i++)
+        Serial.printf("  %2d: %s%s\n", i, hdmi_mode_names[i], (i == selected) ? "  <-- default" : "");
+      Serial.printf("Enter mode number [0-%d] or wait for default: ", (int)HDMI_MODE_COUNT - 1);
+
+      char buf[4] = {};
+      uint8_t len = 0;
+      uint32_t deadline = millis() + 30000;
+      while (millis() < deadline) {
+        if (Serial.available()) {
+          char c = Serial.read();
+          if (c == '\n' || c == '\r') { if (len > 0) break; }
+          else if (c >= '0' && c <= '9' && len < 2) { buf[len++] = c; deadline = millis() + 2000; }
+        }
+        vTaskDelay(1);
+      }
+      if (len > 0) {
+        int choice = atoi(buf);
+        if (choice >= 0 && choice < (int)HDMI_MODE_COUNT) selected = choice;
+      }
+      Serial.printf("\nUsing mode %d: %s\n", selected, hdmi_mode_names[selected]);
+      hdmi_dpi_config_t timing = {};
+      hdmi_get_dpi_config((hdmi_mode_t)selected, bus_config.num_data_lanes, timing);
+    wledmm_display_w = timing.width;
+    wledmm_display_h = timing.height;
+    bus_config.lane_bit_rate_mbps = timing.lane_bit_rate_mbps;
     ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
-    // DPI panel config: 1280x720 @ 60Hz
+    // DPI panel config — dimensions and timing from WLEDMM_DISPLAY_MODE
     esp_lcd_dpi_panel_config_t dpi_config = {};
     dpi_config.dpi_clk_src                    = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-    dpi_config.dpi_clock_freq_mhz             = 60;
+    dpi_config.dpi_clock_freq_mhz             = timing.dpi_clock_freq_mhz;
     dpi_config.virtual_channel                = 0;
     dpi_config.in_color_format                = LCD_COLOR_FMT_RGB888;
-    // dpi_config.out_color_format               = LCD_COLOR_FMT_RGB888;  // must match in_color_format or driver enables color conversion
+    dpi_config.out_color_format               = LCD_COLOR_FMT_RGB888;  // must match in_color_format or driver enables color conversion
     dpi_config.num_fbs                        = 2;
-    dpi_config.video_timing.h_size            = 1280;
-    dpi_config.video_timing.v_size            = 720;
-    dpi_config.video_timing.hsync_back_porch  = 80;
-    dpi_config.video_timing.hsync_pulse_width = 32;
-    dpi_config.video_timing.hsync_front_porch = 48;
-    dpi_config.video_timing.vsync_back_porch  = 13;
-    dpi_config.video_timing.vsync_pulse_width = 5;
-    dpi_config.video_timing.vsync_front_porch = 3;
+    dpi_config.video_timing.h_size            = timing.width;
+    dpi_config.video_timing.v_size            = timing.height;
+    dpi_config.video_timing.hsync_front_porch = timing.hsync_front_porch;
+    dpi_config.video_timing.hsync_pulse_width = timing.hsync_pulse_width;
+    dpi_config.video_timing.hsync_back_porch  = timing.hsync_back_porch;
+    dpi_config.video_timing.vsync_front_porch = timing.vsync_front_porch;
+    dpi_config.video_timing.vsync_pulse_width = timing.vsync_pulse_width;
+    dpi_config.video_timing.vsync_back_porch  = timing.vsync_back_porch;
     dpi_config.flags.use_dma2d                = true;
     dpi_config.flags.disable_lp               = true;
 
@@ -2053,11 +2205,37 @@ void WLED::setup() {
         .lane_num   = 2,
       },
     };
+
+    vendor_config.video_timing.hfp = timing.hsync_front_porch;
+    vendor_config.video_timing.hs = timing.hsync_pulse_width;
+    vendor_config.video_timing.hbp = timing.hsync_back_porch;
+    vendor_config.video_timing.vfp = timing.vsync_front_porch;
+    vendor_config.video_timing.vs = timing.vsync_pulse_width;
+    vendor_config.video_timing.vbp = timing.vsync_back_porch;
+
+    vendor_config.video_timing.hact = timing.width;
+    vendor_config.video_timing.htotal = timing.hsync_total;
+    vendor_config.video_timing.vact = timing.height;
+    vendor_config.video_timing.vtotal = timing.vsync_total;
+
+    vendor_config.video_timing.h_polarity = 1;
+    vendor_config.video_timing.v_polarity = 0;
+    vendor_config.video_timing.vic = timing.vic;
+    vendor_config.video_timing.aspect_ratio = timing.aspect_ratio;
+    vendor_config.video_timing.pclk_mhz = timing.dpi_clock_freq_mhz;
+
+    // VIC	Format
+    //   0	No standard format(custom / undefined)
+    //   4	1280×720 @ 60Hz
+    //   19	1280×720 @ 50Hz
+    //   62	1280×720 @ 30Hz
+    //   61	1280×720 @ 25Hz
+    //   60	1280×720 @ 24Hz
   
     const esp_lcd_panel_dev_config_t panel_config = {
       .reset_gpio_num = -1,
       .rgb_ele_order = (lcd_rgb_element_order_t)LCD_RGB_ELEMENT_ORDER_RGB,
-      .bits_per_pixel = 24,
+      .bits_per_pixel = WLEDMM_DISPLAY_DEPTH,
       .vendor_config  = &vendor_config,
     };
     esp_lcd_panel_lt8912b_io_t lt8912b_io = {
@@ -2071,7 +2249,7 @@ void WLED::setup() {
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     // Note: esp_lcd_panel_disp_on_off() is not supported by the LT8912B driver (returns ESP_ERR_NOT_SUPPORTED).
-    USER_PRINTF("HDMI display initialized: %dx%d @ 60Hz\n", WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H);
+    USER_PRINTF("HDMI display initialized: %dx%d @ %dHz\n", timing.width, timing.height, timing.fps);
 
     // Get the DPI panel's native framebuffer
     void* fb0_ptr = NULL;
@@ -2087,7 +2265,8 @@ void WLED::setup() {
     // PPA on ESP32-P4 checks alignment via esp_cache_get_alignment(MALLOC_CAP_SPIRAM).
     // Use 4096-byte alignment to satisfy both cache and DMA burst requirements.
     const size_t ppa_align = 4096;
-    const size_t fb_aligned_size = ((size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3 + ppa_align - 1) & ~(ppa_align - 1);
+    const size_t bytes_per_pixel = WLEDMM_DISPLAY_DEPTH / 8;
+    const size_t fb_aligned_size = ((size_t)timing.width * timing.height * bytes_per_pixel + ppa_align - 1) & ~(ppa_align - 1);
     ppa_framebuffer = (uint8_t*)heap_caps_aligned_alloc(ppa_align, fb_aligned_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!ppa_framebuffer) {
       USER_PRINTLN("FATAL: Failed to allocate PPA framebuffer!");
@@ -2102,13 +2281,13 @@ void WLED::setup() {
       (unsigned)(fb_aligned_size % 64));
 
     // Paint a startup test pattern: RGB bands, static colours (beatsin8 returns 0 at millis=0)
-    for (uint16_t y = 0; y < WLEDMM_DISPLAY_H; y++) {
-      uint8_t band = (y * 6) / WLEDMM_DISPLAY_H;  // 0..5 → 6 colour bands
+    for (uint16_t y = 0; y < timing.height; y++) {
+      uint8_t band = (y * 6) / timing.height;  // 0..5 → 6 colour bands across height
       uint8_t r = (band == 0 || band == 3 || band == 4) ? 255 : 0;
       uint8_t g = (band == 1 || band == 3 || band == 5) ? 255 : 0;
       uint8_t b = (band == 2 || band == 4 || band == 5) ? 255 : 0;
-      for (uint16_t x = 0; x < WLEDMM_DISPLAY_W; x++) {
-        uint32_t off = ((uint32_t)y * WLEDMM_DISPLAY_W + x) * 3;
+      for (uint16_t x = 0; x < timing.width; x++) {
+        uint32_t off = ((uint32_t)y * timing.width + x) * bytes_per_pixel;
         display_framebuffer[off + 0] = b;  // DPI framebuffer: BGR order in memory (B at byte 0, R at byte 2)
         display_framebuffer[off + 1] = g;
         display_framebuffer[off + 2] = r;
@@ -2119,10 +2298,10 @@ void WLED::setup() {
     // Allocate LGFX sprites for UI overlays (PSRAM-backed)
     myFramebuffer.setPsram(true);
     buttonFramebuffer.setPsram(true);
-    myFramebuffer.setColorDepth(24);
-    buttonFramebuffer.setColorDepth(24);
+    myFramebuffer.setColorDepth(WLEDMM_DISPLAY_DEPTH);
+    buttonFramebuffer.setColorDepth(WLEDMM_DISPLAY_DEPTH);
 
-    if (!myFramebuffer.createSprite(WLEDMM_DISPLAY_W, 100)) {
+    if (!myFramebuffer.createSprite(timing.width, 100)) {
       USER_PRINTLN("Failed to allocate myFramebuffer sprite!");
       while (1) vTaskDelay(1);
     }
@@ -2132,17 +2311,18 @@ void WLED::setup() {
     const int padding = 5;
     int rows          = ((int)WLEDMM_DISPLAY_BUTTONS + cols - 1) / cols;
     if (rows < 1) rows = 1;
-    int rectWidth  = (WLEDMM_DISPLAY_W - (cols + 1) * padding) / cols;
+    int rectWidth = (timing.width - (cols + 1) * padding) / cols;
     int rectHeight = (int)((float)rectWidth * 8.0f / (float)cols);
     int btnFbH     = rows * rectHeight + (rows + 1) * padding;
 
-    if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, btnFbH)) {
+    if (!buttonFramebuffer.createSprite(timing.width, btnFbH)) {
       USER_PRINTLN("Failed to allocate buttonFramebuffer sprite!");
       while (1) vTaskDelay(1);
     }
-    USER_PRINTF("Sprites allocated: main=%dx100, buttons=%dx%d\n", WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_W, btnFbH);
+    USER_PRINTF("Sprites allocated: main=%dx100, buttons=%dx%d\n", timing.width, timing.width, btnFbH);
+    } // end runtime mode selection scope
   }
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_W
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
 
     xSemaphoreGive(busMutex);
 
