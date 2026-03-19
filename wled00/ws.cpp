@@ -265,30 +265,26 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
     const uint16_t srcW = Segment::maxWidth;
     const uint16_t srcH = Segment::maxHeight;
 
-    constexpr uint16_t MAX_PREVIEW_WIDTH = 64;
-    constexpr float MIN_SCALE = 0.1f;
+    // MAX_PREVIEW_WIDTH must be >= srcW * PPA_MIN_SCALE (1/16).
+    // For 1280px source, min PPA scale gives 80px output, so we need at least 80.
+    constexpr uint16_t MAX_PREVIEW_WIDTH = 128;
+    constexpr float PPA_MIN_SCALE = 1.0f / 16.0f;  // PPA hardware minimum
     constexpr float SCALE_STEP = 1.0f / 16.0f;
 
-    // Calculate scale, clamp to min, then truncate to PPA's actual precision
-    float scale = (srcW > MAX_PREVIEW_WIDTH) ? (float)MAX_PREVIEW_WIDTH / srcW : 1.0f;
-    if (scale < MIN_SCALE) scale = MIN_SCALE;
+    // Target ~64px wide output, but never below PPA minimum scale
+    float scale = (srcW > 64) ? 64.0f / srcW : 1.0f;
     scale = floorf(scale / SCALE_STEP) * SCALE_STEP;
+    if (scale < PPA_MIN_SCALE) scale = PPA_MIN_SCALE;  // PPA minimum is 1/16
 
-    // Calculate output dimensions from the truncated scale
+    // Calculate output dimensions
     uint16_t dstW = MAX(1, (uint16_t)(srcW * scale));
     uint16_t dstH = MAX(1, (uint16_t)(srcH * scale));
 
-    // Clamp to MAX_PREVIEW_WIDTH to prevent buffer overflow
-    if (dstW > MAX_PREVIEW_WIDTH) {
-      scale = (float)MAX_PREVIEW_WIDTH / srcW;
-      scale = floorf(scale / SCALE_STEP) * SCALE_STEP;
-      dstW = MAX(1, (uint16_t)(srcW * scale));
-      dstH = MAX(1, (uint16_t)(srcH * scale));
-    }
-    if (dstH > MAX_PREVIEW_WIDTH) {
+    // Clamp to MAX_PREVIEW_WIDTH (buffer size limit); if still too big, use min scale
+    if (dstW > MAX_PREVIEW_WIDTH || dstH > MAX_PREVIEW_WIDTH) {
       float maxDim = MAX(srcW, srcH);
-      scale = (float)MAX_PREVIEW_WIDTH / maxDim;
-      scale = floorf(scale / SCALE_STEP) * SCALE_STEP;
+      scale = floorf((MAX_PREVIEW_WIDTH / maxDim) / SCALE_STEP) * SCALE_STEP;
+      if (scale < PPA_MIN_SCALE) scale = PPA_MIN_SCALE;
       dstW = MAX(1, (uint16_t)(srcW * scale));
       dstH = MAX(1, (uint16_t)(srcH * scale));
     }
@@ -301,18 +297,24 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
     const size_t pixelDataSize = dstW * dstH * 3;
     const size_t bufSize = headerSize + pixelDataSize;
 
-    constexpr size_t CACHE_LINE = 64;
-    constexpr size_t PPA_BUF_SIZE = ((MAX_PREVIEW_WIDTH * MAX_PREVIEW_WIDTH * 3) + CACHE_LINE - 1) & ~(CACHE_LINE - 1);
+    // Use 4096-byte alignment in PSRAM — same as ppa_framebuffer which is confirmed working.
+    // Internal SRAM with 64-byte alignment fails PPA's cache line check on ESP32-P4.
+    constexpr size_t PPA_ALIGN = 4096;
+    constexpr size_t PPA_BUF_SIZE = ((MAX_PREVIEW_WIDTH * MAX_PREVIEW_WIDTH * 3) + PPA_ALIGN - 1) & ~(PPA_ALIGN - 1);
     static uint8_t* ppaBuffer = nullptr;
 
     if (!ppaBuffer) {
-      ppaBuffer = (uint8_t*)heap_caps_aligned_alloc(CACHE_LINE, PPA_BUF_SIZE, MALLOC_CAP_INTERNAL);
-      if (!ppaBuffer) return false;
+      ppaBuffer = (uint8_t*)heap_caps_aligned_alloc(PPA_ALIGN, PPA_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (!ppaBuffer) {
+        USER_PRINTLN("Preview PPA: failed to alloc ppaBuffer");
+        return false;
+      }
+      USER_PRINTF("Preview PPA buf: %p (%u B) addr%%4096=%u\n", ppaBuffer, (unsigned)PPA_BUF_SIZE, (unsigned)((uintptr_t)ppaBuffer % PPA_ALIGN));
     }
 
     // Verify buffer size is sufficient
     if (pixelDataSize > PPA_BUF_SIZE) {
-      DEBUG_PRINTF("PPA buffer too small: need %d, have %d\n", pixelDataSize, PPA_BUF_SIZE);
+      USER_PRINTF("Preview PPA buf too small: need %u have %u\n", (unsigned)pixelDataSize, (unsigned)PPA_BUF_SIZE);
       return false;
     }
 
@@ -332,7 +334,16 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
     srm_config.scale_y = scale;
     srm_config.mode = PPA_TRANS_MODE_BLOCKING;
 
-    if (ppa_do_scale_rotate_mirror(preview_ppa_srm_handle, &srm_config) != ESP_OK) return false;
+    esp_err_t ppa_ret = ppa_do_scale_rotate_mirror(preview_ppa_srm_handle, &srm_config);
+    if (ppa_ret != ESP_OK) {
+      static uint32_t last_err_ms = 0;
+      if (millis() - last_err_ms > 5000) {  // throttle to once per 5s
+        last_err_ms = millis();
+        USER_PRINTF("Preview PPA err %d: in=%p %dx%d out=%p/%u scale=%.4f\n",
+          ppa_ret, srcBuffer, dstW, dstH, ppaBuffer, (unsigned)PPA_BUF_SIZE, scale);
+      }
+      return false;
+    }
 
     AsyncWebSocketBuffer wsBuf(bufSize);
     if (!wsBuf) return false;

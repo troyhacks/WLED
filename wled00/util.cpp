@@ -3,6 +3,9 @@
 #include "const.h"
 #include <dirent.h>
 #include <sys/stat.h>
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "driver/i2c_master.h"
+#endif
 
 void scanI2C(TwoWire& wire) {
   struct I2CDevice { uint8_t addr; const char* name; };
@@ -72,6 +75,57 @@ void scanI2C(TwoWire& wire) {
   Serial.printf("--- %d device(s) found ---\n\n", found);
   if (ES7210_present) USER_PRINTLN("ES7210_present == true");
 }
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+// IDF v5 I2C scan using i2c_master_probe() — used on ESP32-P4 instead of Arduino Wire
+void scanI2C_IDF(i2c_master_bus_handle_t bus) {
+  if (!bus) { USER_PRINTLN("scanI2C_IDF: no bus handle"); return; }
+
+  // Reuse the known-device lookup from scanI2C by declaring a local lambda
+  struct I2CDevice { uint8_t addr; const char* name; };
+  static const I2CDevice knownDevices[] = {
+    {0x10, "ES8388"},
+    {0x13, "ES7243"},
+    {0x18, "ES8311 (common ESP32-P4 on-board mic codec)"},
+    {0x1A, "WM8978/AC101"},
+    {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
+    {0x14, "GT911 Touch Panel Controller (alt)"},
+    {0x38, "FT6336/AHT10/VEML6070"},
+    {0x3C, "SSD1306 OLED"},
+    {0x3D, "SSD1306 OLED (alt)"},
+    {0x44, "SHT30/SHT31"},
+    {0x48, "LT8912B HDMI bridge (main) / ADS1115/TMP102"},
+    {0x49, "LT8912B HDMI bridge (CEC-DSI) / ADS1115 alt"},
+    {0x4A, "LT8912B HDMI bridge (AVI) / MAX44009"},
+    {0x4B, "Unknown"},
+    {0x5D, "GT911 Touch Panel Controller"},
+    {0x68, "DS3231 RTC/MPU6050"},
+    {0x76, "BME280/BMP280"},
+    {0x77, "BME280/BMP180"},
+  };
+  const int knownCount = sizeof(knownDevices) / sizeof(knownDevices[0]);
+  auto getName = [&](uint8_t addr) -> const char* {
+    for (int i = 0; i < knownCount; i++) {
+      if (addr == 0x40) ES7210_present = true;
+      if (knownDevices[i].addr == addr) return knownDevices[i].name;
+    }
+    return nullptr;
+  };
+
+  Serial.println(F("\n--- I2C Scan (IDF) ---"));
+  int found = 0;
+  for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+    if (i2c_master_probe(bus, addr, 10) == ESP_OK) {
+      found++;
+      Serial.printf("  0x%02X: ", addr);
+      const char* name = getName(addr);
+      Serial.println(name ? name : "Unknown");
+    }
+  }
+  Serial.printf("--- %d device(s) found ---\n\n", found);
+  if (ES7210_present) USER_PRINTLN("ES7210_present == true");
+}
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
 //helper to get int value at a position in string
 int getNumVal(const String* req, uint32_t pos)
@@ -184,6 +238,7 @@ bool copyDirectory(const char* srcDir, const char* destDir) {
 }
 
 bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint32_t* mappingTable, uint32_t tableSize, const char* filename) {
+  return true; // disabled for now.
   if (!mappingTable || tableSize == 0) return false;
   bakeMap = false;
   File f = WLED_FS.open(filename, "w");

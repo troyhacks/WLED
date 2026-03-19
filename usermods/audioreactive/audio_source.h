@@ -661,19 +661,50 @@ class ES8388Source : public I2SSource {
 */
 class ES8311Source : public I2SSource {
   private:
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    // On ESP32-P4, Wire is not used; communicate via IDF I2C master API instead.
+    bool _p4_i2c_write(uint8_t addr, uint8_t reg, uint8_t val) {
+      i2c_device_config_t dev_cfg = {};
+      dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+      dev_cfg.device_address  = addr;
+      dev_cfg.scl_speed_hz    = 100000;
+      i2c_master_dev_handle_t dev = NULL;
+      if (i2c_master_bus_add_device(global_i2c_bus_handle, &dev_cfg, &dev) != ESP_OK) return false;
+      uint8_t buf[2] = {reg, val};
+      bool ok = (i2c_master_transmit(dev, buf, 2, pdMS_TO_TICKS(50)) == ESP_OK);
+      i2c_master_bus_rm_device(dev);
+      return ok;
+    }
+    bool _p4_i2c_probe(uint8_t addr) {
+      return (i2c_master_probe(global_i2c_bus_handle, addr, pdMS_TO_TICKS(50)) == ESP_OK);
+    }
+#endif
+
     bool es7210_present() {
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+      return _p4_i2c_probe(0x40);
+#else
       Wire.beginTransmission(0x40);
       return (Wire.endTransmission() == 0);
+#endif
     }
     // I2C initialization functions for es8311
     void _es8311I2cBegin() {
+#if !defined(CONFIG_IDF_TARGET_ESP32P4)
       Wire.setClock(100000);
+#endif
     }
 
     void _es8311I2cWrite(uint8_t reg, uint8_t val) {
       #ifndef ES8311_ADDR
         #define ES8311_ADDR 0x18
       #endif
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+      uint8_t addr = ES7210_present ? (uint8_t)0x40 : (uint8_t)ES8311_ADDR;
+      if (!_p4_i2c_write(addr, reg, val)) {
+        DEBUGSR_PRINTF("AR: ES8311 I2C write failed (addr=0x%X, reg 0x%X, val 0x%X).\n", addr, reg, val);
+      }
+#else
       if (ES7210_present) {
         Wire.beginTransmission(0x40);
       } else {
@@ -685,6 +716,7 @@ class ES8311Source : public I2SSource {
       if (i2cErr != 0) {
         DEBUGSR_PRINTF("AR: ES8311 I2C write failed with error=%d  (addr=0x%X, reg 0x%X, val 0x%X).\n", i2cErr, ES8311_ADDR, reg, val);
       }
+#endif
     }
 
     void es7210_init_22k_32bit() {
@@ -773,6 +805,11 @@ class ES8311Source : public I2SSource {
     }
 
     void es8311_disable() {
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+      _p4_i2c_write(0x18, 0x00, 0x1F);  // Hold in reset
+      _p4_i2c_write(0x18, 0x0D, 0x00);  // Power down analog
+      _p4_i2c_write(0x18, 0x0C, 0x00);  // Power down digital
+#else
       Wire.setClock(100000);
 
       Wire.beginTransmission(0x18);
@@ -789,6 +826,7 @@ class ES8311Source : public I2SSource {
       Wire.write(0x0C);
       Wire.write(0x00);  // Power down digital
       Wire.endTransmission();
+#endif
     }
 
 public:

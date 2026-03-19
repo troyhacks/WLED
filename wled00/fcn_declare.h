@@ -407,6 +407,10 @@ bool removeDirectory(const char* path);
 bool is_sdcard_mounted(void);
 
 void scanI2C(TwoWire& wire = Wire);
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "driver/i2c_master.h"
+void scanI2C_IDF(i2c_master_bus_handle_t bus);
+#endif
 void dumpAllTaskHWMs(void);
 #define inoise8 perlin8   // fastled legacy alias
 #define inoise16 perlin16 // fastled legacy alias

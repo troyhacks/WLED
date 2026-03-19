@@ -332,10 +332,13 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 
 #ifdef CONFIG_SOC_PPA_SUPPORTED
 #include "esp_heap_caps.h"
+#include "esp_cache.h"
 #include "driver/ppa.h"
 #include "driver/jpeg_decode.h"
 #include "esp_h264_dec_sw.h"
 #include "ImageCacheManager.h"
+#include "esp_lcd_panel_ops.h"
+#include "driver/i2c_master.h"
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
@@ -345,9 +348,11 @@ WLED_GLOBAL ppa_client_handle_t preview_ppa_srm_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
 WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
-// WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);
-// WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);
+// WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);       // no touch on HDMI board
 // WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
+WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // raw DPI framebuffer from LT8912B (IDF-allocated, may not be 256B aligned)
+WLED_GLOBAL uint8_t* ppa_framebuffer    _INIT(NULL);        // PPA output buffer, 256-byte aligned (required by PPA for PSRAM)
 WLED_GLOBAL uint16_t touchscreen_x[1];
 WLED_GLOBAL uint16_t touchscreen_y[1];
 WLED_GLOBAL uint16_t touchscreen_strength[1];
@@ -355,8 +360,8 @@ WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
 WLED_GLOBAL bool touchpad_pressed _INIT(false);
 WLED_GLOBAL bool update_screen _INIT(true);
 WLED_GLOBAL bool update_screen_background _INIT(true);
-// WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
-// WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
+WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
+WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
@@ -368,6 +373,7 @@ WLED_GLOBAL bool  prolink_presetMover   _INIT(false);
 #endif
 
 WLED_GLOBAL bool ES7210_present _INIT(false); // we'll check for this during boot I2C scan.
+WLED_GLOBAL bool busNetworkDummyMode _INIT(false); // Skip network transmit; keep pixel buffer for HDMI blit
 
 // Global Variable definitions
 WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));

@@ -649,6 +649,8 @@ void IRAM_ATTR BusNetwork::show() {
     return;
   }
 
+  if (busNetworkDummyMode) return;  // pixel buffer filled above; skip network transmit for HDMI-only mode
+
   _broadcastLock = true;
   realtimeBroadcast(_UDPtype, _client, temp_len, _data, _bri, _rgbw, _outputs, _leds_per_output, _fps_limit, _colorOrder, false);
   _broadcastLock = false;

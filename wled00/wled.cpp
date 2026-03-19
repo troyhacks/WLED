@@ -7,17 +7,25 @@ static const char *TAG = "WLED";
   #define CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT 0
 #endif
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-  #include "esp_ldo_regulator.h" // ESP32-P4 for higher GPIOS.
-  esp_ldo_channel_handle_t ldo2 = NULL;
-  esp_ldo_channel_handle_t ldo3 = NULL;
+  #include "esp_ldo_regulator.h"  // ESP32-P4 LDO control
+  #include "driver/i2c_master.h"  // IDF v5 I2C master API
+  #include "esp_lcd_panel_ops.h"
+  #include "esp_lcd_panel_io.h"
+  #include "esp_lcd_mipi_dsi.h"
+  #include "esp_lcd_lt8912b.h"    // Olimex ESP32-P4-PC HDMI bridge (LT8912B)
+  #include <LovyanGFX.hpp>
+  static LGFX_Sprite myFramebuffer;
+  static LGFX_Sprite buttonFramebuffer;
   // ESP32-P4 Board Log
+  // ESP-ROM:esp32p4-eco2-20240710 // Olimex ESP32-P4-PC (HDMI output via LT8912B)
   // ESP-ROM:esp32p4-eco2-20240710 // WaveShare Nano
   // ESP-ROM:esp32p4-eco2-20240710 // WaveShare P4 Module Dev Kit (4 USB-A ports, custom module)
   // ESP-ROM:esp32p4-eco2-20240710 // WaveShare Big Round Display Thingy
   // ESP-ROM:esp32p4-eco2-20240710 // WaveShare ESP32-P4-86-Panel-ETH-PRO
   // ESP-ROM:esp32p4-eco1-20240205 // Espressif EV
   // ESP-ROM:esp32p4-eco2-20240710 // Wireless Tag Fancy C5 board that's weird.
-  // 
+  // ESP-ROM:esp32p4-eco2-20240710 // WaveShare ESP32-P4-WIFI6-POE-ETH
+
 #endif
 #ifdef SOC_USB_OTG_SUPPORTED
   #ifndef CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED
@@ -794,6 +802,121 @@ void WLED::loop() { // loopTask
       newArtNetData = false;
     }
   }
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_W) && defined(CONFIG_SOC_PPA_SUPPORTED)
+  // HDMI blit — runs every loop regardless of realtimeMode or Art-Net input state
+  if (display_framebuffer && panel_handle) {
+    static uint32_t last_blit_us = 0;
+    uint32_t now_us = esp_timer_get_time();
+    if (1 || now_us - last_blit_us >= 33333) {  // ~30fps
+      last_blit_us = now_us;
+      if (xSemaphoreTake(busMutex, 0)) {
+        Bus* bus = busses.getBus(0);
+        uint8_t* busPixelData = bus ? bus->getPixelData() : nullptr;
+        if (busPixelData) {
+          const int ledW = SEGMENT.maxWidth  ? SEGMENT.maxWidth  : WLEDMM_DISPLAY_W;
+          const int ledH = SEGMENT.maxHeight ? SEGMENT.maxHeight : WLEDMM_DISPLAY_H;
+          // Use the full display area — no UI bars yet
+          float scale  = min((float)WLEDMM_DISPLAY_W / ledW, (float)WLEDMM_DISPLAY_H / ledH);
+          int scaledW  = (int)(ledW * scale);
+          int scaledH  = (int)(ledH * scale);
+
+          if (scale > 0.0f && scale <= 16.0f && scaledW > 0 && scaledH > 0) {
+            static uint32_t blit_ok = 0, blit_fail = 0, blit_log_ms = 0;
+            const size_t fb_size = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+
+            ppa_srm_oper_config_t srm_cfg = {};
+            srm_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
+            srm_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB888;
+            srm_cfg.in.buffer          = busPixelData;
+            srm_cfg.in.pic_w           = ledW;
+            srm_cfg.in.pic_h           = ledH;
+            srm_cfg.in.block_w         = ledW;
+            srm_cfg.in.block_h         = ledH;
+            srm_cfg.out.buffer         = display_framebuffer;
+            srm_cfg.out.buffer_size    = fb_size;
+            srm_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
+            srm_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
+            srm_cfg.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledW) / 2;
+            srm_cfg.out.block_offset_y = (WLEDMM_DISPLAY_H - scaledH) / 2;
+            srm_cfg.scale_x            = scale;
+            srm_cfg.scale_y            = scale;
+            srm_cfg.rotation_angle     = PPA_SRM_ROTATION_ANGLE_0;
+            srm_cfg.rgb_swap           = true;  // bus data is R,G,B; display expects R,G,B (no swap needed)
+            srm_cfg.byte_swap          = false;
+            srm_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
+
+            if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
+              blit_ok++;
+            } else {
+              blit_fail++;
+            }
+
+            // Diagnostic: every 5s print blit counts and first pixel of source & dest
+            uint32_t now_ms = millis();
+            if (now_ms - blit_log_ms >= 5000) {
+              blit_log_ms = now_ms;
+              USER_PRINTF("HDMI blit ok=%u fail=%u src[0]=%02x%02x%02x dst[0]=%02x%02x%02x scale=%.2f %dx%d\n",
+                blit_ok, blit_fail,
+                busPixelData[0], busPixelData[1], busPixelData[2],
+                display_framebuffer[0], display_framebuffer[1], display_framebuffer[2],
+                scale, ledW, ledH);
+              blit_ok = blit_fail = 0;
+            }
+          }
+        }
+        xSemaphoreGive(busMutex);
+      }
+    }
+
+    // UI sprite blits — disabled until UI is ready
+    static uint32_t last_ui_ms = 0;
+    uint32_t now_ms = millis();
+    if (false && (now_ms - last_ui_ms >= 1000 || update_screen)) {
+      last_ui_ms = now_ms;
+      if (myFramebuffer.getBuffer()) {
+        ppa_srm_oper_config_t ui_cfg = {};
+        ui_cfg.in.srm_cm    = PPA_SRM_COLOR_MODE_RGB888;
+        ui_cfg.out.srm_cm   = PPA_SRM_COLOR_MODE_RGB888;
+        ui_cfg.in.buffer    = (uint8_t*)myFramebuffer.getBuffer();
+        ui_cfg.in.pic_w     = WLEDMM_DISPLAY_W;
+        ui_cfg.in.pic_h     = 100;
+        ui_cfg.in.block_w   = WLEDMM_DISPLAY_W;
+        ui_cfg.in.block_h   = 100;
+        ui_cfg.out.buffer      = ppa_framebuffer;
+        ui_cfg.out.buffer_size = WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+        ui_cfg.out.pic_w       = WLEDMM_DISPLAY_W;
+        ui_cfg.out.pic_h       = WLEDMM_DISPLAY_H;
+        ui_cfg.scale_x         = 1.0f;
+        ui_cfg.scale_y         = 1.0f;
+        ui_cfg.rotation_angle  = PPA_SRM_ROTATION_ANGLE_0;
+        ui_cfg.mode            = PPA_TRANS_MODE_BLOCKING;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &ui_cfg));
+      }
+      if (update_screen && buttonFramebuffer.getBuffer()) {
+        update_screen = false;
+        ppa_srm_oper_config_t btn_cfg = {};
+        btn_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
+        btn_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB888;
+        btn_cfg.in.buffer          = (uint8_t*)buttonFramebuffer.getBuffer();
+        btn_cfg.in.pic_w           = WLEDMM_DISPLAY_W;
+        btn_cfg.in.pic_h           = buttonFramebuffer.height();
+        btn_cfg.in.block_w         = WLEDMM_DISPLAY_W;
+        btn_cfg.in.block_h         = buttonFramebuffer.height();
+        btn_cfg.out.buffer         = ppa_framebuffer;
+        btn_cfg.out.buffer_size    = WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+        btn_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
+        btn_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
+        btn_cfg.out.block_offset_y = WLEDMM_DISPLAY_H - buttonFramebuffer.height();
+        btn_cfg.scale_x            = 1.0f;
+        btn_cfg.scale_y            = 1.0f;
+        btn_cfg.rotation_angle     = PPA_SRM_ROTATION_ANGLE_0;
+        btn_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &btn_cfg));
+      }
+    }
+  }
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_W && CONFIG_SOC_PPA_SUPPORTED
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
   if (millis() - debugTime > 29999) {
@@ -1613,43 +1736,8 @@ void WLED::setup() {
   //pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #elif defined(CONFIG_IDF_TARGET_ESP32P4)
   // ESP32-P4 peripherals are hidden from GPIO map, including PSRAM - so we don't need to further hide them.
-
-  // GPIO > 36 are not powered/configured for Arduino-ESP32 by default.
-  // fix from https://esp32.com/viewtopic.php?t=45334 thanks to microfoundry
-
-  esp_ldo_channel_config_t config2 = {
-    .chan_id = 3,  // discovered by trial and error
-    .voltage_mv = 3300,
-    .flags = {
-      .adjustable = 1,
-      .owned_by_hw = 0,
-      .bypass = 0
-    }
-  };
-
-  // Create configuration for LDO index 3
-  esp_ldo_channel_config_t config3 = {
-    .chan_id = 4,  // discovered by trial and error
-    .voltage_mv = 3300,
-    .flags = {
-      .adjustable = 1,
-      .owned_by_hw = 0,
-      .bypass = 0
-    }
-  };
-
-  // Try to acquire both channels
-  if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 2 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 2");
-  }
-
-  if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 3 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
-  }
+  // Note: 3.3V LDOs for GPIO>36 expansion are not needed for the Olimex ESP32-P4-PC HDMI build.
+  // MIPI DSI PHY LDO (chan_id=3, 2500mV) is acquired later during display init.
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };
@@ -1886,11 +1974,175 @@ void WLED::setup() {
       }
     }
 
-    #if !defined(CONFIG_IDF_TARGET_ESP32C5)
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    scanI2C_IDF(global_i2c_bus_handle);  // use IDF v5 API on P4
+    #elif !defined(CONFIG_IDF_TARGET_ESP32C5)
     scanI2C(Wire);
     #endif
 
     strip.createLedmapBinaryCache();
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_W)
+  busNetworkDummyMode = true;  // P4/HDMI build: fill pixel buffer but skip Art-Net transmit
+  // === HDMI Display Initialization: Olimex ESP32-P4-PC via LT8912B bridge ===
+  {
+    // Power on MIPI DSI PHY (LDO channel 3 at 2500mV)
+    USER_PRINTLN("MIPI DSI PHY Power on");
+    esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
+    esp_ldo_channel_config_t ldo_mipi_phy_config = {
+      .chan_id = 3, .voltage_mv = 2500,
+    };
+    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
+
+    // MIPI DSI bus — 2 lanes at 1000 Mbps (sufficient for 1280x720@60Hz RGB888)
+    // Note: macros from esp_lcd_lt8912b.h cannot be used directly in C++ due to enum cast and
+    // field-order issues, so structs are initialized explicitly here.
+    USER_PRINTLN("Initialize MIPI DSI bus");
+    esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
+    esp_lcd_dsi_bus_config_t bus_config = {};
+    bus_config.bus_id             = 0;
+    bus_config.num_data_lanes     = 2;
+    bus_config.phy_clk_src        = (mipi_dsi_phy_clock_source_t)4; // MIPI_DSI_PHY_CLK_SRC_DEFAULT
+    bus_config.lane_bit_rate_mbps = 721;
+    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
+
+    // DPI panel config: 1280x720 @ 60Hz
+    esp_lcd_dpi_panel_config_t dpi_config = {};
+    dpi_config.dpi_clk_src                    = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+    dpi_config.dpi_clock_freq_mhz             = 60;
+    dpi_config.virtual_channel                = 0;
+    dpi_config.in_color_format                = LCD_COLOR_FMT_RGB888;
+    // dpi_config.out_color_format               = LCD_COLOR_FMT_RGB888;  // must match in_color_format or driver enables color conversion
+    dpi_config.num_fbs                        = 2;
+    dpi_config.video_timing.h_size            = 1280;
+    dpi_config.video_timing.v_size            = 720;
+    dpi_config.video_timing.hsync_back_porch  = 80;
+    dpi_config.video_timing.hsync_pulse_width = 32;
+    dpi_config.video_timing.hsync_front_porch = 48;
+    dpi_config.video_timing.vsync_back_porch  = 13;
+    dpi_config.video_timing.vsync_pulse_width = 5;
+    dpi_config.video_timing.vsync_front_porch = 3;
+    dpi_config.flags.use_dma2d                = true;
+    dpi_config.flags.disable_lp               = true;
+
+    // Three I2C handles for LT8912B register access (main, CEC-DSI, AVI)
+    // io_cfg fields must be in declaration order (dev_addr first, scl_speed_hz last)
+    esp_lcd_panel_io_handle_t io_main = NULL, io_cec = NULL, io_avi = NULL;
+    esp_lcd_panel_io_i2c_config_t io_cfg_main = {};
+    io_cfg_main.dev_addr             = LT8912B_IO_I2C_MAIN_ADDRESS;
+    io_cfg_main.control_phase_bytes  = 1;
+    io_cfg_main.dc_bit_offset        = 0;
+    io_cfg_main.lcd_cmd_bits         = 8;
+    io_cfg_main.lcd_param_bits       = 8;
+    io_cfg_main.flags.disable_control_phase = 1;
+    io_cfg_main.scl_speed_hz         = 400000;
+    esp_lcd_panel_io_i2c_config_t io_cfg_cec = io_cfg_main;
+    io_cfg_cec.dev_addr = LT8912B_IO_I2C_CEC_ADDRESS;
+    esp_lcd_panel_io_i2c_config_t io_cfg_avi = io_cfg_main;
+    io_cfg_avi.dev_addr = LT8912B_IO_I2C_AVI_ADDRESS;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_main, &io_main));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_cec,  &io_cec));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_avi,  &io_avi));
+
+    // LT8912B vendor config: 720p timing + DSI bus
+    lt8912b_vendor_config_t vendor_config = {
+      .video_timing = ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz(),
+      .mipi_config = {
+        .dsi_bus    = mipi_dsi_bus,
+        .dpi_config = &dpi_config,
+        .lane_num   = 2,
+      },
+    };
+  
+    const esp_lcd_panel_dev_config_t panel_config = {
+      .reset_gpio_num = -1,
+      .rgb_ele_order = (lcd_rgb_element_order_t)LCD_RGB_ELEMENT_ORDER_RGB,
+      .bits_per_pixel = 24,
+      .vendor_config  = &vendor_config,
+    };
+    esp_lcd_panel_lt8912b_io_t lt8912b_io = {
+      .main    = io_main,
+      .cec_dsi = io_cec,
+      .avi     = io_avi,
+    };
+
+    USER_PRINTLN("Installing LT8912B HDMI bridge driver");
+    ESP_ERROR_CHECK(esp_lcd_new_panel_lt8912b(&lt8912b_io, &panel_config, &panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+    // Note: esp_lcd_panel_disp_on_off() is not supported by the LT8912B driver (returns ESP_ERR_NOT_SUPPORTED).
+    USER_PRINTF("HDMI display initialized: %dx%d @ 60Hz\n", WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H);
+
+    // Get the DPI panel's native framebuffer
+    void* fb0_ptr = NULL;
+    ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+    display_framebuffer = (uint8_t*)fb0_ptr;
+    if (!display_framebuffer) {
+      USER_PRINTLN("FATAL: Failed to get display framebuffer!");
+      while (1) vTaskDelay(1);
+    }
+    USER_PRINTF("Display framebuffer at: %p (DPI-internal)\n", display_framebuffer);
+
+    // Allocate a cache-aligned PPA output buffer in PSRAM.
+    // PPA on ESP32-P4 checks alignment via esp_cache_get_alignment(MALLOC_CAP_SPIRAM).
+    // Use 4096-byte alignment to satisfy both cache and DMA burst requirements.
+    const size_t ppa_align = 4096;
+    const size_t fb_aligned_size = ((size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3 + ppa_align - 1) & ~(ppa_align - 1);
+    ppa_framebuffer = (uint8_t*)heap_caps_aligned_alloc(ppa_align, fb_aligned_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ppa_framebuffer) {
+      USER_PRINTLN("FATAL: Failed to allocate PPA framebuffer!");
+      while (1) vTaskDelay(1);
+    }
+    memset(ppa_framebuffer, 0, fb_aligned_size);
+    USER_PRINTF("PPA framebuffer: %p (%u B) addr%%64=%u addr%%256=%u addr%%4096=%u size%%64=%u\n",
+      ppa_framebuffer, (unsigned)fb_aligned_size,
+      (unsigned)((uintptr_t)ppa_framebuffer % 64),
+      (unsigned)((uintptr_t)ppa_framebuffer % 256),
+      (unsigned)((uintptr_t)ppa_framebuffer % 4096),
+      (unsigned)(fb_aligned_size % 64));
+
+    // Paint a startup test pattern: RGB bands, static colours (beatsin8 returns 0 at millis=0)
+    for (uint16_t y = 0; y < WLEDMM_DISPLAY_H; y++) {
+      uint8_t band = (y * 6) / WLEDMM_DISPLAY_H;  // 0..5 → 6 colour bands
+      uint8_t r = (band == 0 || band == 3 || band == 4) ? 255 : 0;
+      uint8_t g = (band == 1 || band == 3 || band == 5) ? 255 : 0;
+      uint8_t b = (band == 2 || band == 4 || band == 5) ? 255 : 0;
+      for (uint16_t x = 0; x < WLEDMM_DISPLAY_W; x++) {
+        uint32_t off = ((uint32_t)y * WLEDMM_DISPLAY_W + x) * 3;
+        display_framebuffer[off + 0] = b;  // DPI framebuffer: BGR order in memory (B at byte 0, R at byte 2)
+        display_framebuffer[off + 1] = g;
+        display_framebuffer[off + 2] = r;
+      }
+    }
+
+
+    // Allocate LGFX sprites for UI overlays (PSRAM-backed)
+    myFramebuffer.setPsram(true);
+    buttonFramebuffer.setPsram(true);
+    myFramebuffer.setColorDepth(24);
+    buttonFramebuffer.setColorDepth(24);
+
+    if (!myFramebuffer.createSprite(WLEDMM_DISPLAY_W, 100)) {
+      USER_PRINTLN("Failed to allocate myFramebuffer sprite!");
+      while (1) vTaskDelay(1);
+    }
+
+    // Calculate buttonFramebuffer height based on button grid layout
+    const int cols    = WLEDMM_DISPLAY_BUTTONS_COLS;
+    const int padding = 5;
+    int rows          = ((int)WLEDMM_DISPLAY_BUTTONS + cols - 1) / cols;
+    if (rows < 1) rows = 1;
+    int rectWidth  = (WLEDMM_DISPLAY_W - (cols + 1) * padding) / cols;
+    int rectHeight = (int)((float)rectWidth * 8.0f / (float)cols);
+    int btnFbH     = rows * rectHeight + (rows + 1) * padding;
+
+    if (!buttonFramebuffer.createSprite(WLEDMM_DISPLAY_W, btnFbH)) {
+      USER_PRINTLN("Failed to allocate buttonFramebuffer sprite!");
+      while (1) vTaskDelay(1);
+    }
+    USER_PRINTF("Sprites allocated: main=%dx100, buttons=%dx%d\n", WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_W, btnFbH);
+  }
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_W
 
     xSemaphoreGive(busMutex);
 

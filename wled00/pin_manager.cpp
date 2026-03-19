@@ -643,14 +643,30 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
   // NOW do it - start Wire !!! fire ;-)
 
   bool wireIsOK = true;
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // ESP32-P4: use IDF v5 I2C master API directly (global_i2c_bus_handle shared with LCD panel IO)
+  {
+    i2c_master_bus_config_t i2c_mst_config = {};
+    i2c_mst_config.clk_source             = I2C_CLK_SRC_DEFAULT;
+    i2c_mst_config.i2c_port               = GLOBAL_I2C_PORT;
+    i2c_mst_config.scl_io_num             = gpio_num_t(pinSCL);
+    i2c_mst_config.sda_io_num             = gpio_num_t(pinSDA);
+    i2c_mst_config.glitch_ignore_cnt      = 7;
+    i2c_mst_config.flags.enable_internal_pullup = false;
+    esp_err_t ret = i2c_new_master_bus(&i2c_mst_config, &global_i2c_bus_handle);
+    wireIsOK = (ret == ESP_OK);
+    if (!wireIsOK) {
+      USER_PRINTF("PIN Manager: i2c_new_master_bus failed (err %d)!\n", ret);
+    } else {
+      USER_PRINTF("PIN Manager: IDF I2C master bus on port %d, SDA=%d SCL=%d\n",
+                  GLOBAL_I2C_PORT, pinSDA, pinSCL);
+    }
+  }
+#else
   #ifdef ARDUINO_ARCH_ESP32         // ESP32 - i2c pins can be mapped to any GPIO
     wireIsOK = Wire.setPins(pinSDA, pinSCL);   // this will fail if Wire is initialised already (i.e. Wire.begin() called prior)
   #else // 8266 - I2C pins are fixed -> actually they are not.
-    //if((pinSDA != 4) || (pinSCL != 5)) {     // fixed PINS: SDA = 4, SCL = 5
-    // DEBUG_PRINT(F("PIN Manager: warning ESP8266 I2C pins are fixed. please use SDA="));
-    //  DEBUG_PRINTF("%d, SCL=%d !\n",4, 5);
-    //  return(false);
-    //}
   #endif
   if (wireIsOK == false) {
     USER_PRINTLN(F("PIN Manager: warning - wire.setPins failed!"));
@@ -678,6 +694,7 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
   Wire.setTimeOut(50);   // workaround for wire timeout bug on -S3
   Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having wiring difficulties
 #endif
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
   wire0isStarted = true;
   wire0PinSDA = pinSDA;
