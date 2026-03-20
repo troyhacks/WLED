@@ -42,27 +42,45 @@ static const char *TAG = "WLED";
 //          Verified: (width+hfp+hsw+hbp) * (height+vfp+vsw+vbp) * fps = pclk_khz*1000
 #define HDMI_MODE_LIST \
   /* --- CEA-861 standard modes (vic > 0) --- */ \
-  X(HDMI_720P_24HZ,             60, 24, 1280,  720,  59400, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
-  X(HDMI_720P_25HZ,             61, 25, 1280,  720,  74250, 2420, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3960 Vtot=750  */ \
-  X(HDMI_720P_30HZ,             62, 30, 1280,  720,  74250, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
-  X(HDMI_720P_50HZ,             19, 50, 1280,  720,  74250,  440, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1980 Vtot=750  */ \
-  X(HDMI_720P_60HZ,              4, 60, 1280,  720,  74250,  110, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1650 Vtot=750  */ \
-  X(HDMI_1080P_24HZ,            32, 24, 1920, 1080,  74250,  638, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2750 Vtot=1125 */ \
-  X(HDMI_1080P_25HZ,            33, 25, 1920, 1080,  74250,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
-  X(HDMI_1080P_30HZ,            34, 30, 1920, 1080,  74250,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
-  X(HDMI_1080P_50HZ,            31, 50, 1920, 1080, 148500,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
-  X(HDMI_1080P_60HZ,            16, 60, 1920, 1080, 148500,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
+  /* 480p: officially supported by LT8912B (datasheet §5.1). 59.94Hz = 27027kHz, 60.00Hz = 27000kHz */ \
+  /* NOTE: vic>0 (standard CEA blanking) modes consistently show no display — ESP-IDF driver  */ \
+  /* appears only validated for vic=0 (LT8912B reduced blanking) reference modes.             */ \
+  X(CEA_480P_60HZ_NO_DISPLAY,               2, 60,  720,  480,  27027,   16, 62,  60,  9,  6, 30, HDMI_AR_4_3 ) /* Htot=858  Vtot=525  VIC 2 4:3  */ \
+  X(CEA_480P_60HZ_WIDE_NO_DISPLAY,          3, 60,  720,  480,  27027,   16, 62,  60,  9,  6, 30, HDMI_AR_16_9) /* Htot=858  Vtot=525  VIC 3 16:9 */ \
+  X(CEA_VGA_480P_60HZ_GARBLED,           1, 60,  640,  480,  25175,   16, 96,  48, 10,  2, 33, HDMI_AR_4_3 ) /* Htot=800  Vtot=525  VIC 1 640x480 */ \
+  /* vic=0 reduced-blanking 480p — test if driver works with non-CEA blanking at this res   */ \
+  X(LT8912B_480P_60HZ_NO_DISPLAY,           0, 60,  720,  480,  27000,   48, 32,  80,  3,  5, 13, HDMI_AR_4_3 ) /* Htot=880  Vtot=501  no display — monitor may not accept 480p, or ESP-IDF driver untested at this res */ \
+  X(HDMI_720P_24HZ_NO_DISPLAY,             60, 24, 1280,  720,  59400, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
+  X(HDMI_720P_25HZ_NO_DISPLAY,             61, 25, 1280,  720,  74250, 2420, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3960 Vtot=750  */ \
+  X(HDMI_720P_30HZ_NO_DISPLAY,             62, 30, 1280,  720,  74250, 1760, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=3300 Vtot=750  */ \
+  X(HDMI_720P_50HZ_NO_DISPLAY,             19, 50, 1280,  720,  74250,  440, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1980 Vtot=750  */ \
+  X(HDMI_720P_60HZ_UNDERRUN_AND_GARBLE,              4, 60, 1280,  720,  74250,  110, 40, 220,  5,  5, 20, HDMI_AR_16_9) /* Htot=1650 Vtot=750  */ \
+  X(HDMI_1080P_24HZ_NO_DISPLAY,            32, 24, 1920, 1080,  74250,  638, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2750 Vtot=1125 */ \
+  X(HDMI_1080P_25HZ_NO_DISPLAY,            33, 25, 1920, 1080,  74250,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
+  X(HDMI_1080P_30HZ_UNDERRUN,            34, 30, 1920, 1080,  74250,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
+  X(HDMI_1080P_50HZ_CRASH,            31, 50, 1920, 1080, 148500,  528, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2640 Vtot=1125 */ \
+  X(HDMI_1080P_60HZ_CRASH,            16, 60, 1920, 1080, 148500,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 */ \
   /* --- VESA DMT standard modes (vic=0) --- */ \
-  X(VESA_800x600_60HZ,           0, 60,  800,  600,  40000,   40,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  */ \
-  X(VESA_1024x768_60HZ,          0, 60, 1024,  768,  65000,   24,136, 160,  3,  6, 29, HDMI_AR_4_3 ) /* Htot=1344 Vtot=806  */ \
+  X(VESA_800x600_60HZ_OK,           0, 60,  800,  600,  40000,   40,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  */ \
+  X(VESA_800x600_60HZ_WIDE,           0, 60,  800,  600,  40000,   40,128,  88,  1,  4, 23, HDMI_AR_16_9 ) /* Htot=1056 Vtot=628  */ \
+  X(VESA_1024x768_60HZ_NO_DISPLAY,          0, 60, 1024,  768,  65000,   24,136, 160,  3,  6, 29, HDMI_AR_4_3 ) /* Htot=1344 Vtot=806  */ \
   /* --- LT8912B reference timings (vic=0, non-standard reduced blanking) --- */ \
-  X(LT8912B_800x600_60HZ,        0, 60,  800,  600,  40000,   48,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1064 Vtot=628  */ \
-  X(LT8912B_1024x768_60HZ,       0, 60, 1024,  768,  56000,   48, 32,  80,  3,  4, 15, HDMI_AR_4_3 ) /* Htot=1184 Vtot=790  */ \
-  X(LT8912B_720P_60HZ,           0, 60, 1280,  720,  64000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741  */ \
-  X(LT8912B_720P_60HZ_TROYHACKS, 0, 60, 1280,  720,  60000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741 experimental */ \
-  X(LT8912B_1280x800_60HZ,       0, 60, 1280,  800,  70000,   48, 32,  80,  3,  6, 14, HDMI_AR_NONE) /* Htot=1440 Vtot=823 16:10 */ \
-  X(LT8912B_1080P_30HZ,          0, 30, 1920, 1080,  70000,   48, 32,  80,  3,  5,  8, HDMI_AR_16_9) /* Htot=2080 Vtot=1096 */ \
-  X(LT8912B_1080P_60HZ,          0, 60, 1920, 1080, 120000,   48, 32,  80,  3,  5, 19, HDMI_AR_16_9) /* Htot=2080 Vtot=1107 NOT WORKING per Espressif */
+  X(LT8912B_800x600_60HZ_OKISH,        0, 60,  800,  600,  40000,   48,128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1064 Vtot=628  */ \
+  X(LT8912B_1024x768_60HZ_NO_DISPLAY,       0, 60, 1024,  768,  56000,   48, 32,  80,  3,  4, 15, HDMI_AR_4_3 ) /* Htot=1184 Vtot=790  */ \
+  X(LT8912B_720P_60HZ_UNDERRUN,           0, 60, 1280,  720,  64000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741  */ \
+  X(LT8912B_720P_56HZ_TROYHACKS, 0, 60, 1280,  720,  60000,   48, 32,  80,  3,  5, 13, HDMI_AR_16_9) /* Htot=1440 Vtot=741 experimental */ \
+  X(LT8912B_1280x800_60HZ_UNDERRUN,       0, 60, 1280,  800,  70000,   48, 32,  80,  3,  6, 14, HDMI_AR_NONE) /* Htot=1440 Vtot=823 16:10 */ \
+  X(LT8912B_1080P_30HZ_UNDERRUN,          0, 30, 1920, 1080,  70000,   48, 32,  80,  3,  5,  8, HDMI_AR_16_9) /* Htot=2080 Vtot=1096 */ \
+  X(LT8912B_1080P_60HZ_UNDERRUN,          0, 60, 1920, 1080, 120000,   48, 32,  80,  3,  5, 19, HDMI_AR_16_9) /* Htot=2080 Vtot=1107 NOT WORKING per Espressif */ \
+  /* --- Inno-Maker supported resolutions (VESA DMT, vic=0 unless CEA) --- */ \
+  X(INNO_640x480_60HZ_SKEWED,              1, 60,  640,  480,  25175,   16, 96,  48, 10,  2, 33, HDMI_AR_4_3 ) /* Htot=800  Vtot=525  CEA VIC 1 */ \
+  X(INNO_1152x864_60HZ_UNDERRUN,             0, 60, 1152,  864,  81624,   64,120, 184,  1,  3, 27, HDMI_AR_4_3 ) /* Htot=1520 Vtot=895  CVT */ \
+  X(INNO_720x480_60HZ_NO_DISPLAY,              3, 60,  720,  480,  27000,   16, 62,  60,  9,  6, 30, HDMI_AR_16_9) /* Htot=858  Vtot=525  CEA VIC 3 (480p widescreen) */ \
+  // X(INNO_1280x1024_60HZ,            0, 60, 1280, 1024, 108000,   48,112, 248,  1,  3, 38, HDMI_AR_NONE) /* Htot=1688 Vtot=1066 5:4 */ \
+  // X(INNO_1440x900_60HZ,             0, 60, 1440,  900, 106500,   80,152, 232,  3,  6, 25, HDMI_AR_NONE) /* Htot=1904 Vtot=934  16:10 */ \
+  // X(INNO_1600x900_60HZ,             0, 60, 1600,  900, 108000,   24, 80,  96,  1,  3, 96, HDMI_AR_16_9) /* Htot=1800 Vtot=1000 CVT-RB */ \
+  // X(INNO_1680x1050_60HZ,            0, 60, 1680, 1050, 146250,  104,176, 280,  3,  6, 30, HDMI_AR_NONE) /* Htot=2240 Vtot=1089 16:10 */ \
+  // X(INNO_1920x1080_60HZ,           16, 60, 1920, 1080, 148500,   88, 44, 148,  4,  5, 36, HDMI_AR_16_9) /* Htot=2200 Vtot=1125 CEA VIC 16 */
 
 enum hdmi_mode_t : uint8_t {
 #define X(name, ...) name,
@@ -134,9 +152,227 @@ static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_co
   out.hsync_total        = t.width + t.hfp + t.hsw + t.hbp;
   out.vsync_total        = t.height + t.vfp + t.vsw + t.vbp;
   // lane_bit_rate: minimum = pixel_clock × bpp / num_lanes
+  // Empirically the ESP32-P4 DSI PHY stops working below ~480 Mbps (480p/27MHz fails at 324 Mbps,
+  // 800x600/40MHz works at 480 Mbps). Clamp to 500 Mbps so low-res modes still operate.
+  // The DPI pixel clock is independent — running the DSI lane faster just adds idle time in blanking.
   out.lane_bit_rate_mbps = (uint32_t)((uint64_t)t.pixel_clock_khz * 24 / dsi_lanes / 1000);
+  if (out.lane_bit_rate_mbps < 500) out.lane_bit_rate_mbps = 500;
   out.aspect_ratio       = t.aspect_ratio;
   return true;
+}
+
+// Direct register read from an LT8912B I2C bus (stored io handle, 8-bit reg → 8-bit value).
+// Returns 0xFF on error. Only valid after lt8912b_io_main is assigned in setup().
+// Key regs (from Linux DRM driver lt8912.c):
+//   MAIN 0xC1 bit 7 : HPD — cable plugged in. NOTE: HPD_CBUS pin defaults to MHL CBUS
+//                     mode per datasheet §3.2.2; must be switched to HPD via I2C write.
+//                     Validity depends on the ESP-IDF driver having done that config.
+//   MAIN 0xB2 bit 0 : 1=HDMI mode, 0=DVI. Set from monitor EDID — but LT8912B has no
+//                     DDC support (datasheet §2.2), so this likely always reads 0 (DVI).
+static uint8_t lt8912b_read_reg(esp_lcd_panel_io_handle_t io, uint8_t reg) {
+  uint8_t val = 0xFF;
+  esp_lcd_panel_io_rx_param(io, reg, &val, 1);
+  return val;
+}
+
+// Tear down the HDMI display stack (panel → I2C handles → DSI bus → PPA framebuffer → sprites).
+// Sets display_framebuffer=NULL first so the blit loop stops immediately.
+static void hdmi_display_deinit() {
+  display_framebuffer = NULL;           // blit loop checks this — stops within one frame
+  vTaskDelay(pdMS_TO_TICKS(100));       // let any in-progress PPA blit finish
+
+  myFramebuffer.deleteSprite();
+  buttonFramebuffer.deleteSprite();
+
+  if (ppa_framebuffer) { heap_caps_free(ppa_framebuffer); ppa_framebuffer = NULL; }
+
+  // Delete panel first (it may use I2C handles during teardown)
+  if (panel_handle)    { esp_lcd_panel_del(panel_handle);         panel_handle    = NULL; }
+
+  // Delete I2C handles after panel is gone
+  if (lt8912b_io_avi)  { esp_lcd_del_panel_io(lt8912b_io_avi);   lt8912b_io_avi  = NULL; }
+  if (lt8912b_io_cec)  { esp_lcd_del_panel_io(lt8912b_io_cec);   lt8912b_io_cec  = NULL; }
+  if (lt8912b_io_main) { esp_lcd_del_panel_io(lt8912b_io_main);  lt8912b_io_main = NULL; }
+
+  // Delete DSI bus last (panel depends on it)
+  if (lt8912b_dsi_bus) { esp_lcd_del_dsi_bus(lt8912b_dsi_bus);   lt8912b_dsi_bus = NULL; }
+
+  wledmm_display_w = 0;
+  wledmm_display_h = 0;
+}
+
+// Initialise (or re-initialise) the full HDMI display stack for the given mode index.
+// Safe to call after hdmi_display_deinit(); also called from setup() on first boot.
+static void hdmi_display_init(int mode) {
+  busNetworkDummyMode = true;
+
+  // LDO for MIPI DSI PHY — acquired once, kept on for the lifetime of the app
+  static esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
+  if (!ldo_mipi_phy) {
+    USER_PRINTLN("MIPI DSI PHY Power on");
+    esp_ldo_channel_config_t ldo_cfg = { .chan_id = 3, .voltage_mv = 2500 };
+    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_cfg, &ldo_mipi_phy));
+  }
+
+  esp_lcd_dsi_bus_config_t bus_config = {};
+  bus_config.bus_id         = 0;
+  bus_config.num_data_lanes = 2;
+  bus_config.phy_clk_src    = (mipi_dsi_phy_clock_source_t)4; // MIPI_DSI_PHY_CLK_SRC_DEFAULT
+
+  hdmi_dpi_config_t timing = {};
+  hdmi_get_dpi_config((hdmi_mode_t)mode, bus_config.num_data_lanes, timing);
+  wledmm_display_w = timing.width;
+  wledmm_display_h = timing.height;
+  bus_config.lane_bit_rate_mbps = timing.lane_bit_rate_mbps;
+
+  USER_PRINTLN("Initialize MIPI DSI bus");
+  ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &lt8912b_dsi_bus));
+
+  esp_lcd_dpi_panel_config_t dpi_config = {};
+  dpi_config.dpi_clk_src                    = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+  dpi_config.dpi_clock_freq_mhz             = timing.dpi_clock_freq_mhz;
+  dpi_config.virtual_channel                = 0;
+  dpi_config.in_color_format                = LCD_COLOR_FMT_RGB888;
+  dpi_config.out_color_format               = LCD_COLOR_FMT_RGB888;
+  dpi_config.num_fbs                        = 2;
+  dpi_config.video_timing.h_size            = timing.width;
+  dpi_config.video_timing.v_size            = timing.height;
+  dpi_config.video_timing.hsync_front_porch = timing.hsync_front_porch;
+  dpi_config.video_timing.hsync_pulse_width = timing.hsync_pulse_width;
+  dpi_config.video_timing.hsync_back_porch  = timing.hsync_back_porch;
+  dpi_config.video_timing.vsync_front_porch = timing.vsync_front_porch;
+  dpi_config.video_timing.vsync_pulse_width = timing.vsync_pulse_width;
+  dpi_config.video_timing.vsync_back_porch  = timing.vsync_back_porch;
+  dpi_config.flags.use_dma2d                = true;
+  dpi_config.flags.disable_lp               = true;
+
+  // Three I2C handles for LT8912B register access (main, CEC-DSI, AVI)
+  esp_lcd_panel_io_handle_t io_main = NULL, io_cec = NULL, io_avi = NULL;
+  esp_lcd_panel_io_i2c_config_t io_cfg_main = {};
+  io_cfg_main.dev_addr                    = LT8912B_IO_I2C_MAIN_ADDRESS;
+  io_cfg_main.control_phase_bytes         = 1;
+  io_cfg_main.dc_bit_offset               = 0;
+  io_cfg_main.lcd_cmd_bits                = 8;
+  io_cfg_main.lcd_param_bits              = 8;
+  io_cfg_main.flags.disable_control_phase = 1;
+  io_cfg_main.scl_speed_hz                = 400000;
+  esp_lcd_panel_io_i2c_config_t io_cfg_cec = io_cfg_main;
+  io_cfg_cec.dev_addr = LT8912B_IO_I2C_CEC_ADDRESS;
+  esp_lcd_panel_io_i2c_config_t io_cfg_avi = io_cfg_main;
+  io_cfg_avi.dev_addr = LT8912B_IO_I2C_AVI_ADDRESS;
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_main, &io_main));
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_cec,  &io_cec));
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_avi,  &io_avi));
+  lt8912b_io_main = io_main;
+  lt8912b_io_cec  = io_cec;
+  lt8912b_io_avi  = io_avi;
+
+  lt8912b_vendor_config_t vendor_config = {
+    .video_timing = ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz(),
+    .mipi_config = {
+      .dsi_bus    = lt8912b_dsi_bus,
+      .dpi_config = &dpi_config,
+      .lane_num   = 2,
+    },
+  };
+  vendor_config.video_timing.hfp         = timing.hsync_front_porch;
+  vendor_config.video_timing.hs          = timing.hsync_pulse_width;
+  vendor_config.video_timing.hbp         = timing.hsync_back_porch;
+  vendor_config.video_timing.vfp         = timing.vsync_front_porch;
+  vendor_config.video_timing.vs          = timing.vsync_pulse_width;
+  vendor_config.video_timing.vbp         = timing.vsync_back_porch;
+  vendor_config.video_timing.hact        = timing.width;
+  vendor_config.video_timing.htotal      = timing.hsync_total;
+  vendor_config.video_timing.vact        = timing.height;
+  vendor_config.video_timing.vtotal      = timing.vsync_total;
+  vendor_config.video_timing.h_polarity  = 1;
+  vendor_config.video_timing.v_polarity  = 0;
+  vendor_config.video_timing.vic         = timing.vic;
+  vendor_config.video_timing.aspect_ratio = timing.aspect_ratio;
+  vendor_config.video_timing.pclk_mhz   = timing.dpi_clock_freq_mhz;
+
+  const esp_lcd_panel_dev_config_t panel_config = {
+    .reset_gpio_num = -1,
+    .rgb_ele_order  = (lcd_rgb_element_order_t)LCD_RGB_ELEMENT_ORDER_RGB,
+    .bits_per_pixel = WLEDMM_DISPLAY_DEPTH,
+    .vendor_config  = &vendor_config,
+  };
+  esp_lcd_panel_lt8912b_io_t lt8912b_io = { .main = io_main, .cec_dsi = io_cec, .avi = io_avi };
+
+  USER_PRINTLN("Installing LT8912B HDMI bridge driver");
+  ESP_ERROR_CHECK(esp_lcd_new_panel_lt8912b(&lt8912b_io, &panel_config, &panel_handle));
+  ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
+  ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+  USER_PRINTF("HDMI bridge init: %dx%d @ %dHz (mode %d: %s)\n",
+    timing.width, timing.height, timing.fps, mode, hdmi_mode_names[mode]);
+  {
+    uint8_t r_c1 = lt8912b_read_reg(io_main, 0xC1);
+    uint8_t r_b2 = lt8912b_read_reg(io_main, 0xB2);
+    USER_PRINTF("LT8912B regs: 0xC1=0x%02x (HPD=%d) 0xB2=0x%02x (%s)\n",
+      r_c1, (r_c1 >> 7) & 1, r_b2, (r_b2 & 1) ? "HDMI" : "DVI");
+  }
+
+  {
+    const uint32_t timeout_ms = 5000, poll_ms = 200;
+    uint32_t elapsed = 0;
+    bool ready = false;
+    USER_PRINT("Waiting for HDMI link");
+    while (elapsed < timeout_ms) {
+      ready = esp_lcd_panel_lt8912b_is_ready((esp_lcd_panel_t*)panel_handle);
+      if (ready) break;
+      USER_PRINT(".");
+      vTaskDelay(pdMS_TO_TICKS(poll_ms));
+      elapsed += poll_ms;
+    }
+    USER_PRINTF(ready ? " OK (%ums)\n" : " TIMEOUT — no monitor detected, continuing anyway\n", elapsed);
+  }
+
+  void* fb0_ptr = NULL;
+  ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 1, &fb0_ptr));
+  display_framebuffer = (uint8_t*)fb0_ptr;
+  if (!display_framebuffer) { USER_PRINTLN("FATAL: no display framebuffer!"); while (1) vTaskDelay(1); }
+  USER_PRINTF("Display framebuffer at: %p (DPI-internal)\n", display_framebuffer);
+
+  const size_t ppa_align = 4096;
+  const size_t bytes_per_pixel = WLEDMM_DISPLAY_DEPTH / 8;
+  const size_t fb_aligned_size = ((size_t)timing.width * timing.height * bytes_per_pixel + ppa_align - 1) & ~(ppa_align - 1);
+  ppa_framebuffer = (uint8_t*)heap_caps_aligned_alloc(ppa_align, fb_aligned_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!ppa_framebuffer) { USER_PRINTLN("FATAL: no PPA framebuffer!"); while (1) vTaskDelay(1); }
+  memset(ppa_framebuffer, 0, fb_aligned_size);
+  USER_PRINTF("PPA framebuffer: %p (%u B)\n", ppa_framebuffer, (unsigned)fb_aligned_size);
+
+  // Startup test pattern: RGB colour bands
+  for (uint16_t y = 0; y < timing.height; y++) {
+    uint8_t band = (y * 6) / timing.height;
+    uint8_t r = (band == 0 || band == 3 || band == 4) ? 255 : 0;
+    uint8_t g = (band == 1 || band == 3 || band == 5) ? 255 : 0;
+    uint8_t b = (band == 2 || band == 4 || band == 5) ? 255 : 0;
+    for (uint16_t x = 0; x < timing.width; x++) {
+      uint32_t off = ((uint32_t)y * timing.width + x) * bytes_per_pixel;
+      display_framebuffer[off + 0] = b;
+      display_framebuffer[off + 1] = g;
+      display_framebuffer[off + 2] = r;
+    }
+  }
+
+  myFramebuffer.setPsram(true);
+  buttonFramebuffer.setPsram(true);
+  myFramebuffer.setColorDepth(WLEDMM_DISPLAY_DEPTH);
+  buttonFramebuffer.setColorDepth(WLEDMM_DISPLAY_DEPTH);
+  if (!myFramebuffer.createSprite(timing.width, 100))
+    { USER_PRINTLN("Failed to allocate myFramebuffer sprite!"); while (1) vTaskDelay(1); }
+
+  const int cols = WLEDMM_DISPLAY_BUTTONS_COLS, padding = 5;
+  int rows = ((int)WLEDMM_DISPLAY_BUTTONS + cols - 1) / cols;
+  if (rows < 1) rows = 1;
+  int rectWidth  = (timing.width - (cols + 1) * padding) / cols;
+  int rectHeight = (int)((float)rectWidth * 8.0f / (float)cols);
+  int btnFbH     = rows * rectHeight + (rows + 1) * padding;
+  if (!buttonFramebuffer.createSprite(timing.width, btnFbH))
+    { USER_PRINTLN("Failed to allocate buttonFramebuffer sprite!"); while (1) vTaskDelay(1); }
+  USER_PRINTF("Sprites allocated: main=%dx100, buttons=%dx%d\n", timing.width, timing.width, btnFbH);
+
+  hdmi_current_mode = mode;
 }
 
 // Runtime display dimensions — set at init from WLEDMM_DISPLAY_MODE, replacing compile-time W/H defines
@@ -977,11 +1213,17 @@ void WLED::loop() { // loopTask
             uint32_t now_ms = millis();
             if (now_ms - blit_log_ms >= 5000) {
               blit_log_ms = now_ms;
-              USER_PRINTF("HDMI blit ok=%u fail=%u src[0]=%02x%02x%02x dst[0]=%02x%02x%02x scale=%.2f %dx%d\n",
-                blit_ok, blit_fail,
-                busPixelData[0], busPixelData[1], busPixelData[2],
-                display_framebuffer[0], display_framebuffer[1], display_framebuffer[2],
-                scale, ledW, ledH);
+              {
+                uint8_t r_c1 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xC1) : 0;
+                uint8_t r_b2 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xB2) : 0;
+                USER_PRINTF("HDMI blit ok=%u fail=%u src[0]=%02x%02x%02x dst[0]=%02x%02x%02x scale=%.2f %dx%d hpd=%d %s\n",
+                  blit_ok, blit_fail,
+                  busPixelData[0], busPixelData[1], busPixelData[2],
+                  display_framebuffer[0], display_framebuffer[1], display_framebuffer[2],
+                  scale, ledW, ledH,
+                  (r_c1 >> 7) & 1,
+                  (r_b2 & 1) ? "HDMI" : "DVI");
+              }
               blit_ok = blit_fail = 0;
             }
           }
@@ -2104,31 +2346,7 @@ void WLED::setup() {
     strip.createLedmapBinaryCache();
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
-  busNetworkDummyMode = true;  // P4/HDMI build: fill pixel buffer but skip Art-Net transmit
-
-  // === HDMI Display Initialization: Olimex ESP32-P4-PC via LT8912B bridge ===
   {
-    // Power on MIPI DSI PHY (LDO channel 3 at 2500mV)
-    USER_PRINTLN("MIPI DSI PHY Power on");
-    esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
-    esp_ldo_channel_config_t ldo_mipi_phy_config = {
-      .chan_id = 3, .voltage_mv = 2500,
-    };
-    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
-
-    // MIPI DSI bus — 2 lanes at 1000 Mbps (sufficient for 1280x720@60Hz RGB888)
-    // Note: macros from esp_lcd_lt8912b.h cannot be used directly in C++ due to enum cast and
-    // field-order issues, so structs are initialized explicitly here.
-    USER_PRINTLN("Initialize MIPI DSI bus");
-    esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
-    esp_lcd_dsi_bus_config_t bus_config = {};
-    bus_config.bus_id             = 0;
-    bus_config.num_data_lanes     = 2;
-    bus_config.phy_clk_src        = (mipi_dsi_phy_clock_source_t)4; // MIPI_DSI_PHY_CLK_SRC_DEFAULT
-    
-
-    // --- Runtime HDMI mode selection via Serial ---
-    {
       int selected = (int)WLEDMM_DISPLAY_MODE;
       Serial.println("\n=== HDMI Mode Selection (30s timeout) ===");
       for (int i = 0; i < (int)HDMI_MODE_COUNT; i++)
@@ -2151,16 +2369,11 @@ void WLED::setup() {
         if (choice >= 0 && choice < (int)HDMI_MODE_COUNT) selected = choice;
       }
       Serial.printf("\nUsing mode %d: %s\n", selected, hdmi_mode_names[selected]);
-      hdmi_dpi_config_t timing = {};
-      hdmi_get_dpi_config((hdmi_mode_t)selected, bus_config.num_data_lanes, timing);
-    wledmm_display_w = timing.width;
-    wledmm_display_h = timing.height;
-    bus_config.lane_bit_rate_mbps = timing.lane_bit_rate_mbps;
-    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
+      hdmi_display_init(selected);
 
-    // DPI panel config — dimensions and timing from WLEDMM_DISPLAY_MODE
-    esp_lcd_dpi_panel_config_t dpi_config = {};
-    dpi_config.dpi_clk_src                    = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
+    // DPI_PANEL_PLACEHOLDER_REMOVE_START
+    esp_lcd_dpi_panel_config_t dpi_config_UNUSED = {};
+    dpi_config_UNUSED.dpi_clk_src               = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
     dpi_config.dpi_clock_freq_mhz             = timing.dpi_clock_freq_mhz;
     dpi_config.virtual_channel                = 0;
     dpi_config.in_color_format                = LCD_COLOR_FMT_RGB888;
@@ -2195,6 +2408,7 @@ void WLED::setup() {
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_main, &io_main));
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_cec,  &io_cec));
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(global_i2c_bus_handle, &io_cfg_avi,  &io_avi));
+    lt8912b_io_main = io_main;  // save for ongoing diagnostics
 
     // LT8912B vendor config: 720p timing + DSI bus
     lt8912b_vendor_config_t vendor_config = {
@@ -2249,7 +2463,39 @@ void WLED::setup() {
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     // Note: esp_lcd_panel_disp_on_off() is not supported by the LT8912B driver (returns ESP_ERR_NOT_SUPPORTED).
-    USER_PRINTF("HDMI display initialized: %dx%d @ %dHz\n", timing.width, timing.height, timing.fps);
+    USER_PRINTF("HDMI bridge init: %dx%d @ %dHz (mode %d: %s)\n",
+      timing.width, timing.height, timing.fps, selected, hdmi_mode_names[selected]);
+    {
+      // Register-level diagnostics from Linux DRM driver (lt8912.c):
+      //   0xC1 bit 7 = HPD (Hot Plug Detect) — cable physically connected
+      //   0xB2 bit 0 = HDMI(1) vs DVI(0) mode — set by driver based on monitor EDID
+      uint8_t r_c1 = lt8912b_read_reg(io_main, 0xC1);
+      uint8_t r_b2 = lt8912b_read_reg(io_main, 0xB2);
+      USER_PRINTF("LT8912B regs: 0xC1=0x%02x (HPD=%d) 0xB2=0x%02x (%s)\n",
+        r_c1, (r_c1 >> 7) & 1,
+        r_b2, (r_b2 & 1) ? "HDMI" : "DVI");
+    }
+
+    // Poll LT8912B for HDMI link — monitor must be connected and locked before continuing
+    {
+      const uint32_t timeout_ms = 5000;
+      const uint32_t poll_ms   = 200;
+      uint32_t elapsed = 0;
+      bool ready = false;
+      USER_PRINT("Waiting for HDMI link");
+      while (elapsed < timeout_ms) {
+        ready = esp_lcd_panel_lt8912b_is_ready((esp_lcd_panel_t*)panel_handle);
+        if (ready) break;
+        USER_PRINT(".");
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        elapsed += poll_ms;
+      }
+      if (ready) {
+        USER_PRINTF(" OK (%ums)\n", elapsed);
+      } else {
+        USER_PRINTLN(" TIMEOUT — no monitor detected, continuing anyway");
+      }
+    }
 
     // Get the DPI panel's native framebuffer
     void* fb0_ptr = NULL;

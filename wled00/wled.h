@@ -348,7 +348,12 @@ WLED_GLOBAL ppa_client_handle_t preview_ppa_srm_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
 WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
-WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_handle_t    panel_handle     _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_main  _INIT(NULL);  // kept alive for register-level diagnostics
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_cec   _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_avi   _INIT(NULL);
+WLED_GLOBAL esp_lcd_dsi_bus_handle_t  lt8912b_dsi_bus  _INIT(NULL);
+WLED_GLOBAL int                       hdmi_current_mode _INIT(0);
 // WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);       // no touch on HDMI board
 // WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
 WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // raw DPI framebuffer from LT8912B (IDF-allocated, may not be 256B aligned)
