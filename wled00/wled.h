@@ -339,6 +339,9 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 #include "ImageCacheManager.h"
 #include "esp_lcd_panel_ops.h"
 #include "driver/i2c_master.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "esp_lcd_mipi_dsi.h"
+#endif
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
@@ -356,8 +359,8 @@ WLED_GLOBAL esp_lcd_dsi_bus_handle_t  lt8912b_dsi_bus  _INIT(NULL);
 WLED_GLOBAL int                       hdmi_current_mode _INIT(0);
 // WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);       // no touch on HDMI board
 // WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
-WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // raw DPI framebuffer from LT8912B (IDF-allocated, may not be 256B aligned)
-WLED_GLOBAL uint8_t* ppa_framebuffer    _INIT(NULL);        // PPA output buffer, 256-byte aligned (required by PPA for PSRAM)
+WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // back buffer — PPA writes here; flipped to front on each blit
+WLED_GLOBAL uint8_t* display_front_framebuffer _INIT(NULL); // front buffer — DPI hardware is displaying this one
 WLED_GLOBAL uint16_t touchscreen_x[1];
 WLED_GLOBAL uint16_t touchscreen_y[1];
 WLED_GLOBAL uint16_t touchscreen_strength[1];
