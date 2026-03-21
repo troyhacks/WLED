@@ -374,7 +374,10 @@ void hdmi_switch_mode(int mode) {
 // ============================================================
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
 void hdmi_blit() {
-  if (!display_framebuffer || !panel_handle) return;
+  // Capture globals into locals immediately — deinit may NULL the globals at any time.
+  uint8_t* back_fb = display_framebuffer;
+  esp_lcd_panel_handle_t ph = panel_handle;
+  if (!back_fb || !ph) return;
 
   static uint32_t last_blit_us = 0;
   uint32_t now_us = esp_timer_get_time();
@@ -402,7 +405,7 @@ void hdmi_blit() {
           srm_cfg.in.pic_h           = ledH;
           srm_cfg.in.block_w         = ledW;
           srm_cfg.in.block_h         = ledH;
-          srm_cfg.out.buffer         = display_framebuffer;
+          srm_cfg.out.buffer         = back_fb;
           srm_cfg.out.buffer_size    = fb_size;
           srm_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
           srm_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
@@ -418,9 +421,9 @@ void hdmi_blit() {
           if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
             blit_ok++;
             // Present the back buffer at next vsync, then swap so next blit writes to the old front.
-            esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, display_framebuffer);
+            esp_lcd_panel_draw_bitmap(ph, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, back_fb);
             uint8_t* tmp          = display_front_framebuffer;
-            display_front_framebuffer = display_framebuffer;
+            display_front_framebuffer = back_fb;
             display_framebuffer       = tmp;
           } else {
             blit_fail++;
