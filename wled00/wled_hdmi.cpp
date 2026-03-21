@@ -417,9 +417,8 @@ void hdmi_blit() {
 
           if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
             blit_ok++;
-            // With num_fbs=2 the DPI DMA linked list alternates fb0→fb1→fb0→... automatically.
-            // Just swap our software pointers — the hardware picks up the new back buffer on the
-            // next frame with no explicit draw_bitmap call needed (and draw_bitmap corrupts IDF state).
+            // Present the back buffer at next vsync, then swap so next blit writes to the old front.
+            esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, display_framebuffer);
             uint8_t* tmp          = display_front_framebuffer;
             display_front_framebuffer = display_framebuffer;
             display_framebuffer       = tmp;
