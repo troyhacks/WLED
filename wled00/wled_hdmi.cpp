@@ -163,9 +163,16 @@ static uint8_t lt8912b_read_reg(esp_lcd_panel_io_handle_t io, uint8_t reg) {
 // NULLs both FB pointers first so the blit loop stops and the swap can't resurrect a stale pointer.
 // ============================================================
 static void hdmi_display_deinit() {
+  // Take busMutex to wait for any in-progress blit (including draw_bitmap) to fully complete.
+  // This ensures we know exactly when the last GDMA-backed vsync flip was issued.
+  xSemaphoreTake(busMutex, pdMS_TO_TICKS(500));
   display_framebuffer       = NULL;
   display_front_framebuffer = NULL;
-  vTaskDelay(pdMS_TO_TICKS(150));       // let any in-progress blit + vsync finish
+  xSemaphoreGive(busMutex);
+
+  // Wait two frame periods (40ms @ 50Hz) for the last draw_bitmap's GDMA vsync interrupt to fire
+  // and be handled before panel_del gates the GDMA clock.
+  vTaskDelay(pdMS_TO_TICKS(50));
 
   // Delete panel first (it may use I2C handles during teardown)
   if (panel_handle)    { esp_lcd_panel_del(panel_handle);           panel_handle    = NULL; }
