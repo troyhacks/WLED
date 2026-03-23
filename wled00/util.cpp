@@ -94,10 +94,14 @@ void scanI2C_IDF(i2c_master_bus_handle_t bus) {
     {0x3C, "SSD1306 OLED"},
     {0x3D, "SSD1306 OLED (alt)"},
     {0x44, "SHT30/SHT31"},
-    {0x48, "LT8912B HDMI bridge (main) / ADS1115/TMP102"},
-    {0x49, "LT8912B HDMI bridge (CEC-DSI) / ADS1115 alt"},
-    {0x4A, "LT8912B HDMI bridge (AVI) / MAX44009"},
-    {0x4B, "Unknown"},
+    {0x37, "LT8912B internal video pipeline state (streaming 16-entry FIFO, undocumented)"},
+    {0x3A, "LT8912B phantom/undocumented register bank"},
+    {0x48, "LT8912B HDMI bridge (main control)"},
+    {0x49, "LT8912B HDMI bridge (MIPI/DSI timing)"},
+    {0x4A, "LT8912B HDMI bridge (AVI InfoFrame)"},
+    {0x4B, "LT8912B HDMI bridge (EDID emulation write page — zeros = no custom EDID)"},
+    {0x50, "LT8912B DDC/EDID proxy (connected monitor's EDID)"},
+    {0x54, "FE1.1s USB hub config EEPROM (24Cxx, A2=1)"},
     {0x5D, "GT911 Touch Panel Controller"},
     {0x68, "DS3231 RTC/MPU6050"},
     {0x76, "BME280/BMP280"},
@@ -125,6 +129,186 @@ void scanI2C_IDF(i2c_master_bus_handle_t bus) {
   Serial.printf("--- %d device(s) found ---\n\n", found);
   if (ES7210_present) USER_PRINTLN("ES7210_present == true");
 }
+
+// Probe the five unknown I2C addresses found during bus scan and print identifying register values.
+// Call once after scanI2C_IDF().  Results go to Serial so they appear in the monitor.
+void probeI2C_unknown(i2c_master_bus_handle_t bus) {
+  if (!bus) return;
+
+  // Create a temporary dev handle, do a register read, then remove it.
+  // i2c_master_transmit_receive() requires a dev handle, not the bus handle.
+  auto reg_read = [&](uint8_t addr, uint8_t reg, uint8_t* buf, size_t len) -> bool {
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address   = addr;
+    dev_cfg.scl_speed_hz     = 100000;
+    i2c_master_dev_handle_t dev = nullptr;
+    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
+    bool ok = (i2c_master_transmit_receive(dev, &reg, 1, buf, len, 20) == ESP_OK);
+    i2c_master_bus_rm_device(dev);
+    return ok;
+  };
+
+  // Plain read variant (no sub-address write), used for EDID proxy fallback.
+  auto plain_read = [&](uint8_t addr, uint8_t* buf, size_t len) -> bool {
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address   = addr;
+    dev_cfg.scl_speed_hz     = 100000;
+    i2c_master_dev_handle_t dev = nullptr;
+    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
+    bool ok = (i2c_master_receive(dev, buf, len, 20) == ESP_OK);
+    i2c_master_bus_rm_device(dev);
+    return ok;
+  };
+
+  // Write N bytes then read M bytes — for EEPROM 16-bit address access.
+  auto write_read = [&](uint8_t addr, uint8_t* wbuf, size_t wlen, uint8_t* rbuf, size_t rlen) -> bool {
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address   = addr;
+    dev_cfg.scl_speed_hz     = 100000;
+    i2c_master_dev_handle_t dev = nullptr;
+    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
+    bool ok = (i2c_master_transmit_receive(dev, wbuf, wlen, rbuf, rlen, 20) == ESP_OK);
+    i2c_master_bus_rm_device(dev);
+    return ok;
+  };
+
+  Serial.println(F("\n--- I2C unknown device probe ---"));
+
+  // ── 0x37: MAX17048 fuel gauge?
+  // VERSION reg (0x08) → upper nibble is silicon rev (0x001x expected)
+  // VCELL   reg (0x00) → battery voltage, 78.125µV/LSB, 12 bits MSB-first
+  {
+    uint8_t b[2] = {};
+    if (reg_read(0x37, 0x08, b, 2)) {
+      uint16_t ver = (b[0] << 8) | b[1];
+      Serial.printf("  0x37 reg[0x08]=0x%04X  (MAX17048 VERSION expects 0x001x)\n", ver);
+    } else {
+      Serial.println("  0x37 reg[0x08]: read failed");
+    }
+    if (reg_read(0x37, 0x00, b, 2)) {
+      uint16_t raw = (b[0] << 8) | b[1];
+      float mv = (raw >> 4) * 0.078125f;
+      Serial.printf("  0x37 reg[0x00]=0x%04X  (if MAX17048 VCELL: %.0f mV)\n", raw, mv);
+    }
+  }
+
+  // ── 0x3A: unknown — dump registers 0x00..0x03 to identify chip class
+  {
+    Serial.printf("  0x3A registers:");
+    for (uint8_t r = 0; r <= 3; r++) {
+      uint8_t b = 0;
+      if (reg_read(0x3A, r, &b, 1)) Serial.printf(" [0x%02X]=0x%02X", r, b);
+      else                          Serial.printf(" [0x%02X]=ERR", r);
+    }
+    Serial.println();
+  }
+
+  // ── 0x4B: INA226 power monitor?
+  // Manufacturer ID (0xFE) → 0x5449 ('TI')
+  // Die ID          (0xFF) → 0x2260
+  {
+    uint8_t b[2] = {};
+    if (reg_read(0x4B, 0xFE, b, 2)) {
+      uint16_t manuf = (b[0] << 8) | b[1];
+      if (reg_read(0x4B, 0xFF, b, 2)) {
+        uint16_t die = (b[0] << 8) | b[1];
+        Serial.printf("  0x4B ManufID=0x%04X DieID=0x%04X  (INA226 expects 0x5449/0x2260)\n", manuf, die);
+      }
+    } else {
+      Serial.println("  0x4B reg[0xFE]: read failed");
+    }
+  }
+
+  // ── 0x50: EDID proxy from LT8912B?
+  // Standard EDID header bytes 0-7: 00 FF FF FF FF FF FF 00
+  {
+    uint8_t buf[8] = {};
+    if (reg_read(0x50, 0x00, buf, 8)) {
+      Serial.printf("  0x50 bytes[0..7]:");
+      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
+      bool is_edid = (buf[0]==0x00 && buf[1]==0xFF && buf[2]==0xFF && buf[3]==0xFF &&
+                      buf[4]==0xFF && buf[5]==0xFF && buf[6]==0xFF && buf[7]==0x00);
+      Serial.printf("  (%s)\n", is_edid ? "EDID header confirmed" : "not EDID — likely EEPROM/other");
+    } else if (plain_read(0x50, buf, 8)) {
+      // Some EDID proxies only respond to a plain read (no sub-address byte)
+      Serial.printf("  0x50 plain-read[0..7]:");
+      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
+      Serial.println();
+    } else {
+      Serial.println("  0x50: both addressed and plain read failed");
+    }
+  }
+
+  // ── 0x54: 24Cxx EEPROM (FE1.1s hub config) or other?
+  // Try 16-bit then 8-bit sub-address to determine EEPROM size class.
+  {
+    uint8_t buf[8] = {};
+    uint8_t addr16[2] = {0x00, 0x00};
+    uint8_t addr8      = 0x00;
+    if (write_read(0x54, addr16, 2, buf, 8)) {
+      Serial.printf("  0x54 EEPROM[0..7] (16-bit addr):");
+      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
+      Serial.println();
+    } else if (reg_read(0x54, addr8, buf, 8)) {
+      Serial.printf("  0x54 EEPROM[0..7] (8-bit addr):");
+      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
+      Serial.println();
+    } else {
+      Serial.println("  0x54: read failed");
+    }
+  }
+
+  // ── Follow-up: 0x4B — BD71837 PMIC? (no ID regs at 0xFE/FF; chip ID at reg 0x00 = 0xBD)
+  {
+    uint8_t b[4] = {};
+    if (reg_read(0x4B, 0x00, b, 4)) {
+      Serial.printf("  0x4B reg[0x00..03]: %02X %02X %02X %02X  (BD71837 PMIC expects 0xBD at [0])\n",
+                    b[0], b[1], b[2], b[3]);
+    } else {
+      Serial.println("  0x4B reg[0x00]: read failed");
+    }
+  }
+
+  // ── Follow-up: 0x3A — PCF8574(A) GPIO expander?
+  // PCF8574 has no indexed registers; our earlier "register" writes changed its output port.
+  // A plain read (no sub-address) returns the current port/pin state in one byte.
+  {
+    uint8_t b = 0;
+    if (plain_read(0x3A, &b, 1)) {
+      Serial.printf("  0x3A plain port read: 0x%02X  (PCF8574 port state if GPIO expander)\n", b);
+    } else {
+      Serial.println("  0x3A plain read: failed");
+    }
+    // Also read a few more indexed registers to see if the pattern is register-mapped or port-driven
+    Serial.printf("  0x3A regs[0x04..07]:");
+    for (uint8_t r = 4; r <= 7; r++) {
+      uint8_t v = 0;
+      if (reg_read(0x3A, r, &v, 1)) Serial.printf(" [%02X]=%02X", r, v);
+      else                          Serial.printf(" [%02X]=ERR", r);
+    }
+    Serial.println();
+  }
+
+  // ── Follow-up: 0x37 — probe wider register range to identify chip class
+  {
+    Serial.printf("  0x37 regs[0x00..0F]:");
+    for (uint8_t r = 0; r <= 0x0F; r++) {
+      uint8_t b[2] = {};
+      if (reg_read(0x37, r, b, 2)) Serial.printf(" [%02X]=%02X%02X", r, b[0], b[1]);
+      else                         Serial.printf(" [%02X]=ERR", r);
+    }
+    Serial.println();
+    // Also try ID registers at 0xFE/0xFF
+    uint8_t b[2] = {};
+    if (reg_read(0x37, 0xFE, b, 2)) Serial.printf("  0x37 reg[0xFE]=0x%04X\n", (b[0]<<8)|b[1]);
+    if (reg_read(0x37, 0xFF, b, 2)) Serial.printf("  0x37 reg[0xFF]=0x%04X\n", (b[0]<<8)|b[1]);
+  }
+
+  Serial.println(F("--- probe done ---\n"));
+}
 #endif // CONFIG_IDF_TARGET_ESP32P4
 
 //helper to get int value at a position in string
@@ -133,28 +317,29 @@ int getNumVal(const String* req, uint32_t pos)
   return req->substring(pos+3).toInt();
 }
 
-bool backupLittleFStoSD() {
-  // Delete oldest backup if it exists
+bool backupLittleFStoPath(const char* dest_root) {
   struct stat st;
-  if (stat("/sdcard/littlefs_backup_9", &st) == 0) {
-    removeDirectory("/sdcard/littlefs_backup_9");
-  }
+  char oldPath[64], newPath[64];
+
+  // Delete oldest backup if it exists
+  snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_9", dest_root);
+  if (stat(oldPath, &st) == 0) removeDirectory(oldPath);
 
   // Rotate existing backups 8->9, 7->8, ... 0->1
   for (int i = 8; i >= 0; i--) {
-    char oldPath[32];
-    char newPath[32];
-    snprintf(oldPath, sizeof(oldPath), "/sdcard/littlefs_backup_%d", i);
-    snprintf(newPath, sizeof(newPath), "/sdcard/littlefs_backup_%d", i + 1);
-
-    if (stat(oldPath, &st) == 0) {
-      rename(oldPath, newPath);
-    }
+    snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_%d", dest_root, i);
+    snprintf(newPath, sizeof(newPath), "%s/littlefs_backup_%d", dest_root, i + 1);
+    if (stat(oldPath, &st) == 0) rename(oldPath, newPath);
   }
 
   // Create new backup at 0
-  mkdir("/sdcard/littlefs_backup_0", 0755);
-  return copyDirectory("/littlefs", "/sdcard/littlefs_backup_0");
+  snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_0", dest_root);
+  mkdir(oldPath, 0755);
+  return copyDirectory("/littlefs", oldPath);
+}
+
+bool backupLittleFStoSD() {
+  return backupLittleFStoPath("/sdcard");
 }
 
 bool removeDirectory(const char* path) {

@@ -9,4 +9,9 @@ void    usb_poll();           // call from background_loop_nonblocking() — pro
 esp_err_t mount_sdcard();
 esp_err_t unmount_sdcard();
 bool      is_sdcard_mounted();
+// Check mount_path/wled_update/ for firmware.bin, network_adapter*.bin, cfg.json, presets.json, etc.
+// Processes and renames each file to .done; returns true if a reboot is needed.
+bool      process_storage_updates(const char* mount_path);
+// Populate paths[] (each entry 16 chars) with active USB mount points. Returns count.
+int       get_usb_mount_paths(char (*paths)[16], int max_paths);
 #endif

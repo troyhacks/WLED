@@ -1319,6 +1319,11 @@ void WLED::setup() {
   #if defined(SOC_SDMMC_HOST_SUPPORTED)
   err_t sdcarderr = mount_sdcard();
   if (sdcarderr == ESP_OK) {
+    if (process_storage_updates("/sdcard")) {
+      USER_PRINTLN("Rebooting to apply storage updates from SD card...");
+      delay(500);
+      esp_restart();
+    }
     USER_PRINT("Backup of LittleFS to SD Card... ");
     backupLittleFStoSD();
     USER_PRINTLN("Done!");
@@ -1440,6 +1445,7 @@ void WLED::setup() {
 
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
     scanI2C_IDF(global_i2c_bus_handle);  // use IDF v5 API on P4
+    probeI2C_unknown(global_i2c_bus_handle);  // read identifying registers from unknown addresses
     #elif !defined(CONFIG_IDF_TARGET_ESP32C5)
     scanI2C(Wire);
     #endif

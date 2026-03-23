@@ -399,6 +399,7 @@ void userLoop();
 //util.cpp
 bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint32_t* mappingTable, uint32_t tableSize, const char* filename = "/panel_map.json");
 bool backupLittleFStoSD();
+bool backupLittleFStoPath(const char* dest_root);
 bool copyDirectory(const char* srcDir, const char* destDir);
 bool copyFile(const char* srcPath, const char* destPath);
 bool removeDirectory(const char* path);
@@ -410,6 +411,7 @@ void scanI2C(TwoWire& wire = Wire);
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "driver/i2c_master.h"
 void scanI2C_IDF(i2c_master_bus_handle_t bus);
+void probeI2C_unknown(i2c_master_bus_handle_t bus);
 #endif
 void dumpAllTaskHWMs(void);
 #define inoise8 perlin8   // fastled legacy alias

@@ -37,6 +37,7 @@
 #include "driver/sdmmc_host.h"
 #include "driver/gpio.h"
 #include <sys/stat.h>
+#include "esp_ota_ops.h"
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "esp_ldo_regulator.h"  // ESP32-P4: LDO4 (VO4) powers the SD card via P-FET
 #endif
@@ -288,6 +289,152 @@ static void usb_task(void *args) {
 }
 
 // ============================================================
+// Storage update processing (SD card and USB devices)
+//
+// Drop files into a wled_update/ folder on the SD card or USB drive:
+//   firmware.bin          — flashes the ESP32-P4 via OTA, then reboots
+//   network_adapter*.bin  — flashes C6 WiFi coprocessor firmware directly from storage
+//                           via ota_from_path() — no copy to LittleFS needed
+//   cfg.json              — replaces /littlefs/cfg.json (WLED settings)
+//   presets.json          — replaces /littlefs/presets.json
+//   ir.json / remote.json / wsec.json — same pattern
+//
+// Each file is renamed to <name>.done after processing so it won't re-apply.
+// SD card is processed at boot (preferred); USB is processed when device connects.
+// Any update triggers an automatic reboot.
+// ============================================================
+
+static const char* const WLED_CONFIG_FILES[] = {
+  "cfg.json", "presets.json", "ir.json", "remote.json", "wsec.json", nullptr
+};
+
+// Flash ESP32-P4 firmware from a file path via OTA. Returns true on success.
+static bool flash_p4_firmware(const char* path) {
+  FILE* f = fopen(path, "rb");
+  if (!f) { USER_PRINTF("OTA: cannot open %s\n", path); return false; }
+
+  uint8_t magic = 0;
+  fread(&magic, 1, 1, f);
+  rewind(f);
+  if (magic != 0xE9) {
+    USER_PRINTF("OTA: bad magic 0x%02X in %s\n", magic, path);
+    fclose(f); return false;
+  }
+
+  const esp_partition_t* part = esp_ota_get_next_update_partition(NULL);
+  if (!part) { USER_PRINTLN("OTA: no update partition found"); fclose(f); return false; }
+
+  esp_ota_handle_t handle;
+  if (esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle) != ESP_OK) {
+    USER_PRINTLN("OTA: esp_ota_begin failed"); fclose(f); return false;
+  }
+
+  uint8_t buf[1024];
+  size_t n;
+  bool ok = true;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+    if (esp_ota_write(handle, buf, n) != ESP_OK) { ok = false; break; }
+  }
+  fclose(f);
+
+  if (!ok || esp_ota_end(handle) != ESP_OK) { USER_PRINTLN("OTA: write/end failed"); return false; }
+  if (esp_ota_set_boot_partition(part) != ESP_OK) { USER_PRINTLN("OTA: set_boot_partition failed"); return false; }
+
+  USER_PRINTLN("OTA: P4 firmware flashed successfully");
+  return true;
+}
+
+// Find network_adapter*.bin in update_dir and flash the C6 directly from storage —
+// no copy to LittleFS needed. Returns true if flashed (caller must reboot).
+static bool flash_c6_from_storage(const char* update_dir) {
+  DIR* d = opendir(update_dir);
+  if (!d) return false;
+  bool flashed = false;
+  struct dirent* e;
+  while ((e = readdir(d)) != nullptr && !flashed) {
+    const char* nm = e->d_name;
+    size_t len = strlen(nm);
+    if (len < 20) continue;  // "network_adapter.bin" = 19 chars minimum
+    if (strncmp(nm, "network_adapter", 15) != 0) continue;
+    if (strcmp(nm + len - 4, ".bin") != 0) continue;
+
+    char src[128], done[128];
+    snprintf(src,  sizeof(src),  "%s/%s",  update_dir, nm);
+    snprintf(done, sizeof(done), "%s.done", src);
+    USER_PRINTF("Flashing C6 firmware directly from %s\n", src);
+    esp_err_t ret = ota_from_path(src);
+    if (ret == ESP_OK) {
+      rename(src, done);
+      flashed = true;
+    } else if (ret == ESP_ERR_NOT_FOUND) {
+      USER_PRINTLN("C6 firmware already up to date");
+      rename(src, done);  // rename so we don't check again
+    } else {
+      USER_PRINTF("C6 OTA failed (%s), file left for retry\n", esp_err_to_name(ret));
+    }
+  }
+  closedir(d);
+  return flashed;
+}
+
+// Copy known WLED config files from update_dir into LittleFS.
+static bool apply_config_files(const char* update_dir) {
+  struct stat st;
+  bool any = false;
+  for (int i = 0; WLED_CONFIG_FILES[i]; i++) {
+    char src[128], dst[64], done[128];
+    snprintf(src,  sizeof(src),  "%s/%s",  update_dir, WLED_CONFIG_FILES[i]);
+    snprintf(dst,  sizeof(dst),  "/littlefs/%s", WLED_CONFIG_FILES[i]);
+    snprintf(done, sizeof(done), "%s.done", src);
+    if (stat(src, &st) != 0) continue;
+    USER_PRINTF("Applying %s from storage\n", WLED_CONFIG_FILES[i]);
+    if (copyFile(src, dst)) { rename(src, done); any = true; }
+    else USER_PRINTF("Failed to copy %s\n", WLED_CONFIG_FILES[i]);
+  }
+  return any;
+}
+
+// Check mount_path/wled_update/ for update files and process them in priority order.
+// Returns true if a reboot is needed (caller should reboot after logging).
+bool process_storage_updates(const char* mount_path) {
+  char update_dir[64];
+  snprintf(update_dir, sizeof(update_dir), "%s/wled_update", mount_path);
+  struct stat st;
+  if (stat(update_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+
+  USER_PRINTF("Found wled_update/ on %s — checking for updates\n", mount_path);
+  bool needs_reboot = false;
+
+  // 1. P4 firmware (highest priority — flash and mark done before anything else)
+  char fw[128], fw_done[128];
+  snprintf(fw,      sizeof(fw),      "%s/firmware.bin",      update_dir);
+  snprintf(fw_done, sizeof(fw_done), "%s/firmware.bin.done", update_dir);
+  if (stat(fw, &st) == 0) {
+    USER_PRINTLN("Flashing P4 firmware from storage...");
+    if (flash_p4_firmware(fw)) { rename(fw, fw_done); needs_reboot = true; }
+    else USER_PRINTLN("P4 firmware flash failed — leaving file for retry");
+  }
+
+  // 2. C6 WiFi coprocessor firmware (flashed directly from storage, no LittleFS copy)
+  if (flash_c6_from_storage(update_dir)) needs_reboot = true;
+
+  // 3. Config / preset files
+  if (apply_config_files(update_dir)) needs_reboot = true;
+
+  return needs_reboot;
+}
+
+// Populate paths[] with the mount points of all currently connected USB MSC devices.
+// Returns the number of devices found.
+int get_usb_mount_paths(char (*paths)[16], int max_paths) {
+  int count = 0;
+  for (int i = 0; i < MAX_MSC_DEVICES && count < max_paths; i++) {
+    if (msc_devices[i]) { snprintf(paths[count++], 16, MNT_PATH "%d", i); }
+  }
+  return count;
+}
+
+// ============================================================
 // Public interface
 // ============================================================
 
@@ -309,8 +456,20 @@ void usb_poll() {
       msc_host_device_info_t info;
       ESP_ERROR_CHECK_WITHOUT_ABORT(msc_host_get_device_info(msc_devices[slot]->msc_device, &info));
       print_device_info(&info);
-      USER_PRINTLN("ImageCache started");
-      ImageCacheManager::getInstance().startPreload("/usb0");
+
+      char mount_path[16];
+      snprintf(mount_path, sizeof(mount_path), MNT_PATH "%d", slot);
+
+      USER_PRINTF("Backing up LittleFS to %s...\n", mount_path);
+      backupLittleFStoPath(mount_path);
+
+      if (process_storage_updates(mount_path)) {
+        USER_PRINTLN("Rebooting to apply storage updates from USB...");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+      }
+
+      ImageCacheManager::getInstance().startPreload(mount_path);
     } else {
       USER_PRINTLN("USB operation failed. Try replugging?");
     }

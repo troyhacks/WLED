@@ -311,3 +311,88 @@ esp_err_t ota_littlefs_perform(bool delete_after_use) {
 
   return ESP_HOSTED_SLAVE_OTA_COMPLETED;
 }
+
+/**
+ * Flash C6 firmware from any POSIX path (SD card, USB, etc.) using fopen() — no LittleFS copy.
+ * Returns ESP_OK if flashed and activated (caller must esp_restart()).
+ * Returns ESP_ERR_NOT_FOUND if version already matches.
+ */
+esp_err_t ota_from_path(const char* firmware_path) {
+#if !defined(CONFIG_IDF_TARGET_ESP32P4)
+  return ESP_ERR_NOT_SUPPORTED;
+#else
+  USER_PRINTF("C6 OTA: opening %s\n", firmware_path);
+  FILE* f = fopen(firmware_path, "rb");
+  if (!f) { USER_PRINTF("C6 OTA: cannot open %s\n", firmware_path); return ESP_FAIL; }
+
+  // Validate magic and read version from app description in first segment
+  esp_image_header_t        img_hdr  = {};
+  esp_image_segment_header_t seg_hdr = {};
+  esp_app_desc_t             app_desc = {};
+  char new_version[32] = "unknown";
+
+  if (fread(&img_hdr, 1, sizeof(img_hdr), f) != sizeof(img_hdr) ||
+      img_hdr.magic != ESP_IMAGE_HEADER_MAGIC) {
+    USER_PRINTLN("C6 OTA: invalid image magic");
+    fclose(f); return ESP_ERR_INVALID_ARG;
+  }
+  if (fread(&seg_hdr,  1, sizeof(seg_hdr),  f) == sizeof(seg_hdr) &&
+      fread(&app_desc, 1, sizeof(app_desc),  f) == sizeof(app_desc)) {
+    strncpy(new_version, app_desc.version, sizeof(new_version) - 1);
+  }
+  USER_PRINTF("C6 OTA: firmware version in file: %s\n", new_version);
+
+  // Version check — skip if already running this version
+#ifndef CONFIG_OTA_VERSION_FORCE_SLAVEFW
+  esp_hosted_coprocessor_fwver_t cur = {};
+  if (esp_hosted_get_coprocessor_fwversion(&cur) == ESP_OK) {
+    char cur_str[32];
+    snprintf(cur_str, sizeof(cur_str), "%" PRIu32 ".%" PRIu32 ".%" PRIu32,
+             cur.major1, cur.minor1, cur.patch1);
+    if (strcmp(new_version, cur_str) == 0) {
+      USER_PRINTF("C6 OTA: already at %s, skipping\n", cur_str);
+      fclose(f); return ESP_ERR_NOT_FOUND;
+    }
+    USER_PRINTF("C6 OTA: upgrading %s → %s\n", cur_str, new_version);
+  }
+#endif
+
+  esp_err_t ret = esp_hosted_slave_ota_begin();
+  if (ret != ESP_OK) {
+    USER_PRINTF("C6 OTA: begin failed: %s\n", esp_err_to_name(ret));
+    fclose(f); return ESP_HOSTED_SLAVE_OTA_FAILED;
+  }
+
+  uint8_t* chunk = (uint8_t*)heap_caps_malloc_prefer(CHUNK_SIZE, 3,
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_DMA,
+      MALLOC_CAP_SPIRAM, MALLOC_CAP_INTERNAL);
+  if (!chunk) { fclose(f); return ESP_ERR_NO_MEM; }
+
+  rewind(f);
+  size_t n;
+  bool ok = true;
+  uint32_t chunk_num = 1;
+  while ((n = fread(chunk, 1, CHUNK_SIZE, f)) > 0) {
+    if (esp_hosted_slave_ota_write(chunk, n) != ESP_OK) {
+      USER_PRINTF("C6 OTA: write failed at chunk %lu\n", chunk_num);
+      ok = false; break;
+    }
+    chunk_num++;
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+  free(chunk);
+  fclose(f);
+
+  if (!ok || esp_hosted_slave_ota_end() != ESP_OK) {
+    USER_PRINTLN("C6 OTA: failed"); return ESP_HOSTED_SLAVE_OTA_FAILED;
+  }
+
+  USER_PRINTLN("C6 OTA: complete, activating...");
+  ret = esp_hosted_slave_ota_activate();
+  if (ret != ESP_OK) {
+    USER_PRINTF("C6 OTA: activate failed: %s\n", esp_err_to_name(ret));
+    return ret;
+  }
+  return ESP_OK;  // caller must esp_restart()
+#endif
+}
