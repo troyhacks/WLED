@@ -113,7 +113,7 @@ void Segment::allocLeds() {
   }
   if ((size > 0) && (!ledsrgb || size > ledsrgbSize)) {    //softhack dont allocate zero bytes
     USER_PRINTF("allocLeds (%d,%d to %d,%d), %u from %u\n", start, startY, stop, stopY, size, ledsrgb?ledsrgbSize:0);
-    if (ledsrgb) free(ledsrgb);   // we need a bigger buffer, so free the old one first
+    if (ledsrgb && !Segment::_globalLeds) free(ledsrgb);   // we need a bigger buffer, so free the old one first (don't free if it's a slice of the global buffer)
     ledsrgb = (CRGB*) heap_caps_calloc_prefer(size, 1, 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_INTERNAL);
     ledsrgbSize = ledsrgb?size:0;
     if (ledsrgb == nullptr) {
