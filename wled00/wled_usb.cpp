@@ -1,6 +1,16 @@
 // USB mass storage host subsystem.
 // Handles MSC device connect/disconnect and SD card mount via SDMMC.
 // Public interface: usb_init() called from setup(), usb_poll() called from background loop.
+//
+// KNOWN IDF BUG (ESP32-P4): Random crash during USB host transfers:
+//   assert failed: usb_dwc_hal_chan_decode_intr usb_dwc_hal.c:502
+//   (chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD)
+// Race condition in the DWC HAL — a channel interrupt fires before the hardware sets CHHLTD.
+// Fix: in esp32-arduino-lib-builder/esp-idf/components/hal/usb_dwc_hal.c ~line 502, replace:
+//   HAL_ASSERT(chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD);
+// with:
+//   if (!(chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD)) { return USB_DWC_HAL_CHAN_EVENT_NONE; }
+// This ignores the spurious interrupt; the channel will re-interrupt once actually halted.
 
 #include "wled.h"
 
