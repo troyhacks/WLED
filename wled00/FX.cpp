@@ -10350,6 +10350,9 @@ static const char _data_FX_MODE_PPA_IMAGEPLAYER[] PROGMEM = "Image Player ‚òæüê
 struct WaveformPoint {
   uint8_t height;  // 0-127 amplitude
   uint8_t color;   // Pioneer color index 0-7
+  uint8_t r;       // High frequency (0-127)
+  uint8_t g;       // Mid frequency (0-127)
+  uint8_t b;       // Low frequency (0-127)
 };
 
 // -------------------------------------------------------- -
