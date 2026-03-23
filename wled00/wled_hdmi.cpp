@@ -3,6 +3,7 @@
 // declared in wled_hdmi.h: hdmi_setup(), hdmi_blit(), hdmi_print_mode_menu(), hdmi_switch_mode().
 
 #include "wled.h"
+#include "wled_hdmi.h"
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "esp_ldo_regulator.h"
@@ -156,6 +157,217 @@ static uint8_t lt8912b_read_reg(esp_lcd_panel_io_handle_t io, uint8_t reg) {
   uint8_t val = 0xFF;
   esp_lcd_panel_io_rx_param(io, reg, &val, 1);
   return val;
+}
+
+static void lt8912b_write_reg(esp_lcd_panel_io_handle_t io, uint8_t reg, uint8_t val) {
+  esp_lcd_panel_io_tx_param(io, reg, &val, 1);
+}
+
+// ============================================================
+// EDID reading and parsing.
+// The LT8912B proxies the connected monitor's EDID at I2C address 0x50.
+// Standard EDID block = 128 bytes.  CEA-861 extension = another 128 bytes.
+// Call hdmi_edid_init() once after the HDMI link is established.
+// ============================================================
+
+hdmi_edid_info_t hdmi_edid_info = {};  // extern declared in wled_hdmi.h
+
+// Read one 128-byte block from the DDC EDID proxy at 0x50.
+// offset=0x00 → base block, offset=0x80 → first extension block.
+// Uses a temporary IDF dev handle (same pattern as probeI2C_unknown in util.cpp).
+static bool edid_read_block(uint8_t offset, uint8_t *buf) {
+  if (!global_i2c_bus_handle) return false;
+  i2c_device_config_t cfg = {};
+  cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+  cfg.device_address  = 0x50;
+  cfg.scl_speed_hz    = 100000;  // DDC spec: 100 kHz (don't use 400 kHz — some monitors are slow)
+  i2c_master_dev_handle_t dev = nullptr;
+  if (i2c_master_bus_add_device(global_i2c_bus_handle, &cfg, &dev) != ESP_OK) return false;
+  bool ok = (i2c_master_transmit_receive(dev, &offset, 1, buf, 128, 100) == ESP_OK);
+  if (!ok && offset == 0x00)  // fallback: plain read for base block (no sub-address)
+    ok = (i2c_master_receive(dev, buf, 128, 100) == ESP_OK);
+  i2c_master_bus_rm_device(dev);
+  return ok;
+}
+
+// Decode the 5-bit packed 3-letter manufacturer code from EDID bytes 8–9.
+static void edid_decode_manufacturer(const uint8_t *e, char *out) {
+  uint16_t mid = ((uint16_t)e[8] << 8) | e[9];
+  out[0] = 'A' + ((mid >> 10) & 0x1F) - 1;
+  out[1] = 'A' + ((mid >>  5) & 0x1F) - 1;
+  out[2] = 'A' + ( mid        & 0x1F) - 1;
+  out[3] = '\0';
+  // Sanity check — replace garbage with '?'
+  for (int i = 0; i < 3; i++)
+    if (out[i] < 'A' || out[i] > 'Z') out[i] = '?';
+}
+
+// Copy the monitor name from an 0xFC descriptor block.
+static void edid_decode_name(const uint8_t *d, char *out, size_t out_len) {
+  size_t i = 0;
+  for (; i < 13 && i + 1 < out_len; i++) {
+    char c = (char)d[5 + i];
+    if (c == '\n' || c == '\r' || c == '\0') break;
+    out[i] = c;
+  }
+  // Trim trailing spaces
+  while (i > 0 && out[i - 1] == ' ') i--;
+  out[i] = '\0';
+}
+
+// Parse a Detailed Timing Descriptor (DTD).  Returns false if it's a monitor descriptor, not a timing.
+static bool edid_parse_dtd(const uint8_t *d, uint16_t *h_act, uint16_t *v_act, uint32_t *pclk_khz) {
+  if (d[0] == 0 && d[1] == 0) return false;  // monitor descriptor, not a timing
+  *pclk_khz = ((uint32_t)d[1] << 8 | d[0]) * 10;   // 10 kHz units
+  *h_act    = (uint16_t)(d[2] | ((uint16_t)(d[4] & 0xF0) << 4));
+  *v_act    = (uint16_t)(d[5] | ((uint16_t)(d[7] & 0xF0) << 4));
+  return (*pclk_khz > 0 && *h_act > 0 && *v_act > 0);
+}
+
+static void hdmi_edid_init() {
+  hdmi_edid_info = {};
+  if (!global_i2c_bus_handle) return;
+
+  // ── Base block (128 bytes) ────────────────────────────────────────────────
+  uint8_t base[128] = {};
+  if (!edid_read_block(0x00, base)) {
+    USER_PRINTLN("EDID: DDC read failed (no monitor or link not ready)");
+    return;
+  }
+
+  static const uint8_t edid_hdr[8] = {0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00};
+  if (memcmp(base, edid_hdr, 8) != 0) {
+    USER_PRINTLN("EDID: invalid header — skipping");
+    return;
+  }
+  uint8_t csum = 0;
+  for (int i = 0; i < 128; i++) csum += base[i];
+  if (csum != 0) USER_PRINTF("EDID: base block checksum FAIL (sum=0x%02X)\n", csum);
+
+  hdmi_edid_info.present = true;
+
+  // Manufacturer, product, year
+  edid_decode_manufacturer(base, hdmi_edid_info.manufacturer);
+  hdmi_edid_info.product_code = (uint16_t)base[10] | ((uint16_t)base[11] << 8);
+  hdmi_edid_info.year         = (uint16_t)base[17] + 1990;
+
+  // Four 18-byte descriptor blocks at offsets 54, 72, 90, 108
+  bool got_preferred = false;
+  for (int b = 0; b < 4; b++) {
+    const uint8_t *d = base + 54 + b * 18;
+    if (d[0] == 0 && d[1] == 0 && d[2] == 0) {
+      if (d[3] == 0xFC)  // monitor name
+        edid_decode_name(d, hdmi_edid_info.monitor_name, sizeof(hdmi_edid_info.monitor_name));
+    } else if (!got_preferred) {
+      got_preferred = edid_parse_dtd(d,
+          &hdmi_edid_info.preferred_hactive,
+          &hdmi_edid_info.preferred_vactive,
+          &hdmi_edid_info.preferred_pclk_khz);
+    }
+  }
+
+  // Standard timings: 8 × 2 bytes at bytes 38–53
+  for (int i = 0; i < 8 && hdmi_edid_info.std_timing_count < 8; i++) {
+    uint8_t b0 = base[38 + i * 2], b1 = base[39 + i * 2];
+    if (b0 == 0x01 && b1 == 0x01) continue;   // unused slot
+    uint16_t w  = ((uint16_t)b0 + 31) * 8;
+    uint8_t  ar = (b1 >> 6) & 3;
+    uint16_t h;
+    switch (ar) {
+      case 0:  h = (uint16_t)((uint32_t)w * 10 / 16); break;  // 16:10
+      case 1:  h = (uint16_t)((uint32_t)w *  3 /  4); break;  // 4:3
+      case 2:  h = (uint16_t)((uint32_t)w *  4 /  5); break;  // 5:4
+      default: h = (uint16_t)((uint32_t)w *  9 / 16); break;  // 16:9
+    }
+    uint8_t n = hdmi_edid_info.std_timing_count++;
+    hdmi_edid_info.std_hactive[n] = w;
+    hdmi_edid_info.std_vactive[n] = h;
+  }
+
+  // ── CEA-861 extension block (byte 126 = extension count) ─────────────────
+  if (base[126] > 0) {
+    uint8_t cea[128] = {};
+    if (edid_read_block(0x80, cea) && cea[0] == 0x02) {  // tag 0x02 = CEA-861
+      uint8_t csum2 = 0;
+      for (int i = 0; i < 128; i++) csum2 += cea[i];
+      if (csum2 != 0) {
+        USER_PRINTF("EDID: CEA extension checksum FAIL (sum=0x%02X)\n", csum2);
+      } else {
+        uint8_t dtd_off = cea[2];   // byte offset to first 18-byte DTD within this block
+        int pos = 4;                // data blocks begin at byte 4
+        while (pos < (int)dtd_off && pos < 126) {
+          uint8_t tag = (cea[pos] >> 5) & 0x07;
+          uint8_t len =  cea[pos]       & 0x1F;
+          if (pos + 1 + len > 128) break;
+          if (tag == 2) {           // Video Data Block — SVD list
+            for (int v = 1; v <= len && hdmi_edid_info.cea_vic_count < 32; v++) {
+              uint8_t vic = cea[pos + v] & 0x7F;
+              if (vic) hdmi_edid_info.cea_vic[hdmi_edid_info.cea_vic_count++] = vic;
+            }
+          } else if (tag == 3 && len >= 3) {  // Vendor Specific Data Block
+            // HDMI LLC OUI is 0x000C03, stored little-endian on wire: 03 0C 00
+            if (cea[pos+1] == 0x03 && cea[pos+2] == 0x0C && cea[pos+3] == 0x00)
+              hdmi_edid_info.hdmi_vsdb_found = true;
+          }
+          pos += 1 + len;
+        }
+      }
+    }
+  }
+
+  // ── Print report ─────────────────────────────────────────────────────────
+  Serial.printf("\n+-- Connected Monitor (EDID) ------------------------------------------\n");
+  Serial.printf("|  Manufacturer : %-3s   Product: 0x%04X   Year: %u\n",
+      hdmi_edid_info.manufacturer, hdmi_edid_info.product_code, hdmi_edid_info.year);
+  if (hdmi_edid_info.monitor_name[0])
+    Serial.printf("|  Name         : %s\n", hdmi_edid_info.monitor_name);
+  if (hdmi_edid_info.preferred_pclk_khz)
+    Serial.printf("|  Preferred    : %ux%u  (pclk=%.1f MHz)\n",
+        hdmi_edid_info.preferred_hactive, hdmi_edid_info.preferred_vactive,
+        hdmi_edid_info.preferred_pclk_khz / 1000.0f);
+  Serial.printf("|  Signal type  : %s\n", hdmi_edid_info.hdmi_vsdb_found ? "HDMI" : "DVI");
+  if (hdmi_edid_info.std_timing_count) {
+    Serial.printf("|  Std timings  :");
+    for (int i = 0; i < hdmi_edid_info.std_timing_count; i++)
+      Serial.printf("  %ux%u", hdmi_edid_info.std_hactive[i], hdmi_edid_info.std_vactive[i]);
+    Serial.println();
+  }
+  if (hdmi_edid_info.cea_vic_count) {
+    Serial.printf("|  CEA VICs     :");
+    for (int i = 0; i < hdmi_edid_info.cea_vic_count; i++)
+      Serial.printf(" %u", hdmi_edid_info.cea_vic[i]);
+    Serial.println();
+  }
+  Serial.println("|");
+  Serial.println("|  WLED mode vs EDID (Y = resolution present in EDID data):");
+  for (int m = 0; m < (int)HDMI_MODE_COUNT; m++) {
+    const hdmi_cea861_entry_t &t = hdmi_cea861_table[m];
+    bool match = (t.width == hdmi_edid_info.preferred_hactive &&
+                  t.height == hdmi_edid_info.preferred_vactive);
+    for (int s = 0; s < hdmi_edid_info.std_timing_count && !match; s++)
+      match = (t.width == hdmi_edid_info.std_hactive[s] &&
+               t.height == hdmi_edid_info.std_vactive[s]);
+    for (int v = 0; v < hdmi_edid_info.cea_vic_count && !match; v++)
+      if (t.vic && t.vic == hdmi_edid_info.cea_vic[v]) match = true;
+    Serial.printf("|    [%c] %s\n", match ? 'Y' : ' ', hdmi_mode_names[m]);
+  }
+  Serial.println("+----------------------------------------------------------------------\n");
+
+  // ── Apply HDMI/DVI mode bit to LT8912B ───────────────────────────────────
+  // Reg 0xB2 bit 0: 0=DVI, 1=HDMI. The LT8912B datasheet says it can't auto-detect
+  // this via DDC, so we set it manually based on the CEA-861 HDMI VSDB presence.
+  if (lt8912b_io_main) {
+    uint8_t b2 = lt8912b_read_reg(lt8912b_io_main, 0xB2);
+    uint8_t target = hdmi_edid_info.hdmi_vsdb_found ? (b2 | 0x01) : (b2 & ~0x01);
+    if (target != b2) {
+      lt8912b_write_reg(lt8912b_io_main, 0xB2, target);
+      USER_PRINTF("EDID: LT8912B 0xB2: 0x%02X → 0x%02X (%s mode)\n",
+          b2, target, hdmi_edid_info.hdmi_vsdb_found ? "HDMI" : "DVI");
+    } else {
+      USER_PRINTF("EDID: LT8912B 0xB2=0x%02X (%s mode — already correct)\n",
+          b2, hdmi_edid_info.hdmi_vsdb_found ? "HDMI" : "DVI");
+    }
+  }
 }
 
 // ============================================================
@@ -317,6 +529,10 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
     }
     USER_PRINTF(ready ? " OK (%ums)\n" : " TIMEOUT — no monitor detected, continuing anyway\n", elapsed);
   }
+
+  // Read and parse EDID from the connected monitor.
+  // Must happen after HDMI link lock (DDC channel is only live once HPD is asserted).
+  hdmi_edid_init();
 
   void* fb0_ptr = NULL, *fb1_ptr = NULL;
   ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 2, &fb0_ptr, &fb1_ptr));

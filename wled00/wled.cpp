@@ -1445,7 +1445,9 @@ void WLED::setup() {
 
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
     scanI2C_IDF(global_i2c_bus_handle);  // use IDF v5 API on P4
-    probeI2C_unknown(global_i2c_bus_handle);  // read identifying registers from unknown addresses
+    // probeI2C_unknown: diagnostic function used to identify the 9 I2C devices on this board.
+    // Result: 0x37/0x3A/0x4B/0x50 = LT8912B internal banks + EDID proxy; 0x54 = FE1.1s EEPROM.
+    // Removed from runtime — writing to 0x3A/0x37 (undocumented LT8912B banks) corrupted bridge state.
     #elif !defined(CONFIG_IDF_TARGET_ESP32C5)
     scanI2C(Wire);
     #endif
