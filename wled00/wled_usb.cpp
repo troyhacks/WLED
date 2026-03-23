@@ -37,6 +37,9 @@
 #include "driver/sdmmc_host.h"
 #include "driver/gpio.h"
 #include <sys/stat.h>
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "esp_ldo_regulator.h"  // ESP32-P4: LDO4 (VO4) powers the SD card via P-FET
+#endif
 
 #define MOUNT_POINT    "/sdcard"
 #define SD_POWER_PIN   GPIO_NUM_45
@@ -46,8 +49,19 @@
 // SD card
 // ============================================================
 static sdmmc_card_t* card = NULL;
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+static esp_ldo_channel_handle_t sd_ldo = NULL;
+#endif
 
 static void sdcard_power_on(void) {
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // On Olimex ESP32-P4-PC the SD card P-FET source is fed by ESP32-P4 internal LDO4 (VO4).
+  // LDO4 must be acquired before toggling the P-FET or the card gets no power at all.
+  if (!sd_ldo) {
+    esp_ldo_channel_config_t ldo_cfg = { .chan_id = 4, .voltage_mv = 3300 };
+    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_cfg, &sd_ldo));
+  }
+  #endif
   gpio_config_t io_conf = {
     .pin_bit_mask = (1ULL << SD_POWER_PIN),
     .mode = GPIO_MODE_OUTPUT,
@@ -61,6 +75,9 @@ static void sdcard_power_on(void) {
 
 static void sdcard_power_off(void) {
   gpio_set_level(SD_POWER_PIN, 1);  // P-FET: high = off
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (sd_ldo) { esp_ldo_release_channel(sd_ldo); sd_ldo = NULL; }
+  #endif
 }
 
 esp_err_t mount_sdcard(void) {
@@ -73,14 +90,15 @@ esp_err_t mount_sdcard(void) {
   };
 
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-  host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+  host.max_freq_khz = SDMMC_FREQ_52M;  // 52MHz — standard HS ceiling; try 80000 or SDMMC_FREQ_SDR104 if card supports UHS-I
 
-  #if CONFIG_ESP_HOSTED_SDIO_SLOT == 0
-  host.slot = SDMMC_HOST_SLOT_1;
-  #elif CONFIG_ESP_HOSTED_SDIO_SLOT == 1
+  // GPIO39-44 are SD1_* pins on ESP32-P4 → must use SDMMC_HOST_SLOT_1.
+  // The CONFIG_ESP_HOSTED_SDIO_SLOT logic inverts the slot to avoid conflicts with
+  // the ESP-Hosted SDIO interface, but the default must still be slot 1 for this board.
+  #if CONFIG_ESP_HOSTED_SDIO_SLOT == 1
   host.slot = SDMMC_HOST_SLOT_0;
   #else
-  host.slot = SDMMC_HOST_SLOT_0;
+  host.slot = SDMMC_HOST_SLOT_1;
   #endif
 
   sdmmc_slot_config_t slot_config = {
@@ -96,7 +114,14 @@ esp_err_t mount_sdcard(void) {
     .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
   };
 
-  esp_err_t ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+  esp_err_t ret = ESP_ERR_TIMEOUT;
+  for (int attempt = 1; attempt <= 3 && ret != ESP_OK; attempt++) {
+    ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+    if (ret != ESP_OK && attempt < 3) {
+      USER_PRINTF("Mount attempt %d failed (%s), retrying...\n", attempt, esp_err_to_name(ret));
+      vTaskDelay(pdMS_TO_TICKS(200));
+    }
+  }
   if (ret != ESP_OK) {
     USER_PRINTF("Mount failed : %s\n", esp_err_to_name(ret));
     sdcard_power_off();
