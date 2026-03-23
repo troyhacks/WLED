@@ -48,17 +48,17 @@
 // ============================================================
 #define HDMI_MODE_LIST \
   /* ===== 30 MHz — DPI=240/8, PHY=360Mbps (M=18 N=1) ===== */ \
-  X(P4_720x576_50HZ,       0, 50,  720, 576, 30000,  12,  64, 164,  5,  5, 39, HDMI_AR_4_3 ) /* Htot=960  Vtot=625  50.0Hz PAL  DMA=62MB/s */ \
+  X(P4_720x576_50HZ,      17, 50,  720, 576, 30000,  12,  64, 164,  5,  5, 39, HDMI_AR_4_3 ) /* Htot=960  Vtot=625  50.0Hz PAL  DMA=62MB/s  VIC17=720x576p@50 4:3 */ \
   \
   /* ===== 40 MHz — DPI=240/6, PHY=480Mbps (N=24) ===== */ \
-  X(P4_800x600_60HZ,       0, 60,  800, 600, 40000,  40, 128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  60.3Hz       DMA=87MB/s */ \
-  X(P4_1024x576_57HZ,      0, 57, 1024, 576, 40000,   8,  48,  40,  3,  5, 42, HDMI_AR_16_9) /* Htot=1120 Vtot=626  57.1Hz       DMA=84MB/s */ \
+  X(P4_800x600_60HZ,       0, 60,  800, 600, 40000,  40, 128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  60.3Hz       DMA=87MB/s  no CEA VIC */ \
+  X(P4_1024x576_57HZ,      0, 57, 1024, 576, 40000,   8,  48,  40,  3,  5, 42, HDMI_AR_16_9) /* Htot=1120 Vtot=626  57.1Hz       DMA=84MB/s  no CEA VIC */ \
   \
   /* ===== 60 MHz — DPI=240/4, PHY=720Mbps (N=36) ===== */ \
-  X(P4_1280x720_50HZ,      0, 50, 1280, 720, 60000, 110,  40, 170,  5,  5, 20, HDMI_AR_16_9) /* Htot=1600 Vtot=750  50.00Hz      DMA=115MB/s */ \
-  X(P4_1280x720_60HZ,      0, 60, 1280, 720, 60000,  10,  32,  28,  3,  5, 13, HDMI_AR_16_9) /* Htot=1350 Vtot=741  59.98Hz      DMA=123MB/s */ \
-  X(P4_1280x800_50HZ,      0, 50, 1280, 800, 60000,  48,  32,  80,  3,  5, 25, HDMI_AR_NONE) /* Htot=1440 Vtot=833  50.0Hz       DMA=128MB/s */ \
-  X(P4_1024x768_60HZ,      0, 60, 1024, 768, 60000,  48,  32,  80,  3,  5, 69, HDMI_AR_4_3 ) /* Htot=1184 Vtot=845  59.9Hz       DMA=132MB/s */ \
+  X(P4_1280x720_50HZ,     19, 50, 1280, 720, 60000, 110,  40, 170,  5,  5, 20, HDMI_AR_16_9) /* Htot=1600 Vtot=750  50.00Hz      DMA=115MB/s VIC19=1280x720p@50 */ \
+  X(P4_1280x720_60HZ,      4, 60, 1280, 720, 60000,  10,  32,  28,  3,  5, 13, HDMI_AR_16_9) /* Htot=1350 Vtot=741  59.98Hz      DMA=123MB/s VIC4=1280x720p@60  */ \
+  X(P4_1280x800_50HZ,      0, 50, 1280, 800, 60000,  48,  32,  80,  3,  5, 25, HDMI_AR_NONE) /* Htot=1440 Vtot=833  50.0Hz       DMA=128MB/s no CEA VIC (16:10) */ \
+  X(P4_1024x768_60HZ,      0, 60, 1024, 768, 60000,  48,  32,  80,  3,  5, 69, HDMI_AR_4_3 ) /* Htot=1184 Vtot=845  59.9Hz       DMA=132MB/s no CEA VIC */ \
 
 enum hdmi_mode_t : uint8_t {
 #define X(name, ...) name,
@@ -557,6 +557,58 @@ static void hdmi_display_init(int mode) {
 }
 
 // ============================================================
+// hdmi_edid_best_mode() — pick the best mode from HDMI_MODE_LIST based on EDID.
+// Scoring: width*height*fps, with priority bonuses:
+//   +2 000 000  preferred-timing exact match
+//   +1 000 000  CEA VIC match
+//   +0          standard-timing match
+// Returns mode index, or -1 if EDID not present / no supported mode found.
+// ============================================================
+static int hdmi_edid_best_mode() {
+  if (!hdmi_edid_info.present) return -1;
+
+  int      best_mode  = -1;
+  uint32_t best_score = 0;
+
+  for (int m = 0; m < (int)HDMI_MODE_COUNT; m++) {
+    const hdmi_cea861_entry_t &t = hdmi_cea861_table[m];
+    uint32_t score = 0;
+
+    // 1. Preferred timing exact match (highest priority)
+    if (t.width == hdmi_edid_info.preferred_hactive &&
+        t.height == hdmi_edid_info.preferred_vactive)
+      score = (uint32_t)t.width * t.height * t.fps + 2000000u;
+
+    // 2. CEA VIC match
+    if (!score && t.vic) {
+      for (int v = 0; v < hdmi_edid_info.cea_vic_count; v++) {
+        if (t.vic == hdmi_edid_info.cea_vic[v]) {
+          score = (uint32_t)t.width * t.height * t.fps + 1000000u;
+          break;
+        }
+      }
+    }
+
+    // 3. Standard timing resolution match
+    if (!score) {
+      for (int s = 0; s < hdmi_edid_info.std_timing_count; s++) {
+        if (t.width == hdmi_edid_info.std_hactive[s] &&
+            t.height == hdmi_edid_info.std_vactive[s]) {
+          score = (uint32_t)t.width * t.height * t.fps;
+          break;
+        }
+      }
+    }
+
+    if (score > best_score) {
+      best_score = score;
+      best_mode  = m;
+    }
+  }
+  return best_mode;
+}
+
+// ============================================================
 // hdmi_setup() — boot-time init. Use 'm' in serial console to switch modes at runtime.
 // Call once from WLED::setup().
 // ============================================================
@@ -564,6 +616,16 @@ void hdmi_setup() {
   int selected = (int)WLEDMM_DISPLAY_MODE;
   Serial.printf("HDMI: starting mode %d: %s (type 'm' to switch)\n", selected, hdmi_mode_names[selected]);
   hdmi_display_init(selected);
+
+  // After the first init the EDID has been read — check if a better-matching mode exists.
+  int best = hdmi_edid_best_mode();
+  if (best >= 0 && best != selected) {
+    Serial.printf("HDMI: EDID recommends mode %d: %s — switching\n", best, hdmi_mode_names[best]);
+    hdmi_switch_mode(best);
+  } else if (best == selected) {
+    Serial.printf("HDMI: EDID confirms default mode %d: %s\n", selected, hdmi_mode_names[selected]);
+  }
+  // best == -1: no EDID / no matching mode — stay on default
 }
 
 // ============================================================
