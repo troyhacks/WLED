@@ -1850,6 +1850,10 @@ void WS2812FX::finalizeInit(void)
 
   //initialize leds array. TBD: realloc if nr of leds change
   if (Segment::_globalLeds) {
+    // Null ledsrgb in all segments BEFORE freeing the global buffer.
+    // ledsrgb points into the global buffer (not an independent allocation),
+    // so allocLeds() must not try to free it after _globalLeds is cleared.
+    for (segment &seg : _segments) { seg.ledsrgb = nullptr; seg.ledsrgbSize = 0; }
     free(Segment::_globalLeds);
     Segment::_globalLeds = nullptr;
     purgeSegments(true);   // WLEDMM moved here, because it seems to improve stability.
