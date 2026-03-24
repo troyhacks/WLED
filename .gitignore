@@ -29,3 +29,4 @@ compile_commands.json
 /wled00/html_*.h
 /wled00/*.off
 .vscode/extensions.json
+platformio_override.ini.off
