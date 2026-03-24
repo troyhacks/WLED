@@ -155,6 +155,8 @@ typedef struct {
   msc_host_vfs_handle_t vfs_handle;
 } msc_dev_entry_t;
 
+static const char* TAG = "wled_usb";
+
 static msc_dev_entry_t *msc_devices[MAX_MSC_DEVICES] = {0};
 static QueueHandle_t app_queue;
 

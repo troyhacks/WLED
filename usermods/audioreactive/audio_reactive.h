@@ -11,7 +11,9 @@
 */
 
 #include "wled.h"
+#ifndef WLED_IDF_BUILD
 #include <AsyncUDP.h>
+#endif
 #ifdef UM_AUDIOREACTIVE_USE_ESPDSP_FFT
   #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
     // #include "esp_dsp.h"

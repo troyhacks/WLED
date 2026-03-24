@@ -14,8 +14,8 @@
 // WLEDMM  - you can check for this define in usermods, to only enabled WLEDMM specific code in the "right" fork. Its not defined in AC WLED.
 #define _MoonModules_WLED_
 
-// a few hacks
-#if !defined(ARDUINO_ARCH_ESP32)
+// a few hacks (for ESP8266/Arduino non-ESP32; skipped in pure IDF build)
+#if !defined(ARDUINO_ARCH_ESP32) && !defined(WLED_IDF_BUILD)
 #undef ESP_IDF_VERSION
 #if !defined(ESP_IDF_VERSION_VAL)
 #define ESP_IDF_VERSION_VAL(a,b,c) 99999999 // dummy
@@ -88,6 +88,41 @@
 #undef WLEDMM_PROTECT_SERVICE // prevents crashes when effects are drawing while asyncWebServer tries to modify segments at the same time
 
 // Library inclusions.
+#ifdef WLED_IDF_BUILD
+// ─── Pure IDF build — no Arduino framework ────────────────────────────────────
+#include "idf_compat.h"
+#if defined(WLED_USE_ETHERNET_ONLY) && !defined(WLED_USE_ETHERNET)
+  #define WLED_USE_ETHERNET
+#endif
+#ifdef WLED_USE_ETHERNET
+  #include <esp_eth.h>
+#endif
+#include "nvs_flash.h"
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+  // esp_hosted for P4 WiFi via C6 companion (espressif/esp_hosted IDF component)
+  #include <esp_hosted.h>
+  #include "ota_littlefs.h"
+  #define I2S_SDPIN 11
+  #define I2S_WSPIN 10
+  #define I2S_CKPIN 12
+  #define MCLK_PIN  13
+  #define HW_PIN_SDA 7
+  #define HW_PIN_SCL 8
+#else
+  #include <esp_wifi.h>
+#endif
+#include "esp_task_wdt.h"
+#ifndef WLED_DISABLE_ESPNOW
+  #include <esp_now.h>
+#endif
+// LittleFS via IDF VFS (see file.cpp migration)
+#include "esp_littlefs.h"
+// mDNS via IDF
+#include "mdns.h"
+// I2C via IDF (no Wire.h)
+#include "driver/i2c_master.h"
+
+#else // ─── Arduino framework build ────────────────────────────────────────────
 #include <Arduino.h>
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
@@ -149,6 +184,7 @@
 #endif
 #include <Wire.h>
 #include <SPI.h>
+#endif // WLED_IDF_BUILD
 
 #ifndef TCM_IRAM_ATTR
 #define TCM_IRAM_ATTR
@@ -163,7 +199,7 @@
 #endif
 
 #include "src/dependencies/network/Network.h"
-#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if !defined(WLED_IDF_BUILD) && defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
   #define Network WL_Network
 #endif
 
@@ -171,6 +207,7 @@
   #include "my_config.h"
 #endif
 
+#ifndef WLED_IDF_BUILD
 #include <ESPAsyncWebServer.h>
 #ifdef WLED_ADD_EEPROM_SUPPORT
   #include <EEPROM.h>
@@ -182,6 +219,10 @@
   #include <ArduinoOTA.h>
 #endif
 #include <SPIFFSEditor.h>
+#else  // WLED_IDF_BUILD
+#include "idf_shims/AsyncWebServer.h"  // AsyncWebServer compatibility shim (backed by esp_http_server)
+// WiFiUdp, DNSServer, ArduinoOTA, SPIFFSEditor not used in IDF build
+#endif // WLED_IDF_BUILD
 #include "src/dependencies/time/TimeLib.h"
 #include "src/dependencies/timezone/Timezone.h"
 #include "src/dependencies/toki/Toki.h"
@@ -202,7 +243,10 @@
 #include "ArtNetReceiver.h"
 
 #define ARDUINOJSON_DECODE_UNICODE 0
+#ifndef WLED_IDF_BUILD
+// AsyncJson-v6 depends on ESPAsyncWebServer (Arduino only); IDF uses esp_http_server
 #include "src/dependencies/json/AsyncJson-v6.h"
+#endif
 #include "src/dependencies/json/ArduinoJson-v6.h"
 
 // ESP32-WROVER features SPI RAM (aka PSRAM) which can be allocated using ps_malloc()
@@ -278,14 +322,19 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
   #define WLED_AP_PASS DEFAULT_AP_PASS
 #endif
 
+#ifndef WLED_IDF_BUILD
 #ifndef SPIFFS_EDITOR_AIRCOOOKIE
   #error You are not using the Aircoookie fork of the ESPAsyncWebserver library.\
   Using upstream puts your WiFi password at risk of being served by the filesystem.\
   Comment out this error message to build regardless.
 #endif
+#endif
 
 //Filesystem to use for preset and config files. SPIFFS or LittleFS on ESP8266, SPIFFS only on ESP32 (now using LITTLEFS port by lorol)
-#ifdef ESP8266
+#ifdef WLED_IDF_BUILD
+  #include "LittleFS.h"
+  #define WLED_FS LittleFS
+#elif defined(ESP8266)
   #define WLED_FS LittleFS
 #else
   #if LOROL_LITTLEFS
@@ -417,7 +466,11 @@ WLED_GLOBAL int8_t irPin _INIT(-1);
 WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||  defined(CONFIG_IDF_TARGET_ESP32P4) ||defined(CONFIG_IDF_TARGET_ESP32S2) || (defined(RX) && defined(TX))
+#ifdef WLED_IDF_BUILD
+  // IDF build: Arduino framework does not define RX/TX; use UART0 ESP32-P4 defaults.
+  constexpr uint8_t hardwareRX = 38;
+  constexpr uint8_t hardwareTX = 37;
+#elif defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||  defined(CONFIG_IDF_TARGET_ESP32P4) ||defined(CONFIG_IDF_TARGET_ESP32S2) || (defined(RX) && defined(TX))
   // use RX/TX as set by the framework - these boards do _not_ have RX=3 and TX=1
   constexpr uint8_t hardwareRX = RX;
   constexpr uint8_t hardwareTX = TX;
@@ -470,7 +523,11 @@ WLED_GLOBAL esp_eth_handle_t eth_handle;
 WLED_GLOBAL bool eth_is_connected _INIT(false);
 WLED_GLOBAL bool eth_link_up _INIT(false);  // Physical link status (Layer 2)
 WLED_GLOBAL bool wifi_is_connected _INIT(false);
+#ifndef WLED_IDF_BUILD
 WLED_GLOBAL tcpip_adapter_if_t send_interface;
+#else
+WLED_GLOBAL int send_interface _INIT(0); // placeholder; tcpip_adapter removed in IDF v5
+#endif
 WLED_GLOBAL netif* sender_netif _INIT(NULL);
 
 // LED CONFIG
@@ -775,7 +832,9 @@ WLED_GLOBAL byte interfaceUpdateCallMode _INIT(CALL_MODE_INIT);
 WLED_GLOBAL String escapedMac;
 
 // dns server
+#ifndef WLED_IDF_BUILD
 WLED_GLOBAL DNSServer dnsServer;
+#endif
 
 // network time
 #define NTP_NEVER 999000000L
@@ -847,18 +906,22 @@ WLED_GLOBAL bool ledStatusState _INIT(false); // the current LED state
 
 // server library objects
 WLED_GLOBAL AsyncWebServer server _INIT_N(((80)));
+#ifndef WLED_IDF_BUILD
 #ifdef WLED_ENABLE_WEBSOCKETS
 WLED_GLOBAL AsyncWebSocket ws _INIT_N((("/ws")));
 #endif
 WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL);
+#endif // !WLED_IDF_BUILD
 WLED_GLOBAL AsyncWebHandler *editHandler _INIT(nullptr);
-#if defined(SOC_SDMMC_HOST_SUPPORTED)
+#if defined(SOC_SDMMC_HOST_SUPPORTED) && !defined(WLED_IDF_BUILD)
 WLED_GLOBAL AsyncWebHandler *sdEditHandler _INIT(nullptr);
 #endif
 
 // udp interface objects
+#ifndef WLED_IDF_BUILD
 WLED_GLOBAL WiFiUDP notifierUdp, rgbUdp, notifier2Udp;
 WLED_GLOBAL WiFiUDP ntpUdp;
+#endif
 WLED_GLOBAL ESPAsyncE131 e131 _INIT_N(((handleE131Packet)));
 WLED_GLOBAL ESPAsyncE131 ddp  _INIT_N(((handleE131Packet)));
 WLED_GLOBAL bool e131NewData _INIT(false);

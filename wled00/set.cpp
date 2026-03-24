@@ -3,6 +3,8 @@
 
 #include "wled.h"
 
+#ifndef WLED_IDF_BUILD  // set.cpp is HTTP form/request handling — not needed in IDF build
+
 /*
  * Receives client input
  */
@@ -1173,3 +1175,7 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
 
   return true;
 }
+#else // WLED_IDF_BUILD — provide minimal stubs so linker is satisfied
+void handleSettingsSet(AsyncWebServerRequest* /*request*/, byte /*subPage*/) {}
+bool handleSet(AsyncWebServerRequest* /*request*/, const String& /*req*/, bool /*apply*/) { return false; }
+#endif // !WLED_IDF_BUILD

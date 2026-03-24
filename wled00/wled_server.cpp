@@ -1,5 +1,7 @@
 #include "wled.h"
 
+#ifndef WLED_IDF_BUILD  // wled_server.cpp uses ESPAsyncWebServer throughout — stub out for IDF build
+
 #include "html_ui.h"
 #ifdef WLED_ENABLE_SIMPLE_UI
   #include "html_simple.h"
@@ -11,7 +13,7 @@
 #endif
 #include "html_cpal.h"
 
-#if defined(SOC_SDMMC_HOST_SUPPORTED) && defined(WLED_ENABLE_FS_EDITOR)
+#if defined(SOC_SDMMC_HOST_SUPPORTED) && defined(WLED_ENABLE_FS_EDITOR) && !defined(WLED_IDF_BUILD)
 #include "vfs_api.h"
 static std::shared_ptr<VFSImpl> sdVfsImpl = std::make_shared<VFSImpl>();
 static fs::FS sdcardFS(sdVfsImpl);
@@ -857,3 +859,10 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
   setStaticContentCacheHeaders(response);
   request->send(response);
 }
+
+#else // WLED_IDF_BUILD — stubs for functions called from non-HTTP files
+
+void initServer() {}
+void createEditHandler(bool) {}
+
+#endif // !WLED_IDF_BUILD

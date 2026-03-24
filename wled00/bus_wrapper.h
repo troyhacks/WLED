@@ -1,7 +1,9 @@
 #ifndef BusWrapper_h
 #define BusWrapper_h
 
+#ifndef WLED_IDF_BUILD
 #include "NeoPixelBusLg.h"
+#endif
 
 // temporary - these defines should actually be set in platformio.ini
 // C3: I2S0 and I2S1 methods not supported (has one I2S bus)
@@ -29,6 +31,15 @@
 #endif
 
 // WLEDMM repeat definition of USER_PRINT
+#ifdef WLED_IDF_BUILD
+// Pure IDF build — route to printf()/UART0. Serial stub also delegates here.
+// USER_PRINT/PRINTLN use the Serial stub for type-generic printing.
+// USER_PRINTF maps directly to printf() for zero overhead on format strings.
+#define USER_PRINT(x)     Serial.print(x)
+#define USER_PRINTLN(x)   Serial.println(x)
+#define USER_PRINTF(x...) printf(x)
+#define USER_FLUSH()      fflush(stdout)
+#else
 bool canUseSerial(void);   // WLEDMM (wled_serial.cpp) returns true if Serial can be used for debug output (i.e. not configured for other purpose)
 #if defined(WLED_DEBUG_HOST)
   #include "net_debug.h"
@@ -43,6 +54,7 @@ bool canUseSerial(void);   // WLEDMM (wled_serial.cpp) returns true if Serial ca
   #define USER_PRINTF(x...) {if (canUseSerial()) Serial.printf(x);}
   #define USER_FLUSH() {if (canUseSerial()) Serial.flush();}
 #endif
+#endif // WLED_IDF_BUILD
 // WLEDMM end
 
 //Hardware SPI Pins
@@ -284,6 +296,7 @@ bool canUseSerial(void);   // WLEDMM (wled_serial.cpp) returns true if Serial ca
 
 #endif
 
+#ifndef WLED_IDF_BUILD
 //APA102
 #ifdef WLED_USE_ETHERNET
 // fix for #2542 (by @BlackBird77)
@@ -312,11 +325,13 @@ bool canUseSerial(void);   // WLEDMM (wled_serial.cpp) returns true if Serial ca
 //P9813
 #define B_HS_P98_3 NeoPixelBusLg<P9813BgrFeature, P9813SpiHzMethod, NeoGammaNullMethod>
 #define B_SS_P98_3 NeoPixelBusLg<P9813BgrFeature, P9813Method, NeoGammaNullMethod>
+#endif // !WLED_IDF_BUILD
 
 // 48bit & 64bit to 24bit & 32bit RGB(W) conversion
 #define toRGBW32(c) (RGBW32((c>>40)&0xFF, (c>>24)&0xFF, (c>>8)&0xFF, (c>>56)&0xFF))
 #define RGBW32(r,g,b,w) (uint32_t((byte(w) << 24) | (byte(r) << 16) | (byte(g) << 8) | (byte(b))))
 
+#ifndef WLED_IDF_BUILD
 //handles pointer type conversion for all possible bus types
 class PolyBus {
   public:
@@ -1321,4 +1336,25 @@ class PolyBus {
   }
 };
 
-#endif
+#else // WLED_IDF_BUILD — stub PolyBus; physical LED buses unused (network output only)
+
+class PolyBus {
+public:
+  template <class T>
+  static void beginDotStar(void*, int8_t, int8_t, int8_t, int8_t, uint16_t = 0U) {}
+  template <class T>
+  static void beginTM1814(void*) {}
+  static void begin(void*, uint8_t, uint8_t*, uint16_t = 0U) {}
+  static void* create(uint8_t, uint8_t*, uint16_t, uint8_t, uint16_t = 0U) { return nullptr; }
+  static void show(void*, uint8_t) {}
+  static bool canShow(void*, uint8_t) { return true; }
+  static void setPixelColor(void*, uint8_t, uint16_t, uint32_t, uint8_t) {}
+  static void setBrightness(void*, uint8_t, uint8_t, bool) {}
+  static uint32_t getPixelColor(void*, uint8_t, uint16_t, uint8_t) { return 0; }
+  static void cleanup(void*, uint8_t) {}
+  static uint8_t getI(uint8_t, uint8_t*, uint8_t = 0) { return 0; }
+};
+
+#endif // !WLED_IDF_BUILD
+
+#endif // BusWrapper_h

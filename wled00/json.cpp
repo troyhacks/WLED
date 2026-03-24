@@ -15,7 +15,10 @@
 #define JSON_PATH_EFFECTS    8
 
 // begin WLEDMM
-#ifdef ARDUINO_ARCH_ESP32
+#ifdef WLED_IDF_BUILD
+// Pure IDF build: no Esp.h; use IDF RTC header directly for ESP32-P4
+#include <esp32p4/rom/rtc.h>
+#elif defined(ARDUINO_ARCH_ESP32)
 #include <Esp.h>
 // get the right RTC.H for each MCU
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
@@ -999,7 +1002,7 @@ void serializeInfo(JsonObject root)
     root[F("lip")] = realtimeIP.toString();
   }
 
-  #ifdef WLED_ENABLE_WEBSOCKETS
+  #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
   root[F("ws")] = ws.count();
   #else
   root[F("ws")] = -1;
@@ -1899,7 +1902,7 @@ bool serveLiveLeds(AsyncWebServerRequest* request, uint32_t wsClient)
   else {
     wsc->text(toString(std::move(buffer)));
   }
-  #endif  
+  #endif
   return true;
 }
-#endif
+#endif // WLED_ENABLE_JSONLIVE

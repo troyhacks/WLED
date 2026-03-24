@@ -3,6 +3,9 @@
 #ifdef USERMOD_ARTNETMAP
 #include "../usermods/usermod_v2_artnetmap/usermod_v2_artnetmap.h"
 #endif
+
+#ifndef WLED_IDF_BUILD  // xml.cpp uses AsyncWebServerRequest throughout — stub out for IDF build
+
 /*
  * Sending XML status files to client
  */
@@ -886,3 +889,5 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     #endif
   }
 }
+
+#endif // !WLED_IDF_BUILD

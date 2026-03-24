@@ -5,6 +5,22 @@
  * All globally accessible functions are declared here
  */
 
+#ifdef WLED_IDF_BUILD
+// Forward-declare ESPAsyncWebServer types used in function signatures below.
+// The actual implementation is stubbed/replaced in the IDF build.
+class AsyncWebServerRequest;
+class AsyncWebSocket;
+class AsyncWebSocketClient;
+typedef uint8_t AwsEventType;
+#include "esp_wifi.h"  // wifi_band_mode_t
+// FPSTR is a no-op in IDF (no PROGMEM distinction)
+#ifndef FPSTR
+#define FPSTR(x) (x)
+#endif
+// TwoWire / Wire — in IDF build TwoWire is typedef'd as _WledWire via idf_compat.h/Wire.h
+// No forward declaration needed; using-declaration would conflict with the typedef.
+#endif
+
 #if !defined(FASTLED_VERSION) // only pull in FastLED if we don't have it yet
   #define FASTLED_INTERNAL
   #include <FastLED.h>
@@ -90,7 +106,9 @@ void prepareArtnetPollReply(ArtPollReply* reply);
 void sendArtnetPollReply(ArtPollReply* reply, IPAddress ipAddress, uint16_t portAddress);
 
 //file.cpp
+#ifndef WLED_IDF_BUILD
 bool handleFileRead(AsyncWebServerRequest*, String path);
+#endif
 bool writeObjectToFileUsingId(const char* file, uint16_t id, JsonDocument* content);
 bool writeObjectToFile(const char* file, const char* key, JsonDocument* content);
 bool readObjectFromFileUsingId(const char* file, uint16_t id, JsonDocument* dest);
@@ -103,10 +121,12 @@ void invalidateFileNameCache();   // WLEDMM call when new files were uploaded
 //hue.cpp
 void handleHue();
 void reconnectHue();
+#ifndef WLED_IDF_BUILD
 void onHueError(void* arg, AsyncClient* client, int8_t error);
 void onHueConnect(void* arg, AsyncClient* client);
 void sendHuePoll();
 void onHueData(void* arg, AsyncClient* client, void *data, size_t len);
+#endif
 
 //improv.cpp
 enum ImprovRPCType {
@@ -143,9 +163,18 @@ void initIR();
 void handleIR();
 
 //json.cpp
+#ifndef WLED_IDF_BUILD
 #include "ESPAsyncWebServer.h"
-#include "src/dependencies/json/ArduinoJson-v6.h"
 #include "src/dependencies/json/AsyncJson-v6.h"
+#else
+// IDF build: AsyncWebServerRequest provided by idf_shims/AsyncWebServer.h
+// (already included transitively via wled.h before fcn_declare.h)
+// Forward-declare only if the full definition isn't available yet.
+#ifndef ASYNC_WEB_SERVER_SHIM_H_INCLUDED
+class AsyncWebServerRequest;
+#endif
+#endif
+#include "src/dependencies/json/ArduinoJson-v6.h"
 #include "FX.h"
 
 bool deserializeSegment(JsonObject elem, byte it, byte presetId = 0);

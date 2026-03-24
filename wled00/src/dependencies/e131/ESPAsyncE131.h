@@ -26,6 +26,54 @@
 #ifndef ESPASYNCE131_H_
 #define ESPASYNCE131_H_
 
+#ifdef WLED_IDF_BUILD
+#include <lwip/ip_addr.h>
+#include <lwip/igmp.h>
+#include <lwip/udp.h>
+#include <lwip/pbuf.h>
+#include <string.h>
+#include "IPAddress.h"  // shim
+// AsyncUDP not available from Arduino in IDF build — provide a functional
+// lwIP-backed substitute.  Used both as a base for FastAsyncUDP (send path)
+// and directly for e131Udp / artnetUdp instances that only call writeTo().
+struct AsyncUDPPacket { uint8_t* data() { return nullptr; } size_t length() { return 0; } IPAddress remoteIP() { return IPAddress(); } uint16_t localPort() { return 0; } };
+class AsyncUDP {
+protected:
+    struct udp_pcb* _pcb = nullptr;
+public:
+    // Receive stubs (not used in IDF — E1.31 input is handled separately)
+    bool listen(uint16_t) { return false; }
+    bool listenMulticast(IPAddress, uint16_t) { return false; }
+    template<typename F> void onPacket(F) {}
+    void close() { if (_pcb) { udp_remove(_pcb); _pcb = nullptr; } }
+    void stop()  { close(); }
+    bool connected() { return _pcb != nullptr; }
+
+    // connect() — called once when the destination address/port changes.
+    // FastAsyncUDP overrides this with tcpip_api_call()-based implementation.
+    bool connect(const IPAddress& addr, uint16_t port) {
+        if (!_pcb) { _pcb = udp_new(); }
+        return _pcb != nullptr;
+    }
+
+    // writeTo() — fire-and-forget unicast/multicast UDP send.
+    // Reuses _pcb if already initialised, otherwise allocates a temporary one.
+    bool writeTo(const uint8_t* data, size_t len, const IPAddress& dest, uint16_t port) {
+        bool owned = (_pcb == nullptr);
+        struct udp_pcb* pcb = owned ? udp_new() : _pcb;
+        if (!pcb) return false;
+        struct pbuf* p = pbuf_alloc(PBUF_TRANSPORT, (uint16_t)len, PBUF_RAM);
+        if (!p) { if (owned) udp_remove(pcb); return false; }
+        pbuf_take(p, data, (uint16_t)len);
+        ip_addr_t addr;
+        IP_ADDR4(&addr, dest[0], dest[1], dest[2], dest[3]);
+        err_t err = udp_sendto(pcb, p, &addr, port);
+        pbuf_free(p);
+        if (owned) udp_remove(pcb);
+        return err == ERR_OK;
+    }
+};
+#else  // Arduino build
 #ifdef ESP32
 #ifdef CONFIG_IDF_TARGET_ESP32P4
 #include <esp_wifi.h>
@@ -40,10 +88,10 @@
 #else
 #error Platform not supported
 #endif
-
 #include <lwip/ip_addr.h>
 #include <lwip/igmp.h>
 #include <Arduino.h>
+#endif  // WLED_IDF_BUILD
 
 #if LWIP_VERSION_MAJOR == 1
 typedef struct ip_addr ip4_addr_t;

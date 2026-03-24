@@ -1,10 +1,14 @@
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
-#else // ESP32
+#elif defined(WLED_IDF_BUILD)
+  // Pure IDF build — use IDF networking headers directly
+  #include <esp_eth.h>
+  #include <esp_netif.h>
+#else // Arduino ESP32
   #ifdef CONFIG_IDF_TARGET_ESP32P4
-  #include <esp_wifi.h>
+    #include <esp_wifi.h>
   #else
-  #include "WiFi.h"
+    #include "WiFi.h"
   #endif
   #include <ETH.h>
 #endif
@@ -32,12 +36,14 @@ public:
   bool setHostname(const char* hostname);
 };
 
-#ifdef ARDUINO_ARCH_ESP32
-#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-extern NetworkClass WL_Network;
-#else
+#if defined(WLED_IDF_BUILD)
 extern NetworkClass Network;
-#endif
+#elif defined(ARDUINO_ARCH_ESP32)
+  #if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+  extern NetworkClass WL_Network;
+  #else
+  extern NetworkClass Network;
+  #endif
 #else
 extern NetworkClass Network;
 #endif

@@ -30,8 +30,12 @@
 #define PSPRINTLN(x)
 #endif
 
+#ifndef likely
 #define likely(x)   __builtin_expect(!!(x), 1)
+#endif
+#ifndef unlikely
 #define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
 
 // limit speed of particles (used in 1D and 2D)
 static inline int32_t limitSpeed(const int32_t speed) {

@@ -248,7 +248,7 @@ bool NetworkClass::setHostname(const char* hostname) {
 }
 
 #ifdef ARDUINO_ARCH_ESP32
-#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0) && !defined(WLED_IDF_BUILD)
 NetworkClass WL_Network;
 #else
 NetworkClass Network;

@@ -59,9 +59,12 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   JsonArray nw_ins_0_sn = nw_ins_0["sn"];
 
   for (byte i = 0; i < 4; i++) {
-    CJSON(staticIP[i], nw_ins_0_ip[i]);
-    CJSON(staticGateway[i], nw_ins_0_gw[i]);
-    CJSON(staticSubnet[i], nw_ins_0_sn[i]);
+    // IPAddress::operator[] returns a ByteRef proxy (rvalue); use a temp to avoid
+    // "lvalue required as left operand of assignment" with GCC strict-mode rvalue rules.
+    uint8_t b;
+    b = nw_ins_0_ip[i].as<uint8_t>() | (uint8_t)staticIP[i]; staticIP[i] = b;
+    b = nw_ins_0_gw[i].as<uint8_t>() | (uint8_t)staticGateway[i]; staticGateway[i] = b;
+    b = nw_ins_0_sn[i].as<uint8_t>() | (uint8_t)staticSubnet[i]; staticSubnet[i] = b;
   }
 
   JsonObject ap = doc["ap"];
@@ -695,9 +698,9 @@ void serializeConfig() {
   JsonArray nw_ins_0_sn = nw_ins_0.createNestedArray("sn");
 
   for (byte i = 0; i < 4; i++) {
-    nw_ins_0_ip.add(staticIP[i]);
-    nw_ins_0_gw.add(staticGateway[i]);
-    nw_ins_0_sn.add(staticSubnet[i]);
+    nw_ins_0_ip.add((uint8_t)staticIP[i]);
+    nw_ins_0_gw.add((uint8_t)staticGateway[i]);
+    nw_ins_0_sn.add((uint8_t)staticSubnet[i]);
   }
 
   JsonObject ap = doc.createNestedObject("ap");

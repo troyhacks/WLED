@@ -307,7 +307,7 @@ class BusPwm : public Bus {
   private:
     uint8_t _pins[5] = {255, 255, 255, 255, 255};
     uint8_t _data[5] = {0};
-    #ifdef ARDUINO_ARCH_ESP32
+    #if defined(ARDUINO_ARCH_ESP32) || defined(WLED_IDF_BUILD)
     uint8_t _ledcStart = 255;
     #endif
     uint16_t _frequency = 0U;

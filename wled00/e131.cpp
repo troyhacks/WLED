@@ -559,9 +559,11 @@ void sendArtnetPollReply(ArtPollReply *reply, IPAddress ipAddress, uint16_t port
     pollReplyCount = 0;
   }
 
+#ifndef WLED_IDF_BUILD
   notifierUdp.beginPacket(ipAddress, ARTNET_DEFAULT_PORT);
   notifierUdp.write(reply->raw, sizeof(ArtPollReply));
   notifierUdp.endPacket();
+#endif
 
   reply->reply_bind_index++;
 }

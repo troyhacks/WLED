@@ -122,7 +122,7 @@ private:
     // Read metadata line
     String line = f.readStringUntil('\n');
     StaticJsonDocument<128> doc;
-    if (deserializeJson(doc, line)) {
+    if (deserializeJson(doc, line.c_str())) {
       f.close();
       return false;
     }
@@ -167,11 +167,13 @@ private:
     return WLED_FS.remove(filename);
   }
 
+#ifndef WLED_IDF_BUILD
   // Serve the web page
   void servePage(AsyncWebServerRequest* request);
 
   // Handle API requests
   void handleApi(AsyncWebServerRequest* request);
+#endif
 
 public:
 
@@ -299,6 +301,7 @@ public:
 
   // Register web server handlers
   void initWeb() {
+#ifndef WLED_IDF_BUILD
     if (!enabled || webInitDone) return;
 
     // Use flat paths to avoid routing issues
@@ -312,6 +315,7 @@ public:
 
     webInitDone = true;
     USER_PRINTLN(F("ArtNetMap: Web handlers registered at /artnetmap and /artnetmap-api"));
+#endif
   }
 };
 
@@ -325,8 +329,9 @@ inline const char ArtNetMapUsermod::_currentPreset[] PROGMEM = "currentPreset";
 #endif
 
 // ============================================================================
-// Web page implementation
+// Web page implementation (Arduino / ESPAsyncWebServer only)
 // ============================================================================
+#ifndef WLED_IDF_BUILD
 
 inline void ArtNetMapUsermod::servePage(AsyncWebServerRequest* request) {
   AsyncResponseStream* response = request->beginResponseStream("text/html");
@@ -610,3 +615,5 @@ inline void ArtNetMapUsermod::handleApi(AsyncWebServerRequest* request) {
   serializeJson(doc, response);
   request->send(200, "application/json", response);
 }
+
+#endif // !WLED_IDF_BUILD

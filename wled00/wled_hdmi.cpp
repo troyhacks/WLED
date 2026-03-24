@@ -501,9 +501,27 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   esp_lcd_panel_lt8912b_io_t lt8912b_io = { .main = io_main, .cec_dsi = io_cec, .avi = io_avi };
 
   USER_PRINTLN("Installing LT8912B HDMI bridge driver");
-  ESP_ERROR_CHECK(esp_lcd_new_panel_lt8912b(&lt8912b_io, &panel_config, &panel_handle));
-  ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-  ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
+  {
+    esp_err_t _err = esp_lcd_new_panel_lt8912b(&lt8912b_io, &panel_config, &panel_handle);
+    if (_err != ESP_OK || !panel_handle) {
+      USER_PRINTF("HDMI: esp_lcd_new_panel_lt8912b failed (0x%x) — HDMI disabled\n", _err);
+      return;
+    }
+  }
+  {
+    esp_err_t _err = esp_lcd_panel_reset(panel_handle);
+    if (_err != ESP_OK) {
+      USER_PRINTF("HDMI: panel_reset failed (0x%x) — HDMI disabled\n", _err);
+      return;
+    }
+  }
+  {
+    esp_err_t _err = esp_lcd_panel_init(panel_handle);
+    if (_err != ESP_OK) {
+      USER_PRINTF("HDMI: panel_init failed (0x%x) — HDMI disabled\n", _err);
+      return;
+    }
+  }
   // Note: esp_lcd_panel_disp_on_off() is not supported by the LT8912B driver (returns ESP_ERR_NOT_SUPPORTED).
   USER_PRINTF("HDMI bridge init: %dx%d pclk=%uMHz lane=%uMbps disable_lp=%d (%s)\n",
     timing.width, timing.height, timing.dpi_clock_freq_mhz, timing.lane_bit_rate_mbps,

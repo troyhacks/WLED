@@ -10,8 +10,12 @@
 */
 
 #include "wled.h"
+#ifndef WLED_IDF_BUILD
 #include <AsyncUDP.h>
 #include <WiFiClient.h>
+#else
+#include "idf_shims/WiFiClient.h"
+#endif
 #include <vector>
 #include "fcn_declare.h"
 #include "esp_heap_caps.h"

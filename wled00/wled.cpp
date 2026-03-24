@@ -119,7 +119,7 @@ WLED::WLED()
 void WLED::reset()
 {
   briT = 0;
-  #ifdef WLED_ENABLE_WEBSOCKETS
+  #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
   ws.closeAll(1012);
 #endif
   long dly = millis();
@@ -234,6 +234,7 @@ void background_loop_nonblocking(void* pvParameters) {
 
         vTaskPrioritySet(wled_main_task, MY_BASE_PRIORITY);
 
+        #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
         if (ws.count() > 0 && ws_reset_times < 3) {
           USER_PRINTF("Detected stuck state, resetting WebSockets... %d ws clients\n", ws.count());
           ws.closeAll();
@@ -243,11 +244,14 @@ void background_loop_nonblocking(void* pvParameters) {
           stuckSince = 0;
           ws_reset_times++;
         } else {
-          USER_PRINTF("Detected stuck state, re-initing interfaces. %d ws clients\n", ws.count());
+        #endif
+          USER_PRINTF("Detected stuck state, re-initing interfaces.\n");
           WLED::instance().initInterfaces();
           stuckSince = 0;
           ws_reset_times = 0;
+        #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
         }
+        #endif
       }
     }
     
@@ -288,11 +292,13 @@ void background_loop_nonblocking(void* pvParameters) {
       WLED::reset();
     }
 
+    #ifndef WLED_IDF_BUILD
     if (apActive) dnsServer.processNextRequest();
+    #endif
     
     if (!realtimeMode || realtimeOverride || (realtimeMode && useMainSegmentOnly)) {
 
-      #ifndef WLED_DISABLE_OTA
+      #if !defined(WLED_DISABLE_OTA) && !defined(WLED_IDF_BUILD)
       if (WLED_CONNECTED && aOtaEnabled && !otaLock && correctPIN) ArduinoOTA.handle();
       #endif
 
@@ -567,7 +573,9 @@ static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_b
       s_retry_num = 0;
 
       // Always stop DNS hijacking once we have internet
+      #ifndef WLED_IDF_BUILD
       dnsServer.stop();
+      #endif
       if (apActive) USER_PRINTLN("Stopped captive portal DNS");
 
       // Handle AP based on behavior setting
@@ -612,14 +620,18 @@ static void eth_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
     eth_is_connected = false;
     USER_PRINT("IP Address is now http://");
     USER_PRINTLN(Network.localIP());
+    #ifndef WLED_IDF_BUILD
     MDNS.end();
+    #endif
     escapedMac = Network.getEscapedMac();
     sprintf_P(cmDNS, PSTR("wled-%*s"), 6, escapedMac.c_str() + 6);
+    #ifndef WLED_IDF_BUILD
     MDNS.begin(cmDNS);
     USER_PRINTF("mDNS started: http://%s.local\n", cmDNS); // WLEDMM
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("wled", "tcp", 80);
     MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
+    #endif
   } else if (event_id == ETHERNET_EVENT_START) {
     eth_link_up = false;  // Link not up yet
     eth_is_connected = false;
@@ -1362,7 +1374,7 @@ void WLED::setup() {
   // fill in unique mdns default
   sprintf_P(cmDNS, PSTR("wled-%*s"), 6, escapedMac.c_str() + 6);
 
-#ifndef WLED_DISABLE_OTA
+#if !defined(WLED_DISABLE_OTA) && !defined(WLED_IDF_BUILD)
   if (aOtaEnabled) {
     ArduinoOTA.onStart([]() {
       WLED::instance().disableWatchdog();
@@ -1649,6 +1661,7 @@ void WLED::initAP(bool resetAP) {
   if (!apActive) // start captive portal if AP active
   {
     DEBUG_PRINTLN(F("Init AP interfaces"));
+    #ifndef WLED_IDF_BUILD
     server.begin();
     if (udpPort > 0 && udpPort != ntpLocalPort) {
       udpConnected = notifierUdp.begin(udpPort);
@@ -1656,6 +1669,7 @@ void WLED::initAP(bool resetAP) {
     if (udpPort2 > 0 && udpPort2 != ntpLocalPort && udpPort2 != udpPort && udpPort2 != udpRgbPort) {
       udp2Connected = notifier2Udp.begin(udpPort2);
     }
+    #endif
     if (e131Port == ARTNET_DEFAULT_PORT) {
       artnet.stop();
       artnet.begin(e131Universe, ARTNET_PRIORITY);
@@ -1663,15 +1677,19 @@ void WLED::initAP(bool resetAP) {
       artnet.stop();
       e131.begin(false, e131Port, e131Universe, E131_MAX_UNIVERSE_COUNT);
       ddp.begin(false, DDP_DEFAULT_PORT);
+      #ifndef WLED_IDF_BUILD
       if (udpRgbPort > 0 && udpRgbPort != ntpLocalPort && udpRgbPort != udpPort) {
         udpRgbConnected = rgbUdp.begin(udpRgbPort);
       }
+      #endif
     }
     IPAddress apIP = Network.softAPIP();
     USER_PRINT(F("AP IP: "));
     USER_PRINTLN(apIP);
+    #ifndef WLED_IDF_BUILD
     dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
     dnsServer.start(53, "*", Network.softAPIP());
+    #endif
   }
   apActive = true;
 }
@@ -1683,7 +1701,7 @@ void WLED::initConnection() {
   // while(strip.isUpdating() && (millis() - t_wait < 86)) delay(1); // WLEDMM try to catch a moment when strip is idle
   //if (strip.isUpdating()) USER_PRINTLN("WLED::initConnection: strip still updating.");
 
-#ifdef WLED_ENABLE_WEBSOCKETS
+#if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
   ws.onEvent(wsEvent);
 #endif
 
@@ -1759,12 +1777,12 @@ void WLED::initInterfaces()
 
 // aOtaEnabled=false; strcpy(cmDNS, ""); // WLEDMM use this to disable OTA and mDNS
 
-#ifndef WLED_DISABLE_OTA
+#if !defined(WLED_DISABLE_OTA) && !defined(WLED_IDF_BUILD)
   if (aOtaEnabled)
     ArduinoOTA.begin();
 #endif
 
-  #ifndef WLED_DISABLE_OTA   // WLEDMM
+  #if !defined(WLED_DISABLE_OTA) && !defined(WLED_IDF_BUILD)   // WLEDMM
   if (aOtaEnabled) {
     USER_PRINT(F("           ArduinoOTA: "));
     USER_PRINTLN(ArduinoOTA.getHostname());
@@ -1773,19 +1791,24 @@ void WLED::initInterfaces()
 
   // Set up mDNS responder:
   if (strlen(cmDNS) > 0) {
+    escapedMac = Network.getEscapedMac();
+    sprintf_P(cmDNS, PSTR("wled-%*s"), 6, escapedMac.c_str() + 6);
+    #ifndef WLED_IDF_BUILD
     // "end" must be called before "begin" is called a 2nd time
     // see https://github.com/esp8266/Arduino/issues/7213
     MDNS.end();
-    escapedMac = Network.getEscapedMac();
-    sprintf_P(cmDNS, PSTR("wled-%*s"), 6, escapedMac.c_str() + 6);
     MDNS.begin(cmDNS);
     USER_PRINTF("mDNS started: http://%s.local\n", cmDNS); // WLEDMM
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("wled", "tcp", 80);
     MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
+    #endif
   }
+  #ifndef WLED_IDF_BUILD
   server.begin();
+  #endif
 
+  #ifndef WLED_IDF_BUILD
   if (udpPort > 0 && udpPort != ntpLocalPort) {
     udpConnected = false;
     udpConnected = notifierUdp.begin(udpPort);
@@ -1794,6 +1817,7 @@ void WLED::initInterfaces()
   if (ntpEnabled) {
     ntpConnected = ntpUdp.begin(ntpLocalPort);
   }
+  #endif
   if (e131Port == ARTNET_DEFAULT_PORT) {
     artnet.stop();
     artnet_listening = artnet.begin(e131Universe, ARTNET_PRIORITY);
@@ -1801,9 +1825,11 @@ void WLED::initInterfaces()
     artnet.stop();
     e131_listening = e131.begin(false, e131Port, e131Universe, E131_MAX_UNIVERSE_COUNT);
     ddp_listening = ddp.begin(false, DDP_DEFAULT_PORT);
+    #ifndef WLED_IDF_BUILD
     if (udpConnected && udpRgbPort != udpPort) {
       udpRgbConnected = rgbUdp.begin(udpRgbPort);
     }
+    #endif
   }
   vTaskDelay(pdMS_TO_TICKS(500));
   interfacesInited = true;
@@ -1977,7 +2003,9 @@ void WLED::handleConnection() {
     userConnected();
     usermods.connected();
     lastMqttReconnectAttempt = 0;
+    #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
     ws.onEvent(wsEvent);
+    #endif
   }
 
   // === NEW: Log when WiFi comes up after Ethernet ===

@@ -4,6 +4,10 @@
  * Registers pins so there is no attempt for two interfaces to use the same pin
  */
 
+#ifdef WLED_IDF_BUILD
+#include "idf_compat.h"
+#include "esp32-hal.h"  // digitalPinHasPWM, digitalPinToInterrupt, GPIO register helpers
+#else
 #ifdef ARDUINO_ARCH_ESP32
 // get prototypes for GPIO_IS_VALID_GPIO and GPIO_IS_VALID_OUTPUT_GPIO
 extern "C" {
@@ -11,8 +15,8 @@ extern "C" {
 #include "driver/gpio.h"
 }
 #endif
-
 #include <Arduino.h>
+#endif
 #include "const.h" // for USERMOD_* values
 
 typedef struct PinManagerPinType {
@@ -167,7 +171,7 @@ class PinManagerClass {
   uint8_t getADCPin(AdcIdentifier adcUnit, uint8_t adcPort);   // get GPIO number for ADC unit x, channel y. 255 = no such pin
   // WLEDMM end
 
-  #ifdef ARDUINO_ARCH_ESP32
+  #if defined(ARDUINO_ARCH_ESP32) || defined(WLED_IDF_BUILD)
   byte allocateLedc(byte channels);
   void deallocateLedc(byte pos, byte channels);
   #endif

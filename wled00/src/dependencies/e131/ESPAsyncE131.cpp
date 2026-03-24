@@ -20,9 +20,10 @@
 #include "ESPAsyncE131.h"
 #include "../network/Network.h"
 #include <string.h>
+#include <functional>
 
 #ifdef ARDUINO_ARCH_ESP32
-#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0) && !defined(WLED_IDF_BUILD)
 #define Network WL_Network
 #endif
 #endif

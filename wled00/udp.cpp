@@ -16,6 +16,7 @@
 #define UDP_IN_MAXSIZE 1472
 #define PRESUMED_NETWORK_DELAY 3 //how many ms could it take on avg to reach the receiver? This will be added to transmitted times
 
+#ifndef WLED_IDF_BUILD
 void notify(byte callMode, bool followUp)
 {
   if (!udpConnected) return;
@@ -155,6 +156,9 @@ void notify(byte callMode, bool followUp)
   notificationSentTime = millis();
   notificationCount = followUp ? notificationCount + 1 : 0;
 }
+#else
+void notify(byte callMode, bool followUp) {}
+#endif // !WLED_IDF_BUILD
 
 void realtimeLock(uint32_t timeoutMs, byte md)
 {
@@ -231,6 +235,7 @@ void exitRealtime() {
 
 #define TMP2NET_OUT_PORT 65442
 
+#ifndef WLED_IDF_BUILD
 void sendTPM2Ack() {
   if (0 != notifierUdp.beginPacket(notifierUdp.remoteIP(), TMP2NET_OUT_PORT)) {  // WLEDMM beginPacket == 0 --> error
     uint8_t response_ack = 0xac;
@@ -238,6 +243,9 @@ void sendTPM2Ack() {
     notifierUdp.endPacket();
   }
 }
+#else
+void sendTPM2Ack() {}
+#endif
 
 #ifdef ARDUINO_ARCH_ESP32
 // WLEDMM don't use dynamic arrays for receiving UDP. ESP32 has enough RAM, and handleNotifications() is only called from main loop, so one static buffer should be enough.
@@ -246,6 +254,7 @@ static uint8_t udpIn[UDP_IN_MAXSIZE+1];
 // WLEDMM end
 #endif
 
+#ifndef WLED_IDF_BUILD
 void handleNotifications() {
 
   IPAddress localIP;
@@ -528,6 +537,9 @@ void handleNotifications() {
     releaseJSONBufferLock();
   }
 }
+#else
+void handleNotifications() {}
+#endif // !WLED_IDF_BUILD
 
 void setRealtimePixel(uint16_t i, byte r, byte g, byte b, byte w)
 {
@@ -573,6 +585,7 @@ void refreshNodeList()
 /*********************************************************************************************\
    Broadcast system info to other nodes. (to update node lists)
 \*********************************************************************************************/
+#ifndef WLED_IDF_BUILD
 void sendSysInfoUDP()
 {
   if (!udp2Connected) return;
@@ -627,6 +640,9 @@ void sendSysInfoUDP()
     notifier2Udp.endPacket();
   }
 }
+#else
+void sendSysInfoUDP() {}
+#endif // !WLED_IDF_BUILD
 
 
 /*********************************************************************************************\
@@ -1099,7 +1115,11 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
 
       IPAddress dest = e131_multicast ? e131MulticastIP(universe) : client;
 
+#ifdef WLED_IDF_BUILD
+      if (!e131Udp.writeTo(packet_buffer, packetSize + E131_HEADER_LEN, dest, E131_DEFAULT_PORT)) {
+#else
       if (!e131Udp.writeTo(packet_buffer, packetSize + E131_HEADER_LEN, dest, E131_DEFAULT_PORT, send_interface)) {
+#endif
         DEBUG_PRINTLN(F("E1.31 writeTo error"));
         return 1;
       }

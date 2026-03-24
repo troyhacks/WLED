@@ -77,12 +77,14 @@ void task_list() {
 
   taskCount = uxTaskGetSystemState(taskStatusArray, MAX_TASKS, &totalRunTime);
 
-  // Sort tasks first by Core ID, then by descending Run Time (CPU usage)
+  // Sort tasks by descending Run Time (CPU usage); xCoreID sort only when available
   std::sort(taskStatusArray, taskStatusArray + taskCount, [](const TaskStatus_t& a, const TaskStatus_t& b) {
+#ifdef configTASKLIST_INCLUDE_COREID
     // Primary sort: Core ID (Core 0, then Core 1, then unassigned)
     if (a.xCoreID != b.xCoreID) {
       return a.xCoreID < b.xCoreID;
     }
+#endif
     // Secondary sort: Run Time (higher usage first)
     return a.ulRunTimeCounter > b.ulRunTimeCounter;
   });
@@ -113,7 +115,12 @@ void task_list() {
       ts->usStackHighWaterMark,
       ts->ulRunTimeCounter,
       cpu_percent,
-      ts->xCoreID == tskNO_AFFINITY ? -1 : ts->xCoreID);
+#ifdef configTASKLIST_INCLUDE_COREID
+      ts->xCoreID == tskNO_AFFINITY ? -1 : (int)ts->xCoreID
+#else
+      -1
+#endif
+      );
   }
 }
 

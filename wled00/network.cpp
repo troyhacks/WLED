@@ -164,6 +164,7 @@ int getSignalQuality(int rssi)
 
 
 //handle Ethernet connection event
+#ifndef WLED_IDF_BUILD
 void WiFiEvent(arduino_event_id_t event) // TROYHACKS P4
 {
   switch (event) {
@@ -203,4 +204,5 @@ void WiFiEvent(arduino_event_id_t event) // TROYHACKS P4
       break;
   }
 }
+#endif // !WLED_IDF_BUILD
 

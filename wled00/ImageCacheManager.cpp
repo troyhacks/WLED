@@ -1,5 +1,7 @@
 #include "ImageCacheManager.h"
+#ifdef CONFIG_SPIRAM
 #include "esp_psram.h"
+#endif
 #include "esp_log.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -21,7 +23,11 @@ ImageCacheManager::ImageCacheManager() :
   cache_mutex = xSemaphoreCreateMutex();
   status_events = xEventGroupCreate();
   xEventGroupSetBits(status_events, EVT_IDLE); // Start idle
+#ifdef CONFIG_SPIRAM
   size_t total_psram = esp_psram_get_size();
+#else
+  size_t total_psram = 0;
+#endif
   psram_limit = static_cast<size_t>(total_psram * 0.8);
   ESP_LOGI(TAG, "Total PSRAM: %u bytes, Cache Limit (80%%): %u bytes", total_psram, psram_limit);
 }

@@ -425,6 +425,7 @@ bool readObjectFromFileSD(const char* file, const char* key, JsonDocument* dest)
   return err.code() == DeserializationError::Ok;
 }
 
+#ifndef WLED_IDF_BUILD
 //Un-comment any file types you need
 static String getContentType(AsyncWebServerRequest* request, String filename){
   if(request->hasArg("download")) return "application/octet-stream";
@@ -443,6 +444,7 @@ static String getContentType(AsyncWebServerRequest* request, String filename){
 //  else if(filename.endsWith(".gz")) return "application/x-gzip";
   return "text/plain";
 }
+#endif // !WLED_IDF_BUILD
 
 #if defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
 // caching presets in PSRAM may prevent occasional flashes seen when HomeAssistant polls WLED
@@ -517,6 +519,7 @@ void invalidateFileNameCache() { // reset "file not found" cache
   //USER_PRINTLN("WS FileRead cache cleared");
 }
 
+#ifndef WLED_IDF_BUILD
 bool handleFileRead(AsyncWebServerRequest* request, String path){
   DEBUG_PRINTLN("WS FileRead: " + path);
   if(path.endsWith("/")) path += "index.htm";
@@ -563,6 +566,7 @@ bool handleFileRead(AsyncWebServerRequest* request, String path){
   if (path.equals("/cpal.htm"))    haveCpalFile = false;
   return false;
 }
+#endif // !WLED_IDF_BUILD
 
 bool getHostnameFromConfig(char* dest, size_t maxLen) {
   File f = WLED_FS.open("/cfg.json", "r");

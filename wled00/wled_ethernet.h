@@ -3,6 +3,12 @@
 
 #include "pin_manager.h"
 
+#ifdef WLED_IDF_BUILD
+// eth_phy_type_t / eth_clock_mode_t are Arduino ESP32 ETH.h types; not in IDF v5 directly.
+typedef int eth_phy_type_t;
+typedef int eth_clock_mode_t;
+#endif
+
 #ifdef WLED_USE_ETHERNET
 
 // For ESP32, the remaining five pins are at least somewhat configurable.

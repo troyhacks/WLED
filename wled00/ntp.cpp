@@ -202,7 +202,9 @@ void handleTime() {
 void handleNetworkTime() {
   if (ntpEnabled && ntpConnected && millis() - ntpLastSyncTime > (1000 * NTP_SYNC_INTERVAL) && WLED_CONNECTED) {
     if (millis() - ntpPacketSentTime > 10000) {
+      #ifndef WLED_IDF_BUILD
       while (ntpUdp.parsePacket() > 0) ntpUdp.flush(); // flush any existing packets
+      #endif
       sendNTPPacket();
       ntpPacketSentTime = millis();
     }
@@ -214,6 +216,7 @@ void handleNetworkTime() {
   }
 }
 
+#ifndef WLED_IDF_BUILD
 void sendNTPPacket() {
 
   IPAddress ntpServerIP = Network.hostByName(ntpServerName);
@@ -241,6 +244,9 @@ void sendNTPPacket() {
     ESP_LOGE("NTP", "Hostname '%s' resolve failed.", ntpServerName);
   }
 }
+#else
+void sendNTPPacket() {}
+#endif // !WLED_IDF_BUILD
 
 static bool isValidNtpResponse(byte* ntpPacket) {
   // Perform a few validity checks on the packet
@@ -258,6 +264,7 @@ static bool isValidNtpResponse(byte* ntpPacket) {
   return true;
 }
 
+#ifndef WLED_IDF_BUILD
 bool checkNTPResponse() {
 #ifdef ARDUINO_ARCH_ESP32
   ntpUdp.flush();
@@ -310,6 +317,9 @@ bool checkNTPResponse() {
   calculateSunriseAndSunset();
   return true;
 }
+#else
+bool checkNTPResponse() { return false; }
+#endif // !WLED_IDF_BUILD
 
 void updateLocalTime() {
   if (currentTimezone != tzCurrent) updateTimezone();

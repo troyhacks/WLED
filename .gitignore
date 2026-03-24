@@ -11,7 +11,6 @@
 .claude
 
 esp01-update.sh
-platformio_override.ini
 replace_fs.py
 wled-update.sh
 qodana.yaml
@@ -29,3 +28,5 @@ compile_commands.json
 /wled00/html_*.h
 /wled00/*.off
 .vscode/extensions.json
+managed_components
+platformio_override.ini

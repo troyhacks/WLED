@@ -28,9 +28,11 @@ struct NodeStruct
   uint8_t   nodeType;
   uint32_t  build;
 
-  NodeStruct() : age(0), nodeType(0), build(0)
+  NodeStruct() : age(0), nodeType(0), build(0), ip()
   {
+#ifndef WLED_IDF_BUILD
     for (uint8_t i = 0; i < 4; ++i) { ip[i] = 0; }
+#endif
   }
 };
 typedef std::map<uint8_t, NodeStruct> NodesMap;

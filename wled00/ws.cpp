@@ -3,7 +3,7 @@
 /*
  * WebSockets server for bidirectional communication
  */
-#ifdef WLED_ENABLE_WEBSOCKETS
+#if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
 
 static volatile uint16_t wsLiveClientId = 0;        // WLEDMM added "static"
 static volatile unsigned long wsLastLiveTime = 0;   // WLEDMM
