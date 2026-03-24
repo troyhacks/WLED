@@ -177,7 +177,7 @@ void realtimeLock(uint32_t timeoutMs, byte md)
 
     if (strip.isServicing()) {
       USER_PRINTLN(F("realtimeLock() entering RTM: strip is still drawing effects."));
-      strip.waitUntilIdle(350);
+      strip.waitUntilIdle();
     }
     busses.invalidateCache(true);
     // WLEDMM end
@@ -346,7 +346,7 @@ void handleNotifications()
       uint8_t lbuf[packetSize+1]; // WLEDMM: use global buffer on ESP32
       #endif
       rgbUdp.read(lbuf, packetSize);
-      realtimeLock(realtimeTimeoutMs, REALTIME_MODE_HYPERION);
+      realtimeLock(realtimeTimeoutMs, REALTIME_MODE_GENERIC);
 #ifdef ARDUINO_ARCH_ESP32
       if (realtimeOverride && !(realtimeMode && useMainSegmentOnly)) {notifierUdp.flush(); notifier2Udp.flush(); return;}
 #else
@@ -594,7 +594,7 @@ void handleNotifications()
     if (tpmType != 0xda) return; //return if notTPM2.NET data
 
     realtimeIP = (isSupp) ? notifier2Udp.remoteIP() : notifierUdp.remoteIP();
-    realtimeLock(realtimeTimeoutMs, REALTIME_MODE_TPM2NET);
+    realtimeLock(realtimeTimeoutMs, REALTIME_MODE_GENERIC);
     if (realtimeOverride && !(realtimeMode && useMainSegmentOnly)) return;
 
     tpmPacketCount++; //increment the packet count
@@ -708,7 +708,7 @@ void setRealtimePixel(uint16_t i, byte r, byte g, byte b, byte w)
     }
     if (useMainSegmentOnly) {
       //Segment &seg = strip.getMainSegment();
-      if ((theMainSeg) && (unsigned(pix) < theMainSegLength)) theMainSeg->setPixelColor(pix, r, g, b, w); // WLEDMM used cached main segment
+      if ((theMainSeg) && (unsigned(pix) < theMainSegLength)) theMainSeg->setPixelColor((uint32_t)pix, r, g, b, w); // WLEDMM used cached main segment
     } else {
       strip.setPixelColor(pix, r, g, b, w);
     }

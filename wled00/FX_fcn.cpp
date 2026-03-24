@@ -103,7 +103,7 @@ Segment::Segment(const Segment &orig) {
 
 //WLEDMM: recreate ledsrgb if more space needed (will not free ledsrgb!)
 void Segment::allocLeds() {
-  uint32_t size = sizeof(CRGB)*max((uint32_t) length(), ledmapMaxSize); // TroyHacks
+  uint32_t size = sizeof(CRGB)*max((uint32_t) length(), (uint32_t)ledmapMaxSize); // TroyHacks
   if ((size < sizeof(CRGB))) { //softhack too small (<3) or too large (>160Kb) // TroyHacks Removed  "|| (size > 164000)" for P4 because we can be big
     DEBUG_PRINTF("allocLeds warning: size == %u !!\n", size);
     if (ledsrgb && (ledsrgbSize == 0)) {
@@ -2890,7 +2890,7 @@ bool WS2812FX::deserializeMap(uint8_t n) {
 
   // Allocate
   if (mapSize > customMappingTableSize) {
-    uint32_t size = max(ledmapMaxSize, mapSize);
+    uint32_t size = max((uint32_t)ledmapMaxSize, (uint32_t)mapSize);
     USER_PRINTF("deserializeMap alloc %u from %u\n", size, customMappingTableSize);
 
     if (customMappingTable) heap_caps_free(customMappingTable);

@@ -7,6 +7,9 @@
 #include "esp_netif_net_stack.h"
 #include "esp_mac.h"
 
+// lwIP source interface — set by localIP() so UDP sockets can bind to the right netif.
+static struct netif* sender_netif = nullptr;
+
 IPAddress NetworkClass::localIP() {
   esp_netif_ip_info_t ip_info;
   esp_netif_t* wifi_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");

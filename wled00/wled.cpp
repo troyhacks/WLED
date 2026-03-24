@@ -22,6 +22,10 @@ static const char *TAG = "WLED";
 
 #include "wled_hdmi.h"
 #include "wled_usb.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "esp_task_wdt.h"
+#include "ImageCacheManager.h"
+#endif
 
 #ifdef ARDUINO_ARCH_ESP32
   #include "esp_ota_ops.h"
@@ -289,7 +293,7 @@ void background_loop_nonblocking(void* pvParameters) {
     handleIO();
 
     if (doReboot && !doInitBusses) { // if busses have to be inited & saved, wait until next iteration
-      WLED::reset();
+      WLED::instance().reset();
     }
 
     #ifndef WLED_IDF_BUILD
@@ -529,7 +533,7 @@ static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_b
       }
       if (apBehavior == AP_BEHAVIOR_NO_CONN && !apActive) {
         USER_PRINTLN("Connection lost, restarting AP");
-        WLED::initAP(false);
+        WLED::instance().initAP(false);
       }
     } else if (event_id == WIFI_EVENT_HOME_CHANNEL_CHANGE) {
       // USER_PRINTLN("Event: WiFi HOME CHANNEL CHANGED");

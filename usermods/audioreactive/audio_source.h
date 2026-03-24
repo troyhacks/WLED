@@ -661,6 +661,7 @@ class ES8388Source : public I2SSource {
 */
 class ES8311Source : public I2SSource {
   private:
+    bool ES7210_present = false;  // set true if ES7210 ADC detected on I2C bus
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
     // On ESP32-P4, Wire is not used; communicate via IDF I2C master API instead.
     bool _p4_i2c_write(uint8_t addr, uint8_t reg, uint8_t val) {

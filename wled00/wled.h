@@ -138,6 +138,8 @@
   #include "idf_shims/WiFiUDP.h"   // after idf_compat.h so IPAddress is fully defined
   #include "idf_shims/LittleFS.h"
   #include "esp_wifi.h"
+  #include "esp_eth.h"
+  #include "esp_netif.h"
   #include "esp_timer.h"
   #include "freertos/FreeRTOS.h"
   #include "freertos/task.h"
@@ -199,7 +201,10 @@
 #endif
 
 #define ARDUINOJSON_DECODE_UNICODE 0   // WLEDMM enables support for unicode HEX strings - deserializeJson(doc, "{'firstname':'Beno\\u00EEt'}"); --> not needed - disable saves 1.2KB flash
+#ifndef WLED_IDF_BUILD
+// AsyncJson-v6 depends on ESPAsyncWebServer (Arduino only); IDF build uses its own shim in wled_server_idf.cpp
 #include "src/dependencies/json/AsyncJson-v6.h"
+#endif
 #include "src/dependencies/json/ArduinoJson-v6.h"
 
 
@@ -215,7 +220,7 @@
 // The following is a construct to enable code to compile without it.
 // There is a code that will still not use PSRAM though:
 //    AsyncJsonResponse is a derived class that implements DynamicJsonDocument (AsyncJson-v6.h)
-#if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))         // WLEDMM
+#if defined(ARDUINO_ARCH_ESP32) && !defined(WLED_IDF_BUILD) && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))         // WLEDMM
 // WLEDMM the JSON_TO_PSRAM feature works, so use it by default
 #undef  WLED_USE_PSRAM_JSON
 #define WLED_USE_PSRAM_JSON
@@ -440,6 +445,12 @@ WLED_GLOBAL uint16_t transitionDelay _INIT(750);    // default crossfade duratio
 
 WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
+WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true);  // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true);  // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(true);  // WLED-MM/TroyHacks: Turn other filter from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_PINKY _INIT(false); // WLED-MM/TroyHacks: Internally calibrate audio against white noise
+WLED_GLOBAL float fftBinAverage[16] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
+
 // User Interface CONFIG
 #ifndef SERVERNAME
 WLED_GLOBAL char serverDescription[33] _INIT("WLED");  // Name of module - use default
@@ -518,6 +529,8 @@ WLED_GLOBAL uint16_t DMXSegmentSpacing _INIT(0);                  // Number of v
 WLED_GLOBAL bool e131Multicast _INIT(false);                      // multicast or unicast
 WLED_GLOBAL bool e131SkipOutOfSequence _INIT(false);              // freeze instead of flickering
 WLED_GLOBAL uint16_t pollReplyCount _INIT(0);                     // count number of replies for ArtPoll node report
+WLED_GLOBAL ArtNetReceiver artnet;
+WLED_GLOBAL BusManager artnetbusManager;
 
 // mqtt
 WLED_GLOBAL unsigned long lastMqttReconnectAttempt _INIT(0);  // used for other periodic tasks too
@@ -614,6 +627,17 @@ WLED_GLOBAL bool forceReconnect _INIT(false);
 WLED_GLOBAL unsigned long lastReconnectAttempt _INIT(0);
 WLED_GLOBAL bool interfacesInited _INIT(false);
 WLED_GLOBAL bool wasConnected _INIT(false);
+#ifdef WLED_IDF_BUILD
+  WLED_GLOBAL bool wifi_is_connected _INIT(false);
+  WLED_GLOBAL bool eth_is_connected  _INIT(false);
+  WLED_GLOBAL bool eth_link_up       _INIT(false);   // Physical link status (Layer 2)
+  WLED_GLOBAL esp_eth_handle_t   eth_handle _INIT(nullptr);
+  WLED_GLOBAL esp_netif_t*       eth_netif  _INIT(nullptr);
+  WLED_GLOBAL TaskHandle_t       wled_main_task _INIT(nullptr);
+  WLED_GLOBAL int s_retry_num _INIT(0);
+  WLED_GLOBAL uint8_t g_ap_client_count _INIT(0);
+  WLED_GLOBAL portMUX_TYPE g_ap_client_mux _INIT(portMUX_INITIALIZER_UNLOCKED);
+#endif
 
 // color
 WLED_GLOBAL byte lastRandomIndex _INIT(0);        // used to save last random color so the new one is not the same
@@ -782,15 +806,17 @@ WLED_GLOBAL bool ledStatusState _INIT(false); // the current LED state
 
 // server library objects
 WLED_GLOBAL AsyncWebServer server _INIT_N(((80)));
-#ifdef WLED_ENABLE_WEBSOCKETS
+#if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
 WLED_GLOBAL AsyncWebSocket ws _INIT_N((("/ws")));
 #endif
 //WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL); // WLEDMM moved into hue.cpp
 WLED_GLOBAL AsyncWebHandler *editHandler _INIT(nullptr);
 
 // udp interface objects
+#ifndef WLED_IDF_BUILD
 WLED_GLOBAL WiFiUDP notifierUdp, rgbUdp, notifier2Udp;
 WLED_GLOBAL WiFiUDP ntpUdp;
+#endif
 WLED_GLOBAL ESPAsyncE131 e131 _INIT_N(((handleE131Packet)));
 WLED_GLOBAL ESPAsyncE131 ddp  _INIT_N(((handleE131Packet)));
 WLED_GLOBAL bool e131NewData _INIT(false);
@@ -803,6 +829,9 @@ WLED_GLOBAL BusConfig* busConfigs[WLED_MAX_BUSSES+WLED_MIN_VIRTUAL_BUSSES] _INIT
 WLED_GLOBAL volatile bool doInitBusses _INIT(false);        // WLEDMM "volatile" added - needed as we want to sync parallel tasks
 WLED_GLOBAL volatile bool loadLedmap _INIT(false);          // WLEDMM use as bool and use loadedLedmap for Nr
 WLED_GLOBAL volatile uint8_t loadedLedmap _INIT(0);         // WLEDMM default 0
+WLED_GLOBAL char loadedLedmapName[33] _INIT({0});           // name of currently loaded ledmap (32 chars + NUL)
+WLED_GLOBAL uint8_t onload_loadedLedmap _INIT(0);           // ledmap index to load after boot
+WLED_GLOBAL bool onload_map_loaded _INIT(false);            // true after the boot-time ledmap has been loaded
 WLED_GLOBAL volatile bool suspendStripService _INIT(false); // WLEDMM temporarily prevent running strip.service, when strip or segments are "under update" and inconsistent
 WLED_GLOBAL volatile bool OTAisRunning _INIT(false);        // WLEDMM temporarily stop led updates during OTA
 
@@ -815,6 +844,30 @@ WLED_GLOBAL SemaphoreHandle_t presetFileMux _INIT(nullptr); // Protects presets.
 WLED_GLOBAL SemaphoreHandle_t busMutex _INIT(nullptr);      // serialises bus operations (show/init/config)
 #endif
 WLED_GLOBAL volatile bool newArtNetData _INIT(false);   // set by ArtNet receiver task, cleared by main loop
+
+#ifdef ARTNET_SKIP_FRAME
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(true);
+WLED_GLOBAL bool RealtimeSkipFrame _INIT(true);
+#else
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(false);
+WLED_GLOBAL bool RealtimeSkipFrame _INIT(false);
+#endif
+
+#ifndef ARTNET_PRIORITY
+  #define ARTNET_PRIORITY 20
+#else
+  #if (ARTNET_PRIORITY > (configMAX_PRIORITIES - 2))
+    #undef ARTNET_PRIORITY
+    #define ARTNET_PRIORITY (configMAX_PRIORITIES - 2)
+  #elif (ARTNET_PRIORITY < 1)
+    #undef ARTNET_PRIORITY
+    #define ARTNET_PRIORITY 1
+  #endif
+#endif
+
+WLED_GLOBAL bool artnet_listening _INIT(false);
+WLED_GLOBAL bool ddp_listening _INIT(false);
+WLED_GLOBAL bool e131_listening _INIT(false);
 WLED_GLOBAL volatile bool loadedLedmap_lock _INIT(false); // when true, presets cannot override the active ledmap
 WLED_GLOBAL volatile bool bakeMap _INIT(false);         // when true, bake current LED map to file on next update
 WLED_GLOBAL volatile bool busNetworkDummyMode _INIT(false); // when true, skip network transmit (HDMI-only mode)
@@ -857,6 +910,11 @@ WLED_GLOBAL uint16_t ledMaps _INIT(0); // bitfield representation of available l
 // Usermod manager
 WLED_GLOBAL UsermodManager usermods _INIT(UsermodManager());
 
+#ifdef USERMOD_PIONEER_PROLINK
+WLED_GLOBAL int  prolink_presetOffset _INIT(0);   // randomized phrase-to-preset mapping offset
+WLED_GLOBAL bool prolink_presetMover  _INIT(false); // true = auto-advance presets on phrase change
+#endif
+
 // global I2C SDA pin (used for usermods)
 #ifndef HW_PIN_SDA //WLEDMM not I2CSDAPIN
 WLED_GLOBAL int8_t i2c_sda  _INIT(-1);
@@ -893,6 +951,7 @@ WLED_GLOBAL int8_t spi_sclk  _INIT(HW_PIN_CLOCKSPI);
 #ifdef CONFIG_SOC_PPA_SUPPORTED
 #include <driver/ppa.h>
 #include <driver/jpeg_decode.h>
+WLED_GLOBAL bool update_screen_background _INIT(false);     // flag: redraw HDMI background on next frame
 WLED_GLOBAL ppa_client_handle_t  ppa_blend_handle    _INIT(nullptr);
 WLED_GLOBAL ppa_client_handle_t  ppa_fill_handle     _INIT(nullptr);
 WLED_GLOBAL ppa_client_handle_t  ppa_srm_handle      _INIT(nullptr);

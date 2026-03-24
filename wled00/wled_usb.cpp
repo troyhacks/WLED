@@ -38,6 +38,7 @@
 #include "driver/gpio.h"
 #include <sys/stat.h>
 #include "esp_ota_ops.h"
+#include "ota_littlefs.h"
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "esp_ldo_regulator.h"  // ESP32-P4: LDO4 (VO4) powers the SD card via P-FET
 #endif

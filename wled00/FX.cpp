@@ -12,6 +12,9 @@
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <LovyanGFX.hpp>
 #endif
+#if defined(CONFIG_SOC_PPA_SUPPORTED)
+#include "ImageCacheManager.h"
+#endif
 #if !(defined(WLED_DISABLE_PARTICLESYSTEM2D) && defined(WLED_DISABLE_PARTICLESYSTEM1D))
 #include "FXparticleSystem.h"
 #endif

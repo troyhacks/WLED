@@ -360,7 +360,7 @@ struct _WledSerial {
         return fwrite(buf, 1, len, stdout);
     }
 
-    // IPAddress overloads — declared here, defined inline after IPAddress is included below.
+    // IPAddress overloads — defined in idf_compat.cpp (after IPAddress is fully available).
     size_t print(const IPAddress& ip);
     size_t println(const IPAddress& ip);
 };
@@ -404,16 +404,12 @@ class __FlashStringHelper;
 class DNSServer {
 public:
     void setErrorReplyCode(int) {}
-    bool start(uint16_t, const char*, IPAddress) { return false; }
+    bool start(uint16_t, const char*, const IPAddress&) { return false; }
     void processNextRequest() {}
     void stop() {}
 };
 // DNSReplyCode enum (referenced by wled.cpp even though calls are #ifdef-guarded)
 enum class DNSReplyCode { NoError = 0, ServerFailure = 2, NonExistentDomain = 3 };
-
-// ─── _WledSerial IPAddress overloads (defined after IPAddress is complete) ────
-inline size_t _WledSerial::print(const IPAddress& ip)   { return printf("%s",   ip.toString().c_str()); }
-inline size_t _WledSerial::println(const IPAddress& ip) { return printf("%s\n", ip.toString().c_str()); }
 
 // ─── Bit manipulation macros (Arduino compat) ─────────────────────────────────
 #ifndef bitRead

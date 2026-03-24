@@ -69,7 +69,7 @@ void WS2812FX::setUpMatrix() {
       USER_PRINTLN("setUpMatrix: 1:1 layout, no mapping table needed.");
     } else {
       // Allocate customMappingTable if more space needed
-      uint32_t size = max(ledmapMaxSize, uint32_t(Segment::maxWidth * Segment::maxHeight));
+      uint32_t size = max((uint32_t)ledmapMaxSize, uint32_t(Segment::maxWidth * Segment::maxHeight));
 
       if (size > customMappingTableSize) {
         USER_PRINTF("setUpMatrix: customMappingTable alloc %u from %u\n", size, customMappingTableSize);

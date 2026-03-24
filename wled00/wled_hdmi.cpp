@@ -138,6 +138,19 @@ static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_co
   return true;
 }
 
+// ============================================================
+// File-local state: HDMI display stack handles and framebuffers.
+// All are NULL/0 at boot; populated by hdmi_display_init_timing().
+// ============================================================
+static esp_lcd_panel_io_handle_t lt8912b_io_main = NULL;
+static esp_lcd_panel_io_handle_t lt8912b_io_avi  = NULL;
+static esp_lcd_panel_io_handle_t lt8912b_io_cec  = NULL;
+static esp_lcd_dsi_bus_handle_t  lt8912b_dsi_bus = NULL;
+static esp_lcd_panel_handle_t    panel_handle     = NULL;
+static uint8_t* display_framebuffer       = NULL;  // back buffer (we write here)
+static uint8_t* display_front_framebuffer = NULL;  // front buffer (DPI is displaying this)
+static int hdmi_current_mode = 0;
+
 // Runtime display dimensions — set at init, replacing compile-time W/H defines
 uint16_t wledmm_display_w = 0;
 uint16_t wledmm_display_h = 0;
