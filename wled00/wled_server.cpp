@@ -860,9 +860,5 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
   request->send(response);
 }
 
-#else // WLED_IDF_BUILD — stubs for functions called from non-HTTP files
-
-void initServer() {}
-void createEditHandler(bool) {}
-
 #endif // !WLED_IDF_BUILD
+// In WLED_IDF_BUILD, initServer() and createEditHandler() are defined in wled_server_idf.cpp

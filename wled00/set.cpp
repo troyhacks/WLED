@@ -3,8 +3,6 @@
 
 #include "wled.h"
 
-#ifndef WLED_IDF_BUILD  // set.cpp is HTTP form/request handling — not needed in IDF build
-
 /*
  * Receives client input
  */
@@ -25,11 +23,11 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
 
   // WLEDMM: before changing bus, ledmap, strip or 2D settings, make sure our strip is _not_ servicing effects in parallel
   if ((subPage == 2) || (subPage == 3) || (subPage == 10)) {
-    // suspendStripService = true; // temporarily lock out strip updates
-    // if (strip.isServicing()) {
-    //   USER_PRINTLN(F("handleSettingsSet(): strip is still drawing effects."));
-    //   strip.waitUntilIdle();
-    // }
+    suspendStripService = true; // temporarily lock out strip updates
+    if (strip.isServicing()) {
+      USER_PRINTLN(F("handleSettingsSet(): strip is still drawing effects."));
+      strip.waitUntilIdle();
+    }
   }
 
   //WIFI SETTINGS
@@ -61,8 +59,7 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
 
     #ifdef WLED_USE_ETHERNET
     ethernetType = request->arg(F("ETH")).toInt();
-    ethernetOnly = request->hasArg(F("ETHO"));
-    // WLED::instance().initEthernet();
+    WLED::instance().initEthernet();
     #endif
 
     char k[3]; k[2] = 0;
@@ -98,14 +95,9 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       }
     }
 
-    uint8_t colorOrder, type, awmode, channelSwap, fps_limit;
-    uint32_t length, start, leds_per_output, outputs, skip;
-    #ifdef SOC_PARLIO_SUPPORTED
-    uint8_t nPins = SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH;
-    #else
-    uint8_t nPins = 5;
-    #endif
-    uint8_t pins[nPins];
+    uint8_t colorOrder, type, skip, awmode, channelSwap, artnet_outputs, artnet_fps_limit;
+    uint16_t length, start, artnet_leds_per_output;
+    uint8_t pins[5] = {255, 255, 255, 255, 255};
 
     autoSegments = request->hasArg(F("MS"));
     correctWB = request->hasArg(F("CCT"));
@@ -118,7 +110,6 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
 
     bool busesChanged = false;
     for (uint8_t s = 0; s < WLED_MAX_BUSSES+WLED_MIN_VIRTUAL_BUSSES; s++) {
-      USER_PRINTF("Saving %d\n",s);
       // "48+s" means the ASCII character "0", so 48+1 = ASCII for "1", etc - and "[3]=0" means null-terminate the string.
       char lp[4] = "L0"; lp[2] = 48+s; lp[3] = 0; //ascii 0-9 //strip data pin
       char lc[4] = "LC"; lc[2] = 48+s; lc[3] = 0; //strip length
@@ -135,24 +126,13 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       char al[4] = "AL"; al[2] = 48+s; al[3] = 0; //Art-Net LEDs per output
       char af[4] = "AF"; af[2] = 48+s; af[3] = 0; //Art-Net FPS limit
       if (!request->hasArg(lp)) {
-        USER_PRINT(F("No data for "));
-        USER_PRINTLN(s);
+        DEBUG_PRINT(F("No data for "));
+        DEBUG_PRINTLN(s);
         break;
       }
-      // for (uint8_t i = 0; i < 5; i++) {
-      //   lp[1] = 48+i;
-      //   if (!request->hasArg(lp)) break;
-      //   pins[i] = (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255;
-      // }
-      for (uint8_t i = 0; i < nPins; i++) {
-        char lp[7];
-        snprintf(lp, sizeof(lp), "L%u%u", i, s);
-        if (!request->hasArg(lp)) {
-          DEBUG_PRINT(F("No data for "));
-          DEBUG_PRINTLN(lp);
-          break;
-        }
-        DEBUG_PRINTF("Saving pin arg %s to pin[%d] with value %d\n", lp, i, (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255);
+      for (uint8_t i = 0; i < 5; i++) {
+        lp[1] = 48+i;
+        if (!request->hasArg(lp)) break;
         pins[i] = (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255;
       }
       type = request->arg(lt).toInt();
@@ -191,13 +171,13 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       }
       channelSwap = Bus::hasWhite(type) ? request->arg(wo).toInt() : 0;
       type |= request->hasArg(rf) << 7; // off refresh override
-      outputs         = (request->hasArg(ao)) ? request->arg(ao).toInt() : 1;
-      leds_per_output = (request->hasArg(al)) ? request->arg(al).toInt() : length;
-      fps_limit       = (request->hasArg(af)) ? request->arg(af).toInt() : 33333/length;
+      artnet_outputs         = (request->hasArg(ao)) ? request->arg(ao).toInt() : 1;
+      artnet_leds_per_output = (request->hasArg(al)) ? request->arg(al).toInt() : length;
+      artnet_fps_limit       = (request->hasArg(af)) ? request->arg(af).toInt() : 33333/length;
       // actual finalization is done in WLED::loop() (removing old busses and adding new)
       // this may happen even before this loop is finished so we do "doInitBusses" after the loop
       if (busConfigs[s] != nullptr) delete busConfigs[s];
-      busConfigs[s] = new BusConfig(type, pins, start, length, colorOrder | (channelSwap<<4), request->hasArg(cv), skip, awmode, freqHz, outputs, leds_per_output, fps_limit);
+      busConfigs[s] = new BusConfig(type, pins, start, length, colorOrder | (channelSwap<<4), request->hasArg(cv), skip, awmode, freqHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
       busesChanged = true;
     }
     //doInitBusses = busesChanged; // we will do that below to ensure all input data is processed
@@ -310,7 +290,6 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     t = request->arg(F("BF")).toInt();
     if (t > 0) briMultiplier = t;
 
-    onload_map_loaded = false;
     doInitBusses = busesChanged;
   }
 
@@ -400,6 +379,40 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     t = request->arg(F("AP")).toInt();
     if (t >= 0 && t <= 9) alexaNumPresets = t;
 
+    #ifdef WLED_ENABLE_MQTT
+    mqttEnabled = request->hasArg(F("MQ"));
+    strlcpy(mqttServer, request->arg(F("MS")).c_str(), 33);
+    t = request->arg(F("MQPORT")).toInt();
+    if (t > 0) mqttPort = t;
+    strlcpy(mqttUser, request->arg(F("MQUSER")).c_str(), 41);
+    if (!isAsterisksOnly(request->arg(F("MQPASS")).c_str(), 41)) strlcpy(mqttPass, request->arg(F("MQPASS")).c_str(), 65);
+    strlcpy(mqttClientID, request->arg(F("MQCID")).c_str(), 41);
+    strlcpy(mqttDeviceTopic, request->arg(F("MD")).c_str(), 33);
+    strlcpy(mqttGroupTopic, request->arg(F("MG")).c_str(), 33);
+    buttonPublishMqtt = request->hasArg(F("BM"));
+    retainMqttMsg = request->hasArg(F("RT"));
+    #endif
+
+    #ifndef WLED_DISABLE_HUESYNC
+    for (int i=0;i<4;i++){
+      String a = "H"+String(i);
+      hueIP[i] = request->arg(a).toInt();
+    }
+
+    t = request->arg(F("HL")).toInt();
+    if (t > 0) huePollLightId = t;
+
+    t = request->arg(F("HI")).toInt();
+    if (t > 50) huePollIntervalMs = t;
+
+    hueApplyOnOff = request->hasArg(F("HO"));
+    hueApplyBri = request->hasArg(F("HB"));
+    hueApplyColor = request->hasArg(F("HC"));
+    huePollingEnabled = request->hasArg(F("HP"));
+    hueStoreAllowed = true;
+    reconnectHue();
+    #endif
+
     //WLEDMM: add netdebug variables
     #ifdef WLED_DEBUG_HOST
       for (int i=0;i<4;i++){
@@ -424,7 +437,7 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     utcOffsetSecs = request->arg(F("UO")).toInt();
 
     //start ntp if not already connected
-    // if (ntpEnabled && WLED_CONNECTED && !ntpConnected) ntpConnected = ntpUdp.begin(ntpLocalPort);
+    if (ntpEnabled && WLED_CONNECTED && !ntpConnected) ntpConnected = ntpUdp.begin(ntpLocalPort);
     ntpLastSyncTime = NTP_NEVER; // force new NTP query
 
     longitude = request->arg(F("LN")).toFloat();
@@ -775,11 +788,9 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
         pO[l] = 'H'; p.height      = request->arg(pO).toInt();
         strip.panel.push_back(p);
       }
-      bakeMap = true;
       strip.setUpMatrix(); // will check limits
       strip.resetSegments(true);  //WLEDMM not makeAutoSegments(true) as we only want to change bounds
-      onload_map_loaded = false;
-      strip.deserializeMap(loadedLedmap);
+      strip.deserializeMap();
     } else {
       Segment::maxWidth  = strip.getLengthTotal();
       Segment::maxHeight = 1;
@@ -788,11 +799,14 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
   #endif
 
   if ((subPage == 2) || (subPage == 3) || (subPage == 10)) {
-    // suspendStripService = false; // WLEDMM release lock
+    suspendStripService = false; // WLEDMM release lock
   }
 
   lastEditTime = millis();
   if (subPage != 2 && !doReboot) doSerializeConfig = true; //serializeConfig(); //do not save if factory reset or LED settings (which are saved after LED re-init)
+  #ifndef WLED_DISABLE_ALEXA
+  if (subPage == 4) alexaInit();
+  #endif
 }
 
 
@@ -825,10 +839,10 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
   }
 
   // WLEDMM: before changing segment settings, make sure our strip is _not_ servicing effects in parallel
-  // if (strip.isServicing()) {
-  //     USER_PRINTLN(F("handleSet(): strip is still drawing effects."));
-  //     strip.waitUntilIdle();
-  // }
+  if (strip.isServicing()) {
+      USER_PRINTLN(F("handleSet(): strip is still drawing effects."));
+      strip.waitUntilIdle();
+  }
 
   Segment& selseg = strip.getSegment(selectedSeg);
   pos = req.indexOf(F("SV=")); //segment selected
@@ -934,6 +948,28 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
   col1Changed |= updateVal(req.c_str(), "G2=", &colInSec[1]);
   col1Changed |= updateVal(req.c_str(), "B2=", &colInSec[2]);
   col1Changed |= updateVal(req.c_str(), "W2=", &colInSec[3]);
+
+  #ifdef WLED_ENABLE_LOXONE
+  //lox parser
+  pos = req.indexOf(F("LX=")); // Lox primary color
+  if (pos > 0) {
+    int lxValue = getNumVal(&req, pos);
+    if (parseLx(lxValue, colIn)) {
+      bri = 255;
+      nightlightActive = false; //always disable nightlight when toggling
+      col0Changed = true;
+    }
+  }
+  pos = req.indexOf(F("LY=")); // Lox secondary color
+  if (pos > 0) {
+    int lxValue = getNumVal(&req, pos);
+    if(parseLx(lxValue, colInSec)) {
+      bri = 255;
+      nightlightActive = false; //always disable nightlight when toggling
+      col1Changed = true;
+    }
+  }
+  #endif
 
   //set hue
   pos = req.indexOf(F("HU="));
@@ -1175,7 +1211,3 @@ bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply)
 
   return true;
 }
-#else // WLED_IDF_BUILD — provide minimal stubs so linker is satisfied
-void handleSettingsSet(AsyncWebServerRequest* /*request*/, byte /*subPage*/) {}
-bool handleSet(AsyncWebServerRequest* /*request*/, const String& /*req*/, bool /*apply*/) { return false; }
-#endif // !WLED_IDF_BUILD

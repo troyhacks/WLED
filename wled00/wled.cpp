@@ -1475,7 +1475,7 @@ void WLED::setup() {
     xTaskCreatePinnedToCore(
     background_loop_blocking,  // Task function
     "BG_Blocking",    // Name
-    6244,             // Stack size in words (was 24000)
+    16384,            // Stack size in bytes — serializeConfig+Sec need >8KB alone
     NULL,             // Parameters
     1,                // Priority
     NULL,             // Task handle (optional)

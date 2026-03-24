@@ -49,6 +49,13 @@
 #endif
 // end WLEDMM
 
+// AsyncJson-v6.h provides AsyncJsonResponse / AsyncCallbackJsonWebHandler.
+// In non-IDF builds it is pulled in via fcn_declare.h → ESPAsyncWebServer.
+// In IDF builds the shim AsyncWebServer.h provides the base classes it needs.
+#ifdef WLED_IDF_BUILD
+#include "src/dependencies/json/AsyncJson-v6.h"
+#endif
+
 /*
  * JSON API (De)serialization
  */
@@ -1829,7 +1836,11 @@ void serveJson(AsyncWebServerRequest* request)
       {
         JsonArray effects = lDoc.createNestedArray(F("effects"));
         serializeModeNames(effects); // remove WLED-SR extensions from effect names
+#ifdef WLED_IDF_BUILD
+        lDoc[F("palettes")] = serialized((const char*)JSON_palette_names);
+#else
         lDoc[F("palettes")] = serialized((const __FlashStringHelper*)JSON_palette_names);
+#endif
       }
       //lDoc["m"] = lDoc.memoryUsage(); // JSON buffer usage, for remote debugging
   }

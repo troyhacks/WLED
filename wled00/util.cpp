@@ -1,467 +1,24 @@
 #include "wled.h"
 #include "fcn_declare.h"
 #include "const.h"
-#include <dirent.h>
-#include <sys/stat.h>
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-#include "driver/i2c_master.h"
+#include "util.h"
+
+#ifdef ESP8266
+#include "user_interface.h" // for bootloop detection
+#include <Hash.h>            // for SHA1 on ESP8266
+#else
+#include "mbedtls/sha1.h"   // for SHA1 on ESP32
+#include "esp_efuse.h"
+#include "esp_adc_cal.h"
+#include "esp_heap_caps.h"
 #endif
 
-void scanI2C(TwoWire& wire) {
-  struct I2CDevice { uint8_t addr; const char* name; };
-  static const I2CDevice knownDevices[] = {
-    // Audio codecs from WLED AudioReactive
-    {0x10, "ES8388"},
-    {0x13, "ES7243"},
-    {0x18, "ES8311 (common ESP32-P4 on-board mic codec)"},
-    {0x1A, "WM8978/AC101"},
-    {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
-    
-    // Common sensors & devices
-    {0x14, "GT911 Touch Panel Controller (alt)"},
-    {0x19, "LIS3DH (alt)"},
-    {0x1C, "MMA8452Q"},
-    {0x1D, "ADXL345/MMA8452Q"},
-    {0x20, "PCF8574/TCA6408"},
-    {0x23, "BH1750"},
-    {0x27, "PCF8574/LCD"},
-    {0x29, "VL53L0X/VL53L1X/VL53L8CX"},
-    {0x38, "FT6336/AHT10/VEML6070"},
-    {0x39, "APDS9960/TSL2561"},
-    {0x3C, "SSD1306 OLED"},
-    {0x3D, "SSD1306 OLED (alt)"},
-    {0x44, "SHT30/SHT31"},
-    {0x48, "ADS1115/TMP102/PCF8591"},
-    {0x49, "ADS1115 (alt)/TSL2561"},
-    {0x4A, "MAX44009"},
-    {0x50, "AT24C32 EEPROM"},
-    {0x51, "PCF8563 RTC"},
-    {0x52, "Nunchuk/VL53L8CX (LP)"},
-    {0x53, "ADXL345 (alt)"},
-    {0x57, "MAX30102"},
-    {0x5A, "MLX90614/CCS811/MPR121"},
-    {0x5B, "CCS811 (alt)/MPR121"},
-    {0x5C, "AM2320/BH1750 (alt)"},
-    {0x5D, "GT911 Touch Panel Controller"},
-    {0x60, "SI1145/MCP4725"},
-    {0x62, "SCD30/TSL2591"},
-    {0x68, "DS3231 RTC/MPU6050/ICM20948"},
-    {0x69, "MPU6050 (alt)/ICM20948"},
-    {0x76, "BME280/BMP280/MS5611"},
-    {0x77, "BME280/BMP180/BMP085"},
-    {0x78, "S11059"},
-  };
-  const int knownCount = sizeof(knownDevices) / sizeof(knownDevices[0]);
-
-  auto getName = [&](uint8_t addr) -> const char* {
-    for (int i = 0; i < knownCount; i++) {
-      if (addr == 0x40) ES7210_present = true;
-      if (knownDevices[i].addr == addr) return knownDevices[i].name;
-    }
-    return nullptr; 
-    };
-
-  Serial.println(F("\n--- I2C Scan ---"));
-  int found = 0;
-  for (uint8_t addr = 0x08; addr < 0x78; addr++) {
-    wire.beginTransmission(addr);
-    if (wire.endTransmission() == 0) {
-      found++;
-      Serial.printf("  0x%02X: ", addr);
-      const char* name = getName(addr);
-      Serial.println(name ? name : "Unknown");
-    }
-  }
-  Serial.printf("--- %d device(s) found ---\n\n", found);
-  if (ES7210_present) USER_PRINTLN("ES7210_present == true");
-}
-
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-// IDF v5 I2C scan using i2c_master_probe() — used on ESP32-P4 instead of Arduino Wire
-void scanI2C_IDF(i2c_master_bus_handle_t bus) {
-  if (!bus) { USER_PRINTLN("scanI2C_IDF: no bus handle"); return; }
-
-  // Reuse the known-device lookup from scanI2C by declaring a local lambda
-  struct I2CDevice { uint8_t addr; const char* name; };
-  static const I2CDevice knownDevices[] = {
-    {0x10, "ES8388"},
-    {0x13, "ES7243"},
-    {0x18, "ES8311 (common ESP32-P4 on-board mic codec)"},
-    {0x1A, "WM8978/AC101"},
-    {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
-    {0x14, "GT911 Touch Panel Controller (alt)"},
-    {0x38, "FT6336/AHT10/VEML6070"},
-    {0x3C, "SSD1306 OLED"},
-    {0x3D, "SSD1306 OLED (alt)"},
-    {0x44, "SHT30/SHT31"},
-    {0x37, "LT8912B internal video pipeline state (streaming 16-entry FIFO, undocumented)"},
-    {0x3A, "LT8912B phantom/undocumented register bank"},
-    {0x48, "LT8912B HDMI bridge (main control)"},
-    {0x49, "LT8912B HDMI bridge (MIPI/DSI timing)"},
-    {0x4A, "LT8912B HDMI bridge (AVI InfoFrame)"},
-    {0x4B, "LT8912B HDMI bridge (EDID emulation write page — zeros = no custom EDID)"},
-    {0x50, "LT8912B DDC/EDID proxy (connected monitor's EDID)"},
-    {0x54, "FE1.1s USB hub config EEPROM (24Cxx, A2=1)"},
-    {0x5D, "GT911 Touch Panel Controller"},
-    {0x68, "DS3231 RTC/MPU6050"},
-    {0x76, "BME280/BMP280"},
-    {0x77, "BME280/BMP180"},
-  };
-  const int knownCount = sizeof(knownDevices) / sizeof(knownDevices[0]);
-  auto getName = [&](uint8_t addr) -> const char* {
-    for (int i = 0; i < knownCount; i++) {
-      if (addr == 0x40) ES7210_present = true;
-      if (knownDevices[i].addr == addr) return knownDevices[i].name;
-    }
-    return nullptr;
-  };
-
-  Serial.println(F("\n--- I2C Scan (IDF) ---"));
-  int found = 0;
-  for (uint8_t addr = 0x08; addr < 0x78; addr++) {
-    if (i2c_master_probe(bus, addr, 10) == ESP_OK) {
-      found++;
-      Serial.printf("  0x%02X: ", addr);
-      const char* name = getName(addr);
-      Serial.println(name ? name : "Unknown");
-    }
-  }
-  Serial.printf("--- %d device(s) found ---\n\n", found);
-  if (ES7210_present) USER_PRINTLN("ES7210_present == true");
-}
-
-// Probe the five unknown I2C addresses found during bus scan and print identifying register values.
-// Call once after scanI2C_IDF().  Results go to Serial so they appear in the monitor.
-void probeI2C_unknown(i2c_master_bus_handle_t bus) {
-  if (!bus) return;
-
-  // Create a temporary dev handle, do a register read, then remove it.
-  // i2c_master_transmit_receive() requires a dev handle, not the bus handle.
-  auto reg_read = [&](uint8_t addr, uint8_t reg, uint8_t* buf, size_t len) -> bool {
-    i2c_device_config_t dev_cfg = {};
-    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address   = addr;
-    dev_cfg.scl_speed_hz     = 100000;
-    i2c_master_dev_handle_t dev = nullptr;
-    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
-    bool ok = (i2c_master_transmit_receive(dev, &reg, 1, buf, len, 20) == ESP_OK);
-    i2c_master_bus_rm_device(dev);
-    return ok;
-  };
-
-  // Plain read variant (no sub-address write), used for EDID proxy fallback.
-  auto plain_read = [&](uint8_t addr, uint8_t* buf, size_t len) -> bool {
-    i2c_device_config_t dev_cfg = {};
-    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address   = addr;
-    dev_cfg.scl_speed_hz     = 100000;
-    i2c_master_dev_handle_t dev = nullptr;
-    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
-    bool ok = (i2c_master_receive(dev, buf, len, 20) == ESP_OK);
-    i2c_master_bus_rm_device(dev);
-    return ok;
-  };
-
-  // Write N bytes then read M bytes — for EEPROM 16-bit address access.
-  auto write_read = [&](uint8_t addr, uint8_t* wbuf, size_t wlen, uint8_t* rbuf, size_t rlen) -> bool {
-    i2c_device_config_t dev_cfg = {};
-    dev_cfg.dev_addr_length  = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address   = addr;
-    dev_cfg.scl_speed_hz     = 100000;
-    i2c_master_dev_handle_t dev = nullptr;
-    if (i2c_master_bus_add_device(bus, &dev_cfg, &dev) != ESP_OK) return false;
-    bool ok = (i2c_master_transmit_receive(dev, wbuf, wlen, rbuf, rlen, 20) == ESP_OK);
-    i2c_master_bus_rm_device(dev);
-    return ok;
-  };
-
-  Serial.println(F("\n--- I2C unknown device probe ---"));
-
-  // ── 0x37: MAX17048 fuel gauge?
-  // VERSION reg (0x08) → upper nibble is silicon rev (0x001x expected)
-  // VCELL   reg (0x00) → battery voltage, 78.125µV/LSB, 12 bits MSB-first
-  {
-    uint8_t b[2] = {};
-    if (reg_read(0x37, 0x08, b, 2)) {
-      uint16_t ver = (b[0] << 8) | b[1];
-      Serial.printf("  0x37 reg[0x08]=0x%04X  (MAX17048 VERSION expects 0x001x)\n", ver);
-    } else {
-      Serial.println("  0x37 reg[0x08]: read failed");
-    }
-    if (reg_read(0x37, 0x00, b, 2)) {
-      uint16_t raw = (b[0] << 8) | b[1];
-      float mv = (raw >> 4) * 0.078125f;
-      Serial.printf("  0x37 reg[0x00]=0x%04X  (if MAX17048 VCELL: %.0f mV)\n", raw, mv);
-    }
-  }
-
-  // ── 0x3A: unknown — dump registers 0x00..0x03 to identify chip class
-  {
-    Serial.printf("  0x3A registers:");
-    for (uint8_t r = 0; r <= 3; r++) {
-      uint8_t b = 0;
-      if (reg_read(0x3A, r, &b, 1)) Serial.printf(" [0x%02X]=0x%02X", r, b);
-      else                          Serial.printf(" [0x%02X]=ERR", r);
-    }
-    Serial.println();
-  }
-
-  // ── 0x4B: INA226 power monitor?
-  // Manufacturer ID (0xFE) → 0x5449 ('TI')
-  // Die ID          (0xFF) → 0x2260
-  {
-    uint8_t b[2] = {};
-    if (reg_read(0x4B, 0xFE, b, 2)) {
-      uint16_t manuf = (b[0] << 8) | b[1];
-      if (reg_read(0x4B, 0xFF, b, 2)) {
-        uint16_t die = (b[0] << 8) | b[1];
-        Serial.printf("  0x4B ManufID=0x%04X DieID=0x%04X  (INA226 expects 0x5449/0x2260)\n", manuf, die);
-      }
-    } else {
-      Serial.println("  0x4B reg[0xFE]: read failed");
-    }
-  }
-
-  // ── 0x50: EDID proxy from LT8912B?
-  // Standard EDID header bytes 0-7: 00 FF FF FF FF FF FF 00
-  {
-    uint8_t buf[8] = {};
-    if (reg_read(0x50, 0x00, buf, 8)) {
-      Serial.printf("  0x50 bytes[0..7]:");
-      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
-      bool is_edid = (buf[0]==0x00 && buf[1]==0xFF && buf[2]==0xFF && buf[3]==0xFF &&
-                      buf[4]==0xFF && buf[5]==0xFF && buf[6]==0xFF && buf[7]==0x00);
-      Serial.printf("  (%s)\n", is_edid ? "EDID header confirmed" : "not EDID — likely EEPROM/other");
-    } else if (plain_read(0x50, buf, 8)) {
-      // Some EDID proxies only respond to a plain read (no sub-address byte)
-      Serial.printf("  0x50 plain-read[0..7]:");
-      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
-      Serial.println();
-    } else {
-      Serial.println("  0x50: both addressed and plain read failed");
-    }
-  }
-
-  // ── 0x54: 24Cxx EEPROM (FE1.1s hub config) or other?
-  // Try 16-bit then 8-bit sub-address to determine EEPROM size class.
-  {
-    uint8_t buf[8] = {};
-    uint8_t addr16[2] = {0x00, 0x00};
-    uint8_t addr8      = 0x00;
-    if (write_read(0x54, addr16, 2, buf, 8)) {
-      Serial.printf("  0x54 EEPROM[0..7] (16-bit addr):");
-      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
-      Serial.println();
-    } else if (reg_read(0x54, addr8, buf, 8)) {
-      Serial.printf("  0x54 EEPROM[0..7] (8-bit addr):");
-      for (int i = 0; i < 8; i++) Serial.printf(" %02X", buf[i]);
-      Serial.println();
-    } else {
-      Serial.println("  0x54: read failed");
-    }
-  }
-
-  // ── Follow-up: 0x4B — BD71837 PMIC? (no ID regs at 0xFE/FF; chip ID at reg 0x00 = 0xBD)
-  {
-    uint8_t b[4] = {};
-    if (reg_read(0x4B, 0x00, b, 4)) {
-      Serial.printf("  0x4B reg[0x00..03]: %02X %02X %02X %02X  (BD71837 PMIC expects 0xBD at [0])\n",
-                    b[0], b[1], b[2], b[3]);
-    } else {
-      Serial.println("  0x4B reg[0x00]: read failed");
-    }
-  }
-
-  // ── Follow-up: 0x3A — PCF8574(A) GPIO expander?
-  // PCF8574 has no indexed registers; our earlier "register" writes changed its output port.
-  // A plain read (no sub-address) returns the current port/pin state in one byte.
-  {
-    uint8_t b = 0;
-    if (plain_read(0x3A, &b, 1)) {
-      Serial.printf("  0x3A plain port read: 0x%02X  (PCF8574 port state if GPIO expander)\n", b);
-    } else {
-      Serial.println("  0x3A plain read: failed");
-    }
-    // Also read a few more indexed registers to see if the pattern is register-mapped or port-driven
-    Serial.printf("  0x3A regs[0x04..07]:");
-    for (uint8_t r = 4; r <= 7; r++) {
-      uint8_t v = 0;
-      if (reg_read(0x3A, r, &v, 1)) Serial.printf(" [%02X]=%02X", r, v);
-      else                          Serial.printf(" [%02X]=ERR", r);
-    }
-    Serial.println();
-  }
-
-  // ── Follow-up: 0x37 — probe wider register range to identify chip class
-  {
-    Serial.printf("  0x37 regs[0x00..0F]:");
-    for (uint8_t r = 0; r <= 0x0F; r++) {
-      uint8_t b[2] = {};
-      if (reg_read(0x37, r, b, 2)) Serial.printf(" [%02X]=%02X%02X", r, b[0], b[1]);
-      else                         Serial.printf(" [%02X]=ERR", r);
-    }
-    Serial.println();
-    // Also try ID registers at 0xFE/0xFF
-    uint8_t b[2] = {};
-    if (reg_read(0x37, 0xFE, b, 2)) Serial.printf("  0x37 reg[0xFE]=0x%04X\n", (b[0]<<8)|b[1]);
-    if (reg_read(0x37, 0xFF, b, 2)) Serial.printf("  0x37 reg[0xFF]=0x%04X\n", (b[0]<<8)|b[1]);
-  }
-
-  Serial.println(F("--- probe done ---\n"));
-}
-#endif // CONFIG_IDF_TARGET_ESP32P4
-
 //helper to get int value at a position in string
-int getNumVal(const String* req, uint32_t pos)
+int getNumVal(const String* req, uint16_t pos)
 {
   return req->substring(pos+3).toInt();
 }
 
-bool backupLittleFStoPath(const char* dest_root) {
-  struct stat st;
-  char oldPath[64], newPath[64];
-
-  // Delete oldest backup if it exists
-  snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_9", dest_root);
-  if (stat(oldPath, &st) == 0) removeDirectory(oldPath);
-
-  // Rotate existing backups 8->9, 7->8, ... 0->1
-  for (int i = 8; i >= 0; i--) {
-    snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_%d", dest_root, i);
-    snprintf(newPath, sizeof(newPath), "%s/littlefs_backup_%d", dest_root, i + 1);
-    if (stat(oldPath, &st) == 0) rename(oldPath, newPath);
-  }
-
-  // Create new backup at 0
-  snprintf(oldPath, sizeof(oldPath), "%s/littlefs_backup_0", dest_root);
-  mkdir(oldPath, 0755);
-  return copyDirectory("/littlefs", oldPath);
-}
-
-bool backupLittleFStoSD() {
-  return backupLittleFStoPath("/sdcard");
-}
-
-bool removeDirectory(const char* path) {
-  DIR* dir = opendir(path);
-  if (!dir) return false;
-
-  struct dirent* entry;
-  while ((entry = readdir(dir)) != nullptr) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-      continue;
-    }
-
-    char fullPath[128];
-    snprintf(fullPath, sizeof(fullPath), "%s/%s", path, entry->d_name);
-
-    struct stat st;
-    if (stat(fullPath, &st) == 0 && S_ISDIR(st.st_mode)) {
-      removeDirectory(fullPath);
-    } else {
-      remove(fullPath);
-    }
-  }
-
-  closedir(dir);
-  return rmdir(path) == 0;
-}
-
-bool copyFile(const char* srcPath, const char* destPath) {
-  FILE* src = fopen(srcPath, "rb");
-  if (!src) return false;
-
-  FILE* dest = fopen(destPath, "wb");
-  if (!dest) {
-    fclose(src);
-    return false;
-  }
-
-  uint8_t buf[512];
-  size_t bytesRead;
-  while ((bytesRead = fread(buf, 1, sizeof(buf), src)) > 0) {
-    fwrite(buf, 1, bytesRead, dest);
-  }
-
-  fclose(src);
-  fclose(dest);
-  return true;
-}
-
-bool copyDirectory(const char* srcDir, const char* destDir) {
-  DIR* dir = opendir(srcDir);
-  if (!dir) return false;
-
-  mkdir(destDir, 0755);
-
-  struct dirent* entry;
-  while ((entry = readdir(dir)) != nullptr) {
-    // Skip . and .. and mount points
-    if (strcmp(entry->d_name, ".") == 0 ||
-      strcmp(entry->d_name, "..") == 0 ||
-      strcmp(entry->d_name, "sdcard") == 0 ||
-      strncmp(entry->d_name, "usb", 3) == 0) {
-      continue;
-    }
-
-    char srcPath[128];
-    char destPath[128];
-    snprintf(srcPath, sizeof(srcPath), "%s%s%s",
-      srcDir, (strcmp(srcDir, "/") == 0) ? "" : "/", entry->d_name);
-    snprintf(destPath, sizeof(destPath), "%s/%s", destDir, entry->d_name);
-
-    struct stat st;
-    if (stat(srcPath, &st) == 0 && S_ISDIR(st.st_mode)) {
-      copyDirectory(srcPath, destPath);
-    } else {
-      copyFile(srcPath, destPath);
-    }
-  }
-
-  closedir(dir);
-  return true;
-}
-
-bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint32_t* mappingTable, uint32_t tableSize, const char* filename) {
-  return true; // disabled for now.
-  if (!mappingTable || tableSize == 0) return false;
-  bakeMap = false;
-  File f = WLED_FS.open(filename, "w");
-  if (!f) {
-    USER_PRINTLN(F("Failed to open file for writing"));
-    return false;
-  }
-
-  // Write header
-  f.print(F("{\"n\":\""));
-  f.print(name);
-  f.print(F("\"\n,\"width\":"));
-  f.print(width);
-  f.print(F("\n,\"height\":"));
-  f.print(height);
-  f.print(F("\n,\"map\":[\n"));
-
-  // Write map data - format as rows for readability (optional)
-  const uint16_t valuesPerRow = width > 0 ? width : 48;  // Match width or default
-
-  for (uint32_t i = 0; i < tableSize; i++) {
-    f.print(mappingTable[i]);
-
-    if (i < tableSize - 1) {
-      f.print(',');
-      // Newline after each row for readability
-      if ((i + 1) % valuesPerRow == 0) {
-        f.print('\n');
-      }
-    }
-  }
-
-  f.print(F("\n]}"));
-  f.close();
-
-  USER_PRINTF("Saved LED map '%s' (%u values) to %s\n", name, tableSize, filename);
-  return true;
-}
 
 //helper to get int value with in/decrementing support via ~ syntax
 void parseNumber(const char* str, byte* val, byte minv, byte maxv)
@@ -630,41 +187,28 @@ bool oappend(const char* txt)
 }
 
 
-bool startsWithWled(const char* s) {
-  return strncasecmp(s, "wled", 4) == 0;
-}
-
-void prepareHostname(char* hostname) {
-  const char* pC = serverDescription;
-
-  uint8_t pos = 0;
-
-  // Only add "wled-" if the provided name does NOT already start with "wled"
-  if (!startsWithWled(pC)) {
-    sprintf_P(hostname, "wled-%*s", 6, escapedMac.c_str() + 6);
-    pos = 5;  // continue after "wled-"
-  } else {
-    hostname[0] = '\0';  // start clean
-  }
-
-  // Append sanitized characters
-  while (*pC && pos < 24) {
-    if (isalnum(*pC)) {
-      hostname[pos++] = *pC;
-    } else if (*pC == ' ' || *pC == '_' || *pC == '-' || *pC == '+' ||
-      *pC == '!' || *pC == '?' || *pC == '*') {
-      hostname[pos++] = '-';
+void prepareHostname(char* hostname)
+{
+  sprintf_P(hostname, "wled-%*s", 6, escapedMac.c_str() + 6);
+  const char *pC = serverDescription;
+  uint8_t pos = 5;          // keep "wled-"
+  while (*pC && pos < 24) { // while !null and not over length
+    if (isalnum(*pC)) {     // if the current char is alpha-numeric append it to the hostname
+      hostname[pos] = *pC;
+      pos++;
+    } else if (*pC == ' ' || *pC == '_' || *pC == '-' || *pC == '+' || *pC == '!' || *pC == '?' || *pC == '*') {
+      hostname[pos] = '-';
+      pos++;
     }
+    // else do nothing - no leading hyphens and do not include hyphens for all other characters.
     pC++;
   }
-
-  // Trim trailing hyphens
-  if (pos > 0) {
-    while (pos > 0 && hostname[pos - 1] == '-') pos--;
-    hostname[pos] = '\0';
+  //last character must not be hyphen
+  if (pos > 5) {
+    while (pos > 4 && hostname[pos -1] == '-') pos--;
+    hostname[pos] = '\0'; // terminate string (leave at least "wled")
   }
 }
-
 
 
 bool isAsterisksOnly(const char* str, byte maxLen)
@@ -679,19 +223,34 @@ bool isAsterisksOnly(const char* str, byte maxLen)
 
 
 //threading/network callback details: https://github.com/Aircoookie/WLED/pull/2336#discussion_r762276994
-bool requestJSONBufferLock(uint8_t module)
+bool requestJSONBufferLock(uint8_t module, unsigned timeoutMS)
 {
-  unsigned long now = millis();
+  bool haveLock = false;
+  #ifdef ARDUINO_ARCH_ESP32
+    // We use a recursive mutex to prevent parallel JSON writes from parallel tasks.
+    // This also fixes hanging up for the full timeout interval in cases when the contention is from the same task.
+    // see https://github.com/wled/WLED/pull/4089 for more details.
+    if (esp32SemTake(jsonBufferLockMutex, timeoutMS) == pdTRUE) haveLock = true;  // WLEDMM must wait longer than suspendStripService timeout = 1500ms
+  #else
+    // 8266: only wait in case that can_yield() tells us we can yield and delay
+    if (can_yield()) {
+      unsigned long now = millis();
+      while (jsonBufferLock && millis()-now < timeoutMS) delay(1); // wait for fraction for buffer lock // WLEDMM must wait longer than suspendStripService timeout = 1500ms
+      if (!jsonBufferLock) haveLock = true;
+    }
+  #endif
 
-  while (jsonBufferLock && millis()-now < 1100) delay(1); // wait for fraction for buffer lock
-
-  if (jsonBufferLock) {
+  if (jsonBufferLock || !haveLock) {
+    #ifdef ARDUINO_ARCH_ESP32
+    if (haveLock) esp32SemGive(jsonBufferLockMutex);  // we got the mutex, but jsonBufferLock says the opposite -> give up
+    #endif
     USER_PRINT(F("ERROR: Locking JSON buffer failed! (still locked by "));
     USER_PRINT(jsonBufferLock);
     USER_PRINTLN(")");
     return false; // waiting time-outed
   }
 
+  // success - we keep holding the mutex until releaseJSONBufferLock()
   jsonBufferLock = module ? module : 255;
   DEBUG_PRINT(F("JSON buffer locked. ("));
   DEBUG_PRINT(jsonBufferLock);
@@ -709,11 +268,14 @@ void releaseJSONBufferLock()
   DEBUG_PRINTLN(")");
   fileDoc = nullptr;
   jsonBufferLock = 0;
+  #ifdef ARDUINO_ARCH_ESP32
+  esp32SemGive(jsonBufferLockMutex); // return the mutex
+  #endif
 }
 
 
 // extracts effect mode (or palette) name from names serialized string
-// caller must provide large enough buffer for name (including SR extensions)!
+// caller must provide large enough buffer for name (including SR extensions)! maxLen is (buffersize - 1)
 uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLen)
 {
   if (src == JSON_mode_names || src == nullptr) {
@@ -735,7 +297,7 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
 
   if (src == JSON_palette_names && mode > (GRADIENT_PALETTE_COUNT + 13)) {
     snprintf_P(dest, maxLen, PSTR("~ Custom %d ~"), 255-mode);
-    dest[maxLen-1] = '\0';
+    dest[maxLen] = '\0';
     return strlen(dest);
   }
 
@@ -754,11 +316,12 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
       case '"':
         insideQuotes = !insideQuotes;
         break;
-      case '[':
+      case '[': // falls through
       case ']':
         break;
       case ',':
         if (!insideQuotes) qComma++;
+         // falls through
       default:
         if (!insideQuotes || (qComma != mode)) break;
         dest[printedChars++] = singleJsonSymbol;
@@ -770,7 +333,7 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
 }
 
 
-// extracts effect slider data (1st group after @)
+// extracts effect slider data (1st group after @) -> maxLen is (buffersize - 1)
 uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxLen, uint8_t *var)
 {
   dest[0] = '\0'; // start by clearing buffer
@@ -806,10 +369,11 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
                 strncpy_P(dest, tmpstr, maxLen); // copy the name into buffer (replacing previous)
                 dest[maxLen-1] = '\0';
               } else {
-                if (nameEnd<0) tmpstr = names.substring(nameBegin).c_str(); // did not find ",", last name?
-                else           tmpstr = names.substring(nameBegin, nameEnd).c_str();
-                strlcpy(dest, tmpstr, maxLen); // copy the name into buffer (replacing previous)
-              }
+                // WLEDMM bugfix for WLED-MM #272
+                // names.substring(...).c_str() returns a pointer to a temporary; it’s invalid by the next statement. Added result buffer "sub" to avoid use-after-free
+                String sub = (nameEnd<0) ? names.substring(nameBegin) : names.substring(nameBegin, nameEnd); // special handling in case we did not find "," (last name)
+                strlcpy(dest, sub.c_str(), maxLen); // copy the name into buffer (replacing previous)
+			  }
             }
             nameBegin = nameEnd+1; // next name (if "," is not found it will be 0)
           } // next slider
@@ -955,6 +519,7 @@ um_data_t* simulateSound(uint8_t simulationId)
   if (!um_data) {
     //claim storage for arrays
     fftResult = (uint8_t *)malloc(sizeof(uint8_t) * 16);
+    //fftResult = (uint8_t *)d_malloc(sizeof(uint8_t) * 16); // might potentially fail with nullptr. We don't have a solution or fallback for this case.
 
     // initialize um_data pointer structure
     // NOTE!!!
@@ -1024,12 +589,12 @@ um_data_t* simulateSound(uint8_t simulationId)
       break;
     case UMS_10_13:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8_t(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
+        fftResult[i] = perlin8(beatsin8_t(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
         volumeSmth = fftResult[8];
       break;
     case UMS_14_3:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8_t(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
+        fftResult[i] = perlin8(beatsin8_t(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
       volumeSmth = fftResult[8];
       break;
   }
@@ -1083,7 +648,7 @@ CRGB getCRGBForBand(int x, uint8_t *fftResult, int pal) {
 uint8_t get_random_wheel_index(uint8_t pos) {
   uint8_t r = 0, x = 0, y = 0, d = 0;
   while (d < 42) {
-    r = random8();
+    r = hw_random8();
     x = abs(pos - r);
     y = 255 - x;
     d = MIN(x, y);
@@ -1091,40 +656,18 @@ uint8_t get_random_wheel_index(uint8_t pos) {
   return r;
 }
 
-String strip_unicode(const String& name) {
-  String clean;
-  clean.reserve(name.length()); // pre‑allocate for efficiency
+// float version of map() - WLEDMM not used
+//float mapf(float x, float in_min, float in_max, float out_min, float out_max) {
+//  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+//}
 
-  // Step 1: keep only ASCII printable characters (32..126)
-  for (size_t i = 0; i < name.length(); i++) {
-    char c = name[i];
-    if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
-      clean += c;
-    }
-  }
+//uint32_t hashInt(uint32_t s) { // WLEDMM not used
+//  // borrowed from https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key
+//  s = ((s >> 16) ^ s) * 0x45d9f3b;
+//  s = ((s >> 16) ^ s) * 0x45d9f3b;
+//  return (s >> 16) ^ s;
+//}
 
-  // Step 2: remove newlines, carriage returns, tabs
-  clean.replace("\n", "");
-  clean.replace("\r", "");
-  clean.replace("\t", "");
-
-  // Step 3: trim leading/trailing spaces
-  // Arduino String has no built‑in trim, so implement manually
-  int start = 0;
-  while (start < clean.length() && isspace((unsigned char)clean[start])) {
-    start++;
-  }
-  int end = clean.length() - 1;
-  while (end >= start && isspace((unsigned char)clean[end])) {
-    end--;
-  }
-
-  if (start > 0 || end < (int)clean.length() - 1) {
-    clean = clean.substring(start, end + 1);
-  }
-
-  return clean;
-}
 
 // WLEDMM extended "trim string" function to support enumerateLedmaps
 // The function takes char* as input, and removes all leading and trailing "decorations" like spaces, tabs, line endings, quotes, colons
@@ -1155,6 +698,7 @@ char *cleanUpName(char *in) {
   return(in);
 }
 
+
 // 32 bit hardware random number generator, inlining uses more code, use hw_random16() if speed is critical (see fcn_declare.h)
 uint32_t hw_random(uint32_t upperlimit) {
   uint32_t rnd = hw_random();
@@ -1163,35 +707,433 @@ uint32_t hw_random(uint32_t upperlimit) {
 }
 
 int32_t hw_random(int32_t lowerlimit, int32_t upperlimit) {
-  if (lowerlimit >= upperlimit) {
+  if(lowerlimit >= upperlimit) {
     return lowerlimit;
   }
   uint32_t diff = upperlimit - lowerlimit;
   return hw_random(diff) + lowerlimit;
 }
 
-void dumpAllTaskHWMs(void) {
-  UBaseType_t num = uxTaskGetNumberOfTasks();
-  TaskStatus_t* tasks = (TaskStatus_t*)calloc(num, sizeof(TaskStatus_t));
-  if (!tasks) return;
 
-  UBaseType_t count = uxTaskGetSystemState(tasks, num, NULL);
-
-  USER_PRINT("\n=== Task High Water Marks ===\n");
-
-  for (UBaseType_t i = 0; i < count; i++) {
-    const char* name = tasks[i].pcTaskName;
-    UBaseType_t hwm = tasks[i].usStackHighWaterMark;
-
-    USER_PRINTF("%-16s HWM: %u words (%u bytes)\n",
-      name,
-      (unsigned)hwm,
-      (unsigned)(hwm * 4));
+// memory allocation functions with minimum free heap size check
+#ifdef ESP8266
+static void *validateFreeHeap(void *buffer) {
+  // make sure there is enough free heap left if buffer was allocated in DRAM region, free it if not
+  // note: ESP826 needs very little contiguous heap for webserver, checking total free heap works better
+  if (getFreeHeapSize() < MIN_HEAP_SIZE) {
+    free(buffer);
+    return nullptr;
   }
+  return buffer;
+}
 
-  USER_PRINT("==============================\n\n");
+void *d_malloc(size_t size) {
+  // note: using "if (getContiguousFreeHeap() > MIN_HEAP_SIZE + size)" did perform worse in tests with regards to keeping heap healthy and UI working
+  void *buffer = malloc(size);
+  return validateFreeHeap(buffer);
+}
 
-  free(tasks);
+void *d_malloc_only(size_t size) {
+  return d_malloc(size);
+}
+
+void *d_calloc(size_t count, size_t size) {
+  void *buffer = calloc(count, size);
+  return validateFreeHeap(buffer);
+}
+
+// realloc with malloc fallback, note: on ESPS8266 there is no safe way to ensure MIN_HEAP_SIZE during realloc()s, free buffer and allocate new one
+void *d_realloc_malloc(void *ptr, size_t size) {
+  //void *buffer = realloc(ptr, size);
+  //buffer = validateFreeHeap(buffer);
+  //if (buffer) return buffer; // realloc successful
+  //d_free(ptr); // free old buffer if realloc failed (or min heap was exceeded)
+  //return d_malloc(size); // fallback to malloc
+  free(ptr);
+  return d_malloc(size);
+}
+
+void *d_realloc_malloc_nofree(void *ptr, size_t size) {
+  void *buffer = realloc(ptr, size);
+  //buffer = validateFreeHeap(buffer); violates contract
+  return buffer; // realloc done
+}
+
+
+void d_free(void *ptr) { free(ptr); }
+
+void *p_malloc(size_t size) { return d_malloc(size); }
+void *p_calloc(size_t count, size_t size) { return d_calloc(count, size); }
+void *p_realloc_malloc(void *ptr, size_t size) { return d_realloc_malloc(ptr, size); }
+void *p_realloc_malloc_nofree(void *ptr, size_t size) { return d_realloc_malloc_nofree(ptr, size); }
+void p_free(void *ptr) { free(ptr); }
+
+#else
+
+static size_t lastHeap = 65535;
+static size_t lastMinHeap = 65535;
+WLED_create_spinlock(heapStatusMux); // to prevent race conditions on lastHeap and lastMinHeap
+
+inline static void d_measureHeap(void) {
+#ifdef WLEDMM_FILEWAIT  // only when we don't use the RMTHI driver
+  if (!strip.isUpdating())  // skip measurement while sending out LEDs - prevents flickering
+#endif
+  {
+    size_t newlastHeap    = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t newlastMinHeap = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    portENTER_CRITICAL(&heapStatusMux); // atomic operation
+      lastHeap = newlastHeap;
+      lastMinHeap = newlastMinHeap;
+    portEXIT_CRITICAL(&heapStatusMux);
+  }
+}
+
+size_t d_measureContiguousFreeHeap(void) { 
+  d_measureHeap();
+  return lastMinHeap;
+} // returns largest contiguous free block // WLEDMM may glitch, too
+
+size_t d_measureFreeHeap(void) {
+  d_measureHeap();
+  return lastHeap;
+} // returns free heap (ESP.getFreeHeap() can include other memory types) // WLEDMM can cause LED glitches
+
+// early check to avoid heap fragmentation: when PSRAM is available, we reject DRAM request if remaining heap possibly gets too low.
+//   This check is not exact - in case of strong heap fragmentation, there might be multiple chunks of similar sizes.
+//   However it still improves stability in low-heap situations (tested).
+static inline bool isOkForDRAMHeap(size_t amount) {
+#if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3)
+  // if (!psramFound()) return true; // No PSRAM -> accept everything // disabled - increases fragmentation
+  size_t avail = d_measureContiguousFreeHeap();
+  if ((amount < avail) && (avail - amount > MIN_HEAP_SIZE)) return true;
+  else {
+    DEBUG_PRINTF("* isOkForDRAMHeap() DRAM allocation rejected (%u bytes requested, %u-%u available).\n", amount, avail, MIN_HEAP_SIZE);
+    return(false);
+  }
+  #else
+  return true; // No PSRAM -> no other options
+  #endif
+}
+
+static void *validateFreeHeap(void *buffer) {
+  // make sure there is enough free heap left if buffer was allocated in DRAM region, free it if not
+  // TODO: between allocate and free, heap can run low (async web access), only IDF V5 allows for a pre-allocation-check of all free blocks
+  if (buffer == nullptr) return buffer; // early exit, nothing to check
+  if ((uintptr_t)buffer > SOC_DRAM_LOW && (uintptr_t)buffer < SOC_DRAM_HIGH) { 
+    size_t avail = d_measureContiguousFreeHeap();
+    if (avail < MIN_HEAP_SIZE) { 
+      heap_caps_free(buffer);
+      USER_PRINTF("* validateFreeHeap() DRAM allocation rejected - largest remaining chunk too small (%u bytes).\n", avail);
+      d_measureHeap(); // update statistics after free
+      return nullptr;
+    }
+  }
+  return buffer;
+}
+
+#ifdef BOARD_HAS_PSRAM
+#define RTC_RAM_THRESHOLD 1024 // use RTC RAM for allocations smaller than this size
+#else
+#define RTC_RAM_THRESHOLD (psramFound() ? 1024 : 65535) // without PSRAM, allow any size into RTC RAM (useful especially on S2 without PSRAM)
+#endif
+
+void *d_malloc(size_t size) {
+  void *buffer = nullptr;
+  #if !defined(CONFIG_IDF_TARGET_ESP32)
+  // the newer ESP32 variants have byte-accessible fast RTC memory that can be used as heap, access speed is on-par with DRAM
+  // the system does prefer normal DRAM until full, since free RTC memory is ~7.5k only, its below the minimum heap threshold and needs to be allocated explicitly
+  // use RTC RAM for small allocations or if DRAM is running low to improve fragmentation
+  if (size <= RTC_RAM_THRESHOLD || getContiguousFreeHeap() < 2*MIN_HEAP_SIZE + size) {
+    //buffer = heap_caps_malloc_prefer(size, 2, MALLOC_CAP_RTCRAM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    buffer = heap_caps_malloc(size, MALLOC_CAP_RTCRAM | MALLOC_CAP_8BIT);
+    DEBUG_PRINTF("* d_malloc() trying RTCRAM (%u bytes) - %s.\n", size, buffer?"success":"fail");
+  }
+  #endif
+
+  if ((buffer == nullptr) && isOkForDRAMHeap(size)) // no RTC RAM allocation: use DRAM
+    buffer = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // allocate in any available heap memory
+  buffer = validateFreeHeap(buffer); // make sure there is enough free heap left
+
+  #if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3) // WLEDMM always try PSRAM (auto-detected)
+  if (!buffer && psramFound()) {
+    DEBUG_PRINTF("* d_malloc() using PSRAM(%u bytes) fsllback.\n", size);
+    return heap_caps_malloc_prefer(size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT); // DRAM failed,try PSRAM if available
+  }
+  #endif
+
+  if (!buffer) { errorFlag = ERR_LOW_MEM; USER_PRINTF("* d_malloc() failed (%u bytes) !\n", size); }
+  else if (errorFlag == ERR_LOW_MEM) errorFlag = ERR_NONE; // reset mem error flag
+  return buffer;
+}
+
+void *d_malloc_only(size_t size) {
+  // variant of d_malloc that only allocates from "internal" DRAM (no PSRAM fallback) - MIN_HEAP_SIZE checking relaxed to post-malloc only
+  void *buffer = nullptr;  
+  #if !defined(CONFIG_IDF_TARGET_ESP32) // try RTCRAM on newer chips
+  if (size <= RTC_RAM_THRESHOLD || getContiguousFreeHeap() < 2*MIN_HEAP_SIZE + size) {
+    buffer = heap_caps_malloc(size, MALLOC_CAP_RTCRAM | MALLOC_CAP_8BIT);
+    DEBUG_PRINTF("* d_malloc() trying RTCRAM (%u bytes) - %s.\n", size, buffer?"success":"fail");
+  }
+  #endif
+  if (!buffer) buffer = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  buffer = validateFreeHeap(buffer); // make sure there is enough free heap left
+
+  if (!buffer) { errorFlag = ERR_LOW_MEM; USER_PRINTF("* d_malloc_only() failed (%u bytes) !\n", size); }
+  else if (errorFlag == ERR_LOW_MEM) errorFlag = ERR_NONE; // reset mem error flag
+  return buffer;
+}
+
+void *d_calloc(size_t count, size_t size) {
+  // similar to d_malloc but uses heap_caps_calloc
+  void *buffer = nullptr;
+  #if !defined(CONFIG_IDF_TARGET_ESP32)
+  if ((size * count) <= RTC_RAM_THRESHOLD || getContiguousFreeHeap() < 2*MIN_HEAP_SIZE + (size * count)) {
+    //buffer = heap_caps_calloc_prefer(count, size, 2, MALLOC_CAP_RTCRAM, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    buffer = heap_caps_calloc(count, size, MALLOC_CAP_RTCRAM | MALLOC_CAP_8BIT);
+    DEBUG_PRINTF("* d_calloc() trying RTCRAM (%u bytes) - %s.\n", size*count, buffer?"success":"fail");
+  }
+  #endif
+
+  if ((buffer == nullptr) && isOkForDRAMHeap(size*count)) // no RTC RAM allocation: use DRAM
+    buffer = heap_caps_calloc(count, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // allocate in any available heap memory
+  buffer = validateFreeHeap(buffer); // make sure there is enough free heap left
+
+  #if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3) // WLEDMM always try PSRAM (auto-detected)
+  if (!buffer && psramFound()) {
+    DEBUG_PRINTF("* d_calloc() using PSRAM (%u bytes) fallback.\n", size*count);
+    return heap_caps_calloc_prefer(count, size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT); // DRAM failed,try PSRAM if available
+  }
+  #endif
+  if (!buffer) { errorFlag = ERR_LOW_MEM; USER_PRINTF("* d_calloc() failed (%u bytes) !\n", size*count); }
+  else if (errorFlag == ERR_LOW_MEM) errorFlag = ERR_NONE; // reset mem error flag
+  return buffer;
+}
+
+// realloc with malloc fallback, original buffer is freed if realloc fails but not copied!
+void *d_realloc_malloc(void *ptr, size_t size) {
+  #if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3) // WLEDMM always try PSRAM (auto-detected)
+    void *buffer = heap_caps_realloc_prefer(ptr, size, 3, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  #else
+    void *buffer = heap_caps_realloc(ptr, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  #endif
+  void *bufferNew = buffer;
+  buffer = validateFreeHeap(buffer);
+  if (buffer) return buffer;   // realloc successful
+  if (!bufferNew) d_free(ptr); // free old buffer if realloc failed; don't double-free an invalid pointer if min heap was exceeded
+  DEBUG_PRINTF("* d_realloc_malloc(): realloc failed (%u bytes), trying malloc.\n", size);
+  return d_malloc(size);       // fallback to malloc
+}
+
+// realloc without malloc fallback, original buffer not changed if realloc fails
+void *d_realloc_malloc_nofree(void *ptr, size_t size) {
+  DEBUG_PRINTF("* d_realloc_malloc_nofree() realloc to %u bytes requested.\n", size);
+  void* buffer = nullptr;
+  #if (ESP_IDF_VERSION_MAJOR > 3)
+    // only basic sanity checks possible: prefer PSRAM if DRAM is low
+    size_t oldSize = ptr ? heap_caps_get_allocated_size(ptr) : 0; // heap_caps_get_allocated_size crashes on nullptr
+    size_t delta = (size > oldSize) ? (size - oldSize) : 0;
+    if ((delta == 0) || isOkForDRAMHeap(delta)) {     // prefer DRAM
+      buffer = heap_caps_realloc_prefer(ptr, size, 3, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+    } else {                                          // prefer PSRAM
+      buffer = heap_caps_realloc_prefer(ptr, size, 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+    }
+  #else
+    // V3 lacks heap_caps_get_allocated_size() -> no sanity check
+    buffer = heap_caps_realloc_prefer(ptr, size, 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  #endif
+  //buffer = validateFreeHeap(buffer); // violates contract
+  if (!buffer) { USER_PRINTF("* d_realloc_malloc_nofree() failed (%u bytes) !\n", size); }
+  return buffer;
+}
+
+void d_free(void *ptr) { heap_caps_free(ptr); }
+void p_free(void *ptr) { heap_caps_free(ptr); }
+
+#if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3)  // V4 can auto-detect PSRAM
+// p_xalloc: prefer PSRAM, use DRAM as fallback
+void *p_malloc(size_t size) {
+  if (!psramFound()) return d_malloc(size);
+  void *buffer = heap_caps_malloc_prefer(size, 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  return validateFreeHeap(buffer);
+}
+
+void *p_calloc(size_t count, size_t size) {
+  // similar to p_malloc but uses heap_caps_calloc
+  if (!psramFound()) return d_calloc(count, size);
+  void *buffer = heap_caps_calloc_prefer(count, size, 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  return validateFreeHeap(buffer);
+}
+
+// realloc with malloc fallback, original buffer is freed if realloc fails but not copied!
+void *p_realloc_malloc(void *ptr, size_t size) {
+  if (!psramFound()) return d_realloc_malloc(ptr, size);
+  void *buffer = heap_caps_realloc_prefer(ptr, size, 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  void *bufferNew = buffer;
+  buffer = validateFreeHeap(buffer);
+  if (buffer) return buffer;   // realloc successful
+  if (!bufferNew) p_free(ptr); // free old buffer if realloc failed; don't double-free an invalid pointer if min heap was exceeded
+  return p_malloc(size); // fallback to malloc
+}
+
+// realloc without malloc fallback, original buffer not changed if realloc fails
+void *p_realloc_malloc_nofree(void *ptr, size_t size) {
+  if (!psramFound()) return d_realloc_malloc_nofree(ptr, size);
+  void *buffer = heap_caps_realloc_prefer(ptr, size, 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);
+  //buffer = validateFreeHeap(buffer); // violates contract
+  return buffer;
+}
+
+#else // NO PSRAM support -> fall back to DRAM
+void *p_malloc(size_t size) { return d_malloc(size); }
+void *p_calloc(size_t count, size_t size) { return d_calloc(count, size); }
+void *p_realloc_malloc(void *ptr, size_t size) { return d_realloc_malloc(ptr, size); }
+void *p_realloc_malloc_nofree(void *ptr, size_t size) { return d_realloc_malloc_nofree(ptr, size); }
+#endif
+#endif
+
+
+#if 0 // WLEDMM not used yet
+// allocation function for buffers like pixel-buffers and segment data
+// optimises the use of memory types to balance speed and heap availability, always favours DRAM if possible
+// if multiple conflicting types are defined, the lowest bits of "type" take priority (see fcn_declare.h for types)
+void *allocate_buffer(size_t size, uint32_t type) {
+  void *buffer = nullptr;
+  #if CONFIG_IDF_TARGET_ESP32
+  // only classic ESP32 has "32bit accessible only" aka IRAM type. Using it frees up normal DRAM for other purposes
+  // this memory region is used for IRAM_ATTR functions, whatever is left is unused and can be used for pixel buffers
+  // prefer this type over PSRAM as it is slightly faster, except for _pixels where it is on-par as PSRAM-caching does a good job for mostly sequential access
+  if (type & BFRALLOC_NOBYTEACCESS) {
+    // prefer 32bit region, then PSRAM, fallback to any heap. Note: if adding "INTERNAL"-flag this wont work
+    buffer = heap_caps_malloc_prefer(size, 3, MALLOC_CAP_32BIT, MALLOC_CAP_SPIRAM, MALLOC_CAP_8BIT);
+    buffer = validateFreeHeap(buffer);
+  }
+  else
+  #endif
+  #if !defined(BOARD_HAS_PSRAM)
+  buffer = d_malloc(size);
+  #else
+  if (type & BFRALLOC_PREFER_DRAM) {
+    if (getContiguousFreeHeap() < 3*(MIN_HEAP_SIZE/2) + size && size > PSRAM_THRESHOLD)
+      buffer = p_malloc(size); // prefer PSRAM for large allocations & when DRAM is low
+    else
+      buffer = d_malloc(size); // allocate in DRAM if enough free heap is available, PSRAM as fallback
+  }
+  else if (type & BFRALLOC_ENFORCE_DRAM)
+    buffer = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // use DRAM only, otherwise return nullptr
+  else if (type & BFRALLOC_PREFER_PSRAM) {
+    // if DRAM is plenty, prefer it over PSRAM for speed, reserve enough DRAM for segment data: if MAX_SEGMENT_DATA is exceeded, always uses PSRAM
+    if (getContiguousFreeHeap() > 4*MIN_HEAP_SIZE + size + ((uint32_t)(MAX_SEGMENT_DATA - Segment::getUsedSegmentData())))
+      buffer = d_malloc(size);
+    else
+      buffer = p_malloc(size); // prefer PSRAM
+  }
+  else if (type & BFRALLOC_ENFORCE_PSRAM)
+    buffer = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); // use PSRAM only, otherwise return nullptr
+  buffer = validateFreeHeap(buffer);
+  #endif
+  if (buffer && (type & BFRALLOC_CLEAR))
+    memset(buffer, 0, size); // clear allocated buffer
+
+  return buffer;
+}
+#endif
+
+
+// Platform-agnostic SHA1 computation from String input
+String computeSHA1(const String& input) {
+  #ifdef ESP8266
+    return sha1(input); // ESP8266 has built-in sha1() function
+  #else
+    // ESP32: Compute SHA1 hash using mbedtls
+    unsigned char shaResult[20]; // SHA1 produces 20 bytes
+    mbedtls_sha1_context ctx;
+
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts_ret(&ctx);
+    mbedtls_sha1_update_ret(&ctx, (const unsigned char*)input.c_str(), input.length());
+    mbedtls_sha1_finish_ret(&ctx, shaResult);
+    mbedtls_sha1_free(&ctx);
+
+    // Convert to hexadecimal string
+    char hexString[41];
+    for (int i = 0; i < 20; i++) {
+      sprintf(&hexString[i*2], "%02x", shaResult[i]);
+    }
+    hexString[40] = '\0';
+
+    return String(hexString);
+  #endif
+}
+
+#ifdef ESP32
+String generateDeviceFingerprint() {
+  uint32_t fp[2] = {0, 0}; // create 64 bit fingerprint
+  esp_chip_info_t chip_info;
+  esp_chip_info(&chip_info);
+  esp_efuse_mac_get_default((uint8_t*)fp);
+  fp[1] ^= ESP.getFlashChipSize();
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 4)
+  fp[0] ^= chip_info.full_revision | (chip_info.model << 16);
+  #else
+  fp[0] ^= chip_info.revision | (chip_info.model << 16);
+  #endif
+  // mix in ADC calibration data:
+  esp_adc_cal_characteristics_t ch;
+  #if SOC_ADC_MAX_BITWIDTH == 13 // S2 has 13 bit ADC
+  constexpr auto myBIT_WIDTH = ADC_WIDTH_BIT_13;
+  #else
+  constexpr auto myBIT_WIDTH = ADC_WIDTH_BIT_12;
+  #endif
+  esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, myBIT_WIDTH, 1100, &ch);
+  fp[0] ^= ch.coeff_a;
+  fp[1] ^= ch.coeff_b;
+  if (ch.low_curve) {
+    for (int i = 0; i < 8; i++) {
+      fp[0] ^= ch.low_curve[i];
+    }
+  }
+  if (ch.high_curve) {
+    for (int i = 0; i < 8; i++) {
+      fp[1] ^= ch.high_curve[i];
+    }
+  }
+  char fp_string[17];  // 16 hex chars + null terminator
+  sprintf(fp_string, "%08X%08X", fp[1], fp[0]);
+  return String(fp_string);
+}
+
+#else // ESP8266
+String generateDeviceFingerprint() {
+  uint32_t fp[2] = {0, 0}; // create 64 bit fingerprint
+  WiFi.macAddress((uint8_t*)&fp); // use MAC address as fingerprint base
+  fp[0] ^= ESP.getFlashChipId();
+  fp[1] ^= ESP.getFlashChipSize() | ESP.getFlashChipVendorId() << 16;
+  char fp_string[17];  // 16 hex chars + null terminator
+  sprintf(fp_string, "%08X%08X", fp[1], fp[0]);
+  return String(fp_string);
+}
+#endif
+
+// Generate a device ID based on SHA1 hash of MAC address salted with other unique device info
+// Returns: original SHA1 + last 2 chars of double-hashed SHA1 (42 chars total)
+String getDeviceId() {
+  static String cachedDeviceId = "";
+  if (cachedDeviceId.length() > 0) return cachedDeviceId;
+  // The device string is deterministic as it needs to be consistent for the same device, even after a full flash erase
+  // MAC is salted with other consistent device info to avoid rainbow table attacks.
+  // If the MAC address is known by malicious actors, they could precompute SHA1 hashes to impersonate devices,
+  // but as WLED developers are just looking at statistics and not authenticating devices, this is acceptable.
+  // If the usage data was exfiltrated, you could not easily determine the MAC from the device ID without brute forcing SHA1
+
+  String firstHash = computeSHA1(generateDeviceFingerprint());
+
+  // Second hash: SHA1 of the first hash
+  String secondHash = computeSHA1(firstHash);
+
+  // Concatenate first hash + last 2 chars of second hash
+  cachedDeviceId = firstHash + secondHash.substring(38);
+
+  return cachedDeviceId;
 }
 
 /*
@@ -1200,7 +1142,7 @@ void dumpAllTaskHWMs(void) {
  */
 #define PERLIN_SHIFT 1
 
- // calculate gradient for corner from hash value
+// calculate gradient for corner from hash value
 static inline __attribute__((always_inline)) int32_t hashToGradient(uint32_t h) {
   // using more steps yields more "detailed" perlin noise but looks less like the original fastled version (adjust PERLIN_SHIFT to compensate, also changes range and needs proper adustment)
   // return (h & 0xFF) - 128; // use PERLIN_SHIFT 7
@@ -1224,7 +1166,7 @@ static inline __attribute__((always_inline)) int32_t gradient2D(uint32_t x0, int
   h ^= h >> 15;
   h *= 0x92C3412B;
   h ^= h >> 13;
-  return (hashToGradient(h) * dx + hashToGradient(h >> PERLIN_SHIFT) * dy) >> (1 + PERLIN_SHIFT);
+  return (hashToGradient(h) * dx + hashToGradient(h>>PERLIN_SHIFT) * dy) >> (1 + PERLIN_SHIFT);
 }
 
 static inline __attribute__((always_inline)) int32_t gradient3D(uint32_t x0, int32_t dx, uint32_t y0, int32_t dy, uint32_t z0, int32_t dz) {
@@ -1233,7 +1175,7 @@ static inline __attribute__((always_inline)) int32_t gradient3D(uint32_t x0, int
   h ^= h >> 15;
   h *= 0x92C3412B;
   h ^= h >> 13;
-  return ((hashToGradient(h) * dx + hashToGradient(h >> (1 + PERLIN_SHIFT)) * dy + hashToGradient(h >> (1 + 2 * PERLIN_SHIFT)) * dz) * 85) >> (8 + PERLIN_SHIFT); // scale to 16bit, x*85 >> 8 = x/3
+  return ((hashToGradient(h) * dx + hashToGradient(h>>(1+PERLIN_SHIFT)) * dy + hashToGradient(h>>(1 + 2*PERLIN_SHIFT)) * dz) * 85) >> (8 + PERLIN_SHIFT); // scale to 16bit, x*85 >> 8 = x/3
 }
 
 // fast cubic smoothstep: t*(3 - 2t²), optimized for fixed point, scaled to avoid overflows
@@ -1245,7 +1187,7 @@ static uint32_t smoothstep(const uint32_t t) {
 
 // simple linear interpolation for fixed-point values, scaled for perlin noise use
 static inline int32_t lerpPerlin(int32_t a, int32_t b, int32_t t) {
-  return a + (((b - a) * t) >> 14); // match scaling with smoothstep to yield 16.16bit values
+    return a + (((b - a) * t) >> 14); // match scaling with smoothstep to yield 16.16bit values
 }
 
 // 1D Perlin noise function that returns a value in range of -24691 to 24689
@@ -1253,7 +1195,7 @@ int32_t IRAM_ATTR_YN perlin1D_raw(uint32_t x, bool is16bit) {
   // integer and fractional part coordinates
   int32_t x0 = x >> 16;
   int32_t x1 = x0 + 1;
-  if (is16bit) x1 = x1 & 0xFF; // wrap back to zero at 0xFF instead of 0xFFFF
+  if(is16bit) x1 = x1 & 0xFF; // wrap back to zero at 0xFF instead of 0xFFFF
 
   int32_t dx0 = x & 0xFFFF;
   int32_t dx1 = dx0 - 0x10000;
@@ -1273,7 +1215,7 @@ int32_t IRAM_ATTR_YN perlin2D_raw(uint32_t x, uint32_t y, bool is16bit) {
   int32_t x1 = x0 + 1;
   int32_t y1 = y0 + 1;
 
-  if (is16bit) {
+  if(is16bit) {
     x1 = x1 & 0xFF; // wrap back to zero at 0xFF instead of 0xFFFF
     y1 = y1 & 0xFF;
   }
@@ -1307,7 +1249,7 @@ int32_t IRAM_ATTR_YN perlin3D_raw(uint32_t x, uint32_t y, uint32_t z, bool is16b
   int32_t y1 = y0 + 1;
   int32_t z1 = z0 + 1;
 
-  if (is16bit) {
+  if(is16bit) {
     x1 = x1 & 0xFF; // wrap back to zero at 0xFF instead of 0xFFFF
     y1 = y1 & 0xFF;
     z1 = z1 & 0xFF;
@@ -1350,7 +1292,7 @@ uint16_t perlin16(uint32_t x) {
 }
 
 uint16_t perlin16(uint32_t x, uint32_t y) {
-  return ((perlin2D_raw(x, y) * 1537) >> 10) + 32725; //scale to 16bit and offset (fastled range: about 1748 to 63697)
+ return ((perlin2D_raw(x, y) * 1537) >> 10) + 32725; //scale to 16bit and offset (fastled range: about 1748 to 63697)
 }
 
 uint16_t perlin16(uint32_t x, uint32_t y, uint32_t z) {
