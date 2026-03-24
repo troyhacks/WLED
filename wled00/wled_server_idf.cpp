@@ -30,21 +30,38 @@ static const char s_content_enc[] PROGMEM = "Content-Encoding";
 static const char s_unlock_ota [] PROGMEM = "Please unlock OTA in security settings!";
 static const char s_unlock_cfg [] PROGMEM = "Please unlock settings using PIN code!";
 
+// ── IDF-only macros ───────────────────────────────────────────────────────────
+// ON_STA_FILTER: true when request arrives on STA interface (not AP).
+// In IDF build we approximate: if apActive then requests on AP side are likely
+// captive-portal candidates; on STA side they are not.
+// Since we can't inspect the source IP easily here, use the apActive flag only.
+#ifndef ON_STA_FILTER
+#define ON_STA_FILTER(req) (!apActive)
+#endif
+
 // ── Forward declarations ──────────────────────────────────────────────────────
-static bool   handleIfNoneMatchCacheHeader(AsyncWebServerRequest* request);
-static void   setStaticContentCacheHeaders(AsyncWebServerResponse* response);
-static bool   isIp(const String& str);
-static bool   captivePortal(AsyncWebServerRequest* request);
-static void   serveIndex(AsyncWebServerRequest* request);
-static void   serveIndexOrWelcome(AsyncWebServerRequest* request);
-static void   serveSettingsJS(AsyncWebServerRequest* request);
-static String msgProcessor(const String& var);
+// File-local helpers (not declared in fcn_declare.h):
+static bool handleIfNoneMatchCacheHeader(AsyncWebServerRequest* request);
+static void setStaticContentCacheHeaders(AsyncWebServerResponse* response);
+
+// Matches extern declaration in fcn_declare.h:
+bool isIp(String str);
+
+// These match extern declarations in fcn_declare.h (must not be static):
+bool   captivePortal(AsyncWebServerRequest* request);
+void   serveIndex(AsyncWebServerRequest* request);
+void   serveIndexOrWelcome(AsyncWebServerRequest* request);
+void   serveSettingsJS(AsyncWebServerRequest* request);
+String msgProcessor(const String& var);
+// handleUpload defined at bottom of this file
+void handleUpload(AsyncWebServerRequest* request, const String& filename,
+                  size_t index, uint8_t* data, size_t len, bool final);
 
 // ── String constants persisted across this file ───────────────────────────────
 // (messageHead/messageSub/optionType live in wled.h globals)
 
 // ── isIp ──────────────────────────────────────────────────────────────────────
-static bool isIp(const String& str) {
+bool isIp(String str) {
     for (size_t i = 0; i < str.length(); i++) {
         char c = str.charAt(i);
         if (c != '.' && (c < '0' || c > '9')) return false;
@@ -76,28 +93,6 @@ bool handleFileRead(AsyncWebServerRequest* request, String path) {
     if (path.endsWith("/")) path += "index.htm";
     if (path.indexOf("sec") > -1) return false;
 
-    // WLEDMM file-existence cache shortcuts
-    if (!haveLedmapFile && path.equals("/ledmap.json")) return false;
-    if (!haveIndexFile  && path.equals("/index.htm"))   return false;
-    if (!haveSkinFile   && path.equals("/skin.css"))    return false;
-    if (!haveICOFile    && path.equals("/favicon.ico")) return false;
-    if (!haveCpalFile   && path.equals("/cpal.htm"))    return false;
-
-    // Try PSRAM preset cache first
-#if defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
-    if (path.endsWith("/presets.json")) {
-        size_t psize = 0;
-        const uint8_t* presets = getPresetCache(psize);
-        if (presets) {
-            String ct = getContentType(path);
-            AsyncWebServerResponse* response = request->beginResponse_P(200, ct, presets, psize);
-            request->send(response);
-            delete response;
-            return true;
-        }
-    }
-#endif
-
     // Build absolute POSIX path under LittleFS mount point
     String abspath = String(LITTLEFS_BASE) + path;
 
@@ -108,12 +103,6 @@ bool handleFileRead(AsyncWebServerRequest* request, String path) {
     if (!fp) fp = fopen(abspath.c_str(), "rb");
 
     if (!fp) {
-        // Update WLEDMM not-found cache
-        if (path.equals("/ledmap.json")) haveLedmapFile = false;
-        if (path.equals("/index.htm"))   haveIndexFile  = false;
-        if (path.equals("/skin.css"))    haveSkinFile   = false;
-        if (path.equals("/favicon.ico")) haveICOFile    = false;
-        if (path.equals("/cpal.htm"))    haveCpalFile   = false;
         return false;
     }
 
@@ -155,10 +144,11 @@ bool handleFileRead(AsyncWebServerRequest* request, String path) {
 }
 
 // ── captivePortal ─────────────────────────────────────────────────────────────
-static bool captivePortal(AsyncWebServerRequest* request) {
+bool captivePortal(AsyncWebServerRequest* request) {
     if (ON_STA_FILTER(request)) return false;
     if (!request->hasHeader("Host")) return false;
-    String hostH = request->getHeaderValue("Host");
+    AsyncWebHeader* hdr = request->getHeader("Host");
+    String hostH = hdr ? hdr->value() : String();
     if (!isIp(hostH) && hostH.indexOf("wled.me") < 0 && hostH.indexOf(cmDNS) < 0) {
         DEBUG_PRINTLN("Captive portal");
         AsyncWebServerResponse* response = request->beginResponse(302);
@@ -192,7 +182,7 @@ static void setStaticContentCacheHeaders(AsyncWebServerResponse* response) {
 }
 
 // ── msgProcessor ──────────────────────────────────────────────────────────────
-static String msgProcessor(const String& var) {
+String msgProcessor(const String& var) {
     if (var == "MSG") {
         String messageBody = messageHead;
         messageBody += F("</h2>");
@@ -218,7 +208,7 @@ void serveMessage(AsyncWebServerRequest* request, uint16_t code,
 }
 
 // ── serveIndex ────────────────────────────────────────────────────────────────
-static void serveIndex(AsyncWebServerRequest* request) {
+void serveIndex(AsyncWebServerRequest* request) {
     if (handleFileRead(request, "/index.htm")) return;
     if (handleIfNoneMatchCacheHeader(request)) return;
 
@@ -237,7 +227,7 @@ static void serveIndex(AsyncWebServerRequest* request) {
 }
 
 // ── serveIndexOrWelcome ───────────────────────────────────────────────────────
-static void serveIndexOrWelcome(AsyncWebServerRequest* request) {
+void serveIndexOrWelcome(AsyncWebServerRequest* request) {
 #if defined(WLED_USE_ETHERNET_ONLY)
     showWelcomePage = false;
 #endif
@@ -246,7 +236,7 @@ static void serveIndexOrWelcome(AsyncWebServerRequest* request) {
 }
 
 // ── serveSettingsJS ───────────────────────────────────────────────────────────
-static void serveSettingsJS(AsyncWebServerRequest* request) {
+void serveSettingsJS(AsyncWebServerRequest* request) {
     size_t bufSize = SETTINGS_STACK_BUF_SIZE;
     char* buf = (char*)heap_caps_malloc(bufSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) buf = (char*)malloc(bufSize);

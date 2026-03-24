@@ -293,6 +293,9 @@ static inline void ledcWrite(uint8_t chan, uint32_t duty) {
 #endif
 
 // ─── Serial stub — routes to printf() on UART0 (default IDF console) ─────────
+// Forward declaration — IPAddress is defined via idf_shims/IPAddress.h included below.
+class IPAddress;
+
 // Full Serial migration (Serial.* → printf()) is handled per-file.
 // This stub lets code that still uses Serial compile during incremental migration.
 struct _WledSerial {
@@ -356,6 +359,10 @@ struct _WledSerial {
     size_t write(const char* buf, size_t len) {
         return fwrite(buf, 1, len, stdout);
     }
+
+    // IPAddress overloads — declared here, defined inline after IPAddress is included below.
+    size_t print(const IPAddress& ip);
+    size_t println(const IPAddress& ip);
 };
 
 extern _WledSerial Serial;
@@ -389,6 +396,24 @@ class __FlashStringHelper;
 #include "idf_shims/IPAddress.h"
 #include "idf_shims/Wire.h"
 #include "idf_shims/SPI.h"
+// WiFiUDP.h is NOT included here — it creates a circular dependency because
+// WiFiUDP.h includes IPAddress.h which includes idf_compat.h.
+// WiFiUDP.h is included in wled.h after idf_compat.h is fully processed.
+
+// ─── DNSServer stub (captive portal — not used in IDF/ethernet-only builds) ───
+class DNSServer {
+public:
+    void setErrorReplyCode(int) {}
+    bool start(uint16_t, const char*, IPAddress) { return false; }
+    void processNextRequest() {}
+    void stop() {}
+};
+// DNSReplyCode enum (referenced by wled.cpp even though calls are #ifdef-guarded)
+enum class DNSReplyCode { NoError = 0, ServerFailure = 2, NonExistentDomain = 3 };
+
+// ─── _WledSerial IPAddress overloads (defined after IPAddress is complete) ────
+inline size_t _WledSerial::print(const IPAddress& ip)   { return printf("%s",   ip.toString().c_str()); }
+inline size_t _WledSerial::println(const IPAddress& ip) { return printf("%s\n", ip.toString().c_str()); }
 
 // ─── Bit manipulation macros (Arduino compat) ─────────────────────────────────
 #ifndef bitRead

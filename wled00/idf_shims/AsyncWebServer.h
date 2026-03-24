@@ -219,7 +219,7 @@ private:
         const char* uri = _req->uri;
         const char* q   = strchr(uri, '?');
         if (q) {
-            _url = String(uri, (size_t)(q - uri));
+            _url.assign(uri, (size_t)(q - uri));
             _queryString = String(q + 1);
         } else {
             _url = String(uri);
@@ -245,11 +245,11 @@ private:
             const char* amp = strchr(p, '&');
             if (!amp) amp = p + strlen(p); // points to NUL
             if (eq && eq < amp) {
-                String name  = _aws_urlDecode(String(p, (size_t)(eq - p)).c_str());
-                String value = _aws_urlDecode(String(eq + 1, (size_t)(amp - eq - 1)).c_str());
+                String name  = _aws_urlDecode(std::string(p, (size_t)(eq - p)).c_str());
+                String value = _aws_urlDecode(std::string(eq + 1, (size_t)(amp - eq - 1)).c_str());
                 _params.push_back(new AsyncWebParameter(name, value, isPost));
             } else if (amp > p) {
-                String name = _aws_urlDecode(String(p, (size_t)(amp - p)).c_str());
+                String name = _aws_urlDecode(std::string(p, (size_t)(amp - p)).c_str());
                 _params.push_back(new AsyncWebParameter(name, "", isPost));
             }
             if (!*amp) break;
@@ -268,7 +268,7 @@ public:
 
     // Add parsed POST body as form params
     void _addPostBody(const uint8_t* data, size_t len) {
-        String body(reinterpret_cast<const char*>(data), len);
+        String body(std::string(reinterpret_cast<const char*>(data), len));
         _parseQueryString(body.c_str(), true);
     }
 
@@ -315,6 +315,13 @@ public:
     }
     bool hasParam(const String& name, bool isPost = false) const {
         return getParam(name, isPost) != nullptr;
+    }
+
+    // By-index accessors (used by set.cpp WLEDMM pin handling)
+    size_t params() const { return _params.size(); }
+    AsyncWebParameter* getParam(size_t index) const {
+        if (index < _params.size()) return _params[index];
+        return nullptr;
     }
 
     // Headers
@@ -398,12 +405,26 @@ public:
         send(code, type, String(content ? content : ""));
     }
 
+    // send_P — null-terminated C-string variant (e.g. JSON_palette_names)
+    void send_P(int code, const char* type, const char* data) {
+        _applyDefaultHeaders();
+        _setStatus(code);
+        httpd_resp_set_type(_req, type ? type : "text/plain");
+        httpd_resp_send(_req, data, data ? (int)strlen(data) : 0);
+    }
+
     // send_P — data from ROM/PROGMEM (no template processor)
     void send_P(int code, const char* type, const uint8_t* data, size_t len) {
         _applyDefaultHeaders();
         _setStatus(code);
         httpd_resp_set_type(_req, type ? type : "application/octet-stream");
         httpd_resp_send(_req, reinterpret_cast<const char*>(data), (int)len);
+    }
+
+    // send_P with template processor — const char* variant
+    void send_P(int code, const char* type, const char* data,
+                std::function<String(const String&)> processor) {
+        send_P(code, type, reinterpret_cast<const uint8_t*>(data), processor);
     }
 
     // send_P with template processor (used by serveMessage)
@@ -575,25 +596,63 @@ public:
         const String& url    = request.url();
         int           method = request.method();
 
-        // 1. Check registered routes
-        for (auto& route : _routes) {
-            if (route.uri != url.c_str()) continue;
-            if (!(route.methodMask & method)) continue;
-            route.handler(&request);
-            return;
+        // Read POST/PUT body before route handlers run.
+        // form bodies  → parse into request params (arg() works)
+        // JSON bodies  → store in _tempObject (JSON route handlers use it)
+        if ((method & (HTTP_POST | HTTP_PUT)) && req->content_len > 0 && req->content_len <= 65536) {
+            bool isJson = false;
+            size_t ctLen = httpd_req_get_hdr_value_len(req, "Content-Type");
+            if (ctLen > 0 && ctLen < 128) {
+                char ctBuf[129];
+                if (httpd_req_get_hdr_value_str(req, "Content-Type", ctBuf, sizeof(ctBuf)) == ESP_OK) {
+                    isJson = (strstr(ctBuf, "json") != nullptr);
+                }
+            }
+            uint8_t* body = (uint8_t*)malloc(req->content_len + 1);
+            if (body) {
+                int r = httpd_req_recv(req, reinterpret_cast<char*>(body), req->content_len);
+                if (r > 0) {
+                    body[r] = '\0';
+                    if (isJson) {
+                        request._tempObject = body;  // caller must not free; ~AsyncWebServerRequest does
+                        body = nullptr;              // ownership transferred
+                    } else {
+                        request._addPostBody(body, (size_t)r);
+                    }
+                }
+                if (body) free(body);
+            }
+        }
+
+        // 1. Check registered routes — exact match first, then prefix match
+        // ESPAsyncWebServer matches /settings against /settings/wifi via startsWith("/settings/")
+        // Try exact matches first, then fall back to prefix matches.
+        for (int pass = 0; pass < 2; pass++) {
+            for (auto& route : _routes) {
+                if (!(route.methodMask & method)) continue;
+                bool matches;
+                if (pass == 0) {
+                    matches = (route.uri == url.c_str());
+                } else {
+                    // Prefix match: registered "/foo" matches "/foo/bar"
+                    std::string prefix = route.uri + "/";
+                    matches = (url.length() > prefix.length() &&
+                               url.startsWith(prefix.c_str()));
+                }
+                if (!matches) continue;
+                route.handler(&request);
+                return;
+            }
         }
 
         // 2. Check custom handlers (e.g. AsyncCallbackJsonWebHandler)
         for (auto* h : _handlers) {
             if (h->canHandle(&request)) {
-                size_t bodyLen = req->content_len;
-                if (bodyLen > 0 && bodyLen <= 65536) {
-                    uint8_t* body = (uint8_t*)malloc(bodyLen);
-                    if (body) {
-                        int r = httpd_req_recv(req, reinterpret_cast<char*>(body), bodyLen);
-                        if (r > 0) h->handleBody(&request, body, (size_t)r, 0, bodyLen);
-                        free(body);
-                    }
+                // Body already read above — use _tempObject if set (JSON), else nothing to do
+                if (request._tempObject && req->content_len > 0) {
+                    h->handleBody(&request,
+                                  static_cast<uint8_t*>(request._tempObject),
+                                  req->content_len, 0, req->content_len);
                 }
                 h->handleRequest(&request);
                 return;
