@@ -29,6 +29,7 @@ idf_component_register(
     INCLUDE_DIRS  "."
                   "idf_shims"
     PRIV_REQUIRES esp_psram
+                  espressif__esp_hosted
 )
 
 # ─── Compile definitions (equivalent to platformio.ini build_flags -D) ────────
@@ -70,6 +71,8 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     WLED_DISABLE_MQTT
     WLED_DISABLE_ALEXA
     WLED_DISABLE_LOXONE
+    HW_PIN_SDA=7
+    HW_PIN_SCL=8
     CORE_DEBUG_LEVEL=0
     NDEBUG
     WLED_DANGEROUS_OPTIMIZATIONS

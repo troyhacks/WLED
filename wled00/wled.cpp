@@ -623,7 +623,7 @@ static void eth_event_handler(void* arg, esp_event_base_t event_base, int32_t ev
     eth_link_up = false;  // Physical link is down
     eth_is_connected = false;
     USER_PRINT("IP Address is now http://");
-    USER_PRINTLN(Network.localIP());
+    USER_PRINTLN(Network.localIP().toString());
     #ifndef WLED_IDF_BUILD
     MDNS.end();
     #endif
@@ -800,6 +800,8 @@ void WLED::setup() {
   #endif
   
   init_math();  // WLEDMM: pre-calculate some lookup tables
+
+  busMutex = xSemaphoreCreateMutex();  // must be created before any bus operations
 
   bool fsinit = false;
   USER_PRINTLN(F("Mounting FS ..."));
@@ -1460,6 +1462,7 @@ void WLED::setup() {
     }
 
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    pinManager.joinWire();  // initialize global_i2c_bus_handle before HDMI and I2C scan
     scanI2C_IDF(global_i2c_bus_handle);  // use IDF v5 API on P4
     // probeI2C_unknown: diagnostic function used to identify the 9 I2C devices on this board.
     // Result: 0x37/0x3A/0x4B/0x50 = LT8912B internal banks + EDID proxy; 0x54 = FE1.1s EEPROM.
@@ -1975,14 +1978,14 @@ void WLED::handleConnection() {
   if (anyNetworkConnected && !interfacesInited) {
     USER_PRINTLN();
     USER_PRINT(F("Connected!\nIP address: http://"));
-    USER_PRINT(Network.localIP());
+    USER_PRINT(Network.localIP().toString());
     IPAddress backup;
     if (Network.isEthernet() && !Network.isWiFi()) {
       USER_PRINT(F(" via Ethernet (Primary Route)\n"));
       backup = Network.getWiFiIP();
       if (backup != INADDR_NONE && backup != IPAddress(IPADDR_BROADCAST)) {
         USER_PRINT(F("IP address: http://"));
-        USER_PRINT(backup);
+        USER_PRINT(backup.toString());
         USER_PRINT(F(" via WiFi (Backup Route)\n"));
       }
     } else if (Network.isWiFi() && !Network.isEthernet()) {
@@ -1990,7 +1993,7 @@ void WLED::handleConnection() {
       backup = Network.getEthernetIP();
       if (backup != INADDR_NONE && backup != IPAddress(IPADDR_BROADCAST)) {
         USER_PRINT(F("IP address: http://"));
-        USER_PRINT(backup);
+        USER_PRINT(backup.toString());
         USER_PRINT(F(" via Ethernet (Backup Route)\n"));
       }
     } else {

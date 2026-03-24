@@ -644,6 +644,10 @@ static int hdmi_edid_best_mode() {
 // Call once from WLED::setup().
 // ============================================================
 void hdmi_setup() {
+  // Suppress "underrun" errors from the DSI/DPI driver — expected during blit-rate
+  // development; remove the line below (or change to ESP_LOG_WARN) to re-enable.
+  esp_log_level_set("lcd.dsi.dpi", ESP_LOG_NONE); // FIXME TROYHACKS
+
   int selected = (int)WLEDMM_DISPLAY_MODE;
   Serial.printf("HDMI: starting mode %d: %s (type 'm' to switch)\n", selected, hdmi_mode_names[selected]);
   hdmi_display_init(selected);

@@ -1765,7 +1765,7 @@ void serveJson(AsyncWebServerRequest* request)
   else if (url.indexOf("si")    > 0) subJson = JSON_PATH_STATE_INFO;
   else if (url.indexOf("nodes") > 0) subJson = JSON_PATH_NODES;
   else if (url.indexOf("eff")   > 0) subJson = JSON_PATH_EFFECTS;
-  else if (url.indexOf("palx")  > 0) subJson = JSON_PATH_PALETTES;
+  else if (url.indexOf("palx") > 0 || url.indexOf("palet") > 0) subJson = JSON_PATH_PALETTES;
   else if (url.indexOf("fxda")  > 0) subJson = JSON_PATH_FXDATA;
   else if (url.indexOf("net") > 0) subJson = JSON_PATH_NETWORKS;
   #ifdef WLED_ENABLE_JSONLIVE

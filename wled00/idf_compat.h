@@ -234,6 +234,23 @@ static inline void    analogWrite(uint8_t, int)              {}             // s
 #define NUM_DIGITAL_PINS ((int)GPIO_NUM_MAX)
 #endif
 
+// ─── Arduino default bus pin names — no fixed defaults on ESP32-P4 ────────────
+#ifndef SDA
+#define SDA  (-1)
+#endif
+#ifndef SCL
+#define SCL  (-1)
+#endif
+#ifndef MOSI
+#define MOSI (-1)
+#endif
+#ifndef MISO
+#define MISO (-1)
+#endif
+#ifndef SCK
+#define SCK  (-1)
+#endif
+
 // ─── dtostrf (AVR libc function — not in newlib; format a float to a string) ──
 #ifndef dtostrf
 static inline char* dtostrf(double val, int width, int prec, char* s) {

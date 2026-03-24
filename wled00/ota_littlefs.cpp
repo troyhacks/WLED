@@ -25,9 +25,11 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
+extern "C" {
 #include "esp_hosted_ota.h"
 #include "esp_hosted.h"
 #include "esp_hosted_api_types.h"
+}
 #endif
 #include <unistd.h>
 #include "freertos/FreeRTOS.h"

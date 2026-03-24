@@ -482,7 +482,7 @@ char *cleanUpName(char *in); // to clean up a name that was read from file
 uint32_t hashInt(uint32_t s);
 int32_t perlin1D_raw(uint32_t x, bool is16bit = false);
 int32_t perlin2D_raw(uint32_t x, uint32_t y, bool is16bit = false);
-int32_t perlin3D_raw(uint32_t x, uint32_t y, bool is16bit = false);
+int32_t perlin3D_raw(uint32_t x, uint32_t y, uint32_t z, bool is16bit = false);
 uint16_t perlin16(uint32_t x);
 uint16_t perlin16(uint32_t x, uint32_t y);
 uint16_t perlin16(uint32_t x, uint32_t y, uint32_t z);

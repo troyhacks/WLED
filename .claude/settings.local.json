@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"XML_response\\\\|URL_response\\\\|getSettingsJS\" c:/Users/troys/OneDrive/Projects/WLED/wled00/*.cpp c:/Users/troys/OneDrive/Projects/WLED/wled00/*.h)",
+      "Bash(grep -v \"//.*XML_response\\\\|//.*URL_response\")",
+      "Bash(head -20 \"c:/Users/troys/OneDrive/Projects/WLED/wled00/xml.cpp\" echo \"---\" grep -n \"^#if\\\\|^#ifndef\\\\|^#ifdef\\\\|^#endif\" \"c:/Users/troys/OneDrive/Projects/WLED/wled00/xml.cpp\")",
+      "Bash(grep -rn perlin3D_raw c:/Users/troys/OneDrive/Projects/WLED/ --include=*.cpp --include=*.h)"
+    ]
+  }
+}
