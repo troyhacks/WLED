@@ -1341,7 +1341,7 @@ void WLED::setup() {
       esp_restart();
     }
     USER_PRINT("Backup of LittleFS to SD Card... ");
-    backupLittleFStoSD();
+    backupLittleFStoPath("/sdcard");
     USER_PRINTLN("Done!");
     USER_PRINT("Starting SD card preload... ");
     ImageCacheManager::getInstance().startPreload("/sdcard");

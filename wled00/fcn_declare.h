@@ -425,7 +425,7 @@ void userLoop();
 
 //util.cpp
 bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint32_t* mappingTable, uint32_t tableSize, const char* filename = "/panel_map.json");
-bool backupLittleFStoSD();
+// bool backupLittleFStoSD();
 bool backupLittleFStoPath(const char* dest_root);
 bool copyDirectory(const char* srcDir, const char* destDir);
 bool copyFile(const char* srcPath, const char* destPath);
@@ -448,7 +448,7 @@ void dumpAllTaskHWMs(void);
 // util.h declares these with defaults; guard here to avoid redeclaration errors
 // when util.h is included first (e.g. PSRAM/IDF builds).
 int getNumVal(const String* req, uint32_t pos);
-void parseNumber(const char* str, byte* val, byte minv = 0, byte maxv = 255);
+// void parseNumber(const char* str, byte* val, byte minv = 0, byte maxv = 255);
 bool getVal(JsonVariant elem, byte* val, byte minv = 0, byte maxv = 255);
 bool updateVal(const char* req, const char* key, byte* val, byte minv = 0, byte maxv = 255);
 void oappendUseDeflate(bool OnOff); // enable / disable string squeezing

@@ -22,8 +22,8 @@
 
 int  __attribute__((pure)) getNumVal(const String* req, uint16_t pos);
 void parseNumber(const char* str, byte* val, byte minv=0, byte maxv=255);
-bool getVal(JsonVariant elem, byte* val, byte minv=0, byte maxv=255);
-bool updateVal(const char* req, const char* key, byte* val, byte minv=0, byte maxv=255);
+// bool getVal(JsonVariant elem, byte* val, byte minv=0, byte maxv=255);
+// bool updateVal(const char* req, const char* key, byte* val, byte minv=0, byte maxv=255);
 void oappendUseDeflate(bool OnOff); // enable / disable string squeezing
 bool oappend(const char* txt); // append new c string to temp buffer efficiently
 bool oappendi(int i);          // append new number to temp buffer efficiently
@@ -36,7 +36,7 @@ bool requestJSONBufferLock(uint8_t module=255, unsigned timeoutMS = 1800);
 void releaseJSONBufferLock();
 
 uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLen);
-uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxLen, uint8_t *var = nullptr);
+// uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxLen, uint8_t *var = nullptr);
 int16_t extractModeDefaults(uint8_t mode, const char *segVar);
 
 void checkSettingsPIN(const char *pin);
@@ -44,17 +44,17 @@ uint16_t __attribute__((pure)) crc16(const unsigned char* data_p, size_t length)
 String computeSHA1(const String& input);
 String getDeviceId();
 
-uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
-uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
-uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest = 255, uint32_t timebase = 0, uint8_t phase_offset = 0);
+// uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
+// uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
+// uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest = 255, uint32_t timebase = 0, uint8_t phase_offset = 0);
 
 uint8_t get_random_wheel_index(uint8_t pos);
 CRGB getCRGBForBand(int x, uint8_t *fftResult, int pal); //WLEDMM netmindz ar palette
 char *cleanUpName(char *in); // to clean up a name that was read from file
 
 uint32_t hashInt(uint32_t s);
-int32_t perlin1D_raw(uint32_t x, bool is16bit = false);
-int32_t perlin2D_raw(uint32_t x, uint32_t y, bool is16bit = false);
+// int32_t perlin1D_raw(uint32_t x, bool is16bit = false);
+// int32_t perlin2D_raw(uint32_t x, uint32_t y, bool is16bit = false);
 int32_t perlin3D_raw(uint32_t x, uint32_t y, uint32_t z, bool is16bit = false);
 uint16_t perlin16(uint32_t x);
 uint16_t perlin16(uint32_t x, uint32_t y);
@@ -75,16 +75,16 @@ uint8_t perlin8(uint16_t x, uint16_t y, uint16_t z);
 #include "soc/wdev_reg.h"
 #define HW_RND_REGISTER REG_READ(WDEV_RND_REG)
 #endif
-#define random hw_random // replace arduino random()
-inline uint32_t hw_random() { return HW_RND_REGISTER; };
-uint32_t hw_random(uint32_t upperlimit); // not inlined for code size
-int32_t hw_random(int32_t lowerlimit, int32_t upperlimit);
-inline uint16_t hw_random16() { return HW_RND_REGISTER; };
-inline uint16_t hw_random16(uint32_t upperlimit) { return (hw_random16() * upperlimit) >> 16; }; // input range 0-65535 (uint16_t)
-inline int16_t hw_random16(int32_t lowerlimit, int32_t upperlimit) { int32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random16(range); }; // signed limits, use int16_t ranges
-inline uint8_t hw_random8() { return HW_RND_REGISTER; };
-inline uint8_t hw_random8(uint32_t upperlimit) { return (hw_random8() * upperlimit) >> 8; }; // input range 0-255
-inline uint8_t hw_random8(uint32_t lowerlimit, uint32_t upperlimit) { uint32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random8(range); }; // input range 0-255
+// #define random hw_random // replace arduino random()
+// inline uint32_t hw_random() { return HW_RND_REGISTER; };
+// uint32_t hw_random(uint32_t upperlimit); // not inlined for code size
+// int32_t hw_random(int32_t lowerlimit, int32_t upperlimit);
+// inline uint16_t hw_random16() { return HW_RND_REGISTER; };
+// inline uint16_t hw_random16(uint32_t upperlimit) { return (hw_random16() * upperlimit) >> 16; }; // input range 0-65535 (uint16_t)
+// inline int16_t hw_random16(int32_t lowerlimit, int32_t upperlimit) { int32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random16(range); }; // signed limits, use int16_t ranges
+// inline uint8_t hw_random8() { return HW_RND_REGISTER; };
+// inline uint8_t hw_random8(uint32_t upperlimit) { return (hw_random8() * upperlimit) >> 8; }; // input range 0-255
+// inline uint8_t hw_random8(uint32_t lowerlimit, uint32_t upperlimit) { uint32_t range = upperlimit - lowerlimit; return lowerlimit + hw_random8(range); }; // input range 0-255
 
 // memory allocation wrappers (util.cpp)
 extern "C" {

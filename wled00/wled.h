@@ -16,7 +16,15 @@
 // WLEDMM  - you can check for this define in usermods, to only enabled WLEDMM specific code in the "right" fork. Its not defined in AC WLED.
 #define _MoonModules_WLED_
 
-//WLEDMM + Moustachauve/Wled-Native
+// a few hacks
+// #if !defined(ARDUINO_ARCH_ESP32)
+// #undef ESP_IDF_VERSION
+// #if !defined(ESP_IDF_VERSION_VAL)
+// #define ESP_IDF_VERSION_VAL(a,b,c) 99999999 // dummy
+// #endif
+// #endif
+
+//WLEDMM + Moustachauve/Wled-Native 
 // You can define custom product info from build flags.
 // This is useful to allow API consumer to identify what type of WLED version
 // they are interacting with. Be aware that changing this might cause some third
@@ -48,17 +56,6 @@
 //#define WLED_DISABLE_OTA         // saves 14kb
 
 // You can choose some of these features to disable:
-//#define WLED_DISABLE_ALEXA       // saves 11kb
-//#define WLED_DISABLE_HUESYNC     // saves 4kb
-//#define WLED_DISABLE_INFRARED    // saves 12kb, there is no pin left for this on ESP8266-01
-#ifndef WLED_DISABLE_MQTT
-  #define WLED_ENABLE_MQTT         // saves 12kb
-#endif
-#ifndef WLED_DISABLE_ADALIGHT      // can be used to disable reading commands from serial RX pin (see issue #3128).
-  #define WLED_ENABLE_ADALIGHT     // disable saves 5Kb (uses GPIO3 (RX) for serial). Related serial protocols: Adalight/TPM2, Improv, Serial JSON, Continuous Serial Streaming
-#else
-  #undef WLED_ENABLE_ADALIGHT      // disable has priority over enable
-#endif
 //#define WLED_ENABLE_DMX          // uses 3.5kb (use LEDPIN other than 2)
 //#define WLED_ENABLE_DMX_INPUT      // Listen for DMX over Serial
 //#define WLED_ENABLE_JSONLIVE     // peek LED output via /json/live (WS binary peek is always enabled)
@@ -69,7 +66,7 @@
   #define WLED_ENABLE_WEBSOCKETS
 #endif
 
-//#define WLED_DISABLE_ESPNOW      // Removes dependence on esp now
+//#define WLED_DISABLE_ESPNOW      // Removes dependence on esp now 
 
 #define WLED_ENABLE_FS_EDITOR      // enable /edit page for editing FS content. Will also be disabled with OTA lock
 
@@ -142,6 +139,7 @@
   #include "esp_netif.h"
   #include "esp_timer.h"
   #include "freertos/FreeRTOS.h"
+  // #include "tcpip_adapter.h"
   #include "freertos/task.h"
   #include "freertos/semphr.h"
   #ifndef WLED_DISABLE_ESPNOW
@@ -150,6 +148,9 @@
 #endif // WLED_IDF_BUILD
 
 #include "src/dependencies/network/Network.h"
+#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+  // #define Network WL_Network
+#endif
 
 #ifdef WLED_USE_MY_CONFIG
   #include "my_config.h"
@@ -196,9 +197,7 @@
 #endif
 
 #include "src/dependencies/e131/ESPAsyncE131.h"
-#ifdef WLED_ENABLE_MQTT
-#include "src/dependencies/async-mqtt-client/AsyncMqttClient.h"
-#endif
+#include "ArtNetReceiver.h"
 
 #define ARDUINOJSON_DECODE_UNICODE 0   // WLEDMM enables support for unicode HEX strings - deserializeJson(doc, "{'firstname':'Beno\\u00EEt'}"); --> not needed - disable saves 1.2KB flash
 #ifndef WLED_IDF_BUILD
@@ -220,7 +219,7 @@
 // The following is a construct to enable code to compile without it.
 // There is a code that will still not use PSRAM though:
 //    AsyncJsonResponse is a derived class that implements DynamicJsonDocument (AsyncJson-v6.h)
-#if defined(ARDUINO_ARCH_ESP32) && !defined(WLED_IDF_BUILD) && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))         // WLEDMM
+#if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON)) && 0 // TroyHacks: P4 FIXME: JSON in PSRAM is borked for some reason on v5.5
 // WLEDMM the JSON_TO_PSRAM feature works, so use it by default
 #undef  WLED_USE_PSRAM_JSON
 #define WLED_USE_PSRAM_JSON
@@ -253,7 +252,6 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
 #include "pin_manager.h"
 #include "bus_manager.h"
 #include "FX.h"
-#include "wled_metadata.h"
 
 #ifndef CLIENT_SSID
   #define CLIENT_SSID DEFAULT_CLIENT_SSID
@@ -341,11 +339,51 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
   #define WLED_REPO "unknown"
 #endif
 
+#ifdef CONFIG_SOC_PPA_SUPPORTED
+#include "esp_heap_caps.h"
+#include "driver/ppa.h"
+#include "driver/jpeg_decode.h"
+#include "esp_h264_dec_sw.h"
+#include "ImageCacheManager.h"
+WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
+WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
+WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
+WLED_GLOBAL ppa_client_config_t ppa_fill_config _INIT_N((({ .oper_type = PPA_OPERATION_FILL, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
+WLED_GLOBAL ppa_client_handle_t ppa_srm_handle _INIT(NULL);
+WLED_GLOBAL ppa_client_handle_t preview_ppa_srm_handle _INIT(NULL);
+WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
+WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
+WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
+// WLED_GLOBAL esp_lcd_panel_handle_t panel_handle _INIT(NULL);
+// WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);
+// WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
+WLED_GLOBAL uint16_t touchscreen_x[1];
+WLED_GLOBAL uint16_t touchscreen_y[1];
+WLED_GLOBAL uint16_t touchscreen_strength[1];
+WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
+WLED_GLOBAL bool touchpad_pressed _INIT(false);
+WLED_GLOBAL bool update_screen _INIT(true);
+WLED_GLOBAL bool update_screen_background _INIT(true);
+// WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
+// WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
+// WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
+// WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
+// WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
+#endif
+
+// #ifdef USERMOD_PIONEER_PROLINK
+// WLED_GLOBAL int   prolink_presetOffset  _INIT(0);
+// WLED_GLOBAL bool  prolink_presetMover   _INIT(false);
+// #endif
+
+WLED_GLOBAL bool ES7210_present _INIT(false); // we'll check for this during boot I2C scan.
+
 // Global Variable definitions
-//WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));
-//WLED_GLOBAL char releaseString[] _INIT_PROGMEM(TOSTRING(WLED_RELEASE_NAME)); //WLEDMM: to show on update page // somehow this will not work if using "const char releaseString[]
-extern const __FlashStringHelper* repoString;                       // Github repository (if available)
+WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));
+WLED_GLOBAL char releaseString[] _INIT_PROGMEM(TOSTRING(WLED_RELEASE_NAME)); //WLEDMM: to show on update page // somehow this will not work if using "const char releaseString[]
 #define WLED_CODENAME "Hoshi"
+
+// WLED_GLOBAL SemaphoreHandle_t busMutex _INIT(xSemaphoreCreateMutex());
 
 // AP and OTA default passwords (for maximum security change them!)
 WLED_GLOBAL char apPass[65]  _INIT(WLED_AP_PASS);
@@ -393,7 +431,7 @@ WLED_GLOBAL char clientSSID[33] _INIT(CLIENT_SSID);
 WLED_GLOBAL char clientPass[65] _INIT(CLIENT_PASS);
 WLED_GLOBAL char cmDNS[33] _INIT(MDNS_NAME);                       // mDNS address (*.local, replaced by wledXXXXXX if default is used)
 WLED_GLOBAL char apSSID[33] _INIT("");                             // AP off by default (unless setup)
-WLED_GLOBAL byte apChannel _INIT(6);                               // 2.4GHz WiFi AP channel (1-13)
+WLED_GLOBAL byte apChannel _INIT(1);                               // 2.4GHz WiFi AP channel (1-13)
 WLED_GLOBAL byte apHide    _INIT(0);                               // hidden AP SSID
 WLED_GLOBAL byte apBehavior _INIT(AP_BEHAVIOR_BOOT_NO_CONN);       // access point opens when no connection after boot by default
 WLED_GLOBAL IPAddress staticIP      _INIT_N(((  0,   0,  0,  0))); // static IP of ESP
@@ -405,14 +443,30 @@ WLED_GLOBAL bool noWifiSleep _INIT(true);                          // disabling 
 WLED_GLOBAL bool noWifiSleep _INIT(false);
 #endif
 WLED_GLOBAL bool force802_3g _INIT(false);
+WLED_GLOBAL bool hosted_needs_update _INIT(false);
+WLED_GLOBAL esp_netif_t* sta_netif _INIT(NULL);
+WLED_GLOBAL esp_netif_t* ap_netif _INIT(NULL);
+WLED_GLOBAL esp_netif_t* eth_netif _INIT(NULL);
+WLED_GLOBAL unsigned long staDisconnectTime _INIT(0);
+WLED_GLOBAL EventGroupHandle_t s_wifi_event_group;
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+WLED_GLOBAL int s_retry_num _INIT(0);
 
 #ifdef WLED_USE_ETHERNET
   #ifdef WLED_ETH_DEFAULT                                          // default ethernet board type if specified
     WLED_GLOBAL int ethernetType _INIT(WLED_ETH_DEFAULT);          // ethernet board type
   #else
     WLED_GLOBAL int ethernetType _INIT(WLED_ETH_NONE);             // use none for ethernet board type if default not defined
+    WLED_GLOBAL bool ethernetOnly _INIT(false);             // use none for ethernet board type if default not defined
   #endif
 #endif
+WLED_GLOBAL esp_eth_handle_t eth_handle;
+WLED_GLOBAL bool eth_is_connected _INIT(false);
+WLED_GLOBAL bool eth_link_up _INIT(false);  // Physical link status (Layer 2)
+WLED_GLOBAL bool wifi_is_connected _INIT(false);
+// WLED_GLOBAL tcpip_adapter_if_t send_interface;
+WLED_GLOBAL netif* sender_netif _INIT(NULL);
 
 // LED CONFIG
 WLED_GLOBAL bool turnOnAtBoot _INIT(true);                // turn on LEDs at power-up
@@ -421,13 +475,14 @@ WLED_GLOBAL byte bootPreset   _INIT(0);                   // save preset to load
 //if true, a segment per bus will be created on boot and LED settings save
 //if false, only one segment spanning the total LEDs is created,
 //but not on LED settings save if there is more than one segment currently
+// WLED_GLOBAL bool bakeMap         _INIT(false); // global to trigger baking (saving) our panel-based LED map.
 WLED_GLOBAL bool autoSegments    _INIT(false);
 WLED_GLOBAL bool correctWB       _INIT(false); // CCT color correction of RGB color
 WLED_GLOBAL bool cctFromRgb      _INIT(false); // CCT is calculated from RGB instead of using seg.cct
 WLED_GLOBAL bool gammaCorrectCol _INIT(true ); // use gamma correction on colors // WLEDMM that's what you would think, but the code tells a different story.
 WLED_GLOBAL bool gammaCorrectPreview _INIT(true); // WLEDMM: revert gamma correction for LiveLeds (screens have their own gamma correction)
 WLED_GLOBAL bool gammaCorrectBri _INIT(false); // use gamma correction on brightness
-WLED_GLOBAL float gammaCorrectVal _INIT(2.6f); // gamma correction value // WLEDMM reduced from 2.8 to 2.6
+WLED_GLOBAL float gammaCorrectVal _INIT(2.8f); // gamma correction value
 
 WLED_GLOBAL byte col[]    _INIT_N(({ 255, 160, 0, 0 }));  // current RGB(W) primary color. col[] should be updated if you want to change the color.
 WLED_GLOBAL byte colSec[] _INIT_N(({ 0, 0, 0, 0 }));      // current RGB(W) secondary color
@@ -445,9 +500,9 @@ WLED_GLOBAL uint16_t transitionDelay _INIT(750);    // default crossfade duratio
 
 WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
-WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true);  // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
-WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true);  // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
-WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(true);  // WLED-MM/TroyHacks: Turn other filter from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true); // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
+WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(true); // WLED-MM/TroyHacks: Turn other filter from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_PINKY _INIT(false); // WLED-MM/TroyHacks: Internally calibrate audio against white noise
 WLED_GLOBAL float fftBinAverage[16] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 
@@ -518,6 +573,7 @@ WLED_GLOBAL uint16_t e131ProxyUniverse _INIT(0);                  // output this
   WLED_GLOBAL DMXInput dmxInput;
 #endif
 
+WLED_GLOBAL TaskHandle_t wled_main_task _INIT(NULL);
 WLED_GLOBAL uint16_t e131Universe _INIT(1);                       // settings for E1.31 (sACN) protocol (only DMX_MODE_MULTIPLE_* can span over consecutive universes)
 WLED_GLOBAL uint16_t e131Port _INIT(5568);                        // DMX in port. E1.31 default is 5568, Art-Net is 6454
 WLED_GLOBAL byte e131Priority _INIT(0);                           // E1.31 port priority (if != 0 priority handling is active)
@@ -531,36 +587,8 @@ WLED_GLOBAL bool e131SkipOutOfSequence _INIT(false);              // freeze inst
 WLED_GLOBAL uint16_t pollReplyCount _INIT(0);                     // count number of replies for ArtPoll node report
 WLED_GLOBAL ArtNetReceiver artnet;
 WLED_GLOBAL BusManager artnetbusManager;
-
 // mqtt
 WLED_GLOBAL unsigned long lastMqttReconnectAttempt _INIT(0);  // used for other periodic tasks too
-#ifndef WLED_DISABLE_MQTT
-WLED_GLOBAL AsyncMqttClient *mqtt _INIT(NULL);
-WLED_GLOBAL bool mqttEnabled _INIT(false);
-WLED_GLOBAL char mqttStatusTopic[40] _INIT("");            // this must be global because of async handlers
-WLED_GLOBAL char mqttDeviceTopic[33] _INIT("");            // main MQTT topic (individual per device, default is wled/mac)
-WLED_GLOBAL char mqttGroupTopic[33] _INIT("wled/all");     // second MQTT topic (for example to group devices)
-WLED_GLOBAL char mqttServer[33] _INIT("");                 // both domains and IPs should work (no SSL)
-WLED_GLOBAL char mqttUser[41] _INIT("");                   // optional: username for MQTT auth
-WLED_GLOBAL char mqttPass[65] _INIT("");                   // optional: password for MQTT auth
-WLED_GLOBAL char mqttClientID[41] _INIT("");               // override the client ID
-WLED_GLOBAL uint16_t mqttPort _INIT(1883);
-WLED_GLOBAL bool retainMqttMsg _INIT(false);               // retain brightness and color
-#define WLED_MQTT_CONNECTED (mqtt != nullptr && mqtt->connected())
-#else
-#define WLED_MQTT_CONNECTED false
-#endif
-
-#ifndef WLED_DISABLE_HUESYNC
-WLED_GLOBAL bool huePollingEnabled _INIT(false);           // poll hue bridge for light state
-WLED_GLOBAL uint16_t huePollIntervalMs _INIT(2500);        // low values (< 1sec) may cause lag but offer quicker response
-WLED_GLOBAL char hueApiKey[47] _INIT("api");               // key token will be obtained from bridge
-WLED_GLOBAL byte huePollLightId _INIT(1);                  // ID of hue lamp to sync to. Find the ID in the hue app ("about" section)
-WLED_GLOBAL IPAddress hueIP _INIT_N(((0, 0, 0, 0))); // IP address of the bridge
-WLED_GLOBAL bool hueApplyOnOff _INIT(true);
-WLED_GLOBAL bool hueApplyBri _INIT(true);
-WLED_GLOBAL bool hueApplyColor _INIT(true);
-#endif
 
 WLED_GLOBAL uint16_t serialBaud _INIT(1152); // serial baud rate, multiply by 100
 
@@ -628,15 +656,15 @@ WLED_GLOBAL unsigned long lastReconnectAttempt _INIT(0);
 WLED_GLOBAL bool interfacesInited _INIT(false);
 WLED_GLOBAL bool wasConnected _INIT(false);
 #ifdef WLED_IDF_BUILD
-  WLED_GLOBAL bool wifi_is_connected _INIT(false);
-  WLED_GLOBAL bool eth_is_connected  _INIT(false);
-  WLED_GLOBAL bool eth_link_up       _INIT(false);   // Physical link status (Layer 2)
-  WLED_GLOBAL esp_eth_handle_t   eth_handle _INIT(nullptr);
-  WLED_GLOBAL esp_netif_t*       eth_netif  _INIT(nullptr);
-  WLED_GLOBAL TaskHandle_t       wled_main_task _INIT(nullptr);
-  WLED_GLOBAL int s_retry_num _INIT(0);
-  WLED_GLOBAL uint8_t g_ap_client_count _INIT(0);
-  WLED_GLOBAL portMUX_TYPE g_ap_client_mux _INIT(portMUX_INITIALIZER_UNLOCKED);
+  // WLED_GLOBAL bool wifi_is_connected _INIT(false);
+  // WLED_GLOBAL bool eth_is_connected  _INIT(false);
+  // WLED_GLOBAL bool eth_link_up       _INIT(false);   // Physical link status (Layer 2)
+  // WLED_GLOBAL esp_eth_handle_t   eth_handle _INIT(nullptr);
+  // WLED_GLOBAL esp_netif_t*       eth_netif  _INIT(nullptr);
+  // WLED_GLOBAL TaskHandle_t       wled_main_task _INIT(nullptr);
+  // WLED_GLOBAL int s_retry_num _INIT(0);
+  // WLED_GLOBAL uint8_t g_ap_client_count _INIT(0);
+  // WLED_GLOBAL portMUX_TYPE g_ap_client_mux _INIT(portMUX_INITIALIZER_UNLOCKED);
 #endif
 
 // color
@@ -719,7 +747,7 @@ WLED_GLOBAL byte timerHours[]     _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 WLED_GLOBAL int8_t timerMinutes[] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 WLED_GLOBAL byte timerMacro[]     _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 //weekdays to activate on, bit pattern of arr elem: 0b11111111: sun,sat,fri,thu,wed,tue,mon,validity
-WLED_GLOBAL byte timerWeekday[]   _INIT_N(({ 254, 254, 254, 254, 254, 254, 254, 254, 254, 254 }));
+WLED_GLOBAL byte timerWeekday[]   _INIT_N(({ 255, 255, 255, 255, 255, 255, 255, 255, 255, 255 }));
 //upper 4 bits start, lower 4 bits end month (default 28: start month 1 and end month 12)
 WLED_GLOBAL byte timerMonth[]     _INIT_N(({28,28,28,28,28,28,28,28}));
 WLED_GLOBAL byte timerDay[]       _INIT_N(({1,1,1,1,1,1,1,1}));
@@ -751,10 +779,6 @@ WLED_GLOBAL byte interfaceUpdateCallMode _INIT(CALL_MODE_INIT);
 
 // alexa udp
 WLED_GLOBAL String escapedMac;
-#ifndef WLED_DISABLE_ALEXA
-  WLED_GLOBAL Espalexa espalexa;
-  WLED_GLOBAL EspalexaDevice* espalexaDevice;
-#endif
 
 // dns server
 WLED_GLOBAL DNSServer dnsServer;
@@ -774,6 +798,9 @@ WLED_GLOBAL time_t sunrise _INIT(0);
 WLED_GLOBAL time_t sunset _INIT(0);
 WLED_GLOBAL Toki toki _INIT(Toki());
 
+WLED_GLOBAL uint8_t g_ap_client_count _INIT(0);
+WLED_GLOBAL portMUX_TYPE g_ap_client_mux _INIT(portMUX_INITIALIZER_UNLOCKED);
+
 // Temp buffer
 WLED_GLOBAL char* obuf;
 WLED_GLOBAL uint16_t olen _INIT(0);
@@ -781,9 +808,29 @@ WLED_GLOBAL uint16_t olen _INIT(0);
 // General filesystem
 WLED_GLOBAL size_t fsBytesUsed _INIT(0);
 WLED_GLOBAL size_t fsBytesTotal _INIT(0);
-WLED_GLOBAL volatile unsigned long presetsModifiedTime _INIT(0L);
+WLED_GLOBAL unsigned long presetsModifiedTime _INIT(0L);
 WLED_GLOBAL JsonDocument* fileDoc;
-WLED_GLOBAL volatile bool doCloseFile _INIT(false);
+WLED_GLOBAL bool doCloseFile _INIT(false);
+
+#ifdef ARTNET_SKIP_FRAME
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(true);
+WLED_GLOBAL bool RealtimeSkipFrame _INIT(true);
+#else 
+WLED_GLOBAL bool ArtNetSkipFrame _INIT(false);
+WLED_GLOBAL bool RealtimeSkipFrame _INIT(false);
+#endif
+
+#ifndef ARTNET_PRIORITY
+  #define ARTNET_PRIORITY 20
+#else
+  #if (ARTNET_PRIORITY > (configMAX_PRIORITIES - 2))
+    #undef ARTNET_PRIORITY
+    #define ARTNET_PRIORITY (configMAX_PRIORITIES - 2)
+  #elif (ARTNET_PRIORITY < 1)
+    #undef ARTNET_PRIORITY
+    #define ARTNET_PRIORITY 1
+  #endif
+#endif
 
 // presets
 WLED_GLOBAL byte currentPreset _INIT(0);
@@ -809,8 +856,11 @@ WLED_GLOBAL AsyncWebServer server _INIT_N(((80)));
 #if defined(WLED_ENABLE_WEBSOCKETS) && !defined(WLED_IDF_BUILD)
 WLED_GLOBAL AsyncWebSocket ws _INIT_N((("/ws")));
 #endif
-//WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL); // WLEDMM moved into hue.cpp
+// WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL);
 WLED_GLOBAL AsyncWebHandler *editHandler _INIT(nullptr);
+#if defined(SOC_SDMMC_HOST_SUPPORTED)
+WLED_GLOBAL AsyncWebHandler *sdEditHandler _INIT(nullptr);
+#endif
 
 // udp interface objects
 #ifndef WLED_IDF_BUILD
@@ -820,6 +870,10 @@ WLED_GLOBAL WiFiUDP ntpUdp;
 WLED_GLOBAL ESPAsyncE131 e131 _INIT_N(((handleE131Packet)));
 WLED_GLOBAL ESPAsyncE131 ddp  _INIT_N(((handleE131Packet)));
 WLED_GLOBAL bool e131NewData _INIT(false);
+WLED_GLOBAL bool newArtNetData _INIT(false);
+WLED_GLOBAL bool artnet_listening _INIT(false);
+WLED_GLOBAL bool ddp_listening _INIT(false);
+WLED_GLOBAL bool e131_listening _INIT(false);
 
 // led fx library object
 WLED_GLOBAL BusManager busses _INIT(BusManager());
@@ -843,15 +897,6 @@ WLED_GLOBAL SemaphoreHandle_t jsonBufferLockMutex _INIT(nullptr);
 WLED_GLOBAL SemaphoreHandle_t presetFileMux _INIT(nullptr); // Protects presets.json file writes
 WLED_GLOBAL SemaphoreHandle_t busMutex _INIT(nullptr);      // serialises bus operations (show/init/config)
 #endif
-WLED_GLOBAL volatile bool newArtNetData _INIT(false);   // set by ArtNet receiver task, cleared by main loop
-
-#ifdef ARTNET_SKIP_FRAME
-WLED_GLOBAL bool ArtNetSkipFrame _INIT(true);
-WLED_GLOBAL bool RealtimeSkipFrame _INIT(true);
-#else
-WLED_GLOBAL bool ArtNetSkipFrame _INIT(false);
-WLED_GLOBAL bool RealtimeSkipFrame _INIT(false);
-#endif
 
 #ifndef ARTNET_PRIORITY
   #define ARTNET_PRIORITY 20
@@ -865,9 +910,9 @@ WLED_GLOBAL bool RealtimeSkipFrame _INIT(false);
   #endif
 #endif
 
-WLED_GLOBAL bool artnet_listening _INIT(false);
-WLED_GLOBAL bool ddp_listening _INIT(false);
-WLED_GLOBAL bool e131_listening _INIT(false);
+// WLED_GLOBAL bool artnet_listening _INIT(false);
+// WLED_GLOBAL bool ddp_listening _INIT(false);
+// WLED_GLOBAL bool e131_listening _INIT(false);
 WLED_GLOBAL volatile bool loadedLedmap_lock _INIT(false); // when true, presets cannot override the active ledmap
 WLED_GLOBAL volatile bool bakeMap _INIT(false);         // when true, bake current LED map to file on next update
 WLED_GLOBAL volatile bool busNetworkDummyMode _INIT(false); // when true, skip network transmit (HDMI-only mode)
@@ -905,6 +950,17 @@ WLED_GLOBAL size_t  ledmapMaxSize _INIT(0); //WLEDMM TroyHack
 WLED_GLOBAL uint32_t ledMaps _INIT(0); // bitfield representation of available ledmaps
 #else
 WLED_GLOBAL uint16_t ledMaps _INIT(0); // bitfield representation of available ledmaps
+#endif
+
+#if defined(ENABLE_VL53L8CX)
+#define TOF_INT_PIN 5
+#define LPN_PIN 23
+WLED_GLOBAL VL53L8CX sensor_vl53l8cx_top _INIT_N(((&Wire, LPN_PIN)));
+WLED_GLOBAL uint8_t vl53l8cx_res _INIT(VL53L8CX_RESOLUTION_8X8);
+WLED_GLOBAL uint8_t vl53l8cx_NewDataReady _INIT(0);
+WLED_GLOBAL VL53L8CX_ResultsData vl53l8cx_Results;
+WLED_GLOBAL bool vl53l8cx_data_available _INIT(false);
+WLED_GLOBAL SemaphoreHandle_t vl53l8cxMutex;
 #endif
 
 // Usermod manager
@@ -951,26 +1007,26 @@ WLED_GLOBAL int8_t spi_sclk  _INIT(HW_PIN_CLOCKSPI);
 #ifdef CONFIG_SOC_PPA_SUPPORTED
 #include <driver/ppa.h>
 #include <driver/jpeg_decode.h>
-WLED_GLOBAL bool update_screen_background _INIT(false);     // flag: redraw HDMI background on next frame
-WLED_GLOBAL ppa_client_handle_t  ppa_blend_handle    _INIT(nullptr);
-WLED_GLOBAL ppa_client_handle_t  ppa_fill_handle     _INIT(nullptr);
-WLED_GLOBAL ppa_client_handle_t  ppa_srm_handle      _INIT(nullptr);
-WLED_GLOBAL ppa_client_handle_t  preview_ppa_srm_handle _INIT(nullptr);
-WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle        _INIT(nullptr);
+// WLED_GLOBAL bool update_screen_background _INIT(false);     // flag: redraw HDMI background on next frame
+// WLED_GLOBAL ppa_client_handle_t  ppa_blend_handle    _INIT(nullptr);
+// WLED_GLOBAL ppa_client_handle_t  ppa_fill_handle     _INIT(nullptr);
+// WLED_GLOBAL ppa_client_handle_t  ppa_srm_handle      _INIT(nullptr);
+// WLED_GLOBAL ppa_client_handle_t  preview_ppa_srm_handle _INIT(nullptr);
+// WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle        _INIT(nullptr);
 // Default client configs (oper_type set per client)
 #ifdef WLED_DEFINE_GLOBAL_VARS
-static const ppa_client_config_t ppa_blend_config = { .oper_type = PPA_OPERATION_BLEND };
-static const ppa_client_config_t ppa_fill_config  = { .oper_type = PPA_OPERATION_FILL  };
-static const ppa_client_config_t ppa_srm_config   = { .oper_type = PPA_OPERATION_SRM   };
-static const jpeg_decode_engine_cfg_t decode_eng_cfg = { .intr_priority = 0 };
+// static const ppa_client_config_t ppa_blend_config = { .oper_type = PPA_OPERATION_BLEND };
+// static const ppa_client_config_t ppa_fill_config  = { .oper_type = PPA_OPERATION_FILL  };
+// static const ppa_client_config_t ppa_srm_config   = { .oper_type = PPA_OPERATION_SRM   };
+// static const jpeg_decode_engine_cfg_t decode_eng_cfg = { .intr_priority = 0 };
 // Default decode config (RGB888 output used by most callers)
 static const jpeg_decode_cfg_t decode_cfg_rgb = { .output_format = JPEG_DECODE_OUT_FORMAT_RGB888, .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR };
 #else
-extern const ppa_client_config_t ppa_blend_config;
-extern const ppa_client_config_t ppa_fill_config;
-extern const ppa_client_config_t ppa_srm_config;
-extern const jpeg_decode_engine_cfg_t decode_eng_cfg;
-extern const jpeg_decode_cfg_t decode_cfg_rgb;
+// extern const ppa_client_config_t ppa_blend_config;
+// extern const ppa_client_config_t ppa_fill_config;
+// extern const ppa_client_config_t ppa_srm_config;
+// extern const jpeg_decode_engine_cfg_t decode_eng_cfg;
+// extern const jpeg_decode_cfg_t decode_cfg_rgb;
 #endif
 #endif // CONFIG_SOC_PPA_SUPPORTED
 
@@ -1043,6 +1099,20 @@ WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
 #define USER_FLUSH()       DEBUGOUTFlush()
 // WLEDMM end
 
+#ifdef WLED_DISABLE_LOGGING
+  // First, undefine the existing macros to avoid redefinition warnings
+#undef USER_PRINT
+#undef USER_PRINTLN
+#undef USER_PRINTF
+#undef USER_FLUSH
+
+// Now, redefine them as completely empty
+#define USER_PRINT(x)
+#define USER_PRINTLN(x)
+#define USER_PRINTF(x...)
+#define USER_FLUSH()
+#endif
+
 #ifdef WLED_DEBUG_FS
   #define DEBUGFS_PRINT(x) DEBUGOUT(x)
   #define DEBUGFS_PRINTLN(x) DEBUGOUTLN(x)
@@ -1054,7 +1124,7 @@ WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
 #endif
 
 // debug macro variable definitions
-#if defined(WLED_DEBUG) || defined(WLED_DEBUG_HEAP)
+#ifdef WLED_DEBUG
   WLED_GLOBAL unsigned long debugTime _INIT(0);
   WLED_GLOBAL int lastWifiState _INIT(3);
   WLED_GLOBAL unsigned long wifiStateChangedTime _INIT(0);
@@ -1105,21 +1175,34 @@ public:
     static WLED instance;
     return instance;
   }
-
+  enum WiFiConnectionState {
+    WIFI_STATE_BOOTING,
+    WIFI_STATE_STA_CONNECTING,  // Trying to connect to configured WiFi
+    WIFI_STATE_STA_CONNECTED,   // Successfully connected to WiFi
+    WIFI_STATE_AP_FALLBACK,     // Failed STA, running as AP
+    WIFI_STATE_AP_ALWAYS_ON,    // Running in STA+AP hybrid mode
+    WIFI_STATE_ETHERNET         // Ethernet is connected
+  };
   // boot starts here
   void setup() __attribute__((used));
 
   void loop()  __attribute__((used));
-  void reset();
+  static void reset();
 
   void beginStrip();
   void handleConnection();
-  bool initEthernet(); // result is informational
-  void initAP(bool resetAP = false);
-  void initConnection();
-  void initInterfaces();
-  void handleStatusLED();
+  // static bool initEthernet(); // result is informational
+  static void initAP(bool resetAP = false);
+  static void initConnection();
+  static void initInterfaces();
+  static void handleStatusLED();
   void enableWatchdog();
   void disableWatchdog();
+  WiFiConnectionState wifiState = WIFI_STATE_BOOTING;
+  uint8_t staRetryCount = 0;
+  unsigned long lastStateTransitionTime = 0;
+
+  // This new function will replace initConnection() and initAP()
+  void setWiFiMode(WiFiConnectionState newState);
 };
 #endif        // WLED_H

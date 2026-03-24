@@ -8,7 +8,7 @@
 #include "esp_mac.h"
 
 // lwIP source interface — set by localIP() so UDP sockets can bind to the right netif.
-static struct netif* sender_netif = nullptr;
+// static struct netif* sender_netif = nullptr;
 
 IPAddress NetworkClass::localIP() {
   esp_netif_ip_info_t ip_info;
