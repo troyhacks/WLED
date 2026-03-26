@@ -5474,20 +5474,20 @@ uint16_t mode_2DColoredBursts() {              // By: ldirko   https://editor.so
   SEGENV.aux0++;  // hue
   SEGMENT.fadeToBlackBy(40);
   for (size_t i = 0; i < numLines; i++) {
-    byte x1 = beatsin8_t(2 + SEGMENT.speed/16, 0, (cols - 1));
-    byte x2 = beatsin8_t(1 + SEGMENT.speed/16, 0, (rows - 1));
-    byte y1 = beatsin8_t(5 + SEGMENT.speed/16, 0, (cols - 1), 0, i * 24);
-    byte y2 = beatsin8_t(3 + SEGMENT.speed/16, 0, (rows - 1), 0, i * 48 + 64);
+    uint16_t x1 = beatsin16_t(2 + SEGMENT.speed/16, 0, (cols - 1));
+    uint16_t x2 = beatsin16_t(1 + SEGMENT.speed / 16, 0, (rows - 1));
+    uint16_t y1 = beatsin16_t(5 + SEGMENT.speed / 16, 0, (cols - 1), 0, i * 24);
+    uint16_t y2 = beatsin16_t(3 + SEGMENT.speed / 16, 0, (rows - 1), 0, i * 48 + 64);
     CRGB color = ColorFromPalette(SEGPALETTE, i * 255 / numLines + (SEGENV.aux0&0xFF), 255, LINEARBLEND);
 
-    byte xsteps = abs8(x1 - y1) + 1;
-    byte ysteps = abs8(x2 - y2) + 1;
+    uint16_t xsteps = abs(x1 - y1) + 1;
+    uint16_t ysteps = abs(x2 - y2) + 1;
     byte steps = xsteps >= ysteps ? xsteps : ysteps;
     //Draw gradient line
     for (size_t j = 1; j <= steps; j++) {
       uint8_t rate = j * 255 / steps;
-      byte dx = lerp8by8(x1, y1, rate);
-      byte dy = lerp8by8(x2, y2, rate);
+      uint16_t dx = lerp16by16(x1, y1, rate);
+      uint16_t dy = lerp16by16(x2, y2, rate);
       //SEGMENT.setPixelColorXY(dx, dy, grad ? color.nscale8_video(255-rate) : color); // use addPixelColorXY for different look
       SEGMENT.addPixelColorXY(dx, dy, color); // use setPixelColorXY for different look
       if (grad) SEGMENT.fadePixelColorXY(dx, dy, gamma8(rate));
