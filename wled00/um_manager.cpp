@@ -27,7 +27,8 @@ bool UsermodManager::getUMData(um_data_t **data, uint8_t mod_id) {
 void UsermodManager::addToJsonState(JsonObject& obj)    { for (unsigned i = 0; i < numMods; i++) ums[i]->addToJsonState(obj); }
 void UsermodManager::addToJsonInfo(JsonObject& obj)     { for (unsigned i = 0; i < numMods; i++) ums[i]->addToJsonInfo(obj); }
 void UsermodManager::readFromJsonState(JsonObject& obj) { for (unsigned i = 0; i < numMods; i++) ums[i]->readFromJsonState(obj); }
-void UsermodManager::addToConfig(JsonObject& obj)       { for (unsigned i = 0; i < numMods; i++) ums[i]->addToConfig(obj); }
+void UsermodManager::addToConfig(JsonObject& obj)         { for (unsigned i = 0; i < numMods; i++) ums[i]->addToConfig(obj); }
+void UsermodManager::addToSettingsSchema(JsonObject& obj) { for (unsigned i = 0; i < numMods; i++) ums[i]->addToSettingsSchema(obj); }
 bool UsermodManager::readFromConfig(JsonObject& obj)    {
   bool allComplete = true;
   for (unsigned i = 0; i < numMods; i++) {
