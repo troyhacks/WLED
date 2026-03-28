@@ -485,6 +485,40 @@ umCfg.initPage('${displayName}', { saveButton: '#save-btn' });
   return outPath;
 }
 
+// Check if a USERMOD_ flag is defined in build config files
+function isUsermodEnabled(flagName) {
+  // Check my_config.h - must be an uncommented #define
+  const myConfigPaths = ['wled00/my_config.h', '../wled00/my_config.h'];
+  for (const p of myConfigPaths) {
+    try {
+      if (fs.existsSync(p)) {
+        const content = fs.readFileSync(p, 'utf8');
+        const lines = content.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          // Skip commented lines
+          if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
+          if (line.includes(`#define ${flagName}`) || line.includes(`#undef ${flagName}`)) {
+            return true;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+  // Check platformio.ini for build_flags with -DUSERMOD_<NAME>
+  try {
+    if (fs.existsSync('platformio.ini')) {
+      const content = fs.readFileSync('platformio.ini', 'utf8');
+      // Look for -D USERMOD_EXAMPLE (with space) in build_flags
+      const flagRe = new RegExp(`-D\\s*${flagName}\\b`);
+      if (flagRe.test(content)) {
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
 // Generate usermod settings registry header
 function generateUsermodSettingsRegistry() {
   const pages = [];
@@ -509,13 +543,19 @@ function generateUsermodSettingsRegistry() {
           if (configResult.fields.length > 0) break;
         }
 
-        // If we have config fields but no settings page, generate skeleton
-        if (configResult.fields.length > 0 && existingFiles.length === 0) {
+        // Derive USERMOD_ flag name from directory: usermod_v2_foo -> USERMOD_FOO
+        const flagName = 'USERMOD_' + dir.replace(/^usermod_v2_/i, '').toUpperCase();
+        const isEnabled = isUsermodEnabled(flagName);
+
+        // If we have config fields but no settings page, generate skeleton (only if enabled)
+        if (isEnabled && configResult.fields.length > 0 && existingFiles.length === 0) {
           const baseName = dir.replace(/^usermod_v2_/, '').toLowerCase();
           generateSkeletonSettingsPage(usermodDir, baseName, configResult.fields, configResult.defaults);
         }
 
-        // Process existing settings pages
+        // Process existing settings pages (only if usermod is enabled in build)
+        if (!isEnabled) continue;
+
         for (const file of existingFiles) {
           const baseName = file.replace(/^settings_/, '').replace(/\.htm$/, '');
           const pageName = 'PAGE_settings_' + baseName;

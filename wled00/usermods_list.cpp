@@ -214,6 +214,10 @@
 #include "../usermods/usermod_v2_artnetmap/usermod_v2_artnetmap.h"
 #endif
 
+#ifdef USERMOD_EXAMPLE
+#include "../usermods/usermod_v2_example/usermod_v2_example.h"
+#endif
+
 void registerUsermods()
 {
   /*
@@ -424,5 +428,8 @@ void registerUsermods()
   usermods.add(new AutoPlaylistUsermod(false));
 #endif
 
+#ifdef USERMOD_EXAMPLE
+  usermods.add(new ExampleUsermod(false));
+#endif
 
 }
