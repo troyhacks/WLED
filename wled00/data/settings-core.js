@@ -289,13 +289,14 @@ const umCfg = {
 
     // Auto-discover form and its fields
     const form = document.querySelector('form');
-    if (!fieldMapOrOptions || typeof fieldMapOrOptions !== 'object' || Object.keys(fieldMapOrOptions).length === 0) {
-      fieldMapOrOptions = {};
+    let fieldMap = fieldMapOrOptions;
+    if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+      fieldMap = {};
       if (form) {
         const els = form.querySelectorAll('input, select, textarea');
         els.forEach(el => {
           const name = el.name || el.id;
-          if (name) fieldMapOrOptions[name] = `[name="${name}"]`;
+          if (name) fieldMap[name] = `[name="${name}"]`;
         });
       }
     }

@@ -225,6 +225,15 @@ void initServer()
     serveSettings(request);
   });
 
+  // Static JS served before the wildcard to avoid /settings* matching /settings-core.js
+  server.on("/settings-core.js", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (handleIfNoneMatchCacheHeader(request)) return;
+    AsyncWebServerResponse* response = request->beginResponse_P(200, "application/javascript", settingscoreJs, settingscoreJs_length);
+    response->addHeader(FPSTR(s_content_enc), "gzip");
+    setStaticContentCacheHeaders(response);
+    request->send(response);
+  });
+
   // Usermod settings pages (auto-discovered) - catch /settings_xxx URLs
   // Use wildcard /settings* to match /settings_xxx
   server.on("/settings*", HTTP_GET, [](AsyncWebServerRequest *request){
