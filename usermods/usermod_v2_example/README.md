@@ -1,6 +1,6 @@
 # Example Usermod - Settings Page Demo
 
-This is a minimal example demonstrating the auto-discovery settings page system for WLED usermods.
+A minimal example demonstrating the auto-discovery settings page system for WLED usermods.
 
 ## Files
 
@@ -20,6 +20,8 @@ The build system (`tools/cdata.js`) automatically:
 - Scans `usermods/*/settings*.htm` at build time
 - Generates `wled00/html_usermod_settings_registry.h`
 - Serves pages at `/settings_<name>` URLs
+
+If a usermod has `CONFIG_FIELDS` declared but no settings page, a skeleton is auto-generated at build time.
 
 ### 2. Config Fields with Defaults Declaration
 
@@ -50,7 +52,6 @@ private:
   char myColor[32] = "#ff0000";
   uint16_t mySpeed = 100;
 
-  // String constants matching CONFIG_FIELDS
   static const char _name[];
   static const char _enabled[];
   static const char _debugMode[];
@@ -94,32 +95,27 @@ inline const char ExampleUsermod::_mySpeed[] PROGMEM = "mySpeed";
 <html>
 <head><title>Example Usermod Settings</title></head>
 <body>
-  <div id="error-msg"></div>
-  <div id="saved-msg"></div>
-
-  <input type='checkbox' name='enabled'>
-  <input type='checkbox' name='debugMode'>
-  <input type='color' name='myColor' value='#ff0000'>
-  <input type='number' name='mySpeed' value='100'>
-
-  <button id='save-btn'>Save</button>
-
+  <form>
+    <input type='checkbox' name='enabled'>
+    <input type='checkbox' name='debugMode'>
+    <input type='color' name='myColor' value='#ff0000'>
+    <input type='number' name='mySpeed' value='100'>
+    <button type="submit">Save</button>
+  </form>
   <script src="/settings-core.js"></script>
-  <script>
-  umCfg.initPage('Example', { saveButton: '#save-btn' });
-  </script>
+  <script>umCfg.initPage('Example');</script>
 </body>
 </html>
 ```
 
-**Note:** Fields are auto-discovered from form elements — no need to list them explicitly!
-
-The `initPage()` helper:
-1. Fetches defaults from C++ (via `/json/usermod-fields`)
-2. Loads config from `cfg.json`
-3. Merges with defaults
-4. Populates all form elements
-5. Wires up the save button
+**That's it.** `umCfg.initPage()` handles everything:
+- Auto-discovers all form fields by `name` attribute
+- Auto-finds the submit button
+- Auto-inserts status elements (error/success messages) if missing
+- Fetches defaults from C++ via `/json/usermod-fields`
+- Loads config from `cfg.json`
+- Merges with defaults and populates form
+- Wires up the save button
 
 ### 5. Registering the Usermod
 
@@ -142,9 +138,9 @@ void registerUsermods() {
 
 3. **No duplication**: Field definitions live in `CONFIG_FIELDS` (C++), not duplicated in HTML/JS.
 
-4. **Defaults from C++**: The `CONFIG_FIELDS` comment includes default values. These are parsed at build time and served via `/json/usermod-fields`.
+4. **Defaults from C++**: The `CONFIG_FIELDS` comment includes default values. Parsed at build time and served via `/json/usermod-fields`.
 
-5. **Validation**: If the loaded config is missing expected fields, a warning is shown.
+5. **Auto-discovery**: Form fields, submit button, and status elements are all auto-discovered — no explicit configuration needed.
 
 ## umCfg Helper API
 
@@ -157,7 +153,8 @@ void registerUsermods() {
 | `await umCfg.getDefaults(umName)` | Get default values from C++ |
 | `await umCfg.validate(umName, config)` | Returns missing field names |
 | `umCfg.withDefaults(config, defaults)` | Apply defaults to loaded config |
-| `umCfg.initPage(umName, fields, options)` | Initialize page with minimal code |
+| `umCfg.initPage(umName)` | Initialize page — fully auto-discovered |
+| `umCfg.initPage(umName, options)` | With options (saveButton, etc.) |
 | `umCfg.showError(msg)` | Show error message |
 | `umCfg.showSuccess(msg)` | Show success message (auto-hides) |
 | `umCfg.hideMessages()` | Hide error/success messages |
