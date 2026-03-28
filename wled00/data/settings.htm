@@ -1,12 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+	<head>
 	<meta charset="UTF-8">
 	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
 	<title>WLED Settings</title>
 	<script>
 		var d=document;
 		var loc = false, locip;
+		var umPages = []; // available dedicated usermod settings pages
+
 		function gId(n){return d.getElementById(n);}
 		// https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
 		function loadJS(FILE_URL, async = true) {
@@ -15,7 +17,7 @@
 			scE.setAttribute("type", "text/javascript");
 			scE.setAttribute("async", async);
 			d.body.appendChild(scE);
-			// success event 
+			// success event
 			scE.addEventListener("load", () => {
 				//console.log("File loaded");
 				GetV();
@@ -27,8 +29,30 @@
 			});
 		}
 		function isO(i) { return (i && typeof i === 'object' && !Array.isArray(i)); }
+
+		// Fetch list of available dedicated usermod settings pages
+		async function loadUmPages() {
+			try {
+				const res = await fetch('/json/usermod-pages');
+				if (res.ok) {
+					umPages = await res.json();
+				}
+			} catch (e) {
+				console.log('Could not load usermod pages:', e);
+			}
+		}
+
+		// Get display label for a usermod page name
+		function getPageLabel(name) {
+			// Convert snake_case or camelCase to Title Case
+			return name.replace(/_/g, " ").replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, l => l.toUpperCase());
+		}
+
 		// load settings and insert values into DOM
-		function ldS() {
+		async function ldS() {
+			// First load available usermod pages
+			await loadUmPages();
+
 			var url = (loc?`http://${locip}`:'') + '/cfg.json';
 			fetch(url, {
 				method: 'get'
@@ -40,8 +64,18 @@
 			.then(json => {
         umCfg = json.um;
         urows = "";
+
+        // First add dedicated usermod settings pages (from registry)
+        for (const page of umPages) {
+          let label = getPageLabel(page);
+          urows += `<button type="submit" onclick="window.location='./settings_${page}'">${label} (UM ◆)</button>`;
+        }
+
+        // Then add usermods from cfg.json that don't have dedicated pages
         if (isO(umCfg)) {
           for (const [k, o] of Object.entries(umCfg)) {
+            // Skip if this usermod has a dedicated page
+            if (umPages.includes(k)) continue;
             let label = k.replace(/_/g, " ");
             urows += `<button type="submit" onclick="window.location=\'./settings/um?um=${k}\'">${label} (UM ☾)</button>`;
           }

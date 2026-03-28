@@ -267,6 +267,10 @@ bool isAsterisksOnly(const char* str, byte maxLen);
 void handleSettingsSet(AsyncWebServerRequest *request, byte subPage);
 bool handleSet(AsyncWebServerRequest *request, const String& req, bool apply=true);
 
+//cfg_api.cpp
+void handleCfgGet(AsyncWebServerRequest *request);
+void handleCfgSet(AsyncWebServerRequest *request, JsonObject root);
+
 //udp.cpp
 void notify(byte callMode, bool followUp=false);
 uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint32_t length, uint8_t* buffer, uint8_t bri = 255, bool isRGBW = false, uint32_t outouts = 1, uint32_t leds_per_output = 1, uint8_t fps_limit = 1, uint8_t color_order = 0, bool e131_multicast = false);
@@ -341,6 +345,7 @@ class Usermod {
     virtual bool getUMData(um_data_t **data) { if (data) *data = nullptr; return false; }; // usermod data exchange [see examples for audio effects]
     virtual void connected() {}                                              // called when WiFi is (re)connected
     virtual void appendConfigData() {}                                       // helper function called from usermod settings page to add metadata for entry fields
+    virtual void addToSettingsSchema(JsonObject& schema) {}                  // declare settings field metadata for the new JSON settings UI (optional)
     virtual void addToJsonState(JsonObject& obj) {}                          // add JSON objects for WLED state
     virtual void addToJsonInfo(JsonObject& obj) {}                           // add JSON objects for UI Info page
     virtual void readFromJsonState(JsonObject& obj) {}                       // process JSON messages received from web server
@@ -378,6 +383,7 @@ class UsermodManager {
     void readFromJsonState(JsonObject& obj);
     void addToConfig(JsonObject& obj);
     bool readFromConfig(JsonObject& obj);
+    void addToSettingsSchema(JsonObject& schema);
     void onMqttConnect(bool sessionPresent);
     bool onMqttMessage(char* topic, char* payload);
     void onUpdateBegin(bool);

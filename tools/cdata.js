@@ -327,10 +327,344 @@ writeChunks(
       name: "PAGE_settings_pin",
       method: "gzip",
       filter: "html-minify"
-    }
+    },
+    // Usermod settings pages - auto-discovered from usermod directories
+    ...(() => {
+      const specs = [];
+      try {
+        if (fs.existsSync('usermods')) {
+          const dirs = fs.readdirSync('usermods').filter(d =>
+            fs.statSync(`usermods/${d}`).isDirectory()
+          );
+          for (const dir of dirs) {
+            const usermodDir = `usermods/${dir}`;
+            const files = fs.readdirSync(usermodDir).filter(f =>
+              f.startsWith('settings') && f.endsWith('.htm')
+            );
+            for (const file of files) {
+              // e.g., "settings_audioreactive.htm" -> "audioreactive"
+              const baseName = file.replace(/^settings_/, '').replace(/\.htm$/, '');
+              const pageName = 'PAGE_settings_' + baseName;
+              specs.push({
+                file: `../../usermods/${dir}/${file}`,
+                name: pageName,
+                method: 'gzip',
+                filter: 'html-minify',
+                usermod: dir,  // extra metadata for registry
+                urlSuffix: baseName
+              });
+              console.info(`Discovered usermod settings page: ${dir}/${file} -> ${pageName}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error scanning usermod settings pages:', e.message);
+      }
+      return specs;
+    })()
   ],
   "wled00/html_settings.h"
 );
+
+// Parse CONFIG_FIELDS from usermod header
+// Matches both // CONFIG_FIELDS: and * CONFIG_FIELDS: (inside block comment)
+// Format: CONFIG_FIELDS: field1=default1, field2=default2, ...
+// Default values can be: false, true, 0, 123, "string", ['array']
+function parseConfigFields(headerPath) {
+  try {
+    const content = fs.readFileSync(headerPath, 'utf8');
+    const match = content.match(/CONFIG_FIELDS:\s*([^\n]+)/);
+    if (!match) return { fields: [], defaults: {} };
+
+    const fieldStr = match[1];
+    const fields = [];
+    const defaults = {};
+
+    // Match field=value patterns
+    // Value can be: false, true, number, "string", ['array']
+    const fieldRegex = /([a-zA-Z_][a-zA-Z0-9_]*)(?:=([^,]+))?/g;
+    let m;
+    while ((m = fieldRegex.exec(fieldStr)) !== null) {
+      const fieldName = m[1];
+      const rawValue = m[2] !== undefined ? m[2].trim() : null;
+
+      fields.push(fieldName);
+
+      // Parse default value
+      if (rawValue !== null) {
+        if (rawValue === 'false') {
+          defaults[fieldName] = false;
+        } else if (rawValue === 'true') {
+          defaults[fieldName] = true;
+        } else if (rawValue === '[]') {
+          defaults[fieldName] = [];
+        } else if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
+          defaults[fieldName] = rawValue.slice(1, -1);
+        } else if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
+          // Try to parse as JSON array
+          try { defaults[fieldName] = JSON.parse(rawValue); } catch(e) { defaults[fieldName] = []; }
+        } else {
+          const num = parseFloat(rawValue);
+          defaults[fieldName] = isNaN(num) ? rawValue : num;
+        }
+      }
+    }
+
+    return { fields, defaults };
+  } catch (e) {
+    // Ignore errors
+  }
+  return { fields: [], defaults: {} };
+}
+
+// Generate skeleton settings page for a usermod
+function generateSkeletonSettingsPage(umDir, baseName, configFields, defaults) {
+  const displayName = baseName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+  // Build form fields from config fields
+  const fieldHtml = [];
+  for (const fieldName of configFields) {
+    const defaultVal = defaults[fieldName];
+    const camelName = fieldName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+
+    // Determine input type from default value
+    let inputHtml = '';
+    if (typeof defaultVal === 'boolean') {
+      inputHtml = `<label><input type="checkbox" name="${fieldName}"> ${camelName}</label><br><br>\n`;
+    } else if (typeof defaultVal === 'number') {
+      inputHtml = `<label>${camelName}: <input type="number" name="${fieldName}" value="${defaultVal}"></label><br><br>\n`;
+    } else if (typeof defaultVal === 'string') {
+      if (defaultVal.startsWith('#') && defaultVal.length === 7) {
+        inputHtml = `<label>${camelName}: <input type="color" name="${fieldName}" value="${defaultVal}"></label><br><br>\n`;
+      } else {
+        inputHtml = `<label>${camelName}: <input type="text" name="${fieldName}" value="${defaultVal}"></label><br><br>\n`;
+      }
+    } else {
+      // Skip arrays and complex types - can't represent in simple input
+      continue;
+    }
+    fieldHtml.push(inputHtml);
+  }
+
+  const skeleton = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${displayName} Settings</title>
+<style>@import url("style.css");</style>
+</head>
+<body>
+<!-- Auto-generated skeleton settings page - customize as needed -->
+<form id="${baseName}-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://github.com/troyhacks/WLED')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+  <div id="error-msg" style="color:red;margin:8px 0;display:none"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa">Loading settings...</div>
+  <div id="main-content" style="display:none">
+    <h2>${displayName}</h2>
+    <p><em>Auto-generated skeleton - customize as needed</em></p>
+${fieldHtml.join('')}  </div>
+</form>
+
+<script src="/settings-core.js"></script>
+<script>
+umCfg.initPage('${displayName}', { saveButton: '#save-btn' });
+</script>
+</body>
+</html>`;
+
+  const outPath = `${umDir}/settings_${baseName}.htm`;
+  fs.writeFileSync(outPath, skeleton);
+  console.info(`Generated skeleton settings page: ${outPath}`);
+  return outPath;
+}
+
+// Generate usermod settings registry header
+function generateUsermodSettingsRegistry() {
+  const pages = [];
+  try {
+    if (fs.existsSync('usermods')) {
+      const dirs = fs.readdirSync('usermods').filter(d =>
+        fs.statSync(`usermods/${d}`).isDirectory()
+      );
+      for (const dir of dirs) {
+        const usermodDir = `usermods/${dir}`;
+
+        // Find any existing settings pages
+        const existingFiles = fs.readdirSync(usermodDir).filter(f =>
+          f.startsWith('settings') && f.endsWith('.htm')
+        );
+
+        // Find usermod header with CONFIG_FIELDS
+        const headerFiles = fs.readdirSync(usermodDir).filter(f => f.endsWith('.h'));
+        let configResult = { fields: [], defaults: {} };
+        for (const hf of headerFiles) {
+          configResult = parseConfigFields(`${usermodDir}/${hf}`);
+          if (configResult.fields.length > 0) break;
+        }
+
+        // If we have config fields but no settings page, generate skeleton
+        if (configResult.fields.length > 0 && existingFiles.length === 0) {
+          const baseName = dir.replace(/^usermod_v2_/, '').toLowerCase();
+          generateSkeletonSettingsPage(usermodDir, baseName, configResult.fields, configResult.defaults);
+        }
+
+        // Process existing settings pages
+        for (const file of existingFiles) {
+          const baseName = file.replace(/^settings_/, '').replace(/\.htm$/, '');
+          const pageName = 'PAGE_settings_' + baseName;
+
+          pages.push({
+            urlSuffix: baseName,
+            pageName: pageName,
+            usermod: dir,
+            configFields: configResult.fields,
+            configDefaults: configResult.defaults
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error generating usermod settings registry:', e.message);
+  }
+
+  // Generate C header
+  let header = `/*
+ * Usermod Settings Pages Registry
+ * Auto-generated, do not edit manually.
+ */
+
+#ifndef WLED_USERMOD_SETTINGS_REGISTRY_H
+#define WLED_USERMOD_SETTINGS_REGISTRY_H
+
+#include <Arduino.h>
+#include <ESPAsyncWebServer.h>
+
+struct UsermodPageEntry {
+  const char* urlSuffix;
+  const char* pageName;
+  const uint8_t* pageData;
+  uint32_t pageLength;
+  const char** configFields;
+  uint8_t configFieldCount;
+  const char* configDefaultsJson;
+};
+
+`;
+
+  if (pages.length > 0) {
+    // Generate extern declarations
+    for (const p of pages) {
+      header += `extern const uint32_t ${p.pageName}_length;\nextern const uint8_t ${p.pageName}[] PROGMEM;\n`;
+    }
+
+    // Generate config fields arrays
+    for (const p of pages) {
+      if (p.configFields.length > 0) {
+        header += `static const char* ${p.pageName}_fields[] PROGMEM = {`;
+        header += p.configFields.map(f => `"${f}"`).join(', ');
+        header += `};\n`;
+        // Generate defaults as JSON string
+        const defaultsJson = JSON.stringify(p.configDefaults);
+        header += `static const char ${p.pageName}_defaults[] PROGMEM = "${defaultsJson.replace(/"/g, '\\"')}";\n`;
+      }
+    }
+
+    header += `
+static const UsermodPageEntry usermodPages[] = {
+`;
+    for (const p of pages) {
+      const fieldsPtr = p.configFields.length > 0 ? `${p.pageName}_fields` : 'nullptr';
+      const fieldsCount = p.configFields.length;
+      const defaultsPtr = p.configDefaults && Object.keys(p.configDefaults).length > 0 ? `${p.pageName}_defaults` : 'nullptr';
+      header += `  {"${p.urlSuffix}", "${p.pageName}", ${p.pageName}, ${p.pageName}_length, ${fieldsPtr}, ${fieldsCount}, ${defaultsPtr}},
+`;
+    }
+    header += `};
+
+static const uint8_t usermodPageCount = ${pages.length};
+
+`;
+
+    // Generate lookup function and JSON helper
+    header += "\n// Returns true if the request was handled\n";
+    header += "static bool serveUsermodSettingsPage(AsyncWebServerRequest *request, const char *urlSuffix) {\n";
+    header += "  for (uint8_t i = 0; i < usermodPageCount; i++) {\n";
+    header += "    if (strcmp(usermodPages[i].urlSuffix, urlSuffix) == 0) {\n";
+    header += "      AsyncWebServerResponse *response = request->beginResponse_P(200, \"text/html\",\n";
+    header += "        usermodPages[i].pageData, usermodPages[i].pageLength);\n";
+    header += "      response->addHeader(\"Content-Encoding\", \"gzip\");\n";
+    header += "      request->send(response);\n";
+    header += "      return true;\n";
+    header += "    }\n";
+    header += "  }\n";
+    header += "  return false;\n";
+    header += "}\n\n";
+    header += "// Returns JSON array of available usermod settings page suffixes\n";
+    header += "static void getUsermodSettingsPagesJson(char* buffer, size_t bufferSize) {\n";
+    header += "  strcpy(buffer, \"[\");\n";
+    header += "  for (uint8_t i = 0; i < usermodPageCount; i++) {\n";
+    header += "    if (i > 0) strcat(buffer, \",\");\n";
+    header += "    strcat(buffer, \"\\\"\");\n";
+    header += "    strcat(buffer, usermodPages[i].urlSuffix);\n";
+    header += "    strcat(buffer, \"\\\"\");\n";
+    header += "  }\n";
+    header += "  strcat(buffer, \"]\");\n";
+    header += "}\n\n";
+    header += '// Returns JSON object with expected config fields and defaults for a usermod\n';
+    header += '// Returns {"fields": [...], "defaults": {...}} or empty object if not found\n';
+    header += 'static void getUsermodExpectedFieldsJson(const char* urlSuffix, char* buffer, size_t bufferSize) {\n';
+    header += "  buffer[0] = '\\0';\n";
+    header += '  for (uint8_t i = 0; i < usermodPageCount; i++) {\n';
+    header += '    if (strcmp(usermodPages[i].urlSuffix, urlSuffix) == 0) {\n';
+    header += '      if (usermodPages[i].configFieldCount == 0 || usermodPages[i].configFields == nullptr) {\n';
+    header += '        strcpy(buffer, "{\\"fields\\":[],\\"defaults\\":{}}");\n';
+    header += '      } else {\n';
+    header += '        strcpy(buffer, "{\\"fields\\":[");\n';
+    header += '        for (uint8_t j = 0; j < usermodPages[i].configFieldCount; j++) {\n';
+    header += '          if (j > 0) strcat(buffer, ",");\n';
+    header += '          strcat(buffer, "\\"");\n';
+    header += '          strcat(buffer, usermodPages[i].configFields[j]);\n';
+    header += '          strcat(buffer, "\\"");\n';
+    header += '        }\n';
+    header += '        strcat(buffer, "]");\n';
+    header += '        strcat(buffer, ",\\"defaults\\":");\n';
+    header += '        if (usermodPages[i].configDefaultsJson != nullptr) {\n';
+    header += '          strcat(buffer, usermodPages[i].configDefaultsJson);\n';
+    header += '        } else {\n';
+    header += '          strcat(buffer, "{}");\n';
+    header += '        }\n';
+    header += '        strcat(buffer, "}");\n';
+    header += '      }\n';
+    header += '      return;\n';
+    header += '    }\n';
+    header += '  }\n';
+    header += '  strcpy(buffer, "{}");\n';
+    header += '}\n\n';
+    header += "#endif // WLED_USERMOD_SETTINGS_REGISTRY_H\n";
+  } else {
+    header += `
+static const uint8_t usermodPageCount = 0;
+static inline bool serveUsermodSettingsPage(AsyncWebServerRequest*, const char*) { return false; }
+static inline void getUsermodSettingsPagesJson(char* buffer, size_t bufferSize) { strcpy(buffer, "[]"); }
+static inline void getUsermodExpectedFieldsJson(const char*, char* buffer, size_t bufferSize) { strcpy(buffer, "{}"); }
+
+#endif // WLED_USERMOD_SETTINGS_REGISTRY_H
+`;
+  }
+
+  fs.writeFileSync('wled00/html_usermod_settings_registry.h', header);
+  console.info(`Generated usermod settings registry with ${pages.length} pages`);
+}
+
+// Generate the registry after the main writeChunks
+generateUsermodSettingsRegistry();
 
 writeChunks(
   "wled00/data",
@@ -454,6 +788,16 @@ const char PAGE_dmxmap[] PROGMEM = R"=====()=====";
     {
       file: "worker-json.js",
       name: "workerjsonJs",
+      method: "gzip"
+    },
+    {
+      file: "alpine.min.js",
+      name: "alpineJs",
+      method: "gzip"
+    },
+    {
+      file: "settings-core.js",
+      name: "settingscoreJs",
       method: "gzip"
     }
   ],

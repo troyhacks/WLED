@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AudioReactive Settings</title>
+  <style>@import url("style.css");</style>
+</head>
+<body>
+<form id="ar-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://mm.kno.wled.ge/soundreactive/Sound-Settings')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+
+  <div id="error-msg" style="color:red;margin:8px 0;display:none"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa">Loading settings...</div>
+
+  <div id="main-content" style="display:none">
+    <h2>AudioReactive Settings</h2>
+
+    <!-- Enabled -->
+    <label>Enabled: <input type="checkbox" name="enabled"></label><br><br>
+
+    <h3>Digital Mic</h3>
+    <!-- Microphone Type -->
+    <label>Microphone Type:</label><br>
+    <select name="digitalmic_type" style="width:250px"></select><br><br>
+
+    <!-- Digital Mic Pins -->
+    <div id="digitalmic-pins">
+      <p><u>Digital Mic Pins:</u></p>
+      <div id="pin-list"></div>
+    </div>
+
+    <h3>Config</h3>
+    <!-- AGC -->
+    <label>Automatic Gain Control:</label><br>
+    <select name="config_AGC" style="width:250px"></select><br><br>
+
+    <h3>Experiments</h3>
+    <!-- micLev -->
+    <label>Microphone Level:</label><br>
+    <select name="experiments_micLev" style="width:250px"></select><br><br>
+
+    <!-- Mic_Quality -->
+    <label>Microphone Quality:</label><br>
+    <select name="experiments_Mic_Quality" style="width:250px"></select><br><br>
+
+    <!-- freqDist -->
+    <label>Frequency Distribution:</label><br>
+    <select name="experiments_freqDist" style="width:250px"></select><br><br>
+
+    <!-- FFT_Window -->
+    <label>FFT Window:</label><br>
+    <select name="experiments_FFT_Window" style="width:250px"></select><br><br>
+
+    <h3>Dynamics</h3>
+    <!-- Limiter -->
+    <label>Limiter:</label><br>
+    <select name="dynamics_limiter" style="width:250px"></select><br><br>
+
+    <h3>Frequency</h3>
+    <!-- Scale -->
+    <label>Scale:</label><br>
+    <select name="frequency_scale" style="width:250px"></select><br><br>
+
+    <!-- Profile -->
+    <label>Profile:</label><br>
+    <select name="frequency_profile" style="width:250px"></select><br><br>
+
+    <h3>Sync</h3>
+    <!-- Port -->
+    <label>Port: <input type="number" name="sync_port" min="1024" max="65535"></label><br><br>
+    <!-- Mode -->
+    <label>Sync Mode:</label><br>
+    <select name="sync_mode" style="width:250px"></select><br><br>
+    <!-- Check Sequence -->
+    <label>Check Sequence: <input type="checkbox" name="sync_check_sequence"></label><br><br>
+
+    <!-- Biquad Filter Calculator -->
+    <hr>
+    <h3>Biquad Filter Calculator</h3>
+    <div style="background:#222;padding:15px;border-radius:8px;max-width:600px">
+      <div class="control-group" style="margin-bottom:10px">
+        <label for="filter-type" style="display:inline-block;width:130px">Filter Type:</label>
+        <select id="filter-type" style="width:150px">
+          <option value="lowpass">Lowpass</option>
+          <option value="highpass">Highpass</option>
+          <option value="bandpass">Bandpass</option>
+          <option value="notch">Notch</option>
+          <option value="peak">Peak</option>
+          <option value="lowshelf">Lowshelf</option>
+          <option value="highshelf">Highshelf</option>
+        </select>
+      </div>
+      <div class="control-group" style="margin-bottom:10px">
+        <label for="bq-sample-rate" style="display:inline-block;width:130px">Sample Rate (Hz):</label>
+        <input type="text" id="bq-sample-rate" value="44100" style="width:100px">
+      </div>
+      <div class="control-group" style="margin-bottom:10px">
+        <label for="bq-fc" style="display:inline-block;width:130px">Fc (Hz):</label>
+        <input type="text" id="bq-fc" value="1000" style="width:100px">
+      </div>
+      <div class="control-group" style="margin-bottom:10px">
+        <label for="bq-q" style="display:inline-block;width:130px">Q:</label>
+        <input type="text" id="bq-q" value="0.707" style="width:100px">
+      </div>
+      <div class="control-group" style="margin-bottom:10px">
+        <label for="bq-gain" style="display:inline-block;width:130px">Gain (dB):</label>
+        <input type="text" id="bq-gain" value="0" style="width:100px">
+      </div>
+      <div id="coeffs-display" style="background:#111;padding:10px;border-radius:4px;margin-top:10px">
+        <pre id="coeffs-output" style="color:#0f0;font-size:12px"></pre>
+      </div>
+      <canvas id="bq-plot" width="512" height="150" style="background:#111;border-radius:4px;margin-top:10px;width:100%"></canvas>
+    </div>
+  </div>
+</form>
+
+<script>
+// State
+const state = {
+  loading: true,
+  saving: false,
+  saved: false,
+  error: null,
+  cfg: null,
+  gpio: null,
+};
+
+// Options data
+const OPTIONS = {
+  digitalmic_type: [
+    { value: 254, label: 'None - network receive only' },
+    { value: 0, label: 'Generic Analog' },
+    { value: 1, label: 'Generic I2S' },
+    { value: 2, label: 'ES7243' },
+    { value: 3, label: 'SPH0654' },
+    { value: 4, label: 'Generic I2S with Mclk' },
+    { value: 5, label: 'Generic I2S PDM' },
+    { value: 51, label: 'Legacy I2S PDM' },
+    { value: 6, label: 'ES8388' },
+    { value: 7, label: 'WM8978' },
+    { value: 8, label: 'AC101' },
+    { value: 9, label: 'ES8311' },
+  ],
+  config_AGC: [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'Normal' },
+    { value: 2, label: 'Vivid' },
+    { value: 3, label: 'Lazy' },
+  ],
+  experiments_micLev: [
+    { value: 0, label: 'Floating' },
+    { value: 1, label: 'Freeze' },
+    { value: 2, label: 'Fast Freeze' },
+  ],
+  experiments_Mic_Quality: [
+    { value: 0, label: 'Average (standard)' },
+    { value: 1, label: 'Low Noise' },
+    { value: 2, label: 'Perfect' },
+  ],
+  experiments_freqDist: [
+    { value: 0, label: 'Normal' },
+    { value: 1, label: 'RightShift' },
+  ],
+  experiments_FFT_Window: [
+    { value: 0, label: 'Blackman-Harris (MM standard)' },
+    { value: 1, label: 'Hann (balanced)' },
+    { value: 2, label: 'Nuttall (more accurate)' },
+    { value: 5, label: 'Blackman' },
+    { value: 3, label: 'Hamming' },
+    { value: 4, label: 'Flat-Top (AC WLED, inaccurate)' },
+  ],
+  dynamics_limiter: [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'On' },
+  ],
+  frequency_scale: [
+    { value: 0, label: 'None' },
+    { value: 2, label: 'Linear (Amplitude)' },
+    { value: 3, label: 'Square Root (Energy)' },
+    { value: 1, label: 'Logarithmic (Loudness)' },
+  ],
+  frequency_profile: [
+    { value: 0, label: 'Generic Microphone' },
+    { value: 1, label: 'Instrumental' },
+    { value: 2, label: 'Linear' },
+  ],
+  sync_mode: [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'Primary' },
+    { value: 2, label: 'Secondary' },
+  ],
+};
+
+// DOM helpers
+function gId(id) { return document.getElementById(id); }
+function gName(name) { return document.getElementsByName(name)[0]; }
+
+// Populate a select with options
+function populateSelect(name, options, currentVal) {
+  const sel = gName(name);
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const opt of options) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    if (opt.value === currentVal) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+// Get nested value from object by path like "digitalmic.type"
+function getNested(obj, path) {
+  return path.split('.').reduce((o, k) => (o ? o[k] : undefined), obj);
+}
+
+// Render GPIO pins for digitalmic
+function renderDigitalMicPins(cfg) {
+  const container = gId('digitalmic-pins');
+  const pins = cfg?.digitalmic?.pin || [];
+  const labels = ['SD (DOUT)', 'WS (CLK)', 'SCK (BCLK)', 'MCLK', 'SDA', 'SCL'];
+
+  let html = '<p><u>Digital Mic Pins:</u></p>';
+  for (let i = 0; i < 6; i++) {
+    const val = pins[i] !== undefined ? pins[i] : -1;
+    html += `<div style="margin:4px 0">${labels[i]}: <select name="dm_pin_${i}" style="width:120px"></select></div>`;
+  }
+  container.innerHTML = html;
+
+  // Populate pin selects after DOM is updated
+  setTimeout(() => {
+    for (let i = 0; i < 6; i++) {
+      populateGpioSelect(`dm_pin_${i}`, pins[i]);
+    }
+  }, 0);
+}
+
+// Populate GPIO select with pin options
+function populateGpioSelect(name, currentVal) {
+  const sel = gName(name);
+  if (!sel || !state.gpio) return;
+
+  const gpio = state.gpio;
+  const rsvd = gpio.rsvd || [];
+  const ro = gpio.ro_gpio || [];
+  const used = gpio.um_p || [];
+  const dtPins = gpio.dt_pins || [];
+  const aPins = gpio.a_pins || [];
+  const max = gpio.max_gpio || 55;
+
+  const opts = [{ n: -1, label: 'Undefined', dis: false }];
+  for (let i = 0; i <= max; i++) {
+    const isRsvd = rsvd.includes(i);
+    const isRo = ro.includes(i);
+    const isUsed = used.includes(i) && i !== currentVal;
+    let label = String(i);
+    const di = dtPins.indexOf(i);
+    if (di >= 0) label += di < 9 ? ` D${di}` : (di === 9 ? ' RX' : ' TX');
+    const ai = aPins.indexOf(i);
+    if (ai >= 0) label += ` A${ai}`;
+    if (isRsvd) label += ' reserved 🟣';
+    else if (isRo) label += ' read only 🟠';
+    else if (isUsed) label += ' (in use)';
+    else label += ' 🟢';
+    opts.push({ n: i, label, dis: isRsvd });
+  }
+
+  sel.innerHTML = '';
+  for (const o of opts) {
+    const opt = document.createElement('option');
+    opt.value = o.n;
+    opt.textContent = o.label;
+    opt.disabled = o.dis;
+    if (o.n === currentVal) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+// Render all fields from config
+function render() {
+  if (!state.cfg || !state.cfg.um || !state.cfg.um.AudioReactive) return;
+
+  const ar = state.cfg.um.AudioReactive;
+
+  // Enabled
+  gName('enabled').checked = ar.enabled === true;
+
+  // Select fields
+  populateSelect('digitalmic_type', OPTIONS.digitalmic_type, ar.digitalmic?.type);
+  populateSelect('config_AGC', OPTIONS.config_AGC, ar.config?.AGC);
+  populateSelect('experiments_micLev', OPTIONS.experiments_micLev, ar.experiments?.micLev);
+  populateSelect('experiments_Mic_Quality', OPTIONS.experiments_Mic_Quality, ar.experiments?.Mic_Quality);
+  populateSelect('experiments_freqDist', OPTIONS.experiments_freqDist, ar.experiments?.freqDist);
+  populateSelect('experiments_FFT_Window', OPTIONS.experiments_FFT_Window, ar.experiments?.FFT_Window);
+  populateSelect('dynamics_limiter', OPTIONS.dynamics_limiter, ar.dynamics?.limiter);
+  populateSelect('frequency_scale', OPTIONS.frequency_scale, ar.frequency?.scale);
+  populateSelect('frequency_profile', OPTIONS.frequency_profile, ar.frequency?.profile);
+  populateSelect('sync_mode', OPTIONS.sync_mode, ar.sync?.mode);
+
+  // Sync port
+  gName('sync_port').value = ar.sync?.port || 11988;
+
+  // Sync check_sequence
+  gName('sync_check_sequence').checked = ar.sync?.check_sequence === true;
+
+  // Digital mic pins
+  renderDigitalMicPins(ar);
+
+  // Show content
+  gId('loading-msg').style.display = 'none';
+  gId('main-content').style.display = 'block';
+}
+
+// Load config from backend
+async function load() {
+  try {
+    const resp = await fetch('/json/cfg?p=8');
+    const data = await resp.json();
+    state.cfg = data;
+    state.gpio = data._gpio || {};
+    state.loading = false;
+    render();
+  } catch (e) {
+    state.error = e.message;
+    state.loading = false;
+    gId('loading-msg').textContent = 'Error loading settings: ' + e.message;
+  }
+}
+
+// Save config to backend
+async function save() {
+  const form = gId('ar-form');
+  const fd = new FormData(form);
+
+  // Build AudioReactive config object
+  const ar = {
+    enabled: fd.get('enabled') === 'on',
+    digitalmic: {
+      type: parseInt(fd.get('digitalmic_type')),
+      pin: [
+        parseInt(fd.get('dm_pin_0')),
+        parseInt(fd.get('dm_pin_1')),
+        parseInt(fd.get('dm_pin_2')),
+        parseInt(fd.get('dm_pin_3')),
+        parseInt(fd.get('dm_pin_4')),
+        parseInt(fd.get('dm_pin_5')),
+      ]
+    },
+    config: {
+      AGC: parseInt(fd.get('config_AGC')),
+    },
+    experiments: {
+      micLev: parseInt(fd.get('experiments_micLev')),
+      Mic_Quality: parseInt(fd.get('experiments_Mic_Quality')),
+      freqDist: parseInt(fd.get('experiments_freqDist')),
+      FFT_Window: parseInt(fd.get('experiments_FFT_Window')),
+    },
+    dynamics: {
+      limiter: parseInt(fd.get('dynamics_limiter')),
+    },
+    frequency: {
+      scale: parseInt(fd.get('frequency_scale')),
+      profile: parseInt(fd.get('frequency_profile')),
+    },
+    sync: {
+      port: parseInt(fd.get('sync_port')),
+      mode: parseInt(fd.get('sync_mode')),
+      check_sequence: fd.get('sync_check_sequence') === 'on',
+    },
+  };
+
+  // Preserve other usermods
+  const payload = JSON.parse(JSON.stringify(state.cfg));
+  payload.um.AudioReactive = ar;
+  delete payload._gpio;
+  delete payload._schema;
+
+  gId('save-btn').disabled = true;
+  gId('save-btn').textContent = 'Saving...';
+
+  try {
+    const resp = await fetch('/json/cfg?p=8', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error('Save failed');
+    gId('saved-msg').style.display = 'block';
+    setTimeout(() => { gId('saved-msg').style.display = 'none'; }, 3000);
+  } catch (e) {
+    gId('error-msg').textContent = 'Error: ' + e.message;
+    gId('error-msg').style.display = 'block';
+  } finally {
+    gId('save-btn').disabled = false;
+    gId('save-btn').textContent = 'Save';
+  }
+}
+
+// Form submit
+gId('ar-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  save();
+});
+
+// Init
+load();
+
+// Biquad Filter Calculator
+(function() {
+  const filterType = document.getElementById('filter-type');
+  const sampleRateInput = document.getElementById('bq-sample-rate');
+  const fcInput = document.getElementById('bq-fc');
+  const qInput = document.getElementById('bq-q');
+  const gainInput = document.getElementById('bq-gain');
+  const coeffsOutput = document.getElementById('coeffs-output');
+  const plotCanvas = document.getElementById('bq-plot');
+  const plotCtx = plotCanvas.getContext('2d');
+
+  function calcBiquad() {
+    const type = filterType.value;
+    const Fs = parseFloat(sampleRateInput.value);
+    const Fc = parseFloat(fcInput.value);
+    const Q = parseFloat(qInput.value);
+    const gain = parseFloat(gainInput.value);
+
+    const V = Math.pow(10, Math.abs(gain) / 20);
+    const K = Math.tan(Math.PI * Fc / Fs);
+    let a0, a1, a2, b0, b1, b2;
+    let norm;
+
+    switch (type) {
+      case "lowpass":
+        norm = 1 / (1 + K / Q + K * K);
+        b0 = (K * K) * norm;
+        b1 = 2 * b0;
+        b2 = b0;
+        a1 = 2 * (K * K - 1) * norm;
+        a2 = (1 - K / Q + K * K) * norm;
+        break;
+      case "highpass":
+        norm = 1 / (1 + K / Q + K * K);
+        b0 = 1 * norm;
+        b1 = -2 * b0;
+        b2 = b0;
+        a1 = 2 * (K * K - 1) * norm;
+        a2 = (1 - K / Q + K * K) * norm;
+        break;
+      case "bandpass":
+        norm = 1 / (1 + K / Q + K * K);
+        b0 = K / Q * norm;
+        b1 = 0;
+        b2 = -b0;
+        a1 = 2 * (K * K - 1) * norm;
+        a2 = (1 - K / Q + K * K) * norm;
+        break;
+      case "notch":
+        norm = 1 / (1 + K / Q + K * K);
+        b0 = (1 + K * K) * norm;
+        b1 = 2 * (K * K - 1) * norm;
+        b2 = b0;
+        a1 = b1;
+        a2 = (1 - K / Q + K * K) * norm;
+        break;
+      case "peak":
+        if (gain >= 0) {
+          norm = 1 / (1 + 1/Q * K + K * K);
+          b0 = (1 + V/Q * K + K * K) * norm;
+          b1 = 2 * (K * K - 1) * norm;
+          b2 = (1 - V/Q * K + K * K) * norm;
+          a1 = b1;
+          a2 = (1 - 1/Q * K + K * K) * norm;
+        } else {
+          norm = 1 / (1 + V/Q * K + K * K);
+          b0 = (1 + 1/Q * K + K * K) * norm;
+          b1 = 2 * (K * K - 1) * norm;
+          b2 = (1 - 1/Q * K + K * K) * norm;
+          a1 = b1;
+          a2 = (1 - V/Q * K + K * K) * norm;
+        }
+        break;
+      case "lowshelf":
+        if (gain >= 0) {
+          norm = 1 / (1 + Math.SQRT2 * K + K * K);
+          b0 = (1 + Math.sqrt(2*V) * K + V * K * K) * norm;
+          b1 = 2 * (V * K * K - 1) * norm;
+          b2 = (1 - Math.sqrt(2*V) * K + V * K * K) * norm;
+          a1 = 2 * (K * K - 1) * norm;
+          a2 = (1 - Math.SQRT2 * K + K * K) * norm;
+        } else {
+          norm = 1 / (1 + Math.sqrt(2*V) * K + V * K * K);
+          b0 = (1 + Math.SQRT2 * K + K * K) * norm;
+          b1 = 2 * (K * K - 1) * norm;
+          b2 = (1 - Math.SQRT2 * K + K * K) * norm;
+          a1 = 2 * (V * K * K - 1) * norm;
+          a2 = (1 - Math.sqrt(2*V) * K + V * K * K) * norm;
+        }
+        break;
+      case "highshelf":
+        if (gain >= 0) {
+          norm = 1 / (1 + Math.SQRT2 * K + K * K);
+          b0 = (V + Math.sqrt(2*V) * K + K * K) * norm;
+          b1 = 2 * (K * K - V) * norm;
+          b2 = (V - Math.sqrt(2*V) * K + K * K) * norm;
+          a1 = 2 * (K * K - 1) * norm;
+          a2 = (1 - Math.SQRT2 * K + K * K) * norm;
+        } else {
+          norm = 1 / (V + Math.sqrt(2*V) * K + K * K);
+          b0 = (1 + Math.SQRT2 * K + K * K) * norm;
+          b1 = 2 * (K * K - 1) * norm;
+          b2 = (1 - Math.SQRT2 * K + K * K) * norm;
+          a1 = 2 * (K * K / V - 1) * norm;
+          a2 = (1 - Math.sqrt(2/V) * K + K * K / V) * norm;
+        }
+        break;
+    }
+
+    coeffsOutput.textContent = `a0 = ${b0.toFixed(6)}\na1 = ${b1.toFixed(6)}\na2 = ${b2.toFixed(6)}\nb1 = ${a1.toFixed(6)}\nb2 = ${a2.toFixed(6)}`;
+
+    drawPlot(b0, b1, b2, 1, a1, a2, Fs);
+  }
+
+  function drawPlot(b0, b1, b2, a0, a1, a2, fs) {
+    const width = plotCanvas.width;
+    const height = plotCanvas.height;
+    plotCtx.clearRect(0, 0, width, height);
+    plotCtx.strokeStyle = '#0f0';
+
+    plotCtx.beginPath();
+
+    for(let i = 0; i <= width; i++) {
+      const freq = (i / width) * (fs / 2);
+      const w = 2 * Math.PI * freq / fs;
+
+      const phi = Math.pow(Math.sin(w/2), 2);
+      const y = Math.log(Math.pow(b0+b1+b2, 2) - 4*(b0*b1 + 4*b0*b2 + b1*b2)*phi + 16*b0*b2*phi*phi) - Math.log(Math.pow(a0+a1+a2, 2) - 4*(a0*a1 + 4*a0*a2 + a1*a2)*phi + 16*a0*a2*phi*phi);
+
+      const db = y * 10 / Math.LN10;
+      const y_pos = (height / 2) - (db * 5);
+
+      if (i === 0) {
+        plotCtx.moveTo(i, y_pos);
+      } else {
+        plotCtx.lineTo(i, y_pos);
+      }
+    }
+
+    plotCtx.stroke();
+  }
+
+  [filterType, sampleRateInput, fcInput, qInput, gainInput].forEach(input => {
+    input.addEventListener('input', calcBiquad);
+  });
+
+  calcBiquad();
+})();
+</script>
+</body>
+</html>

@@ -1,286 +1,160 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="utf-8">
-	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
-	<title>UI Settings</title>
-	<script>
-	var d = document;
-	var loc = false, locip;
-	var initial_ds, initial_st, initial_su;
-	var sett = null;
-	var l = {
-		"comp":{
-			"labels":"Show button labels",
-			"colors":{
-				"LABEL":"Color selection methods",
-				"picker": "Color Wheel",
-				"rgb": "RGB sliders",
-				"quick": "Quick color selectors",
-				"hex": "HEX color input"
-				},
-			"pcmbot": "Show bottom tab bar in PC mode",
-			"pid": "Show preset IDs",
-			"seglen": "Set segment length instead of stop LED",
-			"segpwr": "Hide segment power &amp; brightness",
-			"segexp" : "Always expand first segment",
-			"css": "Enable custom CSS",
-			"hdays": "Enable custom Holidays list",
-			"fxdef": "Use effect default parameters",
-			"fxdef2": "Don't use effect palette and segment parameters"
-		},
-		"theme":{
-			"alpha": {
-				"bg":"Background opacity",
-				"tab":"Button opacity"
-			},
-			"bg":{
-				"url":"BG image URL",
-				"random":"Random BG image"
-			},
-			"color":{
-				"bg":"BG HEX color"
-			}
-		}
-	};
-	function gId(s) { return d.getElementById(s); }
-	function toggle(el) { gId(el).classList.toggle("hide"); gId('No'+el).classList.toggle("hide"); }
-	function isObject(item) {
-		return (item && typeof item === 'object' && !Array.isArray(item));
-	}
-	function set(path, obj, val) {
-		var tar = obj;
-		var pList = path.split('_');
-		var len = pList.length;
-		for(var i = 0; i < len-1; i++) {
-			var elem = pList[i];
-			if( !tar[elem] ) tar[elem] = {}
-			tar = tar[elem];
-		}
-		tar[pList[len-1]] = val;
-	}
-	var timeout;
-	function showToast(text, error = false)
-	{
-		var x = gId("toast");
-		x.innerHTML = text;
-		x.classList.add(error ? "error":"show");
-		clearTimeout(timeout);
-		x.style.animation = 'none';
-		timeout = setTimeout(function(){ x.classList.remove("show"); }, 2900);
-	}
-	function addRec(s, path = "", label = null)
-	{
-		var str = "";
-		for (i in s)
-		{
-			var fk = path + (path?'_':'') + i;
-			if (isObject(s[i])) {
-				if (label && label[i] && label[i]["LABEL"]) str += `<h3>${label[i]["LABEL"]}</h3>`;
-				str += addRec(s[i], fk, label? label[i] : null);
-			} else {
-				var lb = fk;
-				if (label && label[i]) lb = label[i];
-				else if (s[i+'LABEL']) lb = s[i+'LABEL'];
-				if (i.indexOf('LABEL') > 0) continue;
-				var t = typeof s[i];
-				if (gId(fk)) { //already exists
-					if(t === 'boolean')
-					{
-						gId(fk).checked = s[i];
-					} else {
-						gId(fk).value = s[i];
-					}
-					if (gId(fk).previousElementSibling.matches('.l')) {
-						gId(fk).previousElementSibling.innerHTML = lb;
-					}
-				} else {
-					if(t === 'boolean')
-					{
-						str += `${lb}: <input class="agi cb" type="checkbox" id=${fk} ${s[i]?"checked":""}><br>`;
-					} else if (t === 'number')
-					{
-						str += `${lb}: <input class="agi" type="number" id=${fk} value=${s[i]}><br>`;
-					} else if (t === 'string')
-					{
-						str += `${lb}:<br><input class="agi" id=${fk} value=${s[i]}><br>`;
-					}
-				}
-			}
-		}
-		return str;
-	}
-
-	function genForm(s) {
-		var str = "";
-		str = addRec(s,"",l);
-		
-		gId('gen').innerHTML = str;
-	}
-	function GetLS()
-	{
-		sett = localStorage.getItem('wledUiCfg');
-		if (!sett) gId('lserr').style.display = "inline";
-		try {
-			sett = JSON.parse(sett);
-		} catch (e) {
-			sett = {};
-			gId('lserr').style.display = "inline";
-			gId('lserr').innerHTML = "&#9888; Settings JSON parsing failed. (" + e + ")";
-		}
-		genForm(sett);
-		gId('dm').checked = (gId('theme_base').value === 'light');
-	}
-
-	function SetLS()
-	{
-		var l = d.querySelectorAll('.agi');
-		for (var i = 0; i < l.length; i++) {
-			var e = l[i];
-			var val = e.classList.contains('cb') ? e.checked : e.value;
-			set(e.id, sett, val);
-			console.log(`${e.id} set to ${val}`);
-		}
-		try {
-			localStorage.setItem('wledUiCfg', JSON.stringify(sett));
-			gId('lssuc').style.display = "inline";
-		} catch (e) {
-			gId('lssuc').style.display = "none";
-			gId('lserr').style.display = "inline";
-			gId('lserr').innerHTML = "&#9888; Settings JSON saving failed. (" + e + ")";
-		}
-	}
-
-	function cLS()
-	{
-		localStorage.removeItem('wledP');
-		localStorage.removeItem('wledPmt');
-		localStorage.removeItem('wledPalx');
-		showToast("Cleared.");
-	}
-	
-	function Save() {
-		SetLS();
-		if (d.Sf.DS.value != initial_ds || d.Sf.ST.checked != initial_st || d.Sf.SU.checked != initial_su) d.Sf.submit();
-	}
-	
-	// https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
-	function loadJS(FILE_URL, async = true) {
-		let scE = d.createElement("script");
-		scE.setAttribute("src", FILE_URL);
-		scE.setAttribute("type", "text/javascript");
-		scE.setAttribute("async", async);
-		d.body.appendChild(scE);
-		// success event 
-		scE.addEventListener("load", () => {
-			//console.log("File loaded");
-			GetV(); 
-			initial_ds = d.Sf.DS.value;
-			initial_st = d.Sf.ST.checked;
-			initial_su = d.Sf.SU.checked;
-			GetLS();
-		});
-		// error event
-		scE.addEventListener("error", (ev) => {
-			console.log("Error on loading file", ev);
-			alert("Loading of configuration script failed.\nIncomplete page data!");
-		});
-	}
-	function S()
-	{
-		if (window.location.protocol == "file:") {
-			loc = true;
-			locip = localStorage.getItem('locIp');
-			if (!locip) {
-				locip = prompt("File Mode. Please enter WLED IP!");
-				localStorage.setItem('locIp', locip);
-			}
-		}
-		var url = (loc?`http://${locip}`:'') + '/settings/s.js?p=3';
-		loadJS(url, false);	// If we set async false, file is loaded and executed, then next statement is processed
-	}
-	function H() { window.open("https://mm.kno.wled.ge/features/settings/#user-interface-settings"); }
-	function B() { window.open("/settings","_self"); }
-	function UI()
-	{
-		gId('idonthateyou').style.display = (gId('dm').checked) ? 'inline':'none';
-		var f = gId('theme_base');
-		if (f) f.value = (gId('dm').checked) ? 'light':'dark';
-	}
-
-	// random BG image
-	function setRandomBg() {
-		if (gId("theme_bg_random").checked) {
-			gId("theme_bg_url").value = "https://picsum.photos/1920/1080";
-		} else {
-			gId("theme_bg_url").value = "";
-		}
-		
-	}
-	function checkRandomBg() {
-		if (gId("theme_bg_url").value === "https://picsum.photos/1920/1080") {
-			gId("theme_bg_random").checked = true;
-		} else {
-			gId("theme_bg_random").checked = false;
-		}
-	}
-	function uploadFile(fO,name) {
-		var req = new XMLHttpRequest();
-		req.addEventListener('load', function(){showToast(this.responseText,this.status >= 400)});
-		req.addEventListener('error', function(e){showToast(e.stack,true);});
-		req.open("POST", "/upload");
-		var formData = new FormData();
-		formData.append("data", fO.files[0], name);
-		req.send(formData);
-		fO.value = '';
-		return false;
-	}
-	</script>
-	<style>@import url("style.css");</style>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>UI Settings</title>
+<script src="/alpine.min.js" defer></script>
+<script src="/settings-core.js"></script>
+<style>@import url("style.css");</style>
 </head>
-<body onload="S()">
-	<form id="form_s" name="Sf" method="post">
-		<div class="toprow">
-		<div class="helpB"><button type="button" onclick="H()">?</button></div>
-		<button type="button" onclick="B()">Back</button><button type="button" onclick="Save()">Save</button><br>
-		<span id="lssuc" style="color:green; display:none">&#10004; Local UI settings saved!</span>
-		<span id="lserr" style="color:red; display:none">&#9888; Could not access local storage. Make sure it is enabled in your browser.</span><hr>
-		</div>
-		<h2>Web Setup</h2>
-		Server description: <input type="text" name="DS" maxlength="32"><br>
-		Sync button toggles both send and receive: <input type="checkbox" name="ST"><br>
-		<div id="NoSimple" class="hide">
-			<em style="color:#fa0;">This firmware build does not include simplified UI support.<br></em>
-		</div>
-		<div id="Simple">Enable simplified UI: <input type="checkbox" name="SU"><br></div>
-		<i>The following UI customization settings are unique both to the WLED device and this browser.<br>
-		You will need to set them again if using a different browser, device or WLED IP address.<br>
-		Refresh the main UI to apply changes.</i><br>
-		
-		<div id="gen">Loading settings...</div>
-		
-		<h3>UI Appearance</h3>
-		<span class="l"></span>: <input type="checkbox" id="comp_labels" class="agi cb"><br>
-		<span class="l"></span>: <input type="checkbox" id="comp_pcmbot" class="agi cb"><br>
-		<span class="l"></span>: <input type="checkbox" id="comp_pid" class="agi cb"><br>
-		<span class="l"></span>: <input type="checkbox" id="comp_seglen" class="agi cb"><br>
-		<span class="l"></span>: <input type="checkbox" id="comp_segpwr" class="agi cb"><br>
-		<span class="l"></span>: <input type="checkbox" id="comp_segexp" class="agi cb"><br>
-		I hate dark mode: <input type="checkbox" id="dm" onchange="UI()"><br>
-		<span id="idonthateyou" style="display:none"><i>Why would you? </i>&#x1F97A;<br></span>
-		<span class="l"></span>: <input type="number" min=0.0 max=1.0 step=0.01 id="theme_alpha_tab" class="agi"><br>
-		<span class="l"></span>: <input type="number" min=0.0 max=1.0 step=0.01 id="theme_alpha_bg" class="agi"><br>
-		<span class="l"></span>: <input type="text" id="theme_color_bg" maxlength="9" class="agi"><br>
-		<span class="l">BG image URL</span>: <input type="text" id="theme_bg_url" class="agi" oninput="checkRandomBg()"><br>
-		<span class="l">Random BG image</span>: <input type="checkbox" id="theme_bg_random" class="agi cb" onchange="setRandomBg()"><br>
-		<input id="theme_base" class="agi" style="display:none">
-		<span class="l"></span>: <input type="checkbox" id="comp_css" class="agi cb"><br>
-		<div id="skin">Custom CSS: <input type="file" name="data" accept=".css"> <input type="button" value="Upload" onclick="uploadFile(d.Sf.data,'/skin.css');"><br></div>
-		<span class="l"></span>: <input type="checkbox" id="comp_hdays" class="agi cb"><br>
-		<div id="holidays">Holidays: <input type="file" name="data2" accept=".json"> <input type="button" value="Upload" onclick="uploadFile(d.Sf.data2,'/holidays.json');"><br></div>
-		<div id="toast"></div>
-		<hr><button type="button" onclick="cLS()">Clear local storage</button>
-		<hr><button type="button" onclick="B()">Back</button><button type="button" onclick="Save()">Save</button>
-	</form>
+<body>
+<div x-data="uiPage()" x-init="init()">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://mm.kno.wled.ge/features/settings/#user-interface-settings')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button><br>
+    <span x-show="lsSaved" style="color:green;">&#10004; Local UI settings saved!</span>
+    <span x-show="lsError" x-text="lsError" style="color:red;"></span>
+    <hr>
+  </div>
+
+  <h2>Web Setup</h2>
+  Server description: <input type="text" x-model="srv.DS" maxlength="32"><br>
+  Sync button toggles both send and receive: <input type="checkbox" x-model="srv.ST"><br>
+  Enable simplified UI: <input type="checkbox" x-model="srv.SU"><br>
+  <i>The following UI customization settings are unique both to the WLED device and this browser.<br>
+  You will need to set them again if using a different browser, device or WLED IP address.<br>
+  Refresh the main UI to apply changes.</i><br>
+
+  <h3>UI Appearance</h3>
+  Show button labels: <input type="checkbox" x-model="ui.comp.labels"><br>
+  Show bottom tab bar in PC mode: <input type="checkbox" x-model="ui.comp.pcmbot"><br>
+  Show preset IDs: <input type="checkbox" x-model="ui.comp.pid"><br>
+  Set segment length instead of stop LED: <input type="checkbox" x-model="ui.comp.seglen"><br>
+  Hide segment power &amp; brightness: <input type="checkbox" x-model="ui.comp.segpwr"><br>
+  Always expand first segment: <input type="checkbox" x-model="ui.comp.segexp"><br>
+  Use effect default parameters: <input type="checkbox" x-model="ui.comp.fxdef"><br>
+  Don't use effect palette and segment parameters: <input type="checkbox" x-model="ui.comp.fxdef2"><br>
+  I hate dark mode: <input type="checkbox" x-model="lightMode" @change="onLightModeChange()"><br>
+  <span x-show="lightMode"><i>Why would you? </i>&#x1F97A;<br></span>
+  Button opacity: <input type="number" min="0" max="1" step="0.01" x-model.number="ui.theme.alpha.tab"><br>
+  Background opacity: <input type="number" min="0" max="1" step="0.01" x-model.number="ui.theme.alpha.bg"><br>
+  BG HEX color: <input type="text" x-model="ui.theme.color.bg" maxlength="9"><br>
+  BG image URL: <input type="text" x-model="ui.theme.bg.url" @input="onBgUrlChange()"><br>
+  Random BG image: <input type="checkbox" x-model="ui.theme.bg.random" @change="onRandomBgChange()"><br>
+
+  <h3>Color selection methods</h3>
+  Color Wheel: <input type="checkbox" x-model="ui.comp.colors.picker"><br>
+  RGB sliders: <input type="checkbox" x-model="ui.comp.colors.rgb"><br>
+  Quick color selectors: <input type="checkbox" x-model="ui.comp.colors.quick"><br>
+  HEX color input: <input type="checkbox" x-model="ui.comp.colors.hex"><br>
+
+  Enable custom CSS: <input type="checkbox" x-model="ui.comp.css"><br>
+  <div x-show="ui.comp.css">
+    Custom CSS:
+    <input type="file" x-ref="cssFile" accept=".css">
+    <button type="button" @click="uploadFile($refs.cssFile, '/skin.css')">Upload</button><br>
+  </div>
+
+  Enable custom Holidays list: <input type="checkbox" x-model="ui.comp.hdays"><br>
+  <div x-show="ui.comp.hdays">
+    Holidays:
+    <input type="file" x-ref="hdaysFile" accept=".json">
+    <button type="button" @click="uploadFile($refs.hdaysFile, '/holidays.json')">Upload</button><br>
+  </div>
+
+  <hr>
+  <button type="button" @click="clearLocalStorage()">Clear local storage</button>
+  <hr>
+  <div x-show="error" x-text="error" style="color:red;margin:8px 0;"></div>
+  <div x-show="saved" style="color:green;margin:8px 0;">Saved!</div>
+  <button type="button" onclick="window.open('/settings','_self')">Back</button>
+  <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+</div>
+
+<script>
+const RANDOM_BG_URL = 'https://picsum.photos/1920/1080';
+
+function uiPage() {
+  return {
+    ...wledPageBase(3),
+    srv: { DS: '', ST: false, SU: false },
+    ui: {
+      comp: { labels: true, pcmbot: false, pid: false, seglen: false, segpwr: false,
+              segexp: false, css: false, hdays: false, fxdef: false, fxdef2: false,
+              colors: { picker: true, rgb: true, quick: true, hex: true } },
+      theme: { alpha: { bg: 0, tab: 0 }, bg: { url: '', random: false }, color: { bg: '' }, base: 'dark' }
+    },
+    lightMode: false,
+    lsSaved: false,
+    lsError: '',
+
+    async init() {
+      const data = await this._load();
+      if (data) this.srv = data;
+      this._loadLocalStorage();
+    },
+
+    _loadLocalStorage() {
+      try {
+        const raw = localStorage.getItem('wledUiCfg');
+        if (raw) this.ui = JSON.parse(raw);
+        this.lightMode = (this.ui.theme && this.ui.theme.base === 'light');
+      } catch(e) {
+        this.lsError = '&#9888; Could not read local storage. (' + e + ')';
+      }
+    },
+
+    _saveLocalStorage() {
+      try {
+        localStorage.setItem('wledUiCfg', JSON.stringify(this.ui));
+        this.lsSaved = true;
+        setTimeout(() => { this.lsSaved = false; }, 3000);
+        this.lsError = '';
+      } catch(e) {
+        this.lsError = '&#9888; Settings JSON saving failed. (' + e + ')';
+      }
+    },
+
+    onLightModeChange() {
+      if (!this.ui.theme) this.ui.theme = {};
+      this.ui.theme.base = this.lightMode ? 'light' : 'dark';
+    },
+
+    onRandomBgChange() {
+      this.ui.theme.bg.url = this.ui.theme.bg.random ? RANDOM_BG_URL : '';
+    },
+
+    onBgUrlChange() {
+      this.ui.theme.bg.random = (this.ui.theme.bg.url === RANDOM_BG_URL);
+    },
+
+    async save() {
+      this._saveLocalStorage();
+      await this._save(this.srv);
+    },
+
+    async uploadFile(fileInput, dest) {
+      const result = await wledCfg.upload(fileInput, dest);
+      if (result.ok) {
+        this.lsSaved = true;
+        setTimeout(() => { this.lsSaved = false; }, 3000);
+      } else {
+        this.lsError = result.text || `Upload failed (HTTP ${result.status})`;
+      }
+    },
+
+    clearLocalStorage() {
+      localStorage.removeItem('wledP');
+      localStorage.removeItem('wledPmt');
+      localStorage.removeItem('wledPalx');
+      this.lsSaved = true;
+      this.lsError = '';
+      setTimeout(() => { this.lsSaved = false; }, 3000);
+    }
+  };
+}
+</script>
 </body>
 </html>

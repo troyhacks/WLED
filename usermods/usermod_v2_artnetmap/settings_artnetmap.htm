@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art-Net Output Map</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#1e1e1e;color:#e0e0e0;margin:0;padding:20px;line-height:1.5}
+.container{max-width:700px;margin:0 auto}
+h1{color:#ffcc00;font-size:1.4em;margin-bottom:5px}
+.subtitle{color:#888;font-size:0.9em;margin-bottom:25px}
+.panel{background:#252525;border-radius:10px;padding:20px;margin-bottom:20px}
+.panel-header{color:#ffcc00;font-size:0.85em;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:15px}
+.row{display:flex;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap}
+.row label{min-width:120px;font-size:13px;color:#bbb}
+input,select{background:#1a1a1a;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:5px;font-size:13px}
+input:focus,select:focus{border-color:#ffcc00;outline:none}
+input.narrow{width:70px}input.wide{width:180px}
+button{background:#ffcc00;color:#000;border:none;padding:8px 16px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
+button:hover{background:#ffe066}
+button.secondary{background:#3a3a3a;color:#ddd}
+button.secondary:hover{background:#4a4a4a}
+button.small{padding:5px 10px;font-size:11px}
+.stats{display:flex;gap:25px;padding:12px 16px;background:#1a1a1a;border-radius:6px;margin:15px 0}
+.stat{display:flex;flex-direction:column}
+.stat-label{font-size:10px;color:#888;text-transform:uppercase}
+.stat-value{font-size:1.3em;color:#ffcc00;font-weight:600}
+.quick-setup{background:#1a2a1a;border:1px solid #2a3a2a;border-radius:6px;padding:12px 15px;margin-bottom:15px}
+.quick-setup-header{font-size:11px;color:#6a6;font-weight:600;text-transform:uppercase;margin-bottom:10px}
+.quick-setup input{width:70px;text-align:center}
+.quick-setup input.leds-input{width:90px}
+.quick-setup .multiply{color:#666;font-size:18px}
+.table-container{max-height:350px;overflow-y:auto;border:1px solid #333;border-radius:6px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead{position:sticky;top:0;background:#2a2a2a;z-index:1}
+th{text-align:left;padding:10px 8px;color:#ffcc00;font-weight:600;font-size:10px;text-transform:uppercase;border-bottom:2px solid #444}
+th.center{text-align:center}
+td{padding:6px 8px;border-bottom:1px solid #2a2a2a}
+tr:hover{background:#2a2a2a}
+.output-num{color:#666;font-weight:600;font-size:11px}
+.output-name{color:#aaa;font-size:11px}
+table input{padding:5px 8px;font-size:12px}
+table input.uni-input{width:65px;text-align:center}
+table input.led-input{width:90px;text-align:center}
+.uni-range{font-family:monospace;color:#888;font-size:11px}
+.test-btn{padding:3px 8px;font-size:10px;background:#333;color:#aaa}
+.test-btn:hover{background:#ffcc00;color:#000}
+.preset-row{display:flex;gap:8px;align-items:center;margin-top:15px;padding-top:15px;border-top:1px solid #333}
+.preset-row select{flex:1;max-width:180px}
+.footer-actions{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding-top:15px;border-top:1px solid #333}
+.help{font-size:11px;color:#666;margin-top:4px}
+#error-msg{color:red;margin:8px 0;display:none}
+#saved-msg{color:green;margin:8px 0;display:none}
+</style>
+</head>
+<body>
+<div class='container'>
+<h1>Art-Net Output Map</h1>
+<p class='subtitle'>Configure universe mapping for Art-Net LED outputs</p>
+
+<div id="error-msg"></div>
+<div id="saved-msg"></div>
+
+<div class='panel'>
+<div class='panel-header'>Global Settings</div>
+<div class='row'><label>Enabled:</label><input type='checkbox' id='enabled'></div>
+<div class='row'><label>Target IP:</label><input type='text' id='targetIP' class='wide'></div>
+<p class='help'>Use .255 for broadcast, or specific IP for unicast</p>
+<div class='row'><label>Channels/Universe:</label>
+<select id='channelsPerUni'>
+<option value='510'>510 (RGB standard)</option>
+<option value='512'>512 (RGBW / Advatek)</option>
+</select></div>
+<div class='row'><label>Pad Universe Gaps:</label>
+<select id='padMode'>
+<option value='0'>None</option>
+<option value='1'>Black pixel per universe</option>
+<option value='2'>Full black universe</option>
+</select></div>
+</div>
+
+<div class='panel'>
+<div class='panel-header'>Output Configuration</div>
+<div class='quick-setup'>
+<div class='quick-setup-header'>Quick Setup</div>
+<div class='row' style='margin-bottom:0'>
+<input type='number' id='qsOutputs' value='1' min='1' max='16'>
+<span class='multiply'>×</span>
+<input type='number' id='qsUniverses' value='6' min='1' max='32'>
+<span style='color:#888;font-size:12px'>universes</span>
+<span class='multiply'>@</span>
+<input type='number' id='qsLeds' value='1020' min='1' class='leds-input'>
+<span style='color:#888;font-size:12px'>LEDs</span>
+<button class='small' onclick='generate()'>Generate</button>
+<button class='small secondary' onclick='calcMax()'>Max LEDs</button>
+</div></div>
+<div class='stats'>
+<div class='stat'><span class='stat-label'>Outputs</span><span class='stat-value' id='statOutputs'>0</span></div>
+<div class='stat'><span class='stat-label'>Universes</span><span class='stat-value' id='statUniverses'>0</span></div>
+<div class='stat'><span class='stat-label'>Total LEDs</span><span class='stat-value' id='statLeds'>0</span></div>
+</div>
+<div class='table-container'>
+<table>
+<thead><tr>
+<th style='width:35px'>#</th>
+<th>Name</th>
+<th style='width:75px' class='center'>Start</th>
+<th style='width:100px' class='center'>LEDs</th>
+<th style='width:90px'>Range</th>
+</tr></thead>
+<tbody id='outputTable'>
+</tbody>
+</table>
+</div>
+
+<div class='preset-row'>
+<select id='presetSelect'><option value=''>— Load Preset —</option></select>
+<button class='small secondary' onclick='loadPreset()'>Load</button>
+<span style='color:#444'>|</span>
+<input type='text' id='presetName' placeholder='Save as...' style='width:120px'>
+<button class='small' onclick='savePreset()'>Save</button>
+</div>
+</div>
+
+<div class='footer-actions'>
+<div><button class='secondary' onclick='stopTest()'>Stop Test</button></div>
+<button onclick='apply()'>Apply Configuration</button>
+</div>
+</div>
+</div>
+
+<!-- Load shared usermod config helpers -->
+<script src="/settings-core.js"></script>
+<script>
+const UM_NAME = 'ArtNetMap';
+const MAX_OUTPUTS = 16;
+let config = {};
+let outputs = [];
+
+function calcMax(){
+  var u=parseInt(document.getElementById('qsUniverses').value)||6;
+  var ch=parseInt(document.getElementById('channelsPerUni').value)||510;
+  document.getElementById('qsLeds').value=u*Math.floor(ch/3);
+}
+
+function calcUniverses(leds) {
+  var ch=parseInt(document.getElementById('channelsPerUni').value)||510;
+  return Math.ceil(leds / Math.floor(ch/3));
+}
+
+function updateStats() {
+  var totalLeds = 0;
+  var totalUnis = 0;
+  for (var i = 0; i < outputs.length; i++) {
+    totalLeds += outputs[i].leds;
+    totalUnis += calcUniverses(outputs[i].leds);
+  }
+  document.getElementById('statOutputs').textContent = outputs.length;
+  document.getElementById('statUniverses').textContent = totalUnis;
+  document.getElementById('statLeds').textContent = totalLeds;
+}
+
+function renderOutputs() {
+  var tbody = document.getElementById('outputTable');
+  tbody.innerHTML = '';
+  for (var i = 0; i < outputs.length; i++) {
+    var unis = calcUniverses(outputs[i].leds);
+    var endUni = outputs[i].startUniverse + unis - 1;
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td class="output-num">' + (i+1) + '</td>' +
+      '<td class="output-name">Output ' + (i+1) + ' (U' + outputs[i].startUniverse + '-' + endUni + ')</td>' +
+      '<td><input type="number" class="uni-input" value="' + outputs[i].startUniverse + '" onchange="updateRow(' + i + ',this.value,null)"></td>' +
+      '<td><input type="number" class="led-input" value="' + outputs[i].leds + '" onchange="updateRow(' + i + ',null,this.value)"></td>' +
+      '<td class="uni-range">U' + outputs[i].startUniverse + '-' + endUni + '</td>';
+    tbody.appendChild(tr);
+  }
+  updateStats();
+}
+
+function generate(){
+  var c=parseInt(document.getElementById('qsOutputs').value)||1;
+  var u=parseInt(document.getElementById('qsUniverses').value)||6;
+  var l=parseInt(document.getElementById('qsLeds').value)||170;
+  outputs = [];
+  for (var i = 0; i < c; i++) {
+    outputs.push({startUniverse: i*u + 1, leds: l});
+  }
+  renderOutputs();
+}
+
+function updateRow(i,uni,leds){
+  if(uni!==null) outputs[i].startUniverse = parseInt(uni)||0;
+  if(leds!==null) outputs[i].leds = parseInt(leds)||0;
+  renderOutputs();
+}
+
+function apply(){
+  config.enabled = document.getElementById('enabled').checked;
+  config.targetIP = document.getElementById('targetIP').value;
+  config.channelsPerUniverse = parseInt(document.getElementById('channelsPerUni').value)||510;
+  config.padMode = parseInt(document.getElementById('padMode').value)||0;
+  config.outputs = outputs;
+  saveConfig();
+}
+
+async function saveConfig() {
+  try {
+    umCfg.showSuccess('Saving...', 'saved-msg');
+    await umCfg.save(UM_NAME, config);
+    umCfg.showSuccess('Saved!');
+  } catch(e) {
+    umCfg.showError('Error: ' + e.message);
+  }
+}
+
+function loadPreset(){
+  var sel = document.getElementById('presetSelect');
+  var name = sel.value;
+  if (!name) return;
+  var preset = config.presets ? config.presets[name] : null;
+  if (preset) {
+    config.targetIP = preset.targetIP || config.targetIP;
+    config.channelsPerUniverse = preset.channelsPerUniverse || config.channelsPerUniverse;
+    config.padMode = preset.padMode || config.padMode;
+    config.outputs = preset.outputs || [];
+    // Update form
+    document.getElementById('targetIP').value = config.targetIP;
+    document.getElementById('channelsPerUni').value = config.channelsPerUniverse;
+    document.getElementById('padMode').value = config.padMode;
+    outputs = config.outputs;
+    renderOutputs();
+    saveConfig();
+  }
+}
+
+function savePreset(){
+  var name = document.getElementById('presetName').value.trim();
+  if(!name){alert('Enter name');return;}
+  if(!config.presets) config.presets = {};
+  config.presets[name] = {
+    targetIP: document.getElementById('targetIP').value,
+    channelsPerUniverse: parseInt(document.getElementById('channelsPerUni').value)||510,
+    padMode: parseInt(document.getElementById('padMode').value)||0,
+    outputs: outputs.slice()
+  };
+  // Update preset dropdown
+  var sel = document.getElementById('presetSelect');
+  var opt = document.createElement('option');
+  opt.value = name;
+  opt.textContent = name;
+  sel.appendChild(opt);
+  document.getElementById('presetName').value = '';
+  saveConfig();
+  alert('Preset "' + name + '" saved!');
+}
+
+function stopTest(){
+  // Test not implemented in JSON mode
+}
+
+// Load config on page load
+(async function() {
+  try {
+    umCfg.hideMessages('error-msg');
+    umCfg.hideMessages('saved-msg');
+
+    config = await umCfg.load(UM_NAME);
+    config.presets = config.presets || {};
+    outputs = config.outputs || [];
+
+    // Validate - warns if config is missing expected fields from C++
+    const missing = await umCfg.validate(UM_NAME, config);
+    if (missing.length > 0) {
+      umCfg.showError('Warning: Config incomplete - missing: ' + missing.join(', '));
+      setTimeout(() => umCfg.hideMessages('error-msg'), 8000);
+    }
+
+    // Populate form
+    document.getElementById('enabled').checked = config.enabled || false;
+    document.getElementById('targetIP').value = config.targetIP || '2.255.255.255';
+    document.getElementById('channelsPerUni').value = config.channelsPerUniverse || 510;
+    document.getElementById('padMode').value = config.padMode || 0;
+
+    // Populate preset dropdown
+    var sel = document.getElementById('presetSelect');
+    for (var name in config.presets) {
+      var opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+
+    renderOutputs();
+  } catch(e) {
+    umCfg.showError('Error loading config: ' + e.message);
+  }
+})();
+</script>
+</body>
+</html>

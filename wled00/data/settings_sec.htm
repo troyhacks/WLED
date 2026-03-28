@@ -1,130 +1,141 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
-	<meta charset="utf-8">
-	<title>Misc Settings</title>
-	<script>
-		var d = document;
-		var loc = false, locip;
-		function H() { window.open("https://mm.kno.wled.ge/features/settings/#security-settings"); }
-		function B() { window.open("/settings","_self"); }
-		function U() { window.open("/update","_self"); }
-		function gId(s) { return d.getElementById(s); }
-		function isObj(o) { return (o && typeof o === 'object' && !Array.isArray(o)); }
-		// https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
-		function loadJS(FILE_URL, async = true) {
-			let scE = d.createElement("script");
-			scE.setAttribute("src", FILE_URL);
-			scE.setAttribute("type", "text/javascript");
-			scE.setAttribute("async", async);
-			d.body.appendChild(scE);
-			// success event 
-			scE.addEventListener("load", () => {
-				//console.log("File loaded");
-				GetV();
-				setBckFilename(gId("bckcfg"));
-				setBckFilename(gId("bckpresets"));
-			});
-			// error event
-			scE.addEventListener("error", (ev) => {
-				console.log("Error on loading file", ev);
-				alert("Loading of configuration script failed.\nIncomplete page data!");
-			});
-		}
-		var timeout;
-		function showToast(text, error = false)
-		{
-			var x = gId("toast");
-			x.innerHTML = text;
-			x.classList.add(error ? "error":"show");
-			clearTimeout(timeout);
-			x.style.animation = 'none';
-			timeout = setTimeout(function(){ x.classList.remove("show"); }, 2900);
-		}
-		function uploadFile(fO,name) {
-			var req = new XMLHttpRequest();
-			req.addEventListener('load', function(){showToast(this.responseText,this.status >= 400)});
-			req.addEventListener('error', function(e){showToast(e.stack,true);});
-			req.open("POST", "/upload");
-			var formData = new FormData();
-			formData.append("data", fO.files[0], name);
-			req.send(formData);
-			fO.value = '';
-			return false;
-		}
-		function checkNum(o) {
-			const specialkeys = ["Backspace", "Tab", "Enter", "Shift", "Control", "Alt", "Pause", "CapsLock", "Escape", "Space", "PageUp", "PageDown", "End", "Home", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Insert", "Delete"];
-			// true if key is a number or a special key
-			if(event.key.match(/[0-9]/) || specialkeys.includes(event.key)) return true;
-			event.preventDefault();
-			return false;
-		}
-		function setBckFilename(x) {
-			x.setAttribute("download","wled_" + x.getAttribute("download") + (sd=="WLED"?"":("_" +sd)));
-		}
-		function S() {
-			if (window.location.protocol == "file:") {
-				loc = true;
-				locip = localStorage.getItem('locIp');
-				if (!locip) {
-					locip = prompt("File Mode. Please enter WLED IP!");
-					localStorage.setItem('locIp', locip);
-				}
-			}
-			var url = (loc?`http://${locip}`:'') + '/settings/s.js?p=6';
-			loadJS(url, false);	// If we set async false, file is loaded and executed, then next statement is processed
-		}
-	</script>
-	<style>
-		@import url("style.css");
-	</style>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<meta charset="utf-8">
+<title>Security Settings</title>
+<script src="/alpine.min.js" defer></script>
+<script src="/settings-core.js"></script>
+<style>@import url("style.css");</style>
 </head>
-<body onload="S()">
-	<form id="form_s" name="Sf" method="post">
-		<div class="toprow">
-		<div class="helpB"><button type="button" onclick="H()">?</button></div>
-		<button type="button" onclick="B()">Back</button><button type="submit">Save</button><hr>
-		</div>
-		<h2>Security & Update setup</h2>
-		Settings PIN: <input type="password" id="PIN" name="PIN" size="4" maxlength="4" minlength="4" onkeydown="checkNum(this)" pattern="[0-9]*" inputmode="numeric" title="Please enter a 4 digit number"><br>
-		<div style="color: #fa0;">&#9888; Unencrypted transmission. Be prudent when selecting PIN, do NOT use your banking, door, SIM, etc. pin!</div><br>
-		Lock wireless (OTA) software update: <input type="checkbox" name="NO"><br>
-		Passphrase: <input type="password" name="OP" maxlength="32"><br>
-		To enable OTA, for security reasons you need to also enter the correct password!<br>
-		The password should be changed when OTA is enabled.<br>
-		<b>Disable OTA when not in use, otherwise an attacker can reflash device software!</b><br>
-		<i>Settings on this page are only changable if OTA lock is disabled!</i><br>
-		Deny access to Wi-Fi settings if locked: <input type="checkbox" name="OW"><br><br>
-		Factory reset: <input type="checkbox" name="RS"><br>
-		All settings and presets will be erased.<br><br>
-		<div style="color: #fa0;">&#9888; Unencrypted transmission. An attacker on the same network can intercept form data!</div>
-		<hr>
-		<h3>Software Update</h3>
-		<button type="button" onclick="U()">Manual OTA Update</button><br>
-		Enable ArduinoOTA: <input type="checkbox" name="AO">
-		<hr>
-		<h3 id="backup">Backup &amp; Restore</h3>
-		<a class="btn lnk" id="bckcfg" href="/presets.json" download="presets">Backup presets</a><br>
-		<div>Restore presets<br><input type="file" name="data" accept=".json"> <button type="button" onclick="uploadFile(d.Sf.data,'/presets.json');">Upload</button><br></div><br>
-		<a class="btn lnk" id="bckpresets" href="/cfg.json" download="cfg">Backup configuration</a><br>
-		<div>Restore configuration<br><input type="file" name="data2" accept=".json"> <button type="button" onclick="uploadFile(d.Sf.data2,'/cfg.json');">Upload</button><br></div>
-		<div style="color: #fa0;">&#9888; Restoring presets/configuration will OVERWRITE your current presets/configuration.<br>
-		Incorrect configuration may require a factory reset or re-flashing of your ESP.</div>
-		For security reasons, passwords are not backed up.
-		<hr>
-		<h3>About</h3>
-		<!-- WLEDMM additions -->
-		<a href="https://github.com/MoonModules/WLED/" target="_blank">WLEDMM</a> version ##VERSION##<!-- Autoreplaced from package.json --> ☾<br>
-		(c) 2024 <a href="https://github.com/Aircoookie/WLED/compare/main...MoonModules:WLED:mdev" target="_blank">Github MoonModules WLED Commit Authors</a><br><br>
-		fork of <a href="https://github.com/Aircoookie/WLED/" target="_blank">WLED:</a><br>
-		<a href="https://github.com/Aircoookie/WLED/wiki/Contributors-and-credits" target="_blank">Contributors, dependencies and special thanks</a><br>
-		A huge thank you to everyone who helped me create WLED!<br><br>
-		WLED core (c) 2016-2024 Christian Schwinne <br>
-		<i>WLED MM Licensed under the <a href="https://github.com/MoonModules/WLED/blob/master/LICENSE" target="_blank">EUPL-1.2 license</a></i><br><br>
-		Server message: <span class="sip"> Response error! </span><hr>
-		<div id="toast"></div>
-		<button type="button" onclick="B()">Back</button><button type="submit">Save</button>
-	</form>
+<body>
+<div x-data="secPage()" x-init="init()">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://mm.kno.wled.ge/features/settings/#security-settings')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+    <hr>
+  </div>
+
+  <h2>Security &amp; Update setup</h2>
+
+  Settings PIN:
+  <input type="password" x-model="cfg.PIN" size="4" maxlength="4" minlength="4"
+    pattern="[0-9]*" inputmode="numeric" title="Please enter a 4 digit number"><br>
+  <div style="color:#fa0;">&#9888; Unencrypted transmission. Be prudent when selecting PIN, do NOT use your banking, door, SIM, etc. pin!</div><br>
+
+  Lock wireless (OTA) software update: <input type="checkbox" x-model="cfg.NO"><br>
+  Passphrase: <input type="password" x-model="otaPass" maxlength="32"
+    :placeholder="cfg.OP && cfg.OP.len ? '('+cfg.OP.len+' chars set)' : ''"
+    @input="otaPassChanged = true"><br>
+  To enable OTA, for security reasons you need to also enter the correct password!<br>
+  The password should be changed when OTA is enabled.<br>
+  <b>Disable OTA when not in use, otherwise an attacker can reflash device software!</b><br>
+  <i>Settings on this page are only changeable if OTA lock is disabled!</i><br>
+  Deny access to Wi-Fi settings if locked: <input type="checkbox" x-model="cfg.OW"><br><br>
+
+  Factory reset: <input type="checkbox" x-model="cfg.RS"><br>
+  All settings and presets will be erased.<br><br>
+  <div style="color:#fa0;">&#9888; Unencrypted transmission. An attacker on the same network can intercept form data!</div>
+  <hr>
+
+  <h3>Software Update</h3>
+  <button type="button" onclick="window.open('/update','_self')">Manual OTA Update</button><br>
+  Enable ArduinoOTA: <input type="checkbox" x-model="cfg.AO">
+  <hr>
+
+  <h3 id="backup">Backup &amp; Restore</h3>
+  <a class="btn lnk" :href="base+'/presets.json'" :download="'wled_presets'+(sd&&sd!='WLED'?'_'+sd:'')">Backup presets</a><br>
+  <div>Restore presets<br>
+    <input type="file" x-ref="presetsFile" accept=".json">
+    <button type="button" @click="uploadFile($refs.presetsFile, '/presets.json')">Upload</button><br>
+  </div><br>
+  <a class="btn lnk" :href="base+'/cfg.json'" :download="'wled_cfg'+(sd&&sd!='WLED'?'_'+sd:'')">Backup configuration</a><br>
+  <div>Restore configuration<br>
+    <input type="file" x-ref="cfgFile" accept=".json">
+    <button type="button" @click="uploadFile($refs.cfgFile, '/cfg.json')">Upload</button><br>
+  </div>
+  <div style="color:#fa0;">&#9888; Restoring presets/configuration will OVERWRITE your current presets/configuration.<br>
+  Incorrect configuration may require a factory reset or re-flashing of your ESP.</div>
+  For security reasons, passwords are not backed up.
+  <hr>
+
+  <h3>About</h3>
+  <a href="https://github.com/MoonModules/WLED/" target="_blank">WLEDMM</a> version ##VERSION##<!-- Autoreplaced from package.json --> ☾<br>
+  (c) 2024 <a href="https://github.com/Aircoookie/WLED/compare/main...MoonModules:WLED:mdev" target="_blank">Github MoonModules WLED Commit Authors</a><br><br>
+  fork of <a href="https://github.com/Aircoookie/WLED/" target="_blank">WLED:</a><br>
+  <a href="https://github.com/Aircoookie/WLED/wiki/Contributors-and-credits" target="_blank">Contributors, dependencies and special thanks</a><br>
+  A huge thank you to everyone who helped me create WLED!<br><br>
+  WLED core (c) 2016-2024 Christian Schwinne<br>
+  <i>WLED MM Licensed under the <a href="https://github.com/MoonModules/WLED/blob/master/LICENSE" target="_blank">EUPL-1.2 license</a></i><br><br>
+  Server message: <span x-text="serverMsg" style="color:#f80;"></span>
+  <hr>
+
+  <div x-show="error" x-text="error" style="color:red;margin:8px 0;"></div>
+  <div x-show="saved" style="color:green;margin:8px 0;">Saved!</div>
+  <div id="toast"></div>
+  <button type="button" onclick="window.open('/settings','_self')">Back</button>
+  <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+</div>
+
+<script>
+var sd = 'WLED'; // overwritten by server-side replace if applicable
+
+function secPage() {
+  return {
+    ...wledPageBase(6),
+    cfg: {},
+    otaPass: '',
+    otaPassChanged: false,
+    serverMsg: '',
+    get base() { return wledCfg._base(); },
+
+    async init() {
+      const data = await this._load();
+      if (!data) return;
+      this.cfg = data;
+      // Show server message from /json/info if available
+      try {
+        const info = await fetch(wledCfg._base() + '/json/info');
+        if (info.ok) {
+          const j = await info.json();
+          this.serverMsg = j.name || '';
+          if (j.cn) sd = j.cn;
+        }
+      } catch(e) {}
+    },
+
+    async save() {
+      if (this.cfg.RS && !confirm('Factory reset will erase ALL settings and presets. Are you sure?')) {
+        this.cfg.RS = false;
+        return;
+      }
+      // Build payload — only send OTA password if changed
+      const payload = { ...this.cfg };
+      if (!this.otaPassChanged) {
+        delete payload.OP; // keep sentinel from server untouched
+      } else {
+        payload.OP = this.otaPass;
+      }
+      await this._save(payload);
+      if (this.cfg.RS) {
+        setTimeout(() => window.open('/settings', '_self'), 1500);
+      }
+    },
+
+    async uploadFile(fileInput, dest) {
+      if (!fileInput.files[0]) return;
+      const result = await wledCfg.upload(fileInput, dest);
+      if (result.ok) {
+        this.serverMsg = result.text || 'Upload successful';
+        this.saved = true;
+        setTimeout(() => { this.saved = false; this.serverMsg = ''; }, 3000);
+      } else {
+        this.error = result.text || `Upload failed (HTTP ${result.status})`;
+      }
+    }
+  };
+}
+</script>
 </body>
 </html>

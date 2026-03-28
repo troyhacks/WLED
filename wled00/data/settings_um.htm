@@ -1,395 +1,339 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-  <meta charset="utf-8">
-  <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
-  <title>Usermod Settings</title>
-  <script>
-    var d = document;
-    d.max_gpio = 55;
-    d.um_p = [];
-    d.rsvd = [];
-    d.ro_gpio = [];
-    var umCfg = {};
-    var pins = [], pinO = [], owner;
-    var loc = false, locip;
-    var urows;
-    // var numM = 0;
-    function gId(s) { return d.getElementById(s); }
-    function isO(i) { return (i && typeof i === 'object' && !Array.isArray(i)); }
-    function H() { window.open("https://github.com/Aircoookie/WLED/wiki/Settings#usermod-settings"); }
-    function B() { window.open("/settings", "_self"); }
-    // https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
-    function loadJS(FILE_URL, async = true) {
-      let scE = d.createElement("script");
-      scE.setAttribute("src", FILE_URL);
-      scE.setAttribute("type", "text/javascript");
-      scE.setAttribute("async", async);
-      d.body.appendChild(scE);
-      // success event 
-      scE.addEventListener("load", () => {
-        GetV();
-        for (let k = 0; k < d.rsvd.length; k++) { pins.push(d.rsvd[k]); pinO.push("rsvd"); }
-        if (d.um_p[0] == -1) d.um_p.shift();
-      });
-      // error event
-      scE.addEventListener("error", (ev) => {
-        console.log("Error on loading file", ev);
-        alert("Loading of configuration script failed.\nIncomplete page data!");
-      });
-    }
-    function S() {
-      if (window.location.protocol == "file:") {
-        loc = true;
-        locip = localStorage.getItem('locIp');
-        if (!locip) {
-          locip = prompt("File Mode. Please enter WLED IP!");
-          localStorage.setItem('locIp', locip);
-        }
-      }
-      ldS();
-      // if (!numM) gId("um").innerHTML = ""; //WLEDMM: Do not display no usermods installed
-    }
-    // https://stackoverflow.com/questions/3885817/how-do-i-check-that-a-number-is-float-or-integer
-    function isF(n) { return n === +n && n !== (n | 0); }
-    function isI(n) { return n === +n && n === (n | 0); }
-    // function check(o,k) {}   //WLEDMM not needed as we use dropdowns
-    function getPins(o) {
-      if (isO(o)) {
-        for (const [k, v] of Object.entries(o)) {
-          if (isO(v)) {
-            owner = k;
-            getPins(v);
-            continue;
-          }
-          if (k.replace("[]", "").substr(-3) == "pin") {
-            if (Array.isArray(v)) {
-              for (var i = 0; i < v.length; i++) if (v[i] >= 0) { pins.push(v[i]); pinO.push(owner); }
-            } else {
-              if (v >= 0) { pins.push(v); pinO.push(owner); }
-            }
-          } else if (Array.isArray(v)) {
-            for (var i = 0; i < v.length; i++) getPins(v[i]);
-          }
-        }
-      }
-    }
-    //WLEDMM util function
-    function initCap(s) {
-      if (typeof s !== 'string') return '';
-      // https://www.freecodecamp.org/news/how-to-capitalize-words-in-javascript/
-      return s.replace(/[\W_]/g, ' ').replace(/(^\w{1})|(\s+\w{1})/g, l => l.toUpperCase()); // replace - and _ with space, capitalize every 1st letter
-    }
-    function addField(k, f, o, a = false) {  //key, field, (sub)object, isArray
-      if (isO(o)) {
-        urows += '<hr class="sml">';
-        if (f !== 'unknown' && !k.includes(":")) urows += `<p><u>${initCap(f)}</u></p>`; //WLEDMM show group title
-        for (const [s, v] of Object.entries(o)) {
-          // possibility to nest objects (only 1 level)
-          if (f !== 'unknown' && !k.includes(":")) addField(k + ":" + f, s, v);
-          else addField(k, s, v);
-        }
-      } else if (Array.isArray(o)) {
-        for (var j = 0; j < o.length; j++) {
-          addField(k, f, o[j], true);
-        }
-      } else {
-        var c, t = typeof o;
-        switch (t) {
-          case "boolean":
-            t = "checkbox"; c = 'value="true"' + (o ? ' checked' : '');
-            break;
-          case "number":
-            c = `value="${o}"`;
-            if (f.substr(-3) === "pin") { //WLEDMM: this will not be used and should never happen as pins are now dropdowns
-              c += ` max="55" min="-1" class="s"`; //WLEDMM: hardcoded to 50 as d.max_gpio is not calculated yet here (done in appendGPIOinfo)
-              t = "int";
-            } else {
-              c += ' step="any" class="xxl"';
-            }
-            break;
-          default:
-            t = "text"; c = `value="${o}" style="width:250px;"`;
-            break;
-        }
-        urows += ` ${initCap(f)} `; //WLEDMM only show field (key is shown in grouping)
-        // https://stackoverflow.com/questions/11657123/posting-both-checked-and-unchecked-checkboxes
-        if (t == "checkbox") urows += `<input type="hidden" name="${k}:${f}${a ? "[]" : ""}" value="false">`;
-        else if (!a) urows += `<input type="hidden" name="${k}:${f}${a ? "[]" : ""}" value="${t}">`;
-        // WLEDMM make a dropdown for pin variables
-        if (f.includes("pin")) {
-          var n = this.name.replace("[]", "").substr(-3);
-          urows += `<select name="${k}:${f}${a ? "[]" : ""}" style="width:200px;max-width:90%;">`; //WLEDMM width capped. to be moved to css one day
-          for (var j = -1; j <= d.max_gpio; j++) { // all possible pins WLEDMM: hardcoded to 50 as d.max_gpio is not calculated yet here (done in appendGPIOinfo)
-            let foundPin = -1;
-            for (var i = 0; i < pins.length; i++) { // check if pin is reserved
-              if (pins[i] == j) foundPin = i;
-            }
-            urows += `<option value="${j}"`;
-            if (j == o) urows += ` selected`; //add selected value
-            if (foundPin >= 0) {// already reserved pin
-              if (!k.includes(pinO[foundPin])) urows += ` disabled`; // && pinO[foundPin] != "if"
-            }
-            if (j == -1) urows += `>undefined`; else urows += `>${j}`; // don't show -1
-            if (foundPin >= 0) {// already reserved pin
-              urows += ` ${pinO[foundPin] == "if" ? "global" : pinO[foundPin]}`;
-              if (!k.includes(pinO[foundPin])) urows += " 🔴"; else urows += " 🟢"; //add pins assigned here || pinO[foundPin] == "if"
-            }
-            urows += `</option>`;
-            // if (j==5) //exclude pin 6 to 11
-            // 	j=11
-          }
-          urows += `</select>`;
-        }
-        else
-          urows += `<input type="${t === "int" ? "number" : t}" name="${k}:${f}${a ? "[]" : ""}" ${c}>`; //WLEDMM no need for oninput="check(this,'${k.substr(k.indexOf(":")+1)}')"
-        urows += `<br>`;
-      }
-    }
-    function adF(k, f, o, a = false) {  //shortcut for addField(key, field, (sub)object, isArray)
-      return addField(k, f, o, a);
-    }
-    // https://stackoverflow.com/questions/39729741/javascript-change-input-text-to-select-option
-    function addDropdown(um, fld) {
-      let sel = d.createElement('select');
-      let arr = d.getElementsByName(um + ":" + fld);
-      let inp = arr[1]; // assume 1st field to be hidden (type)
-      if (inp && inp.tagName === "INPUT" && (inp.type === "text" || inp.type === "number")) {  // may also use nodeName
-        let v = inp.value;
-        let n = inp.name;
-        // copy the existing input element's attributes to the new select element
-        for (var i = 0; i < inp.attributes.length; ++i) {
-          var att = inp.attributes[i];
-          // type and value don't apply, so skip them
-          // ** you might also want to skip style, or others -- modify as needed **
-          if (att.name != 'type' && att.name != 'value' && att.name != 'class' && att.name != 'style') {
-            sel.setAttribute(att.name, att.value);
-          }
-        }
-        sel.setAttribute("data-val", v);
-        // finally, replace the old input element with the new select element
-        inp.parentElement.replaceChild(sel, inp);
-        return sel;
-      }
-      return null;
-    }
-    function adD(um, fld) { // shortcut for addDropdown(um,fld)
-      return addDropdown(um, fld);
-    }
-    function addOption(sel, txt, val) {
-      if (sel === null) return; // select object missing
-      let opt = d.createElement("option");
-      opt.value = val;
-      opt.text = txt;
-      sel.appendChild(opt);
-      for (let i = 0; i < sel.childNodes.length; i++) {
-        let c = sel.childNodes[i];
-        if (c.value == sel.dataset.val) sel.selectedIndex = i;
-      }
-    }
-    function adO(sel, txt, val) { // shortcut for addOption(sel,txt,val)
-      return addOption(sel, txt, val);
-    }
-    //WLEDMM: replace Option to set globals
-    function rOpt(name, el, txt, val) {
-      let obj = d.getElementsByName(name);
-      var select = obj;
-      if (obj[el]) select = obj[el];
-      for (let i = 0; i < select.childNodes.length; i++) {
-        let c = select.childNodes[i];
-        if (c.value == val) c.text = txt;
-      }
-    }
-    //WLEDMM: extend Option to set build flag defaults
-    function xOpt(name, el, txt, val) {
-      let obj = d.getElementsByName(name);
-      var select = obj;
-      if (obj[el]) select = obj[el];
-      for (let i = 0; i < select.childNodes.length; i++) {
-        let c = select.childNodes[i];
-        if (c.value == val) c.text += txt;
-      }
-    }
-    //WLEDMM: delete Options to remove options e.g. mclk
-    function dOpt(name, el, valFrom, valTo) {
-      let obj = d.getElementsByName(name);
-      var select = obj;
-      if (obj[el]) select = obj[el];
-      for (let i = 0; i < select.options.length; i++) {
-        let c = select.options[i];
-        if (c.value >= valFrom && c.value <= valTo) {
-          select.removeChild(c);
-          i--; //decrease i by one because the index has been adjusted
-        }
-        //https://www.javascripttutorial.net/javascript-dom/javascript-add-remove-options/
-        //https://www.javascripttutorial.net/javascript-dom/javascript-remove-items-from-a-select-conditionally/
-      }
-    }
-    //WLEDMM: analog options only
-    function aOpt(name, el) {
-      let obj = d.getElementsByName(name);
-      var select = obj;
-      if (obj[el]) select = obj[el];
-      for (let i = 0; i < select.options.length; i++) {
-        let c = select.options[i];
-        found = false;
-        for (let jj = 0; jj < d.a_pins.length; jj++) if (d.a_pins[jj] == c.value) found = true; //value -1 or analog pins
-        if (c.value != -1 && !found) {
-          select.removeChild(c);
-          i--; //decrease i by one because the index has been adjusted
-        }
-        //https://www.javascripttutorial.net/javascript-dom/javascript-add-remove-options/
-        //https://www.javascripttutorial.net/javascript-dom/javascript-remove-items-from-a-select-conditionally/
-      }
-    }
-
-    //WLEDMM disable read only pins
-    function dRO(name, el) {
-      let obj = d.getElementsByName(name);
-      var select = obj;
-      if (obj[el]) select = obj[el];
-      // console.log("dRO", name, el, obj, "s", select, d.ro_gpio);
-      for (let i = 0; i < select.options.length; i++) {
-        let c = select.options[i];
-        // console.log("dRO option", c, c.value, d.ro_gpio.includes(c.value));
-        for (let j = 0; j < d.ro_gpio.length; j++) if (d.ro_gpio[j] == c.value) c.disabled = true; //if (d.ro_gpio.includes(c.value))
-      }
-    }
-
-    //WLEDMM read only pins 🟠, reserved pins 🟣 and disabled, and remove pins > max_gpio
-    function pinPost() {
-      console.log('pinPost', d.max_gpio, d.ro_gpio, d.rsvd);
-      var elements = gId("form_s").elements;
-
-      for (var i = 0, select; select = elements[i++];) {
-        if (select.name.includes("pin") && select.options != null) { //select all pin select elements
-          // console.log(element);
-          for (let i = 0; i < select.options.length; i++) {
-            let c = select.options[i];
-            // console.log("pinPost option", c, c.value, d.ro_gpio.includes(c.value));
-            for (let j = 0; j < d.ro_gpio.length; j++) if (d.ro_gpio[j] == c.value) c.text += " read only 🟠"; //if (d.ro_gpio.includes(c.value)) not working ???
-            for (let j = 0; j < d.rsvd.length; j++) if (d.rsvd[j] == c.value) { c.text += " reserved 🟣"; c.disabled = true; } //now always disabled as post is done last if (d.rsvd.includes(c.value))
-            //remove pins > max_gpio
-            if (c.value > d.max_gpio) {
-              select.removeChild(c);
-              i--; //decrease i by one because the index has been adjusted
-            }
-            //https://www.javascripttutorial.net/javascript-dom/javascript-add-remove-options/
-            //https://www.javascripttutorial.net/javascript-dom/javascript-remove-items-from-a-select-conditionally/
-            if (c.text.length <= 4) c.text += " 🟢"; //2 digit number space and ⍼/⎌. If no reserved/read only/other um, then pin can be freely used (green)
-            for (let jj = 0; jj < d.dt_pins.length; jj++) if (d.dt_pins[jj] == c.value) c.text += ((jj < 9) ? ` D${jj}` : ((jj == 9) ? ` RX` : ` TX`));  //WLEDMM: Add D0-D8, RX/TX to name
-            for (let jj = 0; jj < d.a_pins.length; jj++) if (d.a_pins[jj] == c.value) c.text += ` A${jj}`;  //WLEDMM: Add A0-A10
-          }
-        }
-      }
-    }
-
-    // https://stackoverflow.com/questions/26440494/insert-text-after-this-input-element-with-javascript
-    function addInfo(name, el, txt, txt2 = "") {
-      let obj = d.getElementsByName(name);
-      if (!obj.length) return;
-      if (typeof el === "string" && obj[0]) obj[0].placeholder = el;
-      else if (obj[el]) {
-        if (txt != "") obj[el].insertAdjacentHTML('afterend', '&nbsp;' + txt);
-        if (txt2 != "") obj[el].insertAdjacentHTML('beforebegin', txt2 + '&nbsp;');  //add pre texts
-      }
-    }
-    function adI(name, el, txt, txt2 = "") { // shortcut for addInfo(name,el,txt, txt2="")
-      return addInfo(name, el, txt, txt2);
-    }
-    // add Help Button
-    function addHB(um) {
-      addInfo(um + ':help', 0, '<button onclick=\"location.href=&quot;https://mm.kno.wled.ge/usermods/' + um + '&quot;\" type=\"button\">?</button>')
-    }
-    // load settings and insert values into DOM
-    function ldS() {
-      var url = (loc ? `http://${locip}` : '') + '/cfg.json';
-      fetch(url, {
-        method: 'get'
-      })
-        .then(res => {
-          if (!res.ok) gId('lserr').style.display = "inline";
-          return res.json();
-        })
-        .then(json => {
-          umCfg = json.um;
-          getPins(json);
-          urows = "";
-          const queryString = window.location.search;
-          const urlParams = new URLSearchParams(queryString);
-          const userMod = urlParams.get('um');
-          if (userMod == null) {
-            urows += "<hr><h2>Usermods (Pin Manager)</h2>";
-            urows += "<button onclick=\"location.href=&quot;https://mm.kno.wled.ge/usermods/pinmanager&quot;\" type=\"button\">?</button>";
-            urows += "<hr class=\"sml\">";
-            urows += "<i style=\"color:orange\">(change requires reboot!)</i>";
-            urows += "<hr class=\"sml\">";
-            urows += "<p><u>Global I2C GPIOs (HW)</u></p>";
-            addField("if:SDA", "pin", -1, false);
-            addField("if:SCL", "pin", -1, false);
-            urows += "<hr class=\"sml\">";
-            urows += "<p><u>Global SPI GPIOs (HW)</u></p>";
-            addField("if:MOSI", "pin", -1, false);
-            addField("if:MISO", "pin", -1, false);
-            addField("if:SCLK", "pin", -1, false);
-          }
-          if (isO(umCfg)) {
-            //WLEDMM: read url parameter. e.g. um=AudioReactive and if set only add the usermod with the same name
-            for (const [k, o] of Object.entries(umCfg)) {
-              if (userMod == k) {
-                let label = k.replace(/_/g, " ");
-                urows += `<hr><h3>${label}</h3><div name="${k}:help"></div>`;
-                addField(k, 'unknown', o);
-              }
-            }
-            if (userMod != null && urows === "") urows = "Usermods configuration not found.<br>Press <i>Save</i> to initialize defaults.";
-            if (userMod == null) {
-              urows += `<hr> `;
-              urows += `<div style="margin: auto;">`;
-              urows += `<table style="margin-left:auto; margin-right:auto;">`;
-              urows += `<tr><th>Usermod</th><th>Enabled</th></tr>` 
-              for (const [k, o] of Object.entries(umCfg)) {
-                urows += `<tr><td>${k}</td><td>${o.enabled}</td></tr>`;
-              }
-              urows += `</table>`;
-              urows += `</div>`;
-            }
-          }
-
-          gId("um").innerHTML = urows;
-          var url = (loc ? `http://${locip}` : '') + '/settings/s.js?p=8';
-          if (userMod != null) url += '&um=' + userMod; //WLEDMM add userMod as parameter
-          loadJS(url, false);	// If we set async false, file is loaded and executed, then next statement is processed
-        })
-        .catch((error) => {
-          gId('lserr').style.display = "inline";
-          console.log(error);
-        });
-    }
-    function svS(e) {
-      e.preventDefault();
-      if (d.Sf.checkValidity()) d.Sf.submit(); //https://stackoverflow.com/q/37323914
-    }
-  </script>
-  <style>
-    @import url("style.css");
-  </style>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>Usermod Settings</title>
+<script src="/alpine.min.js" defer></script>
+<script src="/settings-core.js"></script>
+<style>@import url("style.css");</style>
 </head>
+<body>
+<div x-data="umPage()" x-init="init()">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://github.com/Aircoookie/WLED/wiki/Settings#usermod-settings')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+    <hr>
+  </div>
 
-<body onload="S()">
-  <form id="form_s" name="Sf" method="post" onsubmit="svS(event)">
-    <div class="toprow">
-      <div class="helpB"><button type="button" onclick="H()">?</button></div>
-      <button type="button" onclick="B()">Back</button><button type="submit">Save</button><br>
-      <span id="lssuc" style="color:green; display:none">&#10004; Configuration saved!</span>
-      <span id="lserr" style="color:red; display:none">&#9888; Could not load configuration.</span>
+  <div x-show="error" x-text="error" style="color:red;margin:8px 0;"></div>
+  <div x-show="saved" style="color:green;margin:8px 0;">&#10004; Configuration saved!</div>
+  <div x-show="loading" style="color:#aaa;">Loading settings...</div>
+
+  <!-- Global I2C/SPI Pins (hidden when filtered to specific usermod) -->
+  <div x-show="!loading && !umFilter">
+    <hr>
+    <h2>Usermods (Pin Manager)</h2>
+    <button type="button" onclick="window.open('https://mm.kno.wled.ge/usermods/pinmanager')">?</button>
+    <hr class="sml">
+    <i style="color:orange">(change requires reboot!)</i>
+    <hr class="sml">
+    <p><u>Global I2C GPIOs (HW)</u></p>
+    SDA pin: <select x-model.number="cfg.if.i2c.SDA"><template x-for="o in pinOptions(-1)" :key="o.n"><option :value="o.n" :disabled="o.dis" x-text="o.label"></option></template></select><br>
+    SCL pin: <select x-model.number="cfg.if.i2c.SCL"><template x-for="o in pinOptions(-1)" :key="o.n"><option :value="o.n" :disabled="o.dis" x-text="o.label"></option></template></select><br>
+    <hr class="sml">
+    <p><u>Global SPI GPIOs (HW)</u></p>
+    MOSI pin: <select x-model.number="cfg.if.spi.MOSI"><template x-for="o in pinOptions(-1)" :key="o.n"><option :value="o.n" :disabled="o.dis" x-text="o.label"></option></template></select><br>
+    MISO pin: <select x-model.number="cfg.if.spi.MISO"><template x-for="o in pinOptions(-1)" :key="o.n"><option :value="o.n" :disabled="o.dis" x-text="o.label"></option></template></select><br>
+    SCLK pin: <select x-model.number="cfg.if.spi.SCLK"><template x-for="o in pinOptions(-1)" :key="o.n"><option :value="o.n" :disabled="o.dis" x-text="o.label"></option></template></select><br>
+  </div>
+
+    <!-- Usermod sections -->
+    <template x-for="[modName, modCfg] in umEntries()" :key="modName">
+      <div>
+        <hr>
+        <h3 x-text="modName" style="display:inline;"></h3>
+        <button type="button" x-show="hasSchema(modName)" style="margin-left:8px;" @click="openHelp(modName)">?</button>
+        <br>
+        <template x-for="field in buildFields(modName, modCfg)" :key="field.path">
+          <div>
+            <!-- Group header -->
+            <template x-if="field.type === 'group'">
+              <p><u x-text="field.label"></u></p>
+            </template>
+            <!-- Boolean / checkbox -->
+            <template x-if="field.type === 'bool'">
+              <span>
+                <span x-text="field.label"></span>:
+                <input type="checkbox" :checked="getVal(field.path)" @change="setVal(field.path, $event.target.checked)">
+                <br>
+              </span>
+            </template>
+            <!-- GPIO pin selector -->
+            <template x-if="field.type === 'gpio' || field.isPin">
+              <span>
+                <span x-text="field.label"></span>:
+                <select :value="getVal(field.path)" @change="setVal(field.path, parseInt($event.target.value))">
+                  <template x-for="o in pinOptions(getVal(field.path))" :key="o.n">
+                    <option :value="o.n" :disabled="o.dis" x-text="o.label"></option>
+                  </template>
+                </select><br>
+              </span>
+            </template>
+            <!-- Integer number -->
+            <template x-if="field.type === 'int'">
+              <span>
+                <span x-text="field.label"></span>:
+                <input type="number" class="xxl" :min="field.min ?? ''" :max="field.max ?? ''"
+                  :value="getVal(field.path)"
+                  @input="setVal(field.path, parseInt($event.target.value))"><br>
+              </span>
+            </template>
+            <!-- Float number -->
+            <template x-if="field.type === 'float'">
+              <span>
+                <span x-text="field.label"></span>:
+                <input type="number" class="xxl" step="any" :min="field.min ?? ''" :max="field.max ?? ''"
+                  :value="getVal(field.path)"
+                  @input="setVal(field.path, parseFloat($event.target.value))"><br>
+              </span>
+            </template>
+            <!-- Select / enum -->
+            <template x-if="field.type === 'select'">
+              <span>
+                <span x-text="field.label"></span>:
+                <select :value="getVal(field.path)" @change="setVal(field.path, $event.target.value)">
+                  <template x-for="opt in field.options" :key="opt.value">
+                    <option :value="opt.value" x-text="opt.label"></option>
+                  </template>
+                </select><br>
+              </span>
+            </template>
+            <!-- String / text -->
+            <template x-if="field.type === 'string'">
+              <span>
+                <span x-text="field.label"></span>:
+                <input type="text" style="width:250px;"
+                  :value="getVal(field.path)"
+                  @input="setVal(field.path, $event.target.value)"><br>
+              </span>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- Summary table -->
+    <hr>
+    <div style="margin:auto;">
+      <table style="margin-left:auto;margin-right:auto;">
+        <tr><th>Usermod</th><th>Enabled</th></tr>
+        <template x-for="[k, o] in umEntries()" :key="k">
+          <tr>
+            <td x-text="k"></td>
+            <td x-text="o.enabled !== undefined ? String(o.enabled) : 'n/a'"></td>
+          </tr>
+        </template>
+      </table>
     </div>
-    <!-- WLEDMM: no GPIOs here as it is generated -->
-    <div id="um">Loading settings...</div>
-    <div name="errorMessage"></div>
-    <hr><button type="button" onclick="B()">Back</button><button type="submit">Save</button>
-  </form>
-</body>
+  </div>
 
+  <hr>
+  <button type="button" onclick="window.open('/settings','_self')">Back</button>
+  <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+</div>
+
+<script>
+function initCap(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/[\W_]/g, ' ').replace(/(^\w{1})|(\s+\w{1})/g, l => l.toUpperCase());
+}
+
+function isPin(key) {
+  return key.replace('[]','').slice(-3) === 'pin';
+}
+
+function guessType(key, val) {
+  if (typeof val === 'boolean') return 'bool';
+  if (typeof val === 'string') return 'string';
+  if (isPin(key)) return 'gpio';
+  if (typeof val === 'number') return Number.isInteger(val) ? 'int' : 'float';
+  return 'string';
+}
+
+// Special field options for known usermod fields (when no schema available)
+function specialOptions(modName, path) {
+  if (modName !== 'AudioReactive') return [];
+  if (path === 'AudioReactive.digitalmic.type') {
+    return [
+      { value: '254', label: 'None - network receive only' },
+      { value: '0', label: 'Generic Analog' },
+      { value: '1', label: 'Generic I2S' },
+      { value: '2', label: 'ES7243' },
+      { value: '3', label: 'SPH0654' },
+      { value: '4', label: 'Generic I2S with Mclk' },
+      { value: '5', label: 'Generic I2S PDM' },
+      { value: '51', label: 'Legacy I2S PDM' },
+    ];
+  }
+  if (path === 'AudioReactive.config.AGC') {
+    return [
+      { value: '0', label: 'Off' },
+      { value: '1', label: 'Normal' },
+      { value: '2', label: 'Vivid' },
+    ];
+  }
+  if (path === 'AudioReactive.experiments.micLev') {
+    return [
+      { value: '0', label: 'Floating' },
+      { value: '1', label: 'Freeze' },
+      { value: '2', label: 'Fast Freeze' },
+    ];
+  }
+  if (path === 'AudioReactive.experiments.Mic_Quality') {
+    return [
+      { value: '0', label: 'average (standard)' },
+      { value: '1', label: 'low noise' },
+      { value: '2', label: 'perfect' },
+    ];
+  }
+  if (path === 'AudioReactive.experiments.FFT_Window') {
+    return [
+      { value: '0', label: 'Hanning' },
+      { value: '1', label: 'Hamming' },
+      { value: '2', label: 'Blackman' },
+    ];
+  }
+  if (path === 'AudioReactive.frequency.profile') {
+    return [
+      { value: '0', label: 'Vocals' },
+      { value: '1', label: 'Instrumental' },
+      { value: '2', label: 'Linear' },
+    ];
+  }
+  return [];
+}
+
+function flattenUM(obj, modName, schema, prefix) {
+  // Returns array of field descriptor objects
+  const fields = [];
+  if (!obj || typeof obj !== 'object') return fields;
+  const schemaFields = schema?.fields;
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : `${modName}.${k}`;
+    const sf = schemaFields?.find(f => f.key === k);
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      fields.push({ type: 'group', label: initCap(k), path });
+      fields.push(...flattenUM(v, modName, null, path));
+    } else if (Array.isArray(v)) {
+      if (v.length > 0 && isPin(k)) {
+        v.forEach((item, i) => {
+          fields.push({ type: 'gpio', isPin: true, label: `${initCap(k)} ${i}`, path: `${path}.${i}`, value: item });
+        });
+      }
+      // Otherwise skip arrays we don't know how to handle
+    } else {
+      const opts = sf?.options || specialOptions(modName, path);
+      fields.push({
+        type: opts.length > 0 ? 'select' : (sf?.type || guessType(k, v)),
+        isPin: !sf && isPin(k),
+        label: sf?.label || initCap(k),
+        min: sf?.min, max: sf?.max,
+        options: opts,
+        path
+      });
+    }
+  }
+  return fields;
+}
+
+function umPage() {
+  return {
+    ...wledPageBase(8),
+    cfg: { if: { i2c: { SDA: -1, SCL: -1 }, spi: { MOSI: -1, MISO: -1, SCLK: -1 } }, um: {} },
+    schema: {},
+    gpio: { rsvd: [], ro_gpio: [], um_p: [], max_gpio: 55, dt_pins: [], a_pins: [] },
+    loading: true,
+    umFilter: new URLSearchParams(window.location.search).get('um'),
+
+    async init() {
+      const data = await this._load();
+      if (!data) { this.loading = false; return; }
+      if (data._gpio) this.gpio = data._gpio;
+      if (data._schema) this.schema = data._schema;
+      if (!data.if) data.if = { i2c: { SDA: -1, SCL: -1 }, spi: { MOSI: -1, MISO: -1, SCLK: -1 } };
+      if (!data.um) data.um = {};
+      this.cfg = data;
+      this.loading = false;
+    },
+
+    umEntries() {
+      const entries = Object.entries(this.cfg.um || {});
+      if (!this.umFilter) return entries;
+      return entries.filter(([k]) => k === this.umFilter);
+    },
+
+    hasSchema(modName) {
+      return !!this.schema[modName];
+    },
+
+    openHelp(modName) {
+      window.open(`https://mm.kno.wled.ge/usermods/${modName}`);
+    },
+
+    buildFields(modName, modCfg) {
+      return flattenUM(modCfg, modName, this.schema[modName]);
+    },
+
+    // Path is like "AudioReactive.enabled" or "AudioReactive.group.pin"
+    getVal(path) {
+      const parts = path.split('.');
+      let obj = this.cfg.um;
+      for (const p of parts) {
+        if (obj === undefined || obj === null) return undefined;
+        obj = obj[p];
+      }
+      return obj;
+    },
+
+    setVal(path, value) {
+      const parts = path.split('.');
+      let obj = this.cfg.um;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (obj[parts[i]] === undefined) obj[parts[i]] = {};
+        obj = obj[parts[i]];
+      }
+      obj[parts[parts.length-1]] = value;
+    },
+
+    pinOptions(currentVal) {
+      const gpio = this.gpio;
+      const rsvd = gpio.rsvd || [];
+      const ro = gpio.ro_gpio || [];
+      const used = gpio.um_p || [];
+      const dtPins = gpio.dt_pins || [];
+      const aPins = gpio.a_pins || [];
+      const max = gpio.max_gpio || 55;
+      const opts = [{ n: -1, label: 'Undefined', dis: false }];
+      for (let i = 0; i <= max; i++) {
+        const isRsvd = rsvd.includes(i);
+        const isRo = ro.includes(i);
+        const isUsed = used.includes(i) && i !== currentVal;
+        let label = String(i);
+        // Add DX / AX labels
+        const di = dtPins.indexOf(i);
+        if (di >= 0) label += di < 9 ? ` D${di}` : (di === 9 ? ' RX' : ' TX');
+        const ai = aPins.indexOf(i);
+        if (ai >= 0) label += ` A${ai}`;
+        if (isRsvd) label += ' reserved 🟣';
+        else if (isRo) label += ' read only 🟠';
+        else if (isUsed) label += ' (in use)';
+        else label += ' 🟢';
+        opts.push({ n: i, label, dis: isRsvd });
+      }
+      return opts;
+    },
+
+    async save() {
+      const payload = {
+        if: this.cfg.if,
+        um: this.cfg.um
+      };
+      await this._save(payload);
+    }
+  };
+}
+</script>
+</body>
 </html>

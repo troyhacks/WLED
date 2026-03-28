@@ -1,1084 +1,135 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8">
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
   <title>LED Settings</title>
-  <script>
-    // SINGLE SOURCE OF TRUTH
-    // Map ID to definition. 
-    // Categories: 0:None, 1:Dig(1pin), 2:Dig(2pin), 3:Analog, 4:Net, 5:Virt/Other
-    // Comment/Uncomment to hide from UI.
-    const LED_TYPES = {
-      // 0: { name: "None", cat: 0 },
-      // 1: { name: "Reserved", cat: 5 },
-      // // Digital (Data Pin Only)
-      // 18: { name: "WS2812 1CH (White)", cat: 1, color: "W" },
-      // 19: { name: "WS2812 1CH x3 (White)", cat: 1, color: "W" },
-      // 20: { name: "WS2812 2CH x3 (CCT)", cat: 1, color: "WW/CW" },
-      // 21: { name: "WS2812 WWA", cat: 1, color: "WWA" },
-      // 22: { name: "WS281x (RGB)", cat: 1, color: "RGB" },
-      // 23: { name: "GS8608", cat: 1, color: "RGB", reqRef: true }, // reqRef = requires refresh
-      // 24: { name: "WS2811 400kHz", cat: 1, color: "RGB" },
-      // 25: { name: "TM1829", cat: 1, color: "RGB" },
-      // 26: { name: "UCS8903", cat: 1, color: "RGB" },
-      // 29: { name: "UCS8904", cat: 1, color: "RGBW" },
-      // 30: { name: "SK6812/WS2814 RGBW", cat: 1, color: "RGBW" },
-      // 31: { name: "TM1814", cat: 1, color: "RGBW", reqRef: true },
-
-      // // Analog (PWM)
-      // 40: { name: "On/Off (Relay)", cat: 3, color: "W" },
-      // 41: { name: "PWM White", cat: 3, color: "W" },
-      // 42: { name: "PWM CCT", cat: 3, color: "WW/CW" },
-      // 43: { name: "PWM RGB", cat: 3, color: "RGB" },
-      // 44: { name: "PWM RGBW", cat: 3, color: "RGBW" },
-      // 45: { name: "PWM RGB+CCT", cat: 3, color: "RGBW+CCT" },
-
-      // // Digital (Data + Clock / SPI)
-      // 50: { name: "WS2801", cat: 2, color: "RGB" },
-      // 51: { name: "APA102", cat: 2, color: "RGB" },
-      // 52: { name: "LPD8806", cat: 2, color: "RGB" },
-      // 53: { name: "P9813", cat: 2, color: "RGB" },
-      // 54: { name: "LPD6803", cat: 2, color: "RGB" },
-
-      // Parallel (Treating as specialized Digital 1pin for UI logic, but flagged)
-      60: { name: "Parallel IO RGB", cat: 1, color: "RGB", isPar: true },
-      61: { name: "Parallel IO RGBW", cat: 1, color: "RGBW", isPar: true },
-
-      // Network
-      80: { name: "Art-Net RGB", cat: 4, color: "RGB" },
-      83: { name: "Art-Net RGBW", cat: 4, color: "RGBW" },
-      81: { name: "DDP RGB", cat: 4, color: "RGB" },
-      84: { name: "DDP RGBW", cat: 4, color: "RGBW" },
-      82: { name: "E1.31 RGB", cat: 4, color: "RGB" },
-      85: { name: "E1.31 RGBW", cat: 4, color: "RGBW" },
-      86: { name: "ColorLight 5A-75B RGB", cat: 4, color: "RGB" },
-      87: { name: "ColorLight 5A-75B RGBW", cat: 4, color: "RGBW" },
-
-      // Special/Matrix
-      // 100: { name: "Hub75 Matrix", cat: 5, isMatrix: true }
-    };
-
-    // Helper function to get properties safely
-    function getLedDef(id) {
-      return LED_TYPES[parseInt(id)] || { name: "Unknown", cat: 0, color: "RGB" };
-    }
-
-    var d = document, laprev = 55, maxB = 1, maxV = 0, maxM = 4000, maxPB = 99999, maxL = 1333, maxLbquot = 0; //maximum bytes for LED allocation: 4kB for 8266, 32kB for 32
-    d.um_p = [];
-    d.rsvd = [];
-    d.ro_gpio = [];
-    d.max_gpio = 55;
-    var customStarts = false, startsDirty = [], maxCOOverrides = 5;
-    var loc = false, locip;
-    function H() { window.open("https://mm.kno.wled.ge/features/settings/#led-settings"); }
-    function B() { window.open("/settings", "_self"); }
-    function gId(n) { return d.getElementById(n); }
-    function hideNoIR() { gId("irOnOff2").style.display = "none"; } //WLEDMM
-    function hideHub75() {
-      var s = d.getElementsByTagName("select");
-      for (i = 0; i < s.length; i++) {
-        // is the field a LED type?
-        if (s[i].name.substring(0, 2) == "LT") {
-          var selectobject = s[i];
-          for (var j = (selectobject.length - 1); j > 0; j--) {
-            var t = parseInt(selectobject.options[j].value);
-            if (t >= 100 && t <= 110) selectobject.remove(j);
-          }
-        }
-      }
-    }
-    function off(n) { d.getElementsByName(n)[0].value = -1; }
-    // https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
-    function loadJS(FILE_URL, async = true) {
-      let scE = d.createElement("script");
-      scE.setAttribute("src", FILE_URL);
-      scE.setAttribute("type", "text/javascript");
-      scE.setAttribute("async", async);
-      d.body.appendChild(scE);
-      // success event 
-      scE.addEventListener("load", () => {
-        GetV();
-        checkSi();
-        setABL();
-        if (d.um_p[0] == -1) d.um_p.shift();
-      });
-      // error event
-      scE.addEventListener("error", (ev) => {
-        console.log("Error on loading file", ev);
-        alert("Loading of configuration script failed.\nIncomplete page data!");
-      });
-    }
-    var timeout;
-    function showToast(text, error = false) {
-      var x = gId("toast");
-      x.innerHTML = text;
-      x.className = error ? "error" : "show";
-      clearTimeout(timeout);
-      x.style.animation = 'none';
-      timeout = setTimeout(function () { x.className = x.className.replace("show", ""); }, 2900);
-    }
-    function bLimits(b, v, m, l) {
-      maxB = b; maxV = v; maxM = m; maxL = l;
-    }
-    function setPixelLimit(i, max) {
-      var lc = d.getElementsByName("LC" + i)[0];
-      lc.max = max;
-    }
-
-    function pinsOK() {
-      // Use a Map to track pins that have been assigned.
-      // The key is the pin number, the value is the name of the input field.
-      const pinAssignments = new Map();
-      const allInputs = d.getElementsByTagName("input");
-
-      for (const input of allInputs) {
-        if (input.disabled) {
-          continue; // Skip disabled inputs
-        }
-
-        const name = input.name;
-        const isPinInput = (name.startsWith("L") && !isNaN(name.substring(1))) ||
-          name.startsWith("RL") || name.startsWith("BT") || name.startsWith("IR");
-
-        // Only process inputs that are for GPIO pins
-        if (!isPinInput) {
-          continue;
-        }
-
-        // Check if this input should be skipped because it's an IP address field
-        if (name.startsWith("L")) {
-          const stripIndex = name.charAt(name.length - 1);
-          const ltEl = d.getElementsByName("LT" + stripIndex)[0];
-          const ledType = ltEl ? parseInt(ltEl.value, 10) : 0;
-
-          const typeDef = getLedDef(ledType);
-          if (typeDef.cat === 4) {
-            continue; // This is a Network (IP) field, skip GPIO checks
-          }
-        }
-
-        const value = input.value;
-        if (value === "" || value === "-1") {
-          continue; // No pin assigned, so nothing to check.
-        }
-
-        const pin = parseInt(value, 10);
-
-        // 1. Check for duplicates using the Map (this replaces the nested loop)
-        if (pinAssignments.has(pin)) {
-          const originalInputName = pinAssignments.get(pin);
-          alert(`Pin conflict! Pin ${pin} is used by both ${originalInputName} and ${name}.`);
-          input.focus();
-          return false;
-        }
-
-        // 2. Check against reserved pins
-        const reservedPins = [...d.rsvd, ...d.um_p];
-        if (reservedPins.includes(pin)) {
-          alert(`Sorry, pin ${pin} (${name}) can't be used as it is reserved.`);
-          input.focus();
-          return false;
-        }
-
-        // 3. Check against read-only pins
-        if (!name.startsWith("IR") && !name.startsWith("BT") && d.ro_gpio.includes(pin)) {
-          alert(`Sorry, pin ${pin} (${name}) is input only.`);
-          input.focus();
-          return false;
-        }
-
-        // If all checks pass, add this pin to our map for future duplicate checks.
-        pinAssignments.set(pin, name);
-      }
-
-      // If the loop completes without finding any issues, we're good.
-      return true;
-    }
-
-    function trySubmit(e) {
-      d.Sf.data.value = '';
-      e.preventDefault();
-      if (!pinsOK()) { e.stopPropagation(); return false; } // Prevent form submission and contact with server
-      if (bquot > 100) { var msg = "Too many LEDs for me to handle!"; if (maxM < 10000) msg += "\n\rConsider using an ESP32."; alert(msg); }
-      if (d.Sf.checkValidity()) d.Sf.submit(); //https://stackoverflow.com/q/37323914
-    }
-    function enABL() {
-      const en = gId('able').checked;
-      d.Sf.LA.value = (en) ? laprev : 0;
-      d.Sf.MA.min = (en) ? 250 : 0;   // WLEDMM no minimum if invisble
-      if ((!en) && (!d.Sf.MA.value || d.Sf.MA.value < 0)) d.Sf.MA.value = 0; // WLEDMM workaround when field is invisible with invalid value
-      gId('abl').style.display = (en) ? 'inline' : 'none';
-      gId('psu2').style.display = (en) ? 'inline' : 'none';
-      if (d.Sf.LA.value > 0) setABL();
-    }
-    function enLA() {
-      var val = d.Sf.LAsel.value;
-      d.Sf.LA.value = val;
-      gId('LAdis').style.display = (val == 50) ? 'inline' : 'none';
-      UI();
-    }
-    function setABL() {
-      gId('able').checked = true;
-      d.Sf.LAsel.value = 50;
-      switch (parseInt(d.Sf.LA.value)) {
-        case 0: gId('able').checked = false; enABL(); break;
-        case 30: d.Sf.LAsel.value = 30; break;
-        case 35: d.Sf.LAsel.value = 35; break;
-        case 55: d.Sf.LAsel.value = 55; break;
-        case 255: d.Sf.LAsel.value = 255; break;
-        default: gId('LAdis').style.display = 'inline';
-      }
-      gId('m1').innerHTML = maxM;
-      d.getElementsByName("Sf")[0].addEventListener("submit", trySubmit);
-      UI();
-    }
-    //returns mem usage
-    function getMem(t, n) {
-      let len = parseInt(d.getElementsByName("LC" + n)[0].value);
-      len += parseInt(d.getElementsByName("SL" + n)[0].value);
-      let typeDef = getLedDef(t);
-
-      if (typeDef.cat === 1 || typeDef.cat === 2 || typeDef.isPar) {
-        // Digital types
-        let bytesPerPixel = 3;
-        if (typeDef.color.includes("W")) bytesPerPixel = 4;
-
-        // Double buffer specific logic (ESP32 vs 8266)
-        if (maxM < 10000 && d.getElementsByName("L0" + n)[0].value == 3) {
-          return len * (bytesPerPixel * 5); // 8266 DMA
-        } else if (maxM >= 10000) {
-          return len * (bytesPerPixel * 2); // ESP32 RMT/I2S usually double buffered
-        }
-        return len * bytesPerPixel;
-          }
-
-          if (typeDef.cat === 3) return 5; // Analog uses negligible mem
-          if (typeDef.cat === 4) return len * 3; // Network (usually just buffer)
-
-          return len * 3;
-        }
-        function isValidPositiveNumber(value) {
-          const num = Number(value);
-          return Number.isFinite(num) && num > 0;
-        }
-
-        function matchToOutputCount(n) {
-          if (n <= 1) return 1;
-          if (n <= 2) return 2;
-          if (n <= 4) return 4;
-          if (n <= 8) return 8;
-          return 16;
-        }
-
-        function UI(change = false) {
-          let isRGBW = false, gRGBW = false, memu = 0;
-
-          var drops = document.querySelectorAll("select[name^='LT']");
-
-          drops.forEach(function (sel) {
-            // 1. Save the currently selected value so we don't lose it
-            var selectedVal = sel.value;
-
-            // 2. Extract options into an array
-            var opts = Array.from(sel.options);
-
-            // 3. Sort the array alphabetically by text
-            opts.sort(function (a, b) {
-              return a.text.localeCompare(b.text);
-            });
-
-            // 4. Clear and re-append sorted options
-            sel.innerHTML = '';
-            opts.forEach(function (opt) {
-              sel.add(opt);
-            });
-
-            // 5. Restore the selection
-            sel.value = selectedVal;
-          });
-
-          // 1. Global FPS and Power Warnings
-          gId('ampwarning').style.display = (d.Sf.MA.value > 7200) ? 'inline' : 'none';
-          gId('fpsNone').style.display = ((d.Sf.FR.value == 0) || (d.Sf.FR.value > 249)) ? 'block' : 'none';
-          gId('fpsNoHelp').style.display = ((d.Sf.FR.value == 0) || (d.Sf.FR.value > 249)) ? 'none' : 'block';
-          gId('fpswarning').style.display = (d.Sf.FR.value > 79) || (d.Sf.FR.value == 0) ? 'block' : 'none';
-          gId('fpshelp1').style.display = ((d.Sf.FR.value > 90) && (d.Sf.FR.value < 132)) ? 'block' : 'none';
-          gId('fpshelp2').style.display = ((d.Sf.FR.value > 132) && (d.Sf.FR.value < 196)) ? 'block' : 'none';
-          gId('fpshelp3').style.display = (d.Sf.FR.value > 196) ? 'block' : 'none';
-
-          // 2. ABL
-          const ablEnabled = gId('able').checked;
-          d.Sf.MA.min = ablEnabled ? 250 : 0;
-          if ((!ablEnabled) && !d.Sf.MA.value) d.Sf.MA.value = 0;
-          if (d.Sf.LA.value == 255) laprev = 12;
-          else if (d.Sf.LA.value > 0) laprev = d.Sf.LA.value;
-
-          // 3. Loop LED Outputs
-          var s = d.getElementsByTagName("select");
-          for (i = 0; i < s.length; i++) {
-            if (s[i].name.substring(0, 2) == "LT") {
-              var n = s[i].name.substring(2);
-              var t = parseInt(s[i].value, 10);
-              var typeDef = getLedDef(t);
-
-              // A. Labels
-              let p0Label = "GPIO:";
-              if (typeDef.isPar) p0Label = "Parallel IO Pins:";
-              else if (typeDef.isMatrix) p0Label = "Chain Length:";
-              else if (t === 86 || t === 87) p0Label = "(Not used)";
-              else if (typeDef.cat === 4) p0Label = "IP Address:";
-              else if (typeDef.cat === 2) p0Label = "Data GPIO:";
-              else if (typeDef.cat === 3) p0Label = "GPIOs:";
-
-              gId("p0d" + n).innerHTML = p0Label + ((typeDef.isPar) ? "<br />" : "");
-              gId("p1d" + n).innerHTML = (typeDef.cat === 2) ? "Clk GPIO:" : "";
-
-              // B. Memory
-              memu += getMem(t, n);
-
-              // C. Pins Visibility & Logic
-              var loopmax = d.max_parlio ?? 4;
-              var color_el = d.getElementsByName("AO" + n)[0];
-              var coloroutputs = color_el ? Number(color_el.value) : 0;
-              var pins_nulled = 0;
-              coloroutputs = (Number(coloroutputs) === 0) ? loopmax : coloroutputs;
-
-              for (p = 0; p < 17; p++) {
-                var LK = d.getElementsByName("L" + p + n)[0];
-                if (!LK) continue;
-
-                let showPin = false;
-                if (typeDef.isMatrix) showPin = false;
-                else if (typeDef.isPar) showPin = (p < loopmax);
-                else if (typeDef.cat === 4) showPin = (p < 4); // Always show 4 for Network
-                else if (typeDef.cat === 2) showPin = (p < 2);
-                else if (typeDef.cat === 3) showPin = (p < (t - 40));
-                else showPin = (p === 0);
-
-                if (showPin) {
-                  LK.style.display = "inline";
-                  LK.required = true;
-                  if (typeDef.isPar) {
-                    // Parallel Logic (unchanged)
-                    LK.min = Number(-1); LK.max = Number(d.max_gpio);
-                    if (Array.isArray(d.parlio_default_pins) && typeof d.parlio_default_pins[p] === "number") LK._defaultValue = d.parlio_default_pins[p];
-                    if (p < matchToOutputCount(coloroutputs) && p >= coloroutputs) {
-                      LK.style.backgroundColor = "rgb(80,80,0)"; LK._prevValue = LK.value; LK.value = Number(-1); LK.disabled = true;
-                    } else if (p < coloroutputs) {
-                      LK.style.backgroundColor = "rgb(0,69,0)";
-                      let candidate = LK.value;
-                      if (candidate === undefined || candidate === "" || Number(candidate) === -1) {
-                        candidate = LK._defaultValue;
-                      }
-                      if (Number(candidate) > Number(d.max_gpio)) {
-                        candidate = LK._defaultValue;
-                      }
-                      if (candidate !== undefined && candidate !== "" &&
-                        Array.isArray(d.rsvd) && !d.rsvd.includes(Number(candidate))) {
-                        LK.value = Number(candidate);
-                      } else {
-                        LK.value = -1;
-                      }
-
-                      LK.disabled = false;
-                      if (LK.style.color === "red") LK.style.color = "#fff";
-                    } else {
-                      LK.style.backgroundColor = ""; LK._prevValue = LK.value; LK.value = Number(-1); LK.disabled = true;
-                    }
-                    LK.min = -1;
-                    if (LK.value == -1) { if (LK.disabled != true) pins_nulled++; LK.style.color = "#fff"; }
-                  } else {
-                    // Standard & Network Logic
-                    LK.style.backgroundColor = "";
-                    LK.disabled = false;
-                    if (typeDef.cat === 4) {
-                      LK.min = 0;
-                      LK.max = 255;
-                      
-                      let defVal = "";
-
-                      // Only grab the IP from the array for the first 3 parts (0, 1, 2)
-                      if (p < 3 && Array.isArray(d.network_ip) && typeof d.network_ip[p] === "number") {
-                        defVal = d.network_ip[p];
-                      }
-
-                      LK._defaultValue = defVal;
-                      if (LK.value === "" || parseInt(LK.value) < 0) {
-                        LK.value = defVal;
-                      }
-
-                      LK.required = true;
-                    } else {
-                      LK.min = -1;
-                      LK.max = Number(d.max_gpio);
-                    }
-                  }
-                } else {
-                  LK.style.display = "none";
-                  LK.required = false;
-                }
-              }
-
-              if (change) {
-                gId("rf" + n).checked = (gId("rf" + n).checked || t == 31);
-                if (typeDef.cat === 3) d.getElementsByName("LC" + n)[0].value = 1;
-              }
-              gId("rf" + n).onclick = (t == 31) ? (() => { return false }) : (() => { });
-
-              // RGBW Logic
-              let hasWhite = (typeDef.color.includes("W") && typeDef.color !== "W" && typeDef.color !== "WW/CW");
-              gRGBW |= isRGBW = hasWhite;
-
-              let isNet = (typeDef.cat === 4);
-              let isPar = (typeDef.isPar);
-              let isAna = (typeDef.cat === 3);
-              let isMat = (typeDef.isMatrix);
-
-          // Visibilities
-          gId("co" + n).style.display = (isAna || isMat || isPar) ? "none" : "inline";
-          gId("pbr4_" + n).style.display = (isPar && loopmax > 4) ? "inline" : "none";
-          gId("pbr8_" + n).style.display = (isPar && loopmax > 8) ? "inline" : "none";
-          gId("pbr12_" + n).style.display = (isPar && loopmax > 12) ? "inline" : "none";
-          gId("dig" + n + "w").style.display = (t === 30 || t === 31) ? "inline" : "none";
-
-          gId("dig" + n + "O").style.display = (isNet || isPar) ? "inline" : "none";
-          gId("dig" + n + "L").style.display = (isNet || isPar) ? "inline" : "none";
-          gId("dig" + n + "F").style.display = (isNet) ? "inline" : "none";
-          gId("dig" + n + "W").style.display = (isNet || isPar) ? "inline" : "none";
-
-          let el = gId("dig" + n + "F");
-          if (el.style.display === "inline" && (el.value === "" || isNaN(el.value))) el.value = 30;
-
-          if (isPar) {
-            d.getElementsByName("AO" + n)[0].max = d.max_parlio;
-            d.getElementsByName("AL" + n)[0].value = Math.min(Number(d.getElementsByName("AL" + n)[0].value), 1024);
-            d.getElementsByName("SL" + n)[0].style.display = "none";
-            d.getElementsByName("CV" + n)[0].style.display = "none";
-            d.getElementsByName("RF" + n)[0].style.display = "none"; // coimment out if Parallel IO needs off-refresh
-          }
-          d.getElementsByName("AO" + n)[0].min = (isNet || isPar) ? 1 : -1;
-          d.getElementsByName("AL" + n)[0].min = (isNet || isPar) ? 1 : -1;
-          if (isPar) d.getElementsByName("AL" + n)[0].max = Number(1024);
-          if (isNet) d.getElementsByName("AL" + n)[0].max = Number(maxL);
-          d.getElementsByName("AF" + n)[0].min = (isNet) ? 1 : -1;
-
-          // Warnings and Info
-          gId("dig" + n + "W").innerHTML = "";
-
-          if (gId("dig" + n + "O").style.display == "inline") {
-            let outputs = Number(d.getElementsByName("AO" + n)[0].value);
-            let leds_per_output = Number(d.getElementsByName("AL" + n)[0].value);
-            let total_leds = Number(d.getElementsByName("LC" + n)[0].value);
-            let fps_limit = Number(d.getElementsByName("AF" + n)[0].value);
-
-            if (isPar) {
-              if (outputs == 0) { d.getElementsByName("AO" + n)[0].value = Number(d.max_parlio); outputs = Number(d.max_parlio); }
-              if (d.getElementsByName("AO" + n)[0].value > d.max_parlio) { d.getElementsByName("AO" + n)[0].value = Number(d.max_parlio); outputs = Number(d.max_parlio); }
-              d.getElementsByName("AO" + n)[0].max = Number(d.max_parlio);
-              let symbols_per_pixel = Number(isRGBW ? 128 : 96);
-              let bits_per_pixel = symbols_per_pixel * matchToOutputCount(outputs);
-              let bytes_per_pixel = Math.floor((bits_per_pixel + 7) / 8);
-              let HW_MAX_BYTES_PER_CHUNK = 65535;
-              let max_leds_per_chunk = bytes_per_pixel > 0 ? Math.floor(HW_MAX_BYTES_PER_CHUNK / bytes_per_pixel) : 0;
-              let num_chunks = max_leds_per_chunk > 0 ? Math.floor((leds_per_output + max_leds_per_chunk - 1) / max_leds_per_chunk) : 0;
-              gId("dig" + n + "W").innerHTML += "<br />Parallel IO at " + matchToOutputCount(outputs) + "-bit width with " + outputs + " pins.";
-              if (num_chunks > 1) gId("dig" + n + "W").innerHTML += `<br />Using ${num_chunks} transfers which is not \"guaranteed\" glitch-free.`;
-              const requiredPins = matchToOutputCount(outputs);
-              const activeOutputs = requiredPins - pins_nulled;
-              if (matchToOutputCount(activeOutputs) < requiredPins) gId("dig" + n + "W").innerHTML += `<br />⚠️ You only need ${activeOutputs} output${activeOutputs !== 1 ? "s" : ""}, which increases FPS!`;
-            } else {
-              d.getElementsByName("AO" + n)[0].max = Number(255);
-            }
-
-            if (isValidPositiveNumber(total_leds) && (leds_per_output == 0 || !isValidPositiveNumber(leds_per_output))) {
-              d.getElementsByName("AL" + n)[0].value = Number(total_leds / outputs);
-              leds_per_output = Number(d.getElementsByName("AL" + n)[0].value);
-            }
-
-            // Network Protocol Info
-            let netProtocol = "";
-            if (typeDef.name.includes("Art-Net")) netProtocol = "Art-Net";
-            else if (typeDef.name.includes("E1.31")) netProtocol = "E1.31";
-            else if (typeDef.name.includes("DDP")) netProtocol = "DDP";
-            else if (typeDef.name.includes("ColorLight")) netProtocol = "ColorLight";
-
-            if (netProtocol === "ColorLight") {
-              gId("dig" + n + "W").innerHTML += `<br /><b>ColorLight 5A-75B:</b>`;
-              gId("dig" + n + "W").innerHTML += `<br />• Hardcoded receiver MAC: 11:22:33:44:55:66`;
-              gId("dig" + n + "W").innerHTML += `<br />• Set "Outputs" to 1`;
-              gId("dig" + n + "W").innerHTML += `<br />• Set "Length" and "LEDs Per Output" to your LED count`;
-              gId("dig" + n + "W").innerHTML += `<br />• Requires ESP32-P4 with Ethernet enabled`;
-              gId("dig" + n + "W").innerHTML += `<br />• Uses raw Ethernet frames (not UDP)`;
-            } else if (netProtocol) {
-              let chanPerPix = isRGBW ? 4 : 3;
-              let uniSize = Math.floor(512 / chanPerPix);
-              let universes_per_output = Math.ceil(leds_per_output / uniSize);
-              let max_leds_per_universe = uniSize;
-              let max_leds_per_output = max_leds_per_universe * 8;
-              let wled_universes = total_leds / uniSize;
-              if (typeDef.name.includes("Art-Net") && d.artnetMap_enabled == 1) {
-                gId("dig" + n + "W").innerHTML += `<br />ArtNetMap is Enabled. Set your "Outputs" to 1 and your<br />physical LED count to both "Length" and "LEDs Per Output"`;
-                gId("dig" + n + "W").innerHTML += `<br />FPS limit will need manual tuning.`;
-                gId("dig" + n + "W").innerHTML += `<br />Access the advanced Art-Net mapping system <a href="/artnetmap" target=_blank">here.</a>`;
-              } else if (typeDef.name.includes("DDP")) {
-                gId("dig" + n + "W").innerHTML += `<br />DDP is Enabled. Set your "Outputs" to 1 and your<br />physical LED count to both "Length" and "LEDs Per Output"`;
-                gId("dig" + n + "W").innerHTML += `<br />FPS limit will need manual tuning.`;
-              } else {
-                if (outputs > 1) {
-                  if (universes_per_output <= 8) {
-                    gId("dig" + n + "W").innerHTML += `<br />Set your ${netProtocol} Hardware to ${universes_per_output} universes per output.`;
-                    if (universes_per_output > 6) gId("dig" + n + "W").innerHTML += `(6 may be your max)`;
-                  } else {
-                    gId("dig" + n + "W").innerHTML += `<br />Your ${netProtocol} Hardware likely does not allow ${universes_per_output} universes per output.<br />A max of 6 universes is common, sometimes 8, some are 4.`;
-                  }
-                  if (universes_per_output <= 8) {
-                    if (isRGBW) {
-                      let max_fps = (Math.floor(25000 / leds_per_output)) - 1;
-                      if (fps_limit > max_fps) gId("dig" + n + "W").innerHTML += `<br />FPS limit may be too high for SK6812 pixels. (Suggest max ${max_fps})`;
-                    } else {
-                      let max_fps = (Math.floor(33333 / leds_per_output)) - 1;
-                      if (fps_limit > max_fps) gId("dig" + n + "W").innerHTML += `<br />FPS limit may be too high for WS281x pixels. (Suggest max ${max_fps})`;
-                    }
-                  }
-                } else if (outputs == 1) {
-                  gId("dig" + n + "W").innerHTML += `<br />WLED/FPP-style ${netProtocol} output enabled.`;
-                } else if (outputs < 1) {
-                  gId("dig" + n + "W").innerHTML += "<br />You need at least 1 output!";
-                }
-              }
-
-              if (outputs * leds_per_output != total_leds) {
-                gId(`dig${n}W`).innerHTML += `<br />Your Outputs * LEDs Per Output doesn't match Length (${outputs} * ${leds_per_output} != ${total_leds})<br />`;
-                if (universes_per_output <= 8 || outputs == 1) {
-                  gId(`dig${n}W`).innerHTML += `Fix Length: <span style="text-decoration:underline; cursor:pointer;"
-                  onclick="fix_total_leds=Number(${outputs * leds_per_output}); d.getElementsByName('LC${n}')[0].value=fix_total_leds;UI();">${outputs * leds_per_output} Length</span> = ${outputs} Outputs * ${leds_per_output} LEDs per Output<br />`;
-                } else {
-                  gId(`dig${n}W`).innerHTML += `Please correct your values, this will not work!`;
-                }
-              }
-            }
-          }
-
-          // Broadcast Warning (SAFE CHECK)
-          if (isNet) {
-            let total_leds = parseInt(d.getElementsByName("LC" + n)[0].value);
-            let l3_el = d.getElementsByName("L3" + n)[0];
-            // Check if L3 exists and has a value before parsing to avoid crash
-            if (l3_el && l3_el.value !== "") {
-              let last_octet = parseInt(l3_el.value);
-              if (last_octet == 255) {
-                let protocol = "Network";
-                if (typeDef.name.includes("DDP")) protocol = "DDP";
-                else if (typeDef.name.includes("E1.31")) protocol = "E1.31";
-                else if (typeDef.name.includes("Art-Net")) protocol = "Art-Net";
-
-                if (total_leds <= 1024) gId("dig" + n + "W").innerHTML += `<br />${protocol} is in broadcast mode.`;
-                if (total_leds > 1024) gId("dig" + n + "W").innerHTML += `<br />You are sending a lot of ${protocol} broadcast data. Be cautious.`;
-              }
-            }
-          }
-
-          // Final Cleanup (Hiding Fields)
-          if (!(t > 28 && t < 32)) d.getElementsByName("WO" + n)[0].value = 0;
-
-          gId("dig" + n + "c").style.display = (isAna || isMat) ? "none" : "inline";
-          gId("dig" + n + "r").style.display = (isNet && !isMat) ? "none" : "inline";
-          gId("dig" + n + "s").style.display = (isNet || isAna) ? "none" : "inline";
-          gId("dig" + n + "f").style.display = (typeDef.cat === 1 || typeDef.cat === 2 || isMat) ? "inline" : "none";
-          gId("dig" + n + "a").style.display = (isRGBW && t != 40) ? "inline" : "none";
-          gId("dig" + n + "l").style.display = (typeDef.cat === 2 && !isMat) ? "inline" : "none";
-
-          gId("rev" + n).innerHTML = isAna ? "Inverted output" : (isMat ? "Inverted clock phase" : "Reversed (rotated 180°)");
-          gId("ref" + n).innerHTML = isMat ? "Single-cycle latch blanking" : "Off Refresh";
-          gId("psd" + n).innerHTML = isAna ? "Index:" : "Start:";
-        }
-      }
-
-      // 4. White Channel Logic
-      gId("wc").style.display = (gRGBW) ? 'inline' : 'none';
-      if (!gRGBW) {
-        d.Sf.AW.selectedIndex = 0;
-        d.Sf.CR.checked = false;
-      }
-
-      // 5. Pin Conflicts
-      var LCs = d.getElementsByTagName("input");
-      var sLC = 0, sPC = 0, maxLC = 0;
-
-      for (i = 0; i < LCs.length; i++) {
-        var nm = LCs[i].name.substring(0, 2);
-        var n = LCs[i].name.substring(2);
-
-        let tVal = d.getElementsByName("LT" + n)[0] ? parseInt(d.getElementsByName("LT" + n)[0].value) : 0;
-        let tDef = getLedDef(tVal);
-
-        if (nm == "L0" && tDef.isMatrix && LCs[i].value != "") {
-          const clen = parseInt(LCs[i].value, 10);
-          if ((clen < 1) || ((clen > 6))) LCs[i].value = "1";
-          LCs[i].min = 1; LCs[i].max = 6;
-        }
-
-        if (nm == "LC") {
-          var c = parseInt(LCs[i].value, 10);
-          if (!customStarts || !startsDirty[n]) gId("ls" + n).value = sLC;
-          gId("ls" + n).disabled = !customStarts;
-          if (c) {
-            var s = parseInt(gId("ls" + n).value);
-            if (s + c > sLC) sLC = s + c;
-            if (c > maxLC) maxLC = c;
-            if (tDef.cat !== 4) sPC += c;
-          }
-          continue;
-        }
-
-        // Skip checks for IP Address fields
-        if (tDef.cat === 4 && (nm == "L0" || nm == "L1" || nm == "L2" || nm == "L3")) {
-          LCs[i].max = 255; LCs[i].min = 0; LCs[i].style.color = "#fff";
-          continue;
-        } else if (nm.startsWith("L") && !isNaN(nm[1])) {
-          LCs[i].max = d.max_gpio; LCs[i].min = -1;
-        }
-
-        if (/^L\d+$/.test(nm) || nm === "RL" || nm === "BT" || nm === "IR") {
-          if (LCs[i].value !== "" && LCs[i].value !== "-1") {
-            var pArr = [];
-            for (k = 0; k < d.rsvd.length; k++) pArr.push(d.rsvd[k]);
-            for (k = 0; k < d.um_p.length; k++) pArr.push(d.um_p[k]);
-
-            for (j = 0; j < LCs.length; j++) {
-              if (i === j) continue;
-              var nm2 = LCs[j].name.substring(0, 2);
-
-              // FIX: Only check inputs that are actually Pins (L#, RL, BT, IR)
-              if (!(/^L\d+$/.test(nm2) || nm2 === "RL" || nm2 === "BT" || nm2 === "IR")) continue;
-
-              var name = LCs[j].name;
-
-              if (name.startsWith("L")) {
-                let match = name.match(/^L(\d+)(\d+)$/);
-                if (match) {
-                  let busIdx = match[2];
-                  let t2Val = d.getElementsByName("LT" + busIdx)[0].value;
-                  let t2Def = getLedDef(t2Val);
-                  if (t2Def.cat === 4) continue;
-                }
-              }
-
-              if (LCs[j].value !== "" && LCs[j].value !== "-1") {
-                pArr.push(parseInt(LCs[j].value, 10));
-              }
-            }
-
-            var currentPin = parseInt(LCs[i].value, 10);
-            if (pArr.includes(currentPin)) {
-              LCs[i].style.color = "red";
-            } else {
-              LCs[i].style.color = d.ro_gpio.includes(currentPin) ? "orange" : "#fff";
-            }
-          }
-        }
-
-        if (nm == "IR" || nm == "BT" || nm == "RL") {
-          LCs[i].max = d.max_gpio; LCs[i].min = -1;
-        }
-      }
-
-      gId("lc").textContent = sLC;
-      gId("pc").textContent = (sLC == sPC) ? "" : "(" + sPC + " physical)";
-      gId('m0').innerHTML = memu;
-      bquot = memu / maxM * 100;
-      gId('dbar').style.background = `linear-gradient(90deg, ${bquot > 60 ? (bquot > 90 ? "red" : "orange") : "#ccc"} 0 ${bquot}%, #444 ${bquot}% 100%)`;
-      gId('ledwarning').style.display = (maxLC > Math.min(maxPB, 800) || bquot > 80) ? 'inline' : 'none';
-      gId('ledwarning').style.color = (maxLC > Math.max(maxPB, 800) || bquot > 100) ? 'red' : 'orange';
-      gId('wreason').innerHTML = (bquot > 80) ? "80% of max. LED memory" + (bquot > 100 ? ` (<b>ERROR: Using over ${maxM}B!</b>)` : "") : "800 LEDs per output";
-
-      var val = Math.ceil((100 + sPC * laprev) / 500) / 2;
-      val = (val > 5) ? Math.ceil(val) : val;
-      var s = "";
-      var is12V = (d.Sf.LAsel.value == 30);
-      var isWS2815 = (d.Sf.LAsel.value == 255);
-      if (val < 1.02 && !is12V && !isWS2815) {
-        s = "ESP 5V pin with 1A USB supply";
-      } else {
-        s += is12V ? "12V " : isWS2815 ? "WS2815 12V " : "5V ";
-        s += val;
-        s += "A supply connected to LEDs";
-      }
-      var val2 = Math.ceil((100 + sPC * laprev) / 1500) / 2;
-      val2 = (val2 > 5) ? Math.ceil(val2) : val2;
-      var s2 = "(for most effects, ~";
-      s2 += val2;
-      s2 += "A is enough)<br>";
-      gId('psu').innerHTML = s;
-      gId('psu2').innerHTML = isWS2815 ? "" : s2;
-      gId("json").style.display = d.Sf.IT.value == 8 ? "" : "none";
-    }
-
-    function lastEnd(i) {
-      if (i < 1) return 0;
-      v = parseInt(d.getElementsByName("LS" + (i - 1))[0].value) + parseInt(d.getElementsByName("LC" + (i - 1))[0].value);
-      var t = parseInt(d.getElementsByName("LT" + (i - 1))[0].value);
-      if (t > 31 && t < 48) v = 1; //PWM busses
-      if (isNaN(v)) return 0;
-      return v;
-    }
-
-    function addLEDs(n, init = true) {
-      var o = d.getElementsByClassName("iST");
-      var i = o.length;
-
-      if ((n == 1 && i >= maxB + maxV) || (n == -1 && i == 0)) return;
-
-      var f = gId("mLC");
-      if (n == 1) {
-        let optionsHtml = "";
-        for (const [id, def] of Object.entries(LED_TYPES)) {
-          if (def.cat === 0 || def.cat === 5 && !def.isMatrix) continue;
-          optionsHtml += `<option value="${id}">${def.name}</option>`;
-        }
-
-        var cn = `<div class="iST">
-<hr class="sml">
-${i + 1}:
-<select name="LT${i}" onchange="UI(true)">
-${optionsHtml}
-</select><br>
-<div id="co${i}" style="display:inline">Color Order:
-<select name="CO${i}">
-<option value="0">GRB</option>
-<option value="1">RGB</option>
-<option value="2">BRG</option>
-<option value="3">RBG</option>
-<option value="4">BGR</option>
-<option value="5">GBR</option>
-</select></div>
-<div id="dig${i}w" style="display:none">Swap: <select name="WO${i}"><option value="0">None</option><option value="1">W & B</option><option value="2">W & G</option><option value="3">W & R</option></select></div>
-<div id="dig${i}l" style="display:none">Clock: <select name="SP${i}"><option value="0">Slowest</option><option value="1">Slow</option><option value="2">Normal</option><option value="3">Fast</option><option value="4">Fastest</option><option value="5">MAX</option><option value="6">overspeed</option></select></div>
-<div>
-<span id="psd${i}">Start:</span> <input type="number" name="LS${i}" id="ls${i}" class="l starts" min="0" max="65534" value="${lastEnd(i)}" oninput="startsDirty[${i}]=true;UI();" required />&nbsp;
-<div id="dig${i}c" style="display:inline">Length: <input type="number" name="LC${i}" class="xl" min="1" max="${maxPB}" value="1" required oninput="UI()" /></div><br>
-</div>
-<span id="p0d${i}">GPIO:</span><input title="Pin 1" type="number" name="L0${i}" required class="s" onchange="UI()"/>
-<span id="p1d${i}"></span><input title="Pin 2" type="number" name="L1${i}" class="s" onchange="UI()"/>
-<span id="p2d${i}"></span><input title="Pin 3" type="number" name="L2${i}" class="s" onchange="UI()"/>
-<span id="p3d${i}"></span><input title="Pin 4" type="number" name="L3${i}" class="s" onchange="UI()"/><br id="pbr4_${i}" />
-<span id="p4d${i}"></span><input title="Pin 5" type="number" name="L4${i}" class="s" onchange="UI()"/>
-<span id="p5d${i}"></span><input title="Pin 6" type="number" name="L5${i}" class="s" onchange="UI()"/>
-<span id="p6d${i}"></span><input title="Pin 7" type="number" name="L6${i}" class="s" onchange="UI()"/>
-<span id="p7d${i}"></span><input title="Pin 8" type="number" name="L7${i}" class="s" onchange="UI()"/><br id="pbr8_${i}" />
-<span id="p8d${i}"></span><input title="Pin 9" type="number" name="L8${i}" class="s" onchange="UI()"/>
-<span id="p9d${i}"></span><input title="Pin 10" type="number" name="L9${i}" class="s" onchange="UI()"/>
-<span id="p10d${i}"></span><input title="Pin 11" type="number" name="L10${i}" class="s" onchange="UI()"/>
-<span id="p11d${i}"></span><input title="Pin 12" type="number" name="L11${i}" class="s" onchange="UI()"/><br id="pbr12_${i}" />
-<span id="p12d${i}"></span><input title="Pin 13" type="number" name="L12${i}" class="s" onchange="UI()"/>
-<span id="p13d${i}"></span><input title="Pin 14" type="number" name="L13${i}" class="s" onchange="UI()"/>
-<span id="p14d${i}"></span><input title="Pin 15" type="number" name="L14${i}" class="s" onchange="UI()"/>
-<span id="p15d${i}"></span><input title="Pin 16" type="number" name="L15${i}" class="s" onchange="UI()"/>
-<div id="dig${i}O" style="display:inline"><br>Number of Outputs: <input type="number" name="AO${i}" min="1" max="255" value="1" oninput="UI()"></div>
-<div id="dig${i}L" style="display:inline"><br>LEDs Per Output: <input type="number" name="AL${i}" min="1" max="65535" value="1" oninput="UI()"></div>
-<div id="dig${i}F" style="display:inline"><br>FPS Limit: <input type="number" name="AF${i}" min="1" max="255" value="30" oninput="UI()"></div>
-<div id="dig${i}W" style="display:inline; color:orange"></div>
-<div id="dig${i}r" style="display:inline"><br><span id="rev${i}">Reversed</span>: <input type="checkbox" name="CV${i}"></div>
-<div id="dig${i}s" style="display:inline"><br>Skip 1st: <input type="number" name="SL${i}" min="0" max="255" value="0" oninput="UI()"></div>
-<div id="dig${i}f" style="display:inline"><br><span id="ref${i}">Off Refresh</span>: <input id="rf${i}" type="checkbox" name="RF${i}"></div>
-<div id="dig${i}a" style="display:inline"><br>Auto-calculate white channel from RGB:<br><select name="AW${i}"><option value=0>None</option><option value=1>Brighter</option><option value=2>Accurate</option><option value=3>Dual</option><option value=4>Max</option></select>&nbsp;</div>
-</div>`;
-        f.insertAdjacentHTML("beforeend", cn);
-      }
-      if (n == -1) {
-        o[--i].remove(); --i;
-      }
-
-      gId("+").style.display = (i < maxB + maxV - 1) ? "inline" : "none";
-      gId("-").style.display = (i > 0) ? "inline" : "none";
-
-      if (!init) UI();
-    }
-
-    function addCOM(start = 0, len = 1, co = 0) {
-      var i = d.getElementsByClassName("com_entry").length;
-      if (i >= 10) return;
-
-      var b = `<div class="com_entry">
-                <hr class="sml">
-                ${i + 1}: Start: <input type="number" name="XS${i}" id="xs${i}" class="l starts" min="0" max="65535" value="${start}" oninput="UI();" required="">&nbsp;
-                Length: <input type="number" name="XC${i}" id="xc${i}" class="l" min="1" max="65535" value="${len}" required="" oninput="UI()">
-                <div style="display:inline">Color Order:
-                <select id="xo${i}" name="XO${i}">
-                <option value="0">GRB</option>
-                <option value="1">RGB</option>
-                <option value="2">BRG</option>
-                <option value="3">RBG</option>
-                <option value="4">BGR</option>
-                <option value="5">GBR</option>
-                </select>
-                </div><br></div>`;
-      gId("com_entries").insertAdjacentHTML("beforeend", b);
-      gId("xo" + i).value = co;
-      btnCOM(i + 1);
-      UI();
-    }
-
-    function remCOM() {
-      var entries = d.getElementsByClassName("com_entry");
-      var i = entries.length;
-      if (i === 0) return;
-      entries[i - 1].remove();
-      btnCOM(i - 1);
-      UI();
-    }
-
-    function resetCOM(_newMaxCOOverrides = undefined) {
-      if (_newMaxCOOverrides) {
-        maxCOOverrides = _newMaxCOOverrides;
-      }
-      for (let e of d.getElementsByClassName("com_entry")) {
-        e.remove();
-      }
-      btnCOM(0);
-    }
-
-    function btnCOM(i) {
-      gId("com_add").style.display = (i < maxCOOverrides) ? "inline" : "none";
-      gId("com_rem").style.display = (i > 0) ? "inline" : "none";
-    }
-
-    function addBtn(i, p, t) {
-      var c = gId("btns").innerHTML;
-      var bt = "BT" + String.fromCharCode((i < 10 ? 48 : 55) + i);
-      var be = "BE" + String.fromCharCode((i < 10 ? 48 : 55) + i);
-      c += `Button ${i} GPIO: <input type="number" name="${bt}" onchange="UI()" class="xs" value="${p}">`;
-      c += `&nbsp;<select name="${be}">`
-      c += `<option value="0" ${t == 0 ? "selected" : ""}>Disabled</option>`;
-      c += `<option value="2" ${t == 2 ? "selected" : ""}>Pushbutton</option>`;
-      c += `<option value="3" ${t == 3 ? "selected" : ""}>Push inverted</option>`;
-      c += `<option value="4" ${t == 4 ? "selected" : ""}>Switch</option>`;
-      c += `<option value="5" ${t == 5 ? "selected" : ""}>PIR sensor</option>`;
-      c += `<option value="6" ${t == 6 ? "selected" : ""}>Touch</option>`;
-      c += `<option value="7" ${t == 7 ? "selected" : ""}>Analog</option>`;
-      c += `<option value="8" ${t == 8 ? "selected" : ""}>Analog inverted</option>`;
-      c += `</select>`;
-      c += `<span style="cursor: pointer;" onclick="off('${bt}')">&nbsp;&#x2715;</span><br>`;
-      gId("btns").innerHTML = c;
-    }
-    function tglSi(cs) {
-      customStarts = cs;
-      if (!customStarts) startsDirty = []; //set all starts to clean
-      UI();
-    }
-    function checkSi() { //on load, checks whether there are custom start fields
-      var cs = false;
-      for (var i = 1; i < d.getElementsByClassName("iST").length; i++) {
-        var v = parseInt(gId("ls" + (i - 1)).value) + parseInt(d.getElementsByName("LC" + (i - 1))[0].value);
-        if (v != parseInt(gId("ls" + i).value)) { cs = true; startsDirty[i] = true; }
-      }
-      if (gId("ls0") && parseInt(gId("ls0").value) != 0) { cs = true; startsDirty[0] = true; }
-      gId("si").checked = cs;
-      tglSi(cs);
-    }
-    function uploadFile(name) {
-      var req = new XMLHttpRequest();
-      req.addEventListener('load', function () { showToast(this.responseText, this.status >= 400) });
-      req.addEventListener('error', function (e) { showToast(e.stack, true); });
-      req.open("POST", "/upload");
-      var formData = new FormData();
-      formData.append("data", d.Sf.data.files[0], name);
-      req.send(formData);
-      d.Sf.data.value = '';
-      return false;
-    }
-    // https://stackoverflow.com/questions/7346563/loading-local-json-file
-    function loadCfg(o) {
-      var f, fr;
-
-      if (typeof window.FileReader !== 'function') {
-        alert("The file API isn't supported on this browser yet.");
-        return;
-      }
-
-      if (!o.files) {
-        alert("This browser doesn't support the `files` property of file inputs.");
-      } else if (!o.files[0]) {
-        alert("Please select a JSON file first!");
-      } else {
-        f = o.files[0];
-        fr = new FileReader();
-        fr.onload = receivedText;
-        fr.readAsText(f);
-      }
-      o.value = '';
-
-      function receivedText(e) {
-        let lines = e.target.result;
-        var c = JSON.parse(lines);
-        if (c.hw) {
-          if (c.hw.led) {
-            for (var i = 0; i < 10; i++) addLEDs(-1);
-            var l = c.hw.led;
-            l.ins.forEach((v, i, a) => {
-              addLEDs(1);
-              for (var j = 0; j < v.pin.length; j++) d.getElementsByName(`L${j}${i}`)[0].value = v.pin[j];
-              d.getElementsByName("LT" + i)[0].value = v.type;
-              d.getElementsByName("LS" + i)[0].value = v.start;
-              d.getElementsByName("LC" + i)[0].value = v.len;
-              d.getElementsByName("CO" + i)[0].value = v.order;
-              d.getElementsByName("SL" + i)[0].value = v.skip;
-              d.getElementsByName("RF" + i)[0].checked = v.ref;
-              d.getElementsByName("CV" + i)[0].checked = v.rev;
-            });
-          }
-          if (c.hw.com) {
-            resetCOM();
-            c.hw.com.forEach(e => {
-              addCOM(e.start, e.len, e.order);
-            });
-          }
-          if (c.hw.btn) {
-            var b = c.hw.btn;
-            if (Array.isArray(b.ins)) gId("btns").innerHTML = "";
-            b.ins.forEach((v, i, a) => {
-              addBtn(i, v.pin[0], v.type);
-            });
-            d.getElementsByName("TT")[0].value = b.tt;
-          }
-          if (c.hw.ir) {
-            d.getElementsByName("IR")[0].value = c.hw.ir.pin;
-            d.getElementsByName("IT")[0].value = c.hw.ir.type;
-          }
-          if (c.hw.relay) {
-            d.getElementsByName("RL")[0].value = c.hw.relay.pin;
-            d.getElementsByName("RM")[0].checked = c.hw.relay.inv;
-          }
-          UI();
-        }
-      }
-    }
-    function S() {
-      if (window.location.protocol == "file:") {
-        loc = true;
-        locip = localStorage.getItem('locIp');
-        if (!locip) {
-          locip = prompt("File Mode. Please enter WLED IP!");
-          localStorage.setItem('locIp', locip);
-        }
-      }
-      var url = (loc ? `http://${locip}` : '') + '/settings/s.js?p=2';
-      loadJS(url, false);	// If we set async false, file is loaded and executed, then next statement is processed
-    }
-  </script>
-  <style>
-    @import url("style.css");
-  </style>
+  <script src="/settings-core.js"></script>
+  <style>@import url("style.css");</style>
 </head>
 
-<body onload="S()">
-  <form id="form_s" name="Sf" method="post">
-    <div class="toprow">
-      <div class="helpB"><button type="button" onclick="H()">?</button></div>
-      <button type="button" onclick="B()">Back</button><button type="submit">Save</button>
-      <hr>
-    </div>
+<body>
+<form name="Sf" id="led-settings-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://mm.kno.wled.ge/features/settings/#led-settings')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+
+  <div id="error-msg" style="color:red;margin:8px 0;display:none;"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none;">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa;">Loading settings...</div>
+
+  <div id="main-content" style="display:none;">
     <h2>LED &amp; Hardware setup</h2>
     Total LEDs: <span id="lc">?</span> <span id="pc"></span><br>
     <i>Recommended power supply for brightest white:</i><br>
     <b><span id="psu">?</span></b><br>
-    <span id="psu2"><br></span>
-    <br>
-    Enable automatic brightness limiter: <input type="checkbox" name="ABen" onchange="enABL()" id="able"><br>
+    <span id="psu2"><br></span><br>
+
+    Enable automatic brightness limiter: <input type="checkbox" id="able"><br>
     <div id="abl">
-      Maximum Current: <input name="MA" type="number" class="l" min="250" max="65000" oninput="UI()" required> mA<br>
-      <div id="ampwarning" style="color: orange; display: none;">
+      Maximum Current: <input name="MA" type="number" class="l" min="250" max="65000" required> mA<br>
+      <div id="ampwarning" style="color:orange;display:none;">
         &#9888; Your power supply provides high current.<br>
-        To improve the safety of your setup,<br>
-        please use thick cables,<br>
+        To improve the safety of your setup, please use thick cables,<br>
         multiple power injection points and a fuse!<br>
       </div>
       <i>Automatically limits brightness to stay close to the limit.<br>
         Keep at &lt;1A if powering LEDs directly from the ESP 5V pin!<br>
-        If you are using an external power supply, enter its rating.<br>
-        (Current estimated usage: <span class="pow">unknown</span>)</i><br><br>
+        If you are using an external power supply, enter its rating.</i><br><br>
       LED voltage (Max. current for a single LED):<br>
-      <select name="LAsel" onchange="enLA()">
-        <option value="55" selected>5V default (55mA)</option>
+      <select id="LAsel">
+        <option value="55">5V default (55mA)</option>
         <option value="35">5V efficient (35mA)</option>
         <option value="30">12V (30mA)</option>
         <option value="255">WS2815 (12mA)</option>
         <option value="50">Custom</option>
       </select><br>
-      <span id="LAdis" style="display: none;">Custom max. current per LED: <input name="LA" type="number" min="0"
-          max="255" id="la" oninput="UI()" required> mA<br></span>
+      <span id="LAdis" style="display:none;">Custom max. current per LED:
+        <input name="LA" type="number" min="0" max="255" required> mA<br>
+      </span>
       <i>Keep at default if you are unsure about your type of LEDs.</i><br>
     </div>
+
     <h3>Hardware setup</h3>
     <div id="mLC">LED outputs:</div>
+
+    <!-- ── Bus list ──────────────────────────────────────────────────────── -->
+    <div id="bus-list"></div>
+
     <hr class="sml">
-    <button type="button" id="+" onclick="addLEDs(1,false)">+</button>
-    <button type="button" id="-" onclick="addLEDs(-1,false)">-</button><br>
+    <button type="button" id="add-bus">+</button>
+    <button type="button" id="remove-bus">-</button><br>
     LED Memory Usage: <span id="m0">0</span> / <span id="m1">?</span> B<br>
-    <div id="dbar" style="display:inline-block; width: 100px; height: 10px; border-radius: 20px;"></div><br>
-    <div id="ledwarning" style="color: orange; display: none;">
-      &#9888; You might run into stability or lag issues.<br>
-      Use less than <span id="wreason">800 LEDs per output</span> for the best experience!<br>
+    <div id="dbar" style="display:inline-block;width:100px;height:10px;border-radius:20px;"></div><br>
+    <div id="ledwarning" style="color:orange;display:none;">
+      &#9888; <span id="ledwarning-text"></span><br>
     </div>
     <hr class="sml">
     Make a segment for each output: <input type="checkbox" name="MS"><br>
-    Custom bus start indices: <input type="checkbox" onchange="tglSi(this.checked)" id="si"><br>
+    Custom bus start indices: <input type="checkbox" id="si"><br>
     Use global LED buffer: <input type="checkbox" name="LD"><br>
     <i>WLEDMM: Recommended for overlapping segments (0.13 style)</i><br>
     <hr class="sml">
+
+    <!-- ── Color order overrides ─────────────────────────────────────────── -->
     <div id="color_order_mapping">
       Color Order Override:
-      <div id="com_entries"></div>
+      <div id="com-list"></div>
       <hr class="sml">
-      <button type="button" id="com_add" onclick="addCOM()">+</button>
-      <button type="button" id="com_rem" onclick="remCOM()">-</button><br>
+      <button type="button" id="com_add">+</button>
+      <button type="button" id="com_rem">-</button><br>
     </div>
     <hr class="sml">
+
+    <!-- ── Buttons ───────────────────────────────────────────────────────── -->
     <div id="btns"></div>
+
     Disable internal pull-up/down: <input type="checkbox" name="IP"><br>
     Touch threshold: <input type="number" class="s" min="0" max="100" name="TT" required><br>
-    <div id="irOnOff2"> <!--WLEDMM-->
-      <em style="color:darkorange">This firmware build does not include IR Remote support. <br></em>
-    </div>
-    IR GPIO: <input type="number" min="-1" max="48" name="IR" onchange="UI()" class="xs"><select name="IT"
-      onchange="UI()">
-      <option value=0>Remote disabled</option>
-      <option value=1>24-key RGB</option>
-      <option value=2>24-key with CT</option>
-      <option value=3>40-key blue</option>
-      <option value=4>44-key RGB</option>
-      <option value=5>21-key RGB</option>
-      <option value=6>6-key black</option>
-      <option value=7>9-key red</option>
-      <option value=8>JSON remote</option>
-      <option value=9>24-key music</option> <!--WLEDMM-->
-    </select><span style="cursor: pointer;" onclick="off('IR')">&nbsp;&#x2715;</span><br>
+    IR GPIO: <input type="number" min="-1" id="IR-max" name="IR" class="xs">
+    <select name="IT" id="IT-select">
+      <option value="0">Remote disabled</option>
+      <option value="1">24-key RGB</option>
+      <option value="2">24-key with CT</option>
+      <option value="3">40-key blue</option>
+      <option value="4">44-key RGB</option>
+      <option value="5">21-key RGB</option>
+      <option value="6">6-key black</option>
+      <option value="7">9-key red</option>
+      <option value="8">JSON remote</option>
+      <option value="9">24-key music</option>
+    </select>
+    <span style="cursor:pointer;" id="clear-ir">&#x2715;</span><br>
     Apply IR change to main segment only: <input type="checkbox" name="MSO"><br>
-    <div id="json" style="display:none;">JSON file: <input type="file" name="data" accept=".json"><button type="button"
-        class="sml" onclick="uploadFile('/ir.json')">Upload</button><br></div>
+    <div id="json" style="display:none;">JSON file:
+      <input type="file" id="irJsonFile" accept=".json">
+      <button type="button" class="sml" id="upload-ir">Upload</button><br>
+    </div>
     <a href="https://mm.kno.wled.ge/interfaces/infrared/" target="_blank">IR info</a><br>
-    Relay GPIO: <input type="number" min="-1" max="48" name="RL" onchange="UI()" class="xs"> Invert <input
-      type="checkbox" name="RM"><span style="cursor: pointer;" onclick="off('RL')">&nbsp;&#x2715;</span><br>
+    Relay GPIO: <input type="number" min="-1" id="RL-max" name="RL" class="xs">
+    Invert <input type="checkbox" name="RM">
+    <span style="cursor:pointer;" id="clear-rl">&#x2715;</span><br>
     <hr class="sml">
+
     <h3>Defaults</h3>
     Turn LEDs on after power up/reset: <input type="checkbox" name="BO"><br>
     Default brightness: <input name="CA" type="number" class="m" min="0" max="255" required> (0-255)<br><br>
-    Apply preset <input name="BP" type="number" class="m" min="0" max="250" required> at boot (0 uses defaults)
-    <br><br>
+    Apply preset <input name="BP" type="number" class="m" min="0" max="250" required> at boot (0 uses defaults)<br><br>
     Use Gamma correction for color: <input type="checkbox" name="GC"> (strongly recommended)<br>
-    Use Gamma correction for preview: <input type="checkbox" name="GCP"> (<em>WLEDMM experimental
-    </em>)<br><!--WLEDMM-->
+    Use Gamma correction for preview: <input type="checkbox" name="GCP"> (<em>WLEDMM experimental</em>)<br>
     Use Gamma correction for brightness: <input type="checkbox" name="GB"> (not recommended)<br>
-    Use Gamma value: <input name="GV" type="number" class="m" placeholder="2.8" min="1" max="3" step="0.1"
-      required><br><br>
+    Use Gamma value: <input name="GV" type="number" class="m" placeholder="2.8" min="1" max="3" step="0.1" required><br><br>
     Brightness factor: <input name="BF" type="number" class="m" min="1" max="255" required> %
+
     <h3>Transitions</h3>
     Cross-fade: <input type="checkbox" name="TF"><br>
     Transition Time: <input name="TD" type="number" class="xl" min="0" max="65500"> ms<br>
     Enable Palette transitions: <input type="checkbox" name="PF"><br>
     <i>Random Cycle</i> Palette Time: <input name="TP" type="number" class="m" min="1" max="255"> s<br>
+
     <h3>Timed light</h3>
     Default Duration: <input name="TL" type="number" class="m" min="1" max="255" required> min<br>
     Default Target brightness: <input name="TB" type="number" class="m" min="0" max="255" required><br>
@@ -1089,22 +140,23 @@ ${optionsHtml}
       <option value="2">Fade Color</option>
       <option value="3">Sunrise</option>
     </select>
+
     <h3>White management</h3>
     White Balance correction: <input type="checkbox" name="CCT"><br>
     <div id="wc">
       Global override for Auto-calculate white:<br>
       <select name="AW">
-        <option value=255>Disabled</option>
-        <option value=0>None</option>
-        <option value=1>Brighter</option>
-        <option value=2>Accurate</option>
-        <option value=3>Dual</option>
-        <option value=4>Max</option>
-      </select>
-      <br>
+        <option value="255">Disabled</option>
+        <option value="0">None</option>
+        <option value="1">Brighter</option>
+        <option value="2">Accurate</option>
+        <option value="3">Dual</option>
+        <option value="4">Max</option>
+      </select><br>
       Calculate CCT from RGB: <input type="checkbox" name="CR"><br>
       CCT additive blending: <input type="number" class="s" min="0" max="100" name="CB" required> %
     </div>
+
     <h3>Advanced</h3>
     Palette blending:
     <select name="PB">
@@ -1113,28 +165,1260 @@ ${optionsHtml}
       <option value="2">Linear (never wrap)</option>
       <option value="3">None (not recommended)</option>
     </select><br><br>
-    Target refresh rate: <input type="number" class="s" min="0" max="250" name="FR" oninput="UI()" required> FPS
-    <div id="fpsNoHelp" style="display: block;"><i>use 0 for unlimited</i><br></div>
-    <div id="fpsNone" style="color:green; display: none;"><b>Unlimited refresh rate mode.</b><br></div>
-    <div id="fpswarning" style="color:GoldenRod; display: none;">
+    Target refresh rate: <input type="number" class="s" min="0" max="250" name="FR" required> FPS
+    <div id="fpsNoHelp" style="display:block;"><i>use 0 for unlimited</i><br></div>
+    <div id="fpsNone" style="color:green;display:none;"><b>Unlimited refresh rate mode.</b><br></div>
+    <div id="fpswarning" style="color:GoldenRod;display:none;">
       &#9888; WLED may become unstable above 80 fps.<br>
-      To protect your setup,
-      please make sure to <a class="lnk" href="sec#backup">backup</a> WLED configuration and presets before raising
-      target FPS above 80!<br>
+      Please <a class="lnk" href="/settings/sec#backup">backup</a> WLED configuration before raising target FPS above 80!<br>
     </div>
-    <div id="fpshelp1" style="color: orange; display: none;">For a very smooth experience, use less than 300 LEDs per
-      output!<br> </div><!-- up to 120 fps on ws281x -->
-    <div id="fpshelp2" style="color: orange; display: none;">For an extremely smooth experience, use less than 180 LEDs
-      per output!<br></div><!-- up to 180 fps on WS281x -->
-    <div id="fpshelp3" style="color: orange; display: none;">For a mega ultra smooth experience, use less than 132 LEDs
-      per output!<br></div><!-- up to 240 fps on WS281x -->
+    <div id="fpshelp1" style="color:orange;display:none;">For a very smooth experience, use less than 300 LEDs per output!<br></div>
+    <div id="fpshelp2" style="color:orange;display:none;">For an extremely smooth experience, use less than 180 LEDs per output!<br></div>
+    <div id="fpshelp3" style="color:orange;display:none;">For a mega ultra smooth experience, use less than 132 LEDs per output!<br></div>
     <hr class="sml">
-    <div id="cfg">Config template: <input type="file" name="data2" accept=".json"><button type="button" class="sml"
-        onclick="loadCfg(d.Sf.data2)">Apply</button><br></div>
-    <hr>
-    <button type="button" onclick="B()">Back</button><button type="submit">Save</button>
-  </form>
-  <div id="toast"></div>
-</body>
+    <div id="cfg">Config template:
+      <input type="file" id="cfgFile" accept=".json">
+      <button type="button" class="sml" id="apply-cfg">Apply</button><br>
+    </div>
 
+    <hr>
+    <div id="error-msg-bottom" style="color:red;margin:8px 0;display:none;"></div>
+    <div id="saved-msg-bottom" style="color:green;margin:8px 0;display:none;">&#10004; Saved!</div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn-bottom">Save</button>
+  </div>
+</form>
+<div id="toast"></div>
+
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────
+
+// LED type definitions
+// Categories: 0:None, 1:Dig(1pin), 2:Dig(2pin), 3:Analog, 4:Net, 5:Virt/Other
+const LED_TYPES = {
+  60: { name: "Parallel IO RGB",  cat: 1, color: "RGB",  isPar: true },
+  61: { name: "Parallel IO RGBW", cat: 1, color: "RGBW", isPar: true },
+  80: { name: "Art-Net RGB",      cat: 4, color: "RGB" },
+  83: { name: "Art-Net RGBW",     cat: 4, color: "RGBW" },
+  81: { name: "DDP RGB",          cat: 4, color: "RGB" },
+  84: { name: "DDP RGBW",         cat: 4, color: "RGBW" },
+  82: { name: "E1.31 RGB",        cat: 4, color: "RGB" },
+  85: { name: "E1.31 RGBW",       cat: 4, color: "RGBW" },
+  86: { name: "ColorLight 5A-75B RGB",  cat: 4, color: "RGB" },
+  87: { name: "ColorLight 5A-75B RGBW", cat: 4, color: "RGBW" },
+};
+
+function getLedDef(id) {
+  return LED_TYPES[parseInt(id)] || { name: "Unknown", cat: 0, color: "RGB", isPar: false };
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+
+const state = {
+  loading: true,
+  saving: false,
+  error: null,
+  saved: false,
+  maxBuses: 2,
+  // Config data from backend
+  cfg: {
+    buses: [], com: [], buttons: [],
+    MA: 0, LA: 55, CA: 128, BO: false, BP: 0,
+    GB: false, GC: true, GCP: false, GV: 2.8,
+    TF: true, TD: 750, PF: false, TP: 12, BF: 100,
+    TB: 0, TL: 1, TW: 0, PB: 0,
+    RL: -1, RM: false, IP: false, TT: 28, IR: -1, IT: 0, MSO: false,
+    MS: false, LD: false, CCT: false, CR: false, CB: 0, FR: 42, AW: 255,
+    _gpio: {}, _limits: {},
+    _ablEnabled: false, _LAsel: '55', _customStarts: false,
+  },
+};
+
+// Module-level globals from backend
+let laprev = 55, maxM = 4000, maxL = 1333;
+const gpioInfo = {
+  rsvd: [], ro_gpio: [], um_p: [],
+  max_gpio: 55, max_parlio: 4, parlio_pins: [], artnetMap_enabled: 0
+};
+
+// ── Utility Functions ───────────────────────────────────────────────────────
+
+const d = document;
+const gId = (n) => d.getElementById(n);
+
+function matchToOutputCount(n) {
+  if (n <= 1) return 1;
+  if (n <= 2) return 2;
+  if (n <= 4) return 4;
+  if (n <= 8) return 8;
+  return 16;
+}
+
+function buildGpioOptions() {
+  const opts = [{ n: -1, label: '— None —', dis: false }];
+  for (let i = 0; i <= gpioInfo.max_gpio; i++) {
+    const isRsvd = gpioInfo.rsvd.includes(i);
+    const isRo   = gpioInfo.ro_gpio.includes(i);
+    const isUsed = gpioInfo.um_p.includes(i);
+    const dtIdx  = gpioInfo.dt_pins?.indexOf(i) ?? -1;
+    const aIdx   = gpioInfo.a_pins?.indexOf(i) ?? -1;
+    let label = `GPIO ${i}`;
+    if (dtIdx >= 0) label += dtIdx < 9 ? ` D${dtIdx}` : (dtIdx === 9 ? ' RX' : ' TX');
+    if (aIdx >= 0) label += ` A${aIdx}`;
+    if (isRsvd) label += ' reserved 🟣';
+    else if (isRo) label += ' (input only) 🟠';
+    else if (isUsed) label += ' (in use) 🟡';
+    else label += ' 🟢';
+    opts.push({ n: i, label, dis: isRsvd });
+  }
+  return opts;
+}
+
+function getGpioOptions() {
+  if (!getGpioOptions._cache) getGpioOptions._cache = buildGpioOptions();
+  return getGpioOptions._cache;
+}
+
+function clearGpioOptionsCache() { getGpioOptions._cache = null; }
+
+function isNetworkType(type) { return type >= 80 && type <= 87; }
+function isParallelType(type) { return type >= 60 && type <= 61; }
+function hasWhite(bus) {
+  if (!bus) return false;
+  const def = getLedDef(bus.type);
+  return def.color && def.color.includes("W") && def.color !== "W" && def.color !== "WW/CW";
+}
+
+function buildPinConflictMap() {
+  const m = new Map();
+  for (let bi = 0; bi < state.cfg.buses.length; bi++) {
+    const bus = state.cfg.buses[bi];
+    if (!bus || isNetworkType(bus.type)) continue;
+    for (const pin of (bus.pins || [])) {
+      if (pin === undefined || pin === null || pin === '' || pin === -1) continue;
+      if (!m.has(pin)) m.set(pin, []);
+      m.get(pin).push(bi);
+    }
+  }
+  return m;
+}
+
+function getPinColor(bus, px) {
+  const pin = bus?.pins?.[px];
+  if (!pin && pin !== 0) return '';
+  if (isNetworkType(bus?.type)) return '';
+  if (gpioInfo.rsvd?.includes(pin)) return 'background:#faa';
+  if (gpioInfo.ro_gpio?.includes(pin)) return 'background:#f80';
+  if (buildPinConflictMap().has(pin)) return 'background:#fb0';
+  return 'background:#1a1';
+}
+
+function isActivePin(bus, px) {
+  if (!bus?.type) return false;
+  const outputs = Number(bus.ao) || 1;
+  const activeCount = matchToOutputCount(outputs);
+  return px < activeCount;
+}
+
+function pin1Label(bus) {
+  if (!bus) return 'GPIO:';
+  const def = getLedDef(bus.type);
+  if (def.isMatrix) return 'Chain Length:';
+  if (bus.type === 86 || bus.type === 87) return '(Not used)';
+  if (def.cat === 4) return 'IP Address:';
+  if (def.cat === 2) return 'Data GPIO:';
+  if (def.cat === 3) return 'GPIOs:';
+  if (def.isPar) return 'Parallel IO Pins:';
+  return 'GPIO:';
+}
+
+function maxVisiblePins(bus) {
+  if (!bus) return 1;
+  const type = bus.type;
+  if (isNetworkType(type)) return 4;
+  if (type >= 60 && type <= 61) return gpioInfo.max_parlio || 16;
+  if (type >= 80 && type <= 87) return 4;
+  const def = getLedDef(type);
+  if (def.cat === 2) return 2;
+  if (def.cat === 3) return type - 40;
+  return 1;
+}
+
+// ── LED Type Options ────────────────────────────────────────────────────────
+
+function getLedTypeOptions() {
+  return Object.entries(LED_TYPES)
+    .filter(([id, def]) => def.cat !== 0)
+    .map(([id, def]) => ({ id: parseInt(id), name: def.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderLedTypeOptions() {
+  return getLedTypeOptions().map(opt =>
+    `<option value="${opt.id}">${opt.name}</option>`
+  ).join('');
+}
+
+// ── Bus HTML Rendering ──────────────────────────────────────────────────────
+
+function renderBus(bus, index) {
+  const type = Number(bus.type) || 80;
+  const def = getLedDef(type);
+  const isNet = isNetworkType(type);
+  const isPar = isParallelType(type);
+  const maxPins = maxVisiblePins(bus);
+
+  // Color order (non-network)
+  const colorOrderRow = !isNet ? `
+    <span>Color Order:
+      <select name="CO${index}">${renderColorOrderOptions(bus.co)}</select>
+    </span>
+  ` : '';
+
+  // Swap W (types 30-31)
+  const swapWRow = (type === 30 || type === 31) ? `
+    <span>Swap W:
+      <select name="WO${index}">
+        <option value="0" ${bus.wo == 0 ? 'selected' : ''}>None</option>
+        <option value="1" ${bus.wo == 1 ? 'selected' : ''}>W &amp; B</option>
+        <option value="2" ${bus.wo == 2 ? 'selected' : ''}>W &amp; G</option>
+        <option value="3" ${bus.wo == 3 ? 'selected' : ''}>W &amp; R</option>
+      </select>
+    </span>
+  ` : '';
+
+  // Clock (DDP types)
+  const clockRow = (type === 81 || type === 83) ? `
+    <span>Clock:
+      <select name="SP${index}">
+        ${[0,1,2,3,4,5,6].map(v => `<option value="${v}" ${bus.sp == v ? 'selected' : ''}>${['Slowest','Slow','Normal','Fast','Fastest','MAX','overspeed'][v]}</option>`).join('')}
+      </select>
+    </span>
+  ` : '';
+
+  // Start/Index label
+  const startLabel = (type === 86 || type === 87) ? 'Index' : 'Start';
+
+  // Length row
+  const lengthRow = `
+    <span>Length:
+      <input type="number" class="xl" min="1" name="LC${index}" value="${bus.len || 1}" required>
+    </span>
+  `;
+
+  // Pins section
+  let pinsHtml = '';
+  if (isNet) {
+    // Network: 4 IP octet inputs
+    pinsHtml = `
+      <span>
+        <span>IP Address:</span>:
+        ${[0,1,2,3].map(p => `
+          <input type="number" class="s" title="Octet ${p+1}" name="L${p}${index}" min="0" max="255" value="${bus.pins?.[p] ?? 0}">
+        `).join('')}
+        <br>
+      </span>
+    `;
+  } else {
+    // GPIO dropdowns with breaks every 4 pins
+    const rows = [];
+    for (let px = 0; px < 16; px++) {
+      const isVisible = px < maxPins;
+      const isDisabled = isPar && !isActivePin(bus, px);
+      rows.push(`
+        <select
+          class="gpio-pin-select"
+          data-bus="${index}" data-pin="${px}"
+          name="L${px}${index}"
+          style="${isVisible ? '' : 'display:none'}"
+          ${isDisabled ? 'disabled' : ''}>
+          ${renderGpioSelectOptionsForPin(bus, px)}
+        </select>
+      `);
+      // Add break after pins 4, 8, 12 IF next row will have visible pins
+      if ((px === 3 || px === 7 || px === 11) && px + 1 < maxPins) {
+        rows.push('<br>');
+      }
+    }
+    pinsHtml = `
+      <span>
+        <span>${pin1Label(bus)}</span>
+        ${type === 81 || type === 83 ? '<span> / Clk</span>' : ''}:
+        ${isPar ? '<br>' : ''}
+        ${rows.join('')}
+        <br>
+      </span>
+    `;
+  }
+
+  // Outputs row (network + parallel)
+  let outputsRow = '';
+  if (isNet || isPar) {
+    const maxOut = isPar ? (gpioInfo.max_parlio || 16) : 255;
+    outputsRow = `
+      <div>
+        Outputs: <input type="number" class="s" min="1" max="${maxOut}" name="AO${index}" value="${bus.ao || 1}">
+        LEDs/Output: <input type="number" class="m" min="1" max="65535" name="AL${index}" value="${bus.al || 1}">
+        ${isNet ? `<span>FPS Limit: <input type="number" class="s" min="1" max="255" name="AF${index}" value="${bus.af || 30}"></span>` : ''}
+      </div>
+    `;
+  }
+
+  // Warnings
+  const warnings = getBusWarnings(bus);
+
+  // Reversed / Skip / Refresh / Auto white
+  const reversedLabel = def.isMatrix ? 'Inverted' : 'Reversed';
+  const refreshLabel = def.isMatrix ? 'Latch' : 'Refresh';
+  const reversedRow = (type !== 86 && type !== 87) ? `
+    <span>
+      <span>${reversedLabel}:</span>
+      <input type="checkbox" name="CV${index}" ${bus.rev ? 'checked' : ''}>
+    </span>
+  ` : '';
+
+  const skipRow = !isNet ? `
+    <span>Skip: <input type="number" class="xs" min="0" max="255" name="SL${index}" value="${bus.skip || 0}"></span>
+  ` : '';
+
+  const refreshCheckRow = (type !== 86 && type !== 87) ? `
+    <span>
+      <span>${refreshLabel}:</span>
+      <input type="checkbox" name="RF${index}" ${bus.rf ? 'checked' : ''}>
+    </span>
+  ` : '';
+
+  const autoWRow = hasWhite(bus) ? `
+    <span>Auto W:
+      <select class="xs" name="AW${index}">
+        <option value="0" ${bus.aw == 0 ? 'selected' : ''}>None</option>
+        <option value="1" ${bus.aw == 1 ? 'selected' : ''}>Brighter</option>
+        <option value="2" ${bus.aw == 2 ? 'selected' : ''}>Accurate</option>
+        <option value="3" ${bus.aw == 3 ? 'selected' : ''}>Dual</option>
+        <option value="4" ${bus.aw == 4 ? 'selected' : ''}>Max</option>
+      </select>
+    </span>
+  ` : '';
+
+  return `
+    <div class="iST" data-bus-index="${index}">
+      <hr class="sml">
+      <span>${index + 1}:</span>
+      <select name="LT${index}" data-bus-type="${index}">
+        ${renderLedTypeOptions().replace(`value="${type}"`, `value="${type}" selected`)}
+      </select><br>
+      ${colorOrderRow}
+      ${swapWRow}
+      ${clockRow}
+      <br>
+      <span>${startLabel}:</span>
+      <input type="number" class="l starts" min="0" max="65534" name="LS${index}" value="${bus.start || 0}" required>
+      ${lengthRow}
+      <br>
+      ${pinsHtml}
+      ${outputsRow}
+      <div style="color:orange">${warnings}</div>
+      <div>
+        ${reversedRow}
+        ${skipRow}
+        ${refreshCheckRow}
+        ${autoWRow}
+      </div>
+    </div>
+  `;
+}
+
+function renderGpioSelectOptionsForPin(bus, px) {
+  const opts = getGpioOptions();
+  const selPin = bus?.pins?.[px] ?? -1;
+  return opts.map(opt => {
+    const selected = selPin === opt.n ? 'selected' : '';
+    return `<option value="${opt.n}" ${selected} ${opt.dis ? 'disabled' : ''}>${opt.label}</option>`;
+  }).join('');
+}
+
+function renderColorOrderOptions(selected) {
+  const names = ['GRB','RGB','BRG','RBG','BGR','GBR'];
+  return names.map((n, i) => `<option value="${i}" ${selected == i ? 'selected' : ''}>${n}</option>`).join('');
+}
+
+function renderBusList() {
+  const container = gId('bus-list');
+  container.innerHTML = state.cfg.buses.map((bus, i) => renderBus(bus, i)).join('');
+}
+
+function updateBusType(busIndex, newType) {
+  const bus = state.cfg.buses[busIndex];
+  if (!bus) return;
+  bus.type = Number(newType);
+  renderBusList();
+  updateStats();
+  updateCustomStartsCheckbox();
+}
+
+function updateBusPin(busIndex, pinIndex, newValue) {
+  const bus = state.cfg.buses[busIndex];
+  if (!bus) return;
+  if (!bus.pins) bus.pins = [];
+  bus.pins[pinIndex] = newValue !== '' ? Number(newValue) : -1;
+  updateStats();
+}
+
+function updateBusOutputs(busIndex) {
+  const bus = state.cfg.buses[busIndex];
+  if (!bus) return;
+  renderBusList();
+  updateStats();
+}
+
+function updateBusLength(busIndex) {
+  updateStats();
+}
+
+function updateBusStart(busIndex) {
+  updateCustomStartsCheckbox();
+}
+
+function updateCustomStartsCheckbox() {
+  const cs = validateBusStarts();
+  gId('si').checked = cs;
+  state.cfg._customStarts = cs;
+}
+
+// ── Bus Warnings ────────────────────────────────────────────────────────────
+
+function getBusWarnings(bus) {
+  if (!bus) return '';
+  const type = Number(bus.type) || 80;
+  const def = getLedDef(type);
+  const isNet = def.cat === 4;
+  const isPar = def.isPar;
+  if (!isNet && !isPar) return '';
+
+  const outputs  = Number(bus.ao) || 1;
+  const perOut   = Number(bus.al) || 1;
+  const totalLED = Number(bus.len) || 1;
+  const fpsLimit = Number(bus.af) || 30;
+  const isRGBW   = hasWhite(bus);
+  const pins     = bus.pins || [];
+  let h = '';
+
+  if (isPar) {
+    const maxParlio = gpioInfo.max_parlio || 4;
+    const out   = Math.min(outputs || maxParlio, maxParlio);
+    const width = matchToOutputCount(out);
+    const bpp   = isRGBW ? 128 : 96;
+    const bytesPerPixel = Math.floor((bpp * width + 7) / 8);
+    const maxChunk = bytesPerPixel > 0 ? Math.floor(65535 / bytesPerPixel) : 0;
+    const chunks = maxChunk > 0 ? Math.ceil(perOut / maxChunk) : 0;
+
+    h += `Parallel: ${width}-bit width, ${out} pins`;
+    if (chunks > 1) h += ` · ${chunks} transfers (not guaranteed glitch-free)`;
+
+    let inactive = 0;
+    for (let px = 0; px < width; px++) {
+      if (pins[px] === undefined || pins[px] === null || pins[px] === '' || pins[px] === -1) inactive++;
+    }
+    if (inactive > 0 && (width - inactive) >= 1) {
+      h += ` · ${width - inactive} active pin${width - inactive !== 1 ? 's' : ''} (reduce Outputs for higher FPS)`;
+    }
+
+  } else if (isNet) {
+    const chanPerPix = isRGBW ? 4 : 3;
+    const uniSize    = Math.floor(512 / chanPerPix);
+    const universes  = Math.ceil(perOut / uniSize);
+
+    if (def.name.includes("ColorLight")) {
+      h += `<b>ColorLight 5A-75B:</b> Hardcoded MAC 11:22:33:44:55:66 · Set Outputs=1 · Use Length = LEDs/Output · Requires ESP32-P4 Ethernet`;
+    } else if (def.name.includes("Art-Net") && gpioInfo.artnetMap_enabled == 1) {
+      h += `Art-Net Mapping active: set Outputs=1, Length = LEDs/Output · <a href="/artnetmap" target="_blank">Configure mapping</a>`;
+    } else if (def.name.includes("DDP")) {
+      h += `DDP: Outputs=1, Length = LEDs/Output recommended`;
+    } else if (def.name.includes("E1.31")) {
+      if (outputs > 1 && universes > 8) {
+        h += `⚠️ ${universes} universes/output exceeds typical hardware limits (max 6-8). Check your controller specs.`;
+      } else if (outputs > 1) {
+        h += `Set E1.31 hardware to ${universes} universe${universes !== 1 ? 's' : ''}/output`;
+        if (universes > 6) h += ` (6 is a common maximum)`;
+      }
+    }
+
+    if (outputs * perOut !== totalLED && outputs > 0 && perOut > 0) {
+      h += ` · ⚠️ Outputs × LEDs/Output (${outputs}×${perOut}=${outputs*perOut}) ≠ Length (${totalLED})`;
+    }
+
+    if (outputs > 1 && universes <= 8) {
+      const maxFps = isRGBW ? Math.floor(25000 / perOut) - 1 : Math.floor(33333 / perOut) - 1;
+      if (fpsLimit > maxFps && maxFps > 0) h += ` · FPS limit ${fpsLimit} may be too high (try ≤${maxFps})`;
+    }
+
+    const lastOctet = pins[3];
+    if (lastOctet !== undefined && lastOctet !== null && lastOctet !== '' && Number(lastOctet) === 255) {
+      const proto = def.name.includes("DDP") ? "DDP" : def.name.includes("E1.31") ? "E1.31" : def.name.includes("Art-Net") ? "Art-Net" : "Network";
+      h += ` · ⚠️ ${proto} is using broadcast (last IP octet = 255)`;
+    }
+  }
+
+  return h ? `<span style="color:#f80">ℹ ${h}</span>` : '';
+}
+
+// ── Stats (LED count, memory, PSU) ────────────────────────────────────────
+
+function getTotalLEDs() {
+  let n = 0;
+  for (const b of state.cfg.buses) {
+    if (!b) continue;
+    if (!isNetworkType(b.type)) n += parseInt(b.len) || 0;
+  }
+  return n;
+}
+
+function getMemoryUsed() {
+  let m = 0;
+  for (const b of state.cfg.buses) {
+    if (!b) continue;
+    const def = getLedDef(b.type ?? 80);
+    const len = parseInt(b.len) || 1;
+    if (def.cat === 1 || def.cat === 2 || def.isPar) {
+      const bpp = (def.color && def.color.includes("W")) ? 4 : 3;
+      m += len * (maxM >= 10000 ? bpp * 2 : bpp);
+    } else if (def.cat === 3) {
+      m += 5;
+    } else {
+      m += len * 3;
+    }
+  }
+  return m;
+}
+
+function getPsuEstimate() {
+  let sPC = 0;
+  for (const b of state.cfg.buses) {
+    if (!b) continue;
+    if (!isNetworkType(b.type)) sPC += parseInt(b.len) || 0;
+  }
+  const val = Math.ceil((100 + sPC * laprev) / 500) / 2;
+  const roundedVal = val > 5 ? Math.ceil(val) : val;
+  const is12V = state.cfg._LAsel == 30;
+  const isWS2815 = state.cfg._LAsel == 255;
+  if (roundedVal < 1.02 && !is12V && !isWS2815) return "ESP 5V pin with 1A USB supply";
+  let s = is12V ? "12V " : isWS2815 ? "WS2815 12V " : "5V ";
+  return s + roundedVal + "A supply connected to LEDs";
+}
+
+function updateStats() {
+  const totalLEDs = getTotalLEDs();
+  gId('lc').textContent = totalLEDs;
+  gId('pc').textContent = totalLEDs > 0 ? `(${totalLEDs} physical)` : '';
+
+  const memUsed = getMemoryUsed();
+  gId('m0').textContent = memUsed;
+  gId('m1').textContent = maxM;
+
+  const pct = (memUsed / maxM) * 100;
+  const bar = gId('dbar');
+  bar.style.background = pct <= 60 ? '#ccc' : pct <= 90 ? 'orange' : 'red';
+
+  gId('psu').textContent = getPsuEstimate();
+
+  const ledWarning = gId('ledwarning');
+  const ledWarningText = gId('ledwarning-text');
+  if (memUsed / maxM > 0.8) {
+    ledWarningText.textContent = "You might run into stability or lag issues. Use less than 800 LEDs per output for the best experience!";
+    ledWarning.style.display = 'block';
+  } else {
+    ledWarning.style.display = 'none';
+  }
+
+  syncDOMWarnings();
+}
+
+// ── DOM Warnings (FPS, Amp, etc.) ─────────────────────────────────────────
+
+function syncDOMWarnings() {
+  const sf = d.Sf;
+
+  // FPS warnings
+  if (sf?.FR) {
+    const v = parseInt(sf.FR.value) || 0;
+    gId('fpsNone').style.display    = (v === 0 || v > 249) ? 'block' : 'none';
+    gId('fpsNoHelp').style.display  = (v === 0 || v > 249) ? 'none'  : 'block';
+    gId('fpswarning').style.display = (v > 79 || v === 0) ? 'block' : 'none';
+    gId('fpshelp1').style.display   = (v > 90  && v < 132) ? 'block' : 'none';
+    gId('fpshelp2').style.display   = (v > 132 && v < 196) ? 'block' : 'none';
+    gId('fpshelp3').style.display   = (v > 196) ? 'block' : 'none';
+  }
+
+  // Amp warning
+  if (sf?.MA) {
+    gId('ampwarning').style.display = sf.MA.value > 7200 ? 'inline' : 'none';
+  }
+
+  // ABL min
+  const ablEnabled = gId('able')?.checked;
+  if (sf?.MA) sf.MA.min = ablEnabled ? 250 : 0;
+
+  // JSON remote section
+  if (gId('json') && sf?.IT) {
+    gId('json').style.display = sf.IT.value == 8 ? "" : "none";
+  }
+}
+
+// ── Bus Start Validation ────────────────────────────────────────────────────
+
+function validateBusStarts() {
+  let cs = false;
+  for (let i = 1; i < state.cfg.buses.length; i++) {
+    const prev = (parseInt(state.cfg.buses[i-1]?.start) || 0) + (parseInt(state.cfg.buses[i-1]?.len) || 0);
+    const curr = parseInt(state.cfg.buses[i]?.start) || 0;
+    if (prev !== curr) { cs = true; }
+  }
+  if (state.cfg.buses[0] && parseInt(state.cfg.buses[0].start) !== 0) cs = true;
+  return cs;
+}
+
+// ── Pin Validation ─────────────────────────────────────────────────────────
+
+function validatePins() {
+  for (let bi = 0; bi < state.cfg.buses.length; bi++) {
+    const bus = state.cfg.buses[bi];
+    if (!bus) continue;
+    if (isNetworkType(bus.type)) continue;
+    const pins = bus.pins || [];
+    for (let px = 0; px < pins.length; px++) {
+      const pin = pins[px];
+      if (pin === undefined || pin === null || pin === '' || pin === -1) continue;
+      if (gpioInfo.rsvd?.includes(pin)) return `Pin ${pin} (Bus ${bi+1} pin ${px}) is reserved and cannot be used.`;
+      if (gpioInfo.ro_gpio?.includes(pin)) return `Pin ${pin} (Bus ${bi+1} pin ${px}) is input-only and cannot be used as an output.`;
+    }
+  }
+  // Check pin conflicts between buses
+  const assigned = new Map();
+  for (let bi = 0; bi < state.cfg.buses.length; bi++) {
+    const bus = state.cfg.buses[bi];
+    if (!bus || isNetworkType(bus.type)) continue;
+    for (const pin of (bus.pins || [])) {
+      if (pin === undefined || pin === null || pin === '' || pin === -1) continue;
+      if (assigned.has(pin) && assigned.get(pin) !== bi) {
+        return `Pin ${pin} is used by both Bus ${assigned.get(pin)+1} and Bus ${bi+1}.`;
+      }
+      assigned.set(pin, bi);
+    }
+  }
+  return null;
+}
+
+// ── Add/Remove Buses ───────────────────────────────────────────────────────
+
+function busEndIndex(i) {
+  if (i < 1) return 0;
+  const b = state.cfg.buses[i - 1];
+  const v = (parseInt(b?.start) || 0) + (parseInt(b?.len) || 0);
+  const t = parseInt(b?.type) || 0;
+  return (t > 31 && t < 48) ? 1 : (isNaN(v) ? 0 : v);
+}
+
+function addBus() {
+  if (state.cfg.buses.length >= state.maxBuses) return;
+  const start = busEndIndex(state.cfg.buses.length);
+  state.cfg.buses.push({
+    type: 80, start, len: 1, pins: [-1,-1,-1,-1],
+    co: 0, wo: 0, sp: 2, rev: false, skip: 0, rf: false, aw: 255,
+    ao: 1, al: 1, af: 30
+  });
+  renderBusList();
+  updateStats();
+  updateCustomStartsCheckbox();
+}
+
+function removeBus() {
+  if (state.cfg.buses.length === 0) return;
+  state.cfg.buses.pop();
+  renderBusList();
+  updateStats();
+  updateCustomStartsCheckbox();
+}
+
+// ── Color Order Overrides ───────────────────────────────────────────────────
+
+function renderColorOrderOverrides() {
+  const container = gId('com-list');
+  container.innerHTML = state.cfg.com.map((com, i) => `
+    <div class="com_entry">
+      <hr class="sml">
+      <span>${i + 1}:</span> Start:
+      <input type="number" name="XS${i}" class="l starts" min="0" max="65535" value="${com.start || 0}" required>
+      Length: <input type="number" name="XC${i}" class="l" min="1" max="65535" value="${com.len || 1}" required>
+      <span>Color Order:
+        <select name="XO${i}">
+          ${renderColorOrderOptions(com.co)}
+        </select>
+      </span><br>
+    </div>
+  `).join('');
+}
+
+function addColorOrderOverride() {
+  if (state.cfg.com.length >= 10) return;
+  state.cfg.com.push({ start: 0, len: 1, co: 0 });
+  renderColorOrderOverrides();
+}
+
+function removeColorOrderOverride() {
+  if (state.cfg.com.length === 0) return;
+  state.cfg.com.pop();
+  renderColorOrderOverrides();
+}
+
+// ── Buttons ────────────────────────────────────────────────────────────────
+
+function renderButtons() {
+  const container = gId('btns');
+  container.innerHTML = state.cfg.buttons.map((btn, i) => {
+    const gpioChar = String.fromCharCode((i < 10 ? 48 : 55) + i);
+    return `
+      <span>
+        Button ${i} GPIO:
+        <input type="number" name="BT${gpioChar}" class="xs" value="${btn.pin ?? -1}">
+        <select name="BE${gpioChar}">
+          <option value="0" ${btn.type == 0 ? 'selected' : ''}>Disabled</option>
+          <option value="2" ${btn.type == 2 ? 'selected' : ''}>Pushbutton</option>
+          <option value="3" ${btn.type == 3 ? 'selected' : ''}>Push inverted</option>
+          <option value="4" ${btn.type == 4 ? 'selected' : ''}>Switch</option>
+          <option value="5" ${btn.type == 5 ? 'selected' : ''}>PIR sensor</option>
+          <option value="6" ${btn.type == 6 ? 'selected' : ''}>Touch</option>
+          <option value="7" ${btn.type == 7 ? 'selected' : ''}>Analog</option>
+          <option value="8" ${btn.type == 8 ? 'selected' : ''}>Analog inverted</option>
+        </select>
+        <span style="cursor:pointer;" class="clear-btn-pin" data-btn="${i}">&#x2715;</span><br>
+      </span>
+    `;
+  }).join('');
+}
+
+// ── Form Submission ─────────────────────────────────────────────────────────
+
+async function save() {
+  const errorEl = gId('error-msg');
+  const errorElBottom = gId('error-msg-bottom');
+  errorEl.style.display = 'none';
+  errorElBottom.style.display = 'none';
+
+  // Early validation
+  const pinErr = validatePins();
+  if (pinErr) {
+    errorEl.textContent = pinErr;
+    errorEl.style.display = 'block';
+    errorElBottom.textContent = pinErr;
+    errorElBottom.style.display = 'block';
+    return;
+  }
+
+  const sf = d.Sf;
+  const saveBtn = gId('save-btn');
+  const saveBtnBottom = gId('save-btn-bottom');
+  saveBtn.disabled = true;
+  saveBtnBottom.disabled = true;
+  saveBtn.textContent = 'Saving...';
+  saveBtnBottom.textContent = 'Saving...';
+
+  try {
+    // Collect form data
+    const formData = new FormData(sf);
+
+    // Build buses array from form
+    const buses = [];
+    for (let i = 0; i < state.cfg.buses.length; i++) {
+      const type = Number(formData.get(`LT${i}`)) || 80;
+      buses.push({
+        type,
+        start:  parseInt(formData.get(`LS${i}`)) || 0,
+        len:    Math.max(1, parseInt(formData.get(`LC${i}`)) || 1),
+        co:     parseInt(formData.get(`CO${i}`)) || 0,
+        wo:     parseInt(formData.get(`WO${i}`)) || 0,
+        sp:     parseInt(formData.get(`SP${i}`)) || 2,
+        rev:    formData.get(`CV${i}`) === 'on',
+        skip:   parseInt(formData.get(`SL${i}`)) || 0,
+        rf:     formData.get(`RF${i}`) === 'on',
+        aw:     parseInt(formData.get(`AW${i}`)) || 255,
+        ao:     parseInt(formData.get(`AO${i}`)) || 1,
+        al:     parseInt(formData.get(`AL${i}`)) || 1,
+        af:     parseInt(formData.get(`AF${i}`)) || 30,
+        pins:   [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(p => {
+          const v = formData.get(`L${p}${i}`);
+          return v !== null && v !== '' ? (parseInt(v) || -1) : -1;
+        }),
+      });
+    }
+
+    // Build com array
+    const com = [];
+    for (let i = 0; i < state.cfg.com.length; i++) {
+      com.push({
+        start: parseInt(formData.get(`XS${i}`)) || 0,
+        len:   parseInt(formData.get(`XC${i}`)) || 1,
+        co:    parseInt(formData.get(`XO${i}`)) || 0,
+      });
+    }
+
+    // Build buttons array
+    const buttons = state.cfg.buttons.map((btn, i) => {
+      const gpioChar = String.fromCharCode((i < 10 ? 48 : 55) + i);
+      return {
+        pin:  parseInt(formData.get(`BT${gpioChar}`)) || -1,
+        type: parseInt(formData.get(`BE${gpioChar}`)) || 0,
+      };
+    });
+
+    const payload = {
+      // ABL / Power
+      MA: parseInt(sf.MA?.value) || 0,
+      LA: gId('able').checked ? (parseInt(sf.LA?.value) || 55) : 0,
+      // Boot / Presets
+      CA: parseInt(sf.CA?.value) || 128,
+      BO: sf.BO?.checked || false,
+      BP: parseInt(sf.BP?.value) || 0,
+      // Gamma
+      GB:  sf.GB?.checked || false,
+      GC:  sf.GC?.checked || false,
+      GCP: sf.GCP?.checked || false,
+      GV:  Math.round((parseFloat(sf.GV?.value) || 2.8) * 10) / 10,
+      // Transitions
+      TF: sf.TF?.checked || false,
+      TD: parseInt(sf.TD?.value) || 750,
+      PF: sf.PF?.checked || false,
+      TP: parseInt(sf.TP?.value) || 12,
+      BF: parseInt(sf.BF?.value) || 100,
+      // Timed light
+      TB: parseInt(sf.TB?.value) || 0,
+      TL: parseInt(sf.TL?.value) || 1,
+      TW: parseInt(sf.TW?.value) || 0,
+      // White management
+      CCT: sf.CCT?.checked || false,
+      CR:  sf.CR?.checked || false,
+      CB:  parseInt(sf.CB?.value) || 0,
+      AW:  parseInt(sf.AW?.value) ?? 255,
+      // Palette
+      PB: parseInt(sf.PB?.value) || 0,
+      // IR / Relay / Buttons
+      IR:  parseInt(sf.IR?.value) ?? -1,
+      IT:  parseInt(sf.IT?.value) || 0,
+      MSO: sf.MSO?.checked || false,
+      RL:  parseInt(sf.RL?.value) ?? -1,
+      RM:  sf.RM?.checked || false,
+      IP:  sf.IP?.checked || false,
+      TT:  parseInt(sf.TT?.value) || 28,
+      // Segments / Buffer
+      MS: sf.MS?.checked || false,
+      LD: sf.LD?.checked || false,
+      FR: parseInt(sf.FR?.value) || 42,
+      // Buses
+      buses,
+      com,
+      buttons,
+    };
+
+    const response = await fetch('/json/cfg?p=2', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err || `HTTP ${response.status}`);
+    }
+
+    gId('saved-msg').style.display = 'block';
+    gId('saved-msg-bottom').style.display = 'block';
+    setTimeout(() => {
+      gId('saved-msg').style.display = 'none';
+      gId('saved-msg-bottom').style.display = 'none';
+    }, 3000);
+
+  } catch (err) {
+    errorEl.textContent = 'Save failed: ' + err.message;
+    errorEl.style.display = 'block';
+    errorElBottom.textContent = 'Save failed: ' + err.message;
+    errorElBottom.style.display = 'block';
+  } finally {
+    saveBtn.disabled = false;
+    saveBtnBottom.disabled = false;
+    saveBtn.textContent = 'Save';
+    saveBtnBottom.textContent = 'Save';
+  }
+}
+
+// ── Load Data ───────────────────────────────────────────────────────────────
+
+async function loadSettings() {
+  try {
+    const response = await fetch('/json/cfg?p=2');
+    if (!response.ok) throw new Error('Failed to load');
+    const data = await response.json();
+
+    // Populate gpioInfo from backend
+    const gpio = data._gpio || {};
+    gpioInfo.rsvd    = gpio.rsvd || [];
+    gpioInfo.ro_gpio = gpio.ro_gpio || [];
+    gpioInfo.um_p    = (gpio.um_p || []).filter(v => v !== -1);
+    gpioInfo.max_gpio    = gpio.max_gpio || 55;
+    gpioInfo.max_parlio  = gpio.max_parlio || 4;
+    gpioInfo.parlio_pins = gpio.parlio_pins || [];
+    gpioInfo.artnetMap_enabled = gpio.artnetMap_enabled || 0;
+    gpioInfo.dt_pins = gpio.dt_pins || [];
+    gpioInfo.a_pins = gpio.a_pins || [];
+
+    const lim = data._limits || {};
+    maxM = lim.maxM || 4000;
+    maxL = lim.maxL || 1333;
+    if (lim.maxPins) gpioInfo.max_parlio = lim.maxPins;
+
+    state.maxBuses = (lim.maxB || 1) + (lim.maxV || 0);
+
+    // Normalize buses
+    if (!Array.isArray(data.buses)) data.buses = [];
+    for (const bus of data.buses) {
+      if (bus) bus.type = Number(bus.type) || 80;
+    }
+
+    // Fix gamma
+    if (data.GV) data.GV = Math.round(data.GV * 10) / 10;
+
+    // Populate state
+    state.cfg.buses   = data.buses   || [];
+    state.cfg.com     = data.com     || [];
+    state.cfg.buttons = data.buttons || [];
+
+    // Copy other fields
+    state.cfg.MA = data.MA ?? 0;
+    state.cfg.LA = data.LA ?? 55;
+    state.cfg.CA = data.CA ?? 128;
+    state.cfg.BO = data.BO ?? false;
+    state.cfg.BP = data.BP ?? 0;
+    state.cfg.GB = data.GB ?? false;
+    state.cfg.GC = data.GC ?? true;
+    state.cfg.GCP = data.GCP ?? false;
+    state.cfg.GV = data.GV ?? 2.8;
+    state.cfg.TF = data.TF ?? true;
+    state.cfg.TD = data.TD ?? 750;
+    state.cfg.PF = data.PF ?? false;
+    state.cfg.TP = data.TP ?? 12;
+    state.cfg.BF = data.BF ?? 100;
+    state.cfg.TB = data.TB ?? 0;
+    state.cfg.TL = data.TL ?? 1;
+    state.cfg.TW = data.TW ?? 0;
+    state.cfg.PB = data.PB ?? 0;
+    state.cfg.RL = data.RL ?? -1;
+    state.cfg.RM = data.RM ?? false;
+    state.cfg.IP = data.IP ?? false;
+    state.cfg.TT = data.TT ?? 28;
+    state.cfg.IR = data.IR ?? -1;
+    state.cfg.IT = data.IT ?? 0;
+    state.cfg.MSO = data.MSO ?? false;
+    state.cfg.MS = data.MS ?? false;
+    state.cfg.LD = data.LD ?? false;
+    state.cfg.CCT = data.CCT ?? false;
+    state.cfg.CR = data.CR ?? false;
+    state.cfg.CB = data.CB ?? 0;
+    state.cfg.FR = data.FR ?? 42;
+    state.cfg.AW = data.AW ?? 255;
+
+    // ABL derived state
+    state.cfg._ablEnabled = (data.LA > 0);
+    state.cfg._LAsel = String(data.LA || 55);
+
+    // Populate form fields
+    populateForm();
+
+    state.loading = false;
+    gId('loading-msg').style.display = 'none';
+    gId('main-content').style.display = 'block';
+
+    // Initial render
+    clearGpioOptionsCache();
+    renderBusList();
+    renderColorOrderOverrides();
+    renderButtons();
+    updateStats();
+    updateCustomStartsCheckbox();
+
+  } catch (err) {
+    gId('loading-msg').textContent = 'Failed to load settings: ' + err.message;
+  }
+}
+
+function populateForm() {
+  const sf = d.Sf;
+  const cfg = state.cfg;
+
+  // ABL
+  gId('able').checked = cfg._ablEnabled;
+  sf.MA.value = cfg.MA || 0;
+  sf.LA.value = cfg._LAsel === '50' ? (cfg.LA || 0) : cfg._LAsel;
+  gId('LAsel').value = cfg._LAsel;
+
+  // Boot/Presets
+  sf.CA.value = cfg.CA ?? 128;
+  sf.BO.checked = cfg.BO ?? false;
+  sf.BP.value = cfg.BP ?? 0;
+
+  // Gamma
+  sf.GB.checked = cfg.GB ?? false;
+  sf.GC.checked = cfg.GC ?? true;
+  sf.GCP.checked = cfg.GCP ?? false;
+  sf.GV.value = cfg.GV ?? 2.8;
+  sf.BF.value = cfg.BF ?? 100;
+
+  // Transitions
+  sf.TF.checked = cfg.TF ?? true;
+  sf.TD.value = cfg.TD ?? 750;
+  sf.PF.checked = cfg.PF ?? false;
+  sf.TP.value = cfg.TP ?? 12;
+
+  // Timed light
+  sf.TL.value = cfg.TL ?? 1;
+  sf.TB.value = cfg.TB ?? 0;
+  sf.TW.value = cfg.TW ?? 0;
+
+  // White management
+  sf.CCT.checked = cfg.CCT ?? false;
+  sf.CR.checked = cfg.CR ?? false;
+  sf.CB.value = cfg.CB ?? 0;
+  sf.AW.value = cfg.AW ?? 255;
+
+  // Palette
+  sf.PB.value = cfg.PB ?? 0;
+
+  // IR/Relay/Buttons
+  sf.IR.max = gpioInfo.max_gpio;
+  sf.RL.max = gpioInfo.max_gpio;
+  sf.IR.value = cfg.IR ?? -1;
+  sf.IT.value = cfg.IT ?? 0;
+  sf.MSO.checked = cfg.MSO ?? false;
+  sf.RL.value = cfg.RL ?? -1;
+  sf.RM.checked = cfg.RM ?? false;
+  sf.IP.checked = cfg.IP ?? false;
+  sf.TT.value = cfg.TT ?? 28;
+
+  // Segments/Buffer
+  sf.MS.checked = cfg.MS ?? false;
+  sf.LD.checked = cfg.LD ?? false;
+  sf.FR.value = cfg.FR ?? 42;
+
+  // Set max values for GPIO inputs
+  gId('IR-max').max = gpioInfo.max_gpio;
+  gId('RL-max').max = gpioInfo.max_gpio;
+
+  // Update LA display
+  syncABLDisplay();
+  syncDOMWarnings();
+}
+
+// ── ABL Display Sync ────────────────────────────────────────────────────────
+
+function syncABLDisplay() {
+  const en = gId('able').checked;
+  gId('abl').style.display = en ? 'inline' : 'none';
+  gId('psu2').style.display = en ? 'inline' : 'none';
+  if (en) {
+    laprev = parseInt(d.Sf.LA.value) || 55;
+  }
+}
+
+function onLASelChange() {
+  const val = gId('LAsel').value;
+  // If "Custom" (50), keep the current LA value (user will edit it)
+  // Otherwise, set LA to the selected preset value
+  if (val !== '50') {
+    d.Sf.LA.value = parseInt(val) || 55;
+  }
+  gId('LAdis').style.display = (val == 50) ? 'inline' : 'none';
+}
+
+function onABLChange() {
+  const en = gId('able').checked;
+  if (en) {
+    // Enable ABL - restore previous LA value (captured when last enabled)
+    d.Sf.LA.value = laprev;
+    gId('LAsel').value = (laprev == 30 || laprev == 35 || laprev == 55 || laprev == 255) ? String(laprev) : '50';
+  } else {
+    // Disable ABL - set LA to 0
+    d.Sf.LA.value = 0;
+    gId('LAsel').value = '55'; // Reset dropdown to default
+  }
+  d.Sf.MA.min = en ? 250 : 0;
+  if (!en && d.Sf.MA) d.Sf.MA.value = 0;
+  syncABLDisplay();
+}
+
+// ── Event Delegation Setup ──────────────────────────────────────────────────
+
+function setupEventListeners() {
+  const sf = d.Sf;
+
+  // Form submit
+  sf.addEventListener('submit', (e) => {
+    e.preventDefault();
+    save();
+  });
+
+  // Bus list: type changes, pin changes, output changes
+  gId('bus-list').addEventListener('change', (e) => {
+    const target = e.target;
+    const name = target.name || '';
+
+    // Bus type change
+    const typeMatch = name.match(/^LT(\d+)$/);
+    if (typeMatch) {
+      updateBusType(parseInt(typeMatch[1]), target.value);
+      return;
+    }
+
+    // Pin change - extract bus and pin index from name like L0-1 (L{pin}{busIndex})
+    const pinMatch = name.match(/^L(\d+)(\d+)$/);
+    if (pinMatch) {
+      const pinIndex = parseInt(pinMatch[1]);
+      const busIndex = parseInt(pinMatch[2]);
+      updateBusPin(busIndex, pinIndex, target.value);
+      return;
+    }
+
+    // Outputs, LEDs/Output changes
+    const aoMatch = name.match(/^AO(\d+)$/);
+    if (aoMatch) {
+      const idx = parseInt(aoMatch[1]);
+      state.cfg.buses[idx].ao = parseInt(target.value) || 1;
+      renderBusList();
+      updateStats();
+      return;
+    }
+    const alMatch = name.match(/^AL(\d+)$/);
+    if (alMatch) {
+      const idx = parseInt(alMatch[1]);
+      state.cfg.buses[idx].al = parseInt(target.value) || 1;
+      updateStats();
+      return;
+    }
+    const afMatch = name.match(/^AF(\d+)$/);
+    if (afMatch) {
+      const idx = parseInt(afMatch[1]);
+      state.cfg.buses[idx].af = parseInt(target.value) || 30;
+      updateStats();
+      return;
+    }
+
+    // Length change
+    const lcMatch = name.match(/^LC(\d+)$/);
+    if (lcMatch) {
+      const idx = parseInt(lcMatch[1]);
+      state.cfg.buses[idx].len = parseInt(target.value) || 1;
+      updateBusLength(idx);
+      return;
+    }
+
+    // Start change
+    const lsMatch = name.match(/^LS(\d+)$/);
+    if (lsMatch) {
+      const idx = parseInt(lsMatch[1]);
+      state.cfg.buses[idx].start = parseInt(target.value) || 0;
+      updateBusStart(idx);
+      return;
+    }
+  });
+
+  // Add/Remove bus buttons
+  gId('add-bus').addEventListener('click', addBus);
+  gId('remove-bus').addEventListener('click', removeBus);
+
+  // Color order overrides
+  gId('com_add').addEventListener('click', addColorOrderOverride);
+  gId('com_rem').addEventListener('click', removeColorOrderOverride);
+
+  // ABL
+  gId('able').addEventListener('change', onABLChange);
+  gId('LAsel').addEventListener('change', onLASelChange);
+
+  // FPS / FR
+  sf.FR.addEventListener('input', syncDOMWarnings);
+
+  // IR type
+  sf.IT.addEventListener('change', syncDOMWarnings);
+
+  // Clear buttons
+  gId('clear-ir').addEventListener('click', () => { sf.IR.value = -1; });
+  gId('clear-rl').addEventListener('click', () => { sf.RL.value = -1; });
+
+  // Upload IR
+  gId('upload-ir').addEventListener('click', () => {
+    const fileInput = gId('irJsonFile');
+    if (!fileInput.files?.[0]) { alert("Please select a JSON file first!"); return; }
+    wledCfg.upload(fileInput, '/ir.json');
+  });
+
+  // Config file apply
+  gId('apply-cfg').addEventListener('click', () => {
+    const fileInput = gId('cfgFile');
+    if (!fileInput.files?.[0]) { alert("Please select a JSON file first!"); return; }
+    const fr = new FileReader();
+    fr.onload = (e) => {
+      try {
+        const c = JSON.parse(e.target.result);
+        if (c.hw) applyConfigFile(c);
+      } catch(ex) { alert("Invalid JSON file."); }
+    };
+    fr.readAsText(fileInput.files[0]);
+    fileInput.value = '';
+  });
+
+  // Custom starts checkbox (readonly display)
+  gId('si').addEventListener('change', (e) => {
+    // This is display-only; actual validation comes from backend
+  });
+}
+
+function applyConfigFile(c) {
+  if (!c.hw) return;
+  const hw = c.hw;
+
+  if (hw.led) {
+    state.cfg.buses = (hw.led.ins || []).map(v => ({
+      type: v.type ?? 80,
+      start: v.start ?? 0,
+      len:   v.len ?? 1,
+      co:    v.order ?? 0,
+      wo:    0, sp: 2, rev: !!v.rev, skip: v.skip ?? 0,
+      rf:    !!v.ref, aw: 255, ao: 1, al: 1, af: 30,
+      pins:  v.pin || [],
+    }));
+  }
+
+  if (hw.com) {
+    state.cfg.com = hw.com.map(e => ({ start: e.start ?? 0, len: e.len ?? 1, co: e.order ?? 0 }));
+  }
+
+  if (hw.btn?.ins) {
+    state.cfg.buttons = hw.btn.ins.map(v => ({ pin: v.pin?.[0] ?? -1, type: v.type ?? 0 }));
+    if (hw.btn.tt !== undefined) state.cfg.buttons.tt = hw.btn.tt;
+  }
+
+  if (hw.ir)    { state.cfg.IR = hw.ir.pin;    state.cfg.IT = hw.ir.type; }
+  if (hw.relay) { state.cfg.RL = hw.relay.pin; state.cfg.RM = !!hw.relay.inv; }
+
+  clearGpioOptionsCache();
+  renderBusList();
+  renderColorOrderOverrides();
+  renderButtons();
+  populateForm();
+  updateStats();
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+
+document.addEventListener('wled-loadcfg', (e) => applyConfigFile(e.detail));
+
+loadSettings();
+setupEventListeners();
+</script>
+</body>
 </html>

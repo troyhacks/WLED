@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>Pioneer ProLink Settings</title>
+<style>@import url("style.css");</style>
+</head>
+<body>
+<form id="pl-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://github.com/troyhacks/WLED/blob/master/usermods/usermod_v2_pioneer_prolink/readme.md')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+  <div id="error-msg" style="color:red;margin:8px 0;display:none"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa">Loading settings...</div>
+  <div id="main-content" style="display:none">
+    <h2>Pioneer ProLink Settings</h2>
+    <label><input type="checkbox" name="enabled"> Enabled</label><br><br>
+    <p><u>General Options</u></p>
+    <label>Debug Mode: <input type="checkbox" name="debug"></label><br><br>
+    <label>Beat Flash: <input type="checkbox" name="beatFlash"></label><br><br>
+    <label>Random Preset on Beat: <input type="checkbox" name="randomPreset"></label><br><br>
+    <label>High Resolution Artwork: <input type="checkbox" name="highResArt"></label><br><br>
+    <label>Player IP Override: <input type="text" name="ipOverride" style="width:150px"></label><br><br>
+    <label>Deck Number: <input type="number" name="deckNumber" min="1" max="4" style="width:80px"></label><br><br>
+    <label>Alternate Waveform Colors: <input type="checkbox" name="altcolors"></label><br><br>
+  </div>
+</form>
+<script>
+(async function() {
+  const form = document.getElementById('pl-form');
+  const errorMsg = document.getElementById('error-msg');
+  const savedMsg = document.getElementById('saved-msg');
+  const loadingMsg = document.getElementById('loading-msg');
+  const mainContent = document.getElementById('main-content');
+
+  // Load current config
+  try {
+    const res = await fetch('/cfg.json');
+    const cfg = await res.json();
+    const pl = cfg.um?.PioneerProLink || {};
+    loadingMsg.style.display = 'none';
+    mainContent.style.display = 'block';
+
+    // Fill form
+    if (pl.enabled !== undefined) form.enabled.checked = pl.enabled;
+    if (pl.debug !== undefined) form.debug.checked = pl.debug;
+    if (pl.beatFlash !== undefined) form.beatFlash.checked = pl.beatFlash;
+    if (pl.randomPreset !== undefined) form.randomPreset.checked = pl.randomPreset;
+    if (pl.highResArt !== undefined) form.highResArt.checked = pl.highResArt;
+    if (pl.ipOverride !== undefined) form.ipOverride.value = pl.ipOverride || '';
+    if (pl.deckNumber !== undefined) form.deckNumber.value = pl.deckNumber;
+    if (pl.altcolors !== undefined) form.altcolors.checked = pl.altcolors;
+  } catch (e) {
+    loadingMsg.textContent = 'Error loading settings';
+    console.error(e);
+  }
+
+  // Save handler
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = 'none';
+    savedMsg.style.display = 'none';
+    const saveBtn = document.getElementById('save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      const payload = {
+        um: {
+          PioneerProLink: {
+            enabled: form.enabled.checked,
+            debug: form.debug.checked,
+            beatFlash: form.beatFlash.checked,
+            randomPreset: form.randomPreset.checked,
+            highResArt: form.highResArt.checked,
+            ipOverride: form.ipOverride.value,
+            deckNumber: parseInt(form.deckNumber.value) || 1,
+            altcolors: form.altcolors.checked
+          }
+        }
+      };
+      const res = await fetch('/json/cfg?p=8', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        savedMsg.style.display = 'block';
+        setTimeout(() => { window.location.reload(); }, 1000);
+      } else {
+        throw new Error('Save failed');
+      }
+    } catch (e) {
+      errorMsg.textContent = 'Error: ' + e.message;
+      errorMsg.style.display = 'block';
+    }
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  });
+})();
+</script>
+</body>
+</html>

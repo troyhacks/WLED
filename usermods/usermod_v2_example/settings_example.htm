@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Example Usermod Settings</title>
+<style>@import url("style.css");</style>
+</head>
+<body>
+<form id="example-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://github.com/troyhacks/WLED')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+  <div id="error-msg" style="color:red;margin:8px 0;display:none"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa">Loading settings...</div>
+  <div id="main-content" style="display:none">
+    <h2>Example Usermod</h2>
+    <label><input type="checkbox" name="enabled"> Enabled</label><br><br>
+    <label><input type="checkbox" name="debugMode"> Debug Mode</label><br><br>
+    <label>Color: <input type="color" name="myColor" value="#ff0000"></label><br><br>
+    <label>Speed: <input type="number" name="mySpeed" min="1" max="1000" value="100" style="width:80px"></label><br><br>
+  </div>
+</form>
+
+<script src="/settings-core.js"></script>
+<script>
+  umCfg.initPage('Example');
+</script>
+</body>
+</html>

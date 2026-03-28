@@ -10,6 +10,7 @@
   #include "html_pixart.h"
 #endif
 #include "html_cpal.h"
+#include "html_usermod_settings_registry.h"
 
 #if defined(SOC_SDMMC_HOST_SUPPORTED) && defined(WLED_ENABLE_FS_EDITOR)
 #include "vfs_api.h"
@@ -224,7 +225,23 @@ void initServer()
     serveSettings(request);
   });
 
-  // "/settings/settings.js&p=x" request also handled by serveSettings()
+  // Usermod settings pages (auto-discovered) - catch /settings_xxx URLs
+  // Use wildcard /settings* to match /settings_xxx
+  server.on("/settings*", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (handleIfNoneMatchCacheHeader(request)) return;
+    String url = request->url();
+    // Only handle URLs that start with "/settings_"
+    if (!url.startsWith("/settings_")) {
+      // Fall through to serveSettings for /settings (without suffix)
+      serveSettings(request);
+      return;
+    }
+    // Extract suffix after "/settings_"
+    String suffix = url.substring(10);  // skip "/settings_" (10 chars)
+    int qIdx = suffix.indexOf("?");
+    if (qIdx > 0) suffix = suffix.substring(0, qIdx);
+    serveUsermodSettingsPage(request, suffix.c_str());
+  });
 
   server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (handleIfNoneMatchCacheHeader(request)) return;
@@ -274,6 +291,22 @@ void initServer()
     request->send(response);
     });
 
+  server.on("/alpine.min.js", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (handleIfNoneMatchCacheHeader(request)) return;
+    AsyncWebServerResponse* response = request->beginResponse_P(200, "text/css", alpineJs, alpineJs_length);
+    response->addHeader(FPSTR(s_content_enc), "gzip");
+    setStaticContentCacheHeaders(response);
+    request->send(response);
+    });
+
+  server.on("/settings-core.js", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (handleIfNoneMatchCacheHeader(request)) return;
+    AsyncWebServerResponse* response = request->beginResponse_P(200, "text/css", settingscoreJs, settingscoreJs_length);
+    response->addHeader(FPSTR(s_content_enc), "gzip");
+    setStaticContentCacheHeaders(response);
+    request->send(response);
+    });
+
   server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
     if(!handleFileRead(request, "/favicon.ico"))
     {
@@ -298,9 +331,52 @@ void initServer()
     serveSettings(request, true);
   });
 
+  // JSON endpoint: get list of available usermod settings pages
+  // Must be registered BEFORE /json to take precedence
+  server.on("/json/usermod-pages", HTTP_GET, [](AsyncWebServerRequest *request){
+    char jsonBuffer[256];
+    getUsermodSettingsPagesJson(jsonBuffer, sizeof(jsonBuffer));
+    request->send(200, "application/json", jsonBuffer);
+  });
+
+  // JSON endpoint: get expected config fields for a usermod settings page
+  // Usage: /json/usermod-fields?page=artnetmap
+  server.on("/json/usermod-fields", HTTP_GET, [](AsyncWebServerRequest *request){
+    char jsonBuffer[256];
+    String page = request->hasArg("page") ? request->arg("page") : "";
+    getUsermodExpectedFieldsJson(page.c_str(), jsonBuffer, sizeof(jsonBuffer));
+    request->send(200, "application/json", jsonBuffer);
+  });
+
   server.on("/json", HTTP_GET, [](AsyncWebServerRequest *request){
+    // /json/cfg is handled by the dedicated JSON settings API
+    if (request->url().startsWith("/json/cfg")) {
+      handleCfgGet(request);
+      return;
+    }
     serveJson(request);
   });
+
+  // JSON settings API: GET/POST /json/cfg?p=N
+  // GET  → returns current settings for page N as JSON (parallel to /settings/s.js?p=N)
+  // POST → applies JSON settings (parallel to form POST to /settings)
+  AsyncCallbackJsonWebHandler* cfgHandler = new AsyncCallbackJsonWebHandler("/json/cfg",
+    [](AsyncWebServerRequest *request) {
+      if (!requestJSONBufferLock(15)) {
+        request->send(503, "application/json", F("{\"error\":5}"));
+        return;
+      }
+      DeserializationError error = deserializeJson(doc, (uint8_t*)(request->_tempObject));
+      JsonObject root = doc.as<JsonObject>();
+      if (error || root.isNull()) {
+        releaseJSONBufferLock();
+        request->send(400, "application/json", F("{\"error\":9}"));
+        return;
+      }
+      handleCfgSet(request, root);
+      releaseJSONBufferLock();
+    });
+  server.addHandler(cfgHandler);
 
   AsyncCallbackJsonWebHandler* handler = new AsyncCallbackJsonWebHandler("/json", [](AsyncWebServerRequest *request) {
     bool verboseResponse = false;
@@ -779,7 +855,7 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
   //else if (url.indexOf("/edit")   >= 0) subPage = 10;
   else subPage = 255; // welcome page
 
-  if (!correctPIN && strlen(settingsPIN) > 0 && (subPage > 0 && subPage < 11)) {
+  if (!correctPIN && strlen(settingsPIN) > 0 && (subPage > 0 && subPage < 12)) {
     originalSubPage = subPage;
     subPage = 252; // require PIN
   }

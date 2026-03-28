@@ -1,281 +1,269 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
-	<meta charset="utf-8">
-	<title>Sync Settings</title>
-	<script>var d=document;
-	var loc = false, locip;
-	function gId(s){return d.getElementById(s);}
-	function toggle(el){gId(el).classList.toggle("hide"); gId('No'+el).classList.toggle("hide");}
-	function hideNoDMX(){gId("dmxOnOff2").style.display="none";} //WLEDMM
-	function hideNoLOX(){gId("loxOnOff2").style.display="none";} //WLEDMM
-	function hideNoADA(){gId("adaOnOff2").style.display="none";} //WLEDMM
-	function hideDMXInput(){gId("dmxInput").style.display="none";} //WLEDMM
-	function hideNoDMXInput(){gId("dmxInputOff").style.display="none";} //WLEDMM
-	function H(){window.open("https://mm.kno.wled.ge/interfaces/udp-notifier/");}
-	function B(){window.open("/settings","_self");}
-	function adj(){if (d.Sf.DI.value == 6454) {if (d.Sf.EU.value == 1) d.Sf.EU.value = 0;}
-					else if (d.Sf.DI.value == 5568) {if (d.Sf.DA.value == 0) d.Sf.DA.value = 1; if (d.Sf.EU.value == 0) d.Sf.EU.value = 1;} }
-	// https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
-	function loadJS(FILE_URL, async = true) {
-		let scE = d.createElement("script");
-		scE.setAttribute("src", FILE_URL);
-		scE.setAttribute("type", "text/javascript");
-		scE.setAttribute("async", async);
-		d.body.appendChild(scE);
-		// success event 
-		scE.addEventListener("load", () => {
-			//console.log("File loaded");
-			GetV();SetVal();
-		});
-		// error event
-		scE.addEventListener("error", (ev) => {
-			console.log("Error on loading file", ev);
-			alert("Loading of configuration script failed.\nIncomplete page data!");
-		});
-	}
-	function FC()
-	{
-		for(j=0;j<8;j++)
-		{
-			gId("G"+(j+1)).checked=gId("GS").value>>j&1;
-			gId("R"+(j+1)).checked=gId("GR").value>>j&1;
-		}
-	}
-	function GC()
-	{
-		var a=0, b=0;
-
-		var m=1;
-		for(j=0;j<8;j++)
-		{
-			a+=gId("G"+(j+1)).checked*m;
-			b+=gId("R"+(j+1)).checked*m;
-			m*=2;
-		}
-		gId("GS").value=a;
-		gId("GR").value=b;
-	}
-	function SP(){var p = d.Sf.DI.value; gId("xp").style.display = (p > 0)?"none":"block"; if (p > 0) d.Sf.EP.value = p;}
-	function SetVal(){switch(parseInt(d.Sf.EP.value)){case 5568: d.Sf.DI.value = 5568; break; case 6454: d.Sf.DI.value = 6454; break; case 4048: d.Sf.DI.value = 4048; break; }; SP();FC();}
-	function S(){
-		if (window.location.protocol == "file:") {
-			loc = true;
-			locip = localStorage.getItem('locIp');
-			if (!locip) {
-				locip = prompt("File Mode. Please enter WLED IP!");
-				localStorage.setItem('locIp', locip);
-			}
-		}
-		var url = (loc?`http://${locip}`:'') + '/settings/s.js?p=4';
-		loadJS(url, false);	// If we set async false, file is loaded and executed, then next statement is processed
-	}
-	</script>
-	<style>@import url("style.css");</style>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<meta charset="utf-8">
+<title>Sync Settings</title>
+<script src="/alpine.min.js" defer></script>
+<script src="/settings-core.js"></script>
+<style>@import url("style.css");</style>
 </head>
-<body onload="S()">
-<form id="form_s" name="Sf" method="post" onsubmit="GC()">
-<div class="toprow">
-<div class="helpB"><button type="button" onclick="H()">?</button></div>
-<button type="button" onclick="B()">Back</button><button type="submit">Save</button><hr>
-</div>
-<h2>Sync setup</h2>
-<h3>WLED Broadcast</h3>
-UDP Port: <input name="UP" type="number" min="1" max="65535" class="d5" required><br>
-2nd Port: <input name="U2" type="number" min="1" max="65535" class="d5" required><br>
-<h3>Sync groups</h3>
-<input name="GS" id="GS" type="number" style="display: none;"><!-- hidden inputs for bitwise group checkboxes -->
-<input name="GR" id="GR" type="number" style="display: none;">
-<table style="margin: 0 auto;">
-	<tr>
-		<td></td>
-		<td>1</td>
-		<td>2</td>
-		<td>3</td>
-		<td>4</td>
-		<td>5</td>
-		<td>6</td>
-		<td>7</td>
-		<td>8</td>
-	</tr>
-	<tr>
-		<td>Send:</td>
-		<td><input type="checkbox" id="G1" name="G1"></td>
-		<td><input type="checkbox" id="G2" name="G2"></td>
-		<td><input type="checkbox" id="G3" name="G3"></td>
-		<td><input type="checkbox" id="G4" name="G4"></td>
-		<td><input type="checkbox" id="G5" name="G5"></td>
-		<td><input type="checkbox" id="G6" name="G6"></td>
-		<td><input type="checkbox" id="G7" name="G7"></td>
-		<td><input type="checkbox" id="G8" name="G8"></td>
-	</tr>
-	<tr>
-		<td>Receive:</td>
-		<td><input type="checkbox" id="R1" name="R1"></td>
-		<td><input type="checkbox" id="R2" name="R2"></td>
-		<td><input type="checkbox" id="R3" name="R3"></td>
-		<td><input type="checkbox" id="R4" name="R4"></td>
-		<td><input type="checkbox" id="R5" name="R5"></td>
-		<td><input type="checkbox" id="R6" name="R6"></td>
-		<td><input type="checkbox" id="R7" name="R7"></td>
-		<td><input type="checkbox" id="R8" name="R8"></td>
-	</tr>
-</table><br>
-Receive: <nowrap><input type="checkbox" name="RB">Brightness,</nowrap> <nowrap><input type="checkbox" name="RC">Color,</nowrap> <nowrap>and <input type="checkbox" name="RX">Effects</nowrap><br>
-<input type="checkbox" name="SO"> Segment options, <input type="checkbox" name="SG"> bounds<br>
-Send notifications on direct change: <input type="checkbox" name="SD"><br>
-Send notifications on button press or IR: <input type="checkbox" name="SB"><br>
-Send Alexa notifications: <input type="checkbox" name="SA" class="hide"><br>
-Send Philips Hue change notifications: <input type="checkbox" name="SH" class="hide"><br>
-Send Macro notifications: <input type="checkbox" name="SM"><br>
-UDP packet retransmissions: <input name="UR" type="number" min="0" max="30" class="d5" required><br><br>
-<i>Reboot required to apply changes. </i>
-<hr class="sml">
-<h3>Instance List</h3>
-Enable instance list: <input type="checkbox" name="NL"><br>
-Make this instance discoverable: <input type="checkbox" name="NB">
-<hr class="sml">
-<h3>Realtime</h3>
-Receive UDP realtime: <input type="checkbox" name="RD"><br>
-Use main segment only: <input type="checkbox" name="MO"><br><br>
-<i>Network DMX input</i><br>
-Type:
-<select name=DI onchange="SP(); adj();">
-<option value=5568>E1.31 (sACN)</option>
-<option value=6454>Art-Net</option>
-<option value=0 selected>Custom port</option>
-</select><br>
-<div id=xp>Port: <input name="EP" type="number" min="1" max="65535" value="5568" class="d5" required><br></div>
-Multicast: <input type="checkbox" name="EM"><br>
-Start universe: <input name="EU" type="number" min="0" max="63999" required><br>
-<i>Reboot required.</i> Check out <a href="https://github.com/LedFx/LedFx" target="_blank">LedFx</a>!<br>
-Skip out-of-sequence packets: <input type="checkbox" name="ES"><br>
-DMX start address: <input name="DA" type="number" min="1" max="510" required><br>
-DMX segment spacing: <input name="XX" type="number" min="0" max="150" required><br>
-E1.31 port priority: <input name="PY" type="number" min="0" max="200" required><br>
-DMX mode:
-<select name=DM>
-<option value=0>Disabled</option>
-<option value=1>Single RGB</option>
-<option value=2>Single DRGB</option>
-<option value=3>Effect</option>
-<option value=7>Effect + White</option>
-<option value=8>Effect Segment</option>
-<option value=9>Effect Segment + White</option>
-<option value=4>Multi RGB</option>
-<option value=5>Dimmer + Multi RGB</option>
-<option value=6>Multi RGBW</option>
-<option value=10>Preset</option>
-</select><br>
-<a href="https://mm.kno.wled.ge/interfaces/e1.31-dmx/" target="_blank">E1.31 info</a><br>
-Timeout: <input name="ET" type="number" min="1" max="65000" required> ms<br>
-Force max brightness: <input type="checkbox" name="FB"><br>
-Disable realtime gamma correction: <input type="checkbox" name="RG"><br>
-(Uncheck if your network protocol does NOT apply gamma correction)<br>
-(WLED-MM-P4 assumes sources are gamma corrected by default)<br>
-Realtime LED offset: <input name="WO" type="number" min="-255" max="255" required>
-<div id="dmxInput"> <!--WLEDMM-->
-	<h4>Wired DMX Input Pins</h4>
-	DMX RX: <input name="IDMR" type="number" min="-1" max="99">RO<br/>
-	DMX TX: <input name="IDMT" type="number" min="-1" max="99">DI<br/>
-	DMX Enable: <input name="IDME" type="number" min="-1" max="99">RE+DE<br/>
-	DMX Port: <input name="IDMP" type="number" min="1" max="2"><br/>
-</div> 
-<div id="dmxInputOff"> <!--WLEDMM-->
-	<br><em style="color:darkorange">This firmware build does not include DMX Input support. <br></em>
-</div> 
-<div id="dmxOnOff2"> <!--WLEDMM-->
-  <br><em style="color:darkorange">This firmware build does not include DMX output support. <br></em>
-</div> 
-<hr class="sml">
-<h3>Alexa Voice Assistant</h3>
-<div id="NoAlexa" class="hide">
-	<em style="color:#fa0;">This firmware build does not include Alexa support.<br></em><br>
-</div>
-<div id="Alexa">
-Emulate Alexa device: <input type="checkbox" name="AL"><br>
-Alexa invocation name: <input type="text" name="AI" maxlength="32"><br>
-Also emulate devices to call the first <input name="AP" type="number" class="s" min="0" max="9"> presets<br><br>
-</div>
-<hr class="sml">
-<div style="color: #fa0;">&#9888; <b>MQTT and Hue sync all connect to external hosts!<br>
-This may impact the responsiveness of WLED.</b><br>
-</div>
-For best results, only use one of these services at a time.<br>
-(alternatively, connect a second ESP to them and use the UDP sync)
-<hr class="sml">
-<h3>MQTT</h3>
-<div id="NoMQTT" class="hide">
-	<em style="color:#fa0;">This firmware build does not include MQTT support.<br></em>
-</div>
-<div id="MQTT">
-Enable MQTT: <input type="checkbox" name="MQ"><br>
-Broker: <input type="text" name="MS" maxlength="32">
-Port: <input name="MQPORT" type="number" min="1" max="65535" class="d5"><br>
-<b>The MQTT credentials are sent over an unsecured connection.<br>
-Never use the MQTT password for another service!</b><br>
-Username: <input type="text" name="MQUSER" maxlength="40"><br>
-Password: <input type="password" name="MQPASS" maxlength="64"><br>
-Client ID: <input type="text" name="MQCID" maxlength="40"><br>
-Device Topic: <input type="text" name="MD" maxlength="32"><br>
-Group Topic: <input type="text" name="MG" maxlength="32"><br>
-Publish on button press: <input type="checkbox" name="BM"><br>
-Retain brightness & color messages: <input type="checkbox" name="RT"><br>
-<i>Reboot required to apply changes. </i><a href="https://mm.kno.wled.ge/interfaces/mqtt/" target="_blank">MQTT info</a>
-</div>
-<h3>Philips Hue</h3>
-<div id="NoHue" class="hide">
-	<em style="color:#fa0;">This firmware build does not include Philips Hue support.<br></em>
-</div>
-<div id="Hue">
-<i>You can find the bridge IP and the light number in the 'About' section of the hue app.</i><br>
-Poll Hue light <input name="HL" type="number" min="1" max="99" > every <input name="HI" type="number" min="100" max="65000"> ms: <input type="checkbox" name="HP"><br>
-Then, receive <input type="checkbox" name="HO"> On/Off, <input type="checkbox" name="HB"> Brightness, and <input type="checkbox" name="HC"> Color<br>
-Hue Bridge IP:<br>
-<input name="H0" type="number" class="s" min="0" max="255" > .
-<input name="H1" type="number" class="s" min="0" max="255" > .
-<input name="H2" type="number" class="s" min="0" max="255" > .
-<input name="H3" type="number" class="s" min="0" max="255" ><br>
-<b>Press the pushlink button on the bridge, after that save this page!</b><br>
-(when first connecting)<br>
-</div>
-Hue status: <span class="sip"> Disabled in this build </span>
-<div id="loxOnOff2"> <!--WLEDMM-->
-  <em style="color:darkorange">This firmware build does not include Loxone Lighting support. <br></em>
-</div>
-<h3>Serial</h3>
-<div id="adaOnOff2"> <!--WLEDMM-->
-	<em style="color:darkorange">This firmware build does not include Serial Command support. <br>Serial JSON, Improv, and serial streaming are not possible. <br></em>
+<body>
+<div x-data="syncPage()" x-init="init()">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://mm.kno.wled.ge/interfaces/udp-notifier/')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
+    <hr>
   </div>
+
+  <h2>Sync setup</h2>
+
+  <h3>WLED Broadcast</h3>
+  UDP Port: <input type="number" min="1" max="65535" class="d5" x-model.number="cfg.UP"><br>
+  2nd Port: <input type="number" min="1" max="65535" class="d5" x-model.number="cfg.U2"><br>
+
+  <h3>Sync groups</h3>
+  <table style="margin:0 auto;">
+    <tr>
+      <td></td>
+      <template x-for="n in [1,2,3,4,5,6,7,8]" :key="n"><td x-text="n"></td></template>
+    </tr>
+    <tr>
+      <td>Send:</td>
+      <template x-for="(_, i) in Array(8)" :key="i">
+        <td><input type="checkbox" :checked="isSendBit(i)" @change="toggleSendBit(i)"></td>
+      </template>
+    </tr>
+    <tr>
+      <td>Receive:</td>
+      <template x-for="(_, i) in Array(8)" :key="i">
+        <td><input type="checkbox" :checked="isRecvBit(i)" @change="toggleRecvBit(i)"></td>
+      </template>
+    </tr>
+  </table><br>
+
+  Receive: <input type="checkbox" x-model="cfg.RB">Brightness,
+           <input type="checkbox" x-model="cfg.RC">Color,
+  and <input type="checkbox" x-model="cfg.RX">Effects<br>
+  <input type="checkbox" x-model="cfg.SO"> Segment options,
+  <input type="checkbox" x-model="cfg.SG"> bounds<br>
+  Send notifications on direct change: <input type="checkbox" x-model="cfg.SD"><br>
+  Send notifications on button press or IR: <input type="checkbox" x-model="cfg.SB"><br>
+  Send Macro notifications: <input type="checkbox" x-model="cfg.SM"><br>
+  UDP packet retransmissions: <input type="number" min="0" max="30" class="d5" x-model.number="cfg.UR"><br><br>
+  <i>Reboot required to apply changes.</i>
+
+  <hr class="sml">
+  <h3>Instance List</h3>
+  Enable instance list: <input type="checkbox" x-model="cfg.NL"><br>
+  Make this instance discoverable: <input type="checkbox" x-model="cfg.NB">
+
+  <hr class="sml">
+  <h3>Realtime</h3>
+  Receive UDP realtime: <input type="checkbox" x-model="cfg.RD"><br>
+  Use main segment only: <input type="checkbox" x-model="cfg.MO"><br><br>
+  <i>Network DMX input</i><br>
+  Type:
+  <select x-model.number="dmxType" @change="onDmxTypeChange()">
+    <option value="5568">E1.31 (sACN)</option>
+    <option value="6454">Art-Net</option>
+    <option value="0">Custom port</option>
+  </select><br>
+  <div x-show="dmxType === 0">
+    Port: <input type="number" min="1" max="65535" x-model.number="cfg.EP" class="d5"><br>
+  </div>
+  Multicast: <input type="checkbox" x-model="cfg.EM"><br>
+  Start universe: <input type="number" min="0" max="63999" x-model.number="cfg.EU"><br>
+  <i>Reboot required.</i> Check out <a href="https://github.com/LedFx/LedFx" target="_blank">LedFx</a>!<br>
+  Skip out-of-sequence packets: <input type="checkbox" x-model="cfg.ES"><br>
+  DMX start address: <input type="number" min="1" max="510" x-model.number="cfg.DA"><br>
+  DMX segment spacing: <input type="number" min="0" max="150" x-model.number="cfg.XX"><br>
+  E1.31 port priority: <input type="number" min="0" max="200" x-model.number="cfg.PY"><br>
+  DMX mode:
+  <select x-model.number="cfg.DM">
+    <option value="0">Disabled</option>
+    <option value="1">Single RGB</option>
+    <option value="2">Single DRGB</option>
+    <option value="3">Effect</option>
+    <option value="7">Effect + White</option>
+    <option value="8">Effect Segment</option>
+    <option value="9">Effect Segment + White</option>
+    <option value="4">Multi RGB</option>
+    <option value="5">Dimmer + Multi RGB</option>
+    <option value="6">Multi RGBW</option>
+    <option value="10">Preset</option>
+  </select><br>
+  <a href="https://mm.kno.wled.ge/interfaces/e1.31-dmx/" target="_blank">E1.31 info</a><br>
+  Timeout: <input type="number" min="1" max="65000" x-model.number="cfg.ET"> ms<br>
+  Force max brightness: <input type="checkbox" x-model="cfg.FB"><br>
+  Disable realtime gamma correction: <input type="checkbox" x-model="cfg.RG"><br>
+  (Uncheck if your network protocol does NOT apply gamma correction)<br>
+  (WLED-MM-P4 assumes sources are gamma corrected by default)<br>
+  Realtime LED offset: <input type="number" min="-255" max="255" x-model.number="cfg.WO">
+
+  <!-- Wired DMX Input — shown only when compiled in -->
+  <div x-show="cfg._f && cfg._f.dmxInput">
+    <h4>Wired DMX Input Pins</h4>
+    DMX RX: <input type="number" min="-1" max="99" x-model.number="cfg.IDMR"> RO<br>
+    DMX TX: <input type="number" min="-1" max="99" x-model.number="cfg.IDMT"> DI<br>
+    DMX Enable: <input type="number" min="-1" max="99" x-model.number="cfg.IDME"> RE+DE<br>
+    DMX Port: <input type="number" min="1" max="2" x-model.number="cfg.IDMP"><br>
+  </div>
+  <div x-show="cfg._f && !cfg._f.dmxInput">
+    <em style="color:darkorange">This firmware build does not include DMX Input support.</em>
+  </div>
+  <div x-show="cfg._f && !cfg._f.dmxOut">
+    <em style="color:darkorange">This firmware build does not include DMX output support.</em>
+  </div>
+
+  <hr class="sml">
+  <!-- Alexa — shown only when compiled in -->
+  <div x-show="cfg._f && cfg._f.alexa">
+    <h3>Alexa Voice Assistant</h3>
+    Emulate Alexa device: <input type="checkbox" x-model="cfg.AL"><br>
+    Alexa invocation name: <input type="text" x-model="cfg.AI" maxlength="32"><br>
+    Also emulate devices to call the first <input type="number" class="s" min="0" max="9" x-model.number="cfg.AP"> presets<br><br>
+  </div>
+  <div x-show="cfg._f && !cfg._f.alexa">
+    <h3>Alexa Voice Assistant</h3>
+    <em style="color:#fa0;">This firmware build does not include Alexa support.</em><br><br>
+  </div>
+
+  <hr class="sml">
+  <div style="color:#fa0;">&#9888; <b>MQTT and Hue sync all connect to external hosts!<br>
+  This may impact the responsiveness of WLED.</b><br>
+  </div>
+  For best results, only use one of these services at a time.<br>
+  (alternatively, connect a second ESP to them and use the UDP sync)
+
+  <hr class="sml">
+  <!-- MQTT — shown only when compiled in -->
+  <h3>MQTT</h3>
+  <div x-show="cfg._f && !cfg._f.mqtt">
+    <em style="color:#fa0;">This firmware build does not include MQTT support.</em>
+  </div>
+  <div x-show="cfg._f && cfg._f.mqtt">
+    Enable MQTT: <input type="checkbox" x-model="cfg.MQ"><br>
+    Broker: <input type="text" x-model="cfg.MS" maxlength="32">
+    Port: <input type="number" min="1" max="65535" class="d5" x-model.number="cfg.MQPORT"><br>
+    <b>The MQTT credentials are sent over an unsecured connection.<br>
+    Never use the MQTT password for another service!</b><br>
+    Username: <input type="text" x-model="cfg.MQUSER" maxlength="40"><br>
+    Password:
+    <input type="password" x-model="mqttPass" maxlength="64"
+      :placeholder="cfg.MQPASS && cfg.MQPASS.len ? '('+cfg.MQPASS.len+' chars set)' : ''"
+      @input="mqttPassChanged = true"><br>
+    Client ID: <input type="text" x-model="cfg.MQCID" maxlength="40"><br>
+    Device Topic: <input type="text" x-model="cfg.MD" maxlength="32"><br>
+    Group Topic: <input type="text" x-model="cfg.MG" maxlength="32"><br>
+    Publish on button press: <input type="checkbox" x-model="cfg.BM"><br>
+    Retain brightness &amp; color messages: <input type="checkbox" x-model="cfg.RT"><br>
+    <i>Reboot required to apply changes.</i>
+    <a href="https://mm.kno.wled.ge/interfaces/mqtt/" target="_blank">MQTT info</a>
+  </div>
+
+  <!-- Hue — shown only when compiled in -->
+  <h3>Philips Hue</h3>
+  <div x-show="cfg._f && !cfg._f.hue">
+    <em style="color:#fa0;">This firmware build does not include Philips Hue support.</em>
+  </div>
+  <div x-show="cfg._f && cfg._f.hue">
+    <i>You can find the bridge IP and the light number in the 'About' section of the hue app.</i><br>
+    Poll Hue light <input type="number" min="1" max="99" x-model.number="cfg.HL">
+    every <input type="number" min="100" max="65000" x-model.number="cfg.HI"> ms:
+    <input type="checkbox" x-model="cfg.HP"><br>
+    Then, receive <input type="checkbox" x-model="cfg.HO"> On/Off,
+    <input type="checkbox" x-model="cfg.HB"> Brightness,
+    and <input type="checkbox" x-model="cfg.HC"> Color<br>
+    Hue Bridge IP:<br>
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.H[0]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.H[1]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.H[2]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.H[3]"><br>
+    <b>Press the pushlink button on the bridge, after that save this page!</b><br>
+    (when first connecting)<br>
+  </div>
+  Hue status: <span x-text="cfg.hueStatus || 'Disabled in this build'" style="color:#aaa;"></span>
+
+  <h3>Serial</h3>
   Baud rate:
-<select name=BD>
-<option value=1152>115200</option>
-<option value=2304>230400</option>
-<option value=4608>460800</option>
-<option value=5000>500000</option>
-<option value=5760>576000</option>
-<option value=9216>921600</option>
-<option value=10000>1000000</option>
-<option value=15000>1500000</option>
-</select><br>
-<i>Keep at 115200 to use Improv. Some boards may not support high rates.</i>
-<h3>Net Print ☾</h3>
-<div id="NoNetDebug" class="hide">
-	<em style="color:#fa0;">This firmware build does not include Net Print support.<br></em> <!--WLEDMM we call it Net Print-->
+  <select x-model.number="cfg.BD">
+    <option value="1152">115200</option>
+    <option value="2304">230400</option>
+    <option value="4608">460800</option>
+    <option value="5000">500000</option>
+    <option value="5760">576000</option>
+    <option value="9216">921600</option>
+    <option value="10000">1000000</option>
+    <option value="15000">1500000</option>
+  </select><br>
+  <i>Keep at 115200 to use Improv. Some boards may not support high rates.</i>
+
+  <!-- Net Print — shown only when compiled in -->
+  <h3>Net Print ☾</h3>
+  <div x-show="cfg._f && !cfg._f.netDebug">
+    <em style="color:#fa0;">This firmware build does not include Net Print support.</em>
+  </div>
+  <div x-show="cfg._f && cfg._f.netDebug">
+    Netcat host IP:<br>
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.N[0]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.N[1]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.N[2]"> .
+    <input type="number" class="s" min="0" max="255" x-model.number="cfg.N[3]"><br>
+    Netcat host Port:<br>
+    <input type="number" min="0" max="99999" x-model.number="cfg.NP">
+    <i>If 0, default port 7868 will be used</i><br>
+    <i>on host [ip] open command prompt and enter <pre>nc -l [port] -u</pre></i>
+  </div>
+
+  <hr>
+  <div x-show="error" x-text="error" style="color:red;margin:8px 0;"></div>
+  <div x-show="saved" style="color:green;margin:8px 0;">Saved!</div>
+  <button type="button" onclick="window.open('/settings','_self')">Back</button>
+  <button type="button" @click="save()" :disabled="saving" x-text="saving ? 'Saving...' : 'Save'"></button>
 </div>
-<div id="NetDebug"> <!--WLEDMM-->
-Netcat host IP:<br>
-<input name="N0" type="number" class="s" min="0" max="255" > .
-<input name="N1" type="number" class="s" min="0" max="255" > .
-<input name="N2" type="number" class="s" min="0" max="255" > .
-<input name="N3" type="number" class="s" min="0" max="255" ><br>
-Netcat host Port:<br>
-<input name="NP" type="number" min="0" max="99999" > <i>If 0 default port 7868 will be used</i><br>
-<i>on host [ip] open command prompt and enter <pre>nc -l [port] -u</pre></i>
-</div>
-<hr>
-<button type="button" onclick="B()">Back</button><button type="submit">Save</button>
-</form>
+
+<script>
+function syncPage() {
+  return {
+    ...wledPageBase(4),
+    cfg: { GS: 0, GR: 0, H: [0,0,0,0], N: [0,0,0,0], _f: {} },
+    dmxType: 0,
+    mqttPass: '',
+    mqttPassChanged: false,
+
+    async init() {
+      const data = await this._load();
+      if (!data) return;
+      if (!Array.isArray(data.H)) data.H = [0,0,0,0];
+      if (!Array.isArray(data.N)) data.N = [0,0,0,0];
+      this.cfg = data;
+      // Determine the dmxType selector value from the port
+      const p = data.EP || 5568;
+      this.dmxType = (p === 5568 || p === 6454) ? p : 0;
+    },
+
+    // Sync group bitmask helpers — GS (send) and GR (receive) are 8-bit integers
+    isSendBit(i) { return !!(this.cfg.GS & (1 << i)); },
+    isRecvBit(i) { return !!(this.cfg.GR & (1 << i)); },
+    toggleSendBit(i) { this.cfg.GS ^= (1 << i); },
+    toggleRecvBit(i) { this.cfg.GR ^= (1 << i); },
+
+    onDmxTypeChange() {
+      if (this.dmxType !== 0) this.cfg.EP = this.dmxType;
+      // Auto-adjust multicast and universe for sACN
+      if (this.dmxType === 5568) { if (!this.cfg.EU) this.cfg.EU = 1; }
+    },
+
+    async save() {
+      const payload = { ...this.cfg };
+      if (this.mqttPassChanged) payload.MQPASS = this.mqttPass;
+      else delete payload.MQPASS;
+      await this._save(payload);
+    }
+  };
+}
+</script>
 </body>
 </html>

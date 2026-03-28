@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>Auto Playlist Settings</title>
+<style>@import url("style.css");</style>
+</head>
+<body>
+<form id="ap-form">
+  <div class="toprow">
+    <div class="helpB"><button type="button" onclick="window.open('https://github.com/Aircoookie/WLED/wiki/usermods')">?</button></div>
+    <button type="button" onclick="window.open('/settings','_self')">Back</button>
+    <button type="submit" id="save-btn">Save</button>
+    <hr>
+  </div>
+  <div id="error-msg" style="color:red;margin:8px 0;display:none"></div>
+  <div id="saved-msg" style="color:green;margin:8px 0;display:none">&#10004; Saved!</div>
+  <div id="loading-msg" style="color:#aaa">Loading settings...</div>
+  <div id="main-content" style="display:none">
+    <h2>Auto Playlist Settings</h2>
+    <label><input type="checkbox" name="enabled"> Enabled</label><br><br>
+    <p><u>Playlist Configuration</u></p>
+    <label>Timeout (seconds): <input type="number" name="timeout" min="1" max="3600" style="width:80px"></label><br><br>
+    <label>Ambient Playlist: <input type="text" name="ambientPlaylist" style="width:200px" placeholder="Playlist name"></label><br><br>
+    <label>Music Playlist: <input type="text" name="musicPlaylist" style="width:200px" placeholder="Playlist name"></label><br><br>
+    <p><u>Auto Change Options</u></p>
+    <label>Auto Change: <input type="checkbox" name="autoChange"></label><br><br>
+    <label>Change Lockout (seconds): <input type="number" name="change_lockout" min="0" max="300" style="width:80px"></label><br><br>
+    <label>Ideal Change Min (seconds): <input type="number" name="ideal_change_min" min="1" max="300" style="width:80px"></label><br><br>
+    <label>Ideal Change Max (seconds): <input type="number" name="ideal_change_max" min="1" max="300" style="width:80px"></label><br><br>
+  </div>
+</form>
+<script>
+(async function() {
+  const form = document.getElementById('ap-form');
+  const errorMsg = document.getElementById('error-msg');
+  const savedMsg = document.getElementById('saved-msg');
+  const loadingMsg = document.getElementById('loading-msg');
+  const mainContent = document.getElementById('main-content');
+
+  // Load current config
+  try {
+    const res = await fetch('/cfg.json');
+    const cfg = await res.json();
+    const ap = cfg.um?.AutoPlaylist || {};
+    loadingMsg.style.display = 'none';
+    mainContent.style.display = 'block';
+
+    // Fill form
+    if (ap.enabled !== undefined) form.enabled.checked = ap.enabled;
+    if (ap.timeout !== undefined) form.timeout.value = ap.timeout;
+    if (ap.ambientPlaylist !== undefined) form.ambientPlaylist.value = ap.ambientPlaylist || '';
+    if (ap.musicPlaylist !== undefined) form.musicPlaylist.value = ap.musicPlaylist || '';
+    if (ap.autoChange !== undefined) form.autoChange.checked = ap.autoChange;
+    if (ap.change_lockout !== undefined) form.change_lockout.value = ap.change_lockout;
+    if (ap.ideal_change_min !== undefined) form.ideal_change_min.value = ap.ideal_change_min;
+    if (ap.ideal_change_max !== undefined) form.ideal_change_max.value = ap.ideal_change_max;
+  } catch (e) {
+    loadingMsg.textContent = 'Error loading settings';
+    console.error(e);
+  }
+
+  // Save handler
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = 'none';
+    savedMsg.style.display = 'none';
+    const saveBtn = document.getElementById('save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      const payload = {
+        um: {
+          AutoPlaylist: {
+            enabled: form.enabled.checked,
+            timeout: parseInt(form.timeout.value) || 10,
+            ambientPlaylist: form.ambientPlaylist.value,
+            musicPlaylist: form.musicPlaylist.value,
+            autoChange: form.autoChange.checked,
+            change_lockout: parseInt(form.change_lockout.value) || 0,
+            ideal_change_min: parseInt(form.ideal_change_min.value) || 10,
+            ideal_change_max: parseInt(form.ideal_change_max.value) || 30
+          }
+        }
+      };
+      const res = await fetch('/json/cfg?p=8', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        savedMsg.style.display = 'block';
+        setTimeout(() => { window.location.reload(); }, 1000);
+      } else {
+        throw new Error('Save failed');
+      }
+    } catch (e) {
+      errorMsg.textContent = 'Error: ' + e.message;
+      errorMsg.style.display = 'block';
+    }
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  });
+})();
+</script>
+</body>
+</html>
