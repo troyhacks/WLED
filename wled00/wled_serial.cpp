@@ -68,8 +68,7 @@ static float mapf(float x, float in_min, float in_max, float out_min, float out_
 #include "freertos/task.h"
 
 void task_list() {
-
-  #define MAX_TASKS 30 // if you see "zero tasks" raise this number. If there's more tasks than this, you get NO tasks back.
+  #define MAX_TASKS 30
 
   TaskStatus_t taskStatusArray[MAX_TASKS];
   UBaseType_t taskCount;
@@ -77,15 +76,8 @@ void task_list() {
 
   taskCount = uxTaskGetSystemState(taskStatusArray, MAX_TASKS, &totalRunTime);
 
-  // Sort tasks by descending Run Time (CPU usage); xCoreID sort only when available
   std::sort(taskStatusArray, taskStatusArray + taskCount, [](const TaskStatus_t& a, const TaskStatus_t& b) {
-#ifdef configTASKLIST_INCLUDE_COREID
-    // Primary sort: Core ID (Core 0, then Core 1, then unassigned)
-    if (a.xCoreID != b.xCoreID) {
-      return a.xCoreID < b.xCoreID;
-    }
-#endif
-    // Secondary sort: Run Time (higher usage first)
+    if (a.xCoreID != b.xCoreID) return a.xCoreID < b.xCoreID;
     return a.ulRunTimeCounter > b.ulRunTimeCounter;
   });
 
@@ -94,7 +86,6 @@ void task_list() {
 
   for (UBaseType_t i = 0; i < taskCount; i++) {
     TaskStatus_t* ts = &taskStatusArray[i];
-
     const char* state;
     switch (ts->eCurrentState) {
       case eRunning:   state = "Running"; break;
@@ -104,23 +95,12 @@ void task_list() {
       case eDeleted:   state = "Deleted"; break;
       default:         state = "Unknown"; break;
     }
-
     char cpu_percent[32];
     snprintf(cpu_percent, sizeof(cpu_percent), "%5.2f%%", totalRunTime > 0 ? (100.0f * ts->ulRunTimeCounter) / totalRunTime : 0.0f);
-
     printf("%-12s %-10s %4u\t%5u\t%10lu\t%s\t%2d\n",
-      ts->pcTaskName,
-      state,
-      ts->uxCurrentPriority,
-      ts->usStackHighWaterMark,
-      ts->ulRunTimeCounter,
-      cpu_percent,
-#ifdef configTASKLIST_INCLUDE_COREID
-      ts->xCoreID == tskNO_AFFINITY ? -1 : (int)ts->xCoreID
-#else
-      -1
-#endif
-      );
+      ts->pcTaskName, state, ts->uxCurrentPriority,
+      ts->usStackHighWaterMark, ts->ulRunTimeCounter, cpu_percent,
+      ts->xCoreID == tskNO_AFFINITY ? -1 : ts->xCoreID);
   }
 }
 

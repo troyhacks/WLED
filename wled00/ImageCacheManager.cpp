@@ -45,7 +45,7 @@ ImageCacheManager::~ImageCacheManager() {
 // ============================================================================
 
 bool ImageCacheManager::_isMJPEGFile(const psram_string& path) {
-  return path.size() > 6 && path.substr(path.size() - 6) == ".mjpeg";
+  return path.size() >= 8 && path.substr(path.size() - 8) == ".mjpeg";
 }
 
 // ============================================================================
@@ -540,13 +540,15 @@ void ImageCacheManager::startPreload(const std::string& root_path) {
     psram_string name = entry->d_name;
     psram_string full_path = psram_string(root_path.c_str()) + "/" + name;
 
+    ESP_LOGI(TAG, "SD entry: type=%d name=%s", entry->d_type, entry->d_name);
+
     if (stat(full_path.c_str(), &st) != 0) continue;
 
     // Check for MJPEG files
     if (S_ISREG(st.st_mode) &&
       name.rfind("sequence", 0) == 0 &&
-      name.size() > 6 &&
-      name.substr(name.size() - 6) == ".mjpeg") {
+      name.size() >= 8 &&
+      name.substr(name.size() - 8, 8) == ".mjpeg") {
       items.push_back(name);
     }
     // Check for JPEG sequence folders
@@ -559,8 +561,8 @@ void ImageCacheManager::startPreload(const std::string& root_path) {
   // Sort with _hot items first
   std::sort(items.begin(), items.end(), [](const psram_string& a, const psram_string& b) {
     auto is_hot = [](const psram_string& s) {
-      if (s.size() >= 11 && s.substr(s.size() - 11) == "_hot.mjpeg") return true;
-      if (s.size() >= 4 && s.substr(s.size() - 4) == "_hot") return true;
+      if (s.size() >= 10 && s.substr(s.size() - 10, 10) == "_hot.mjpeg") return true;
+      if (s.size() >= 4 && s.substr(s.size() - 4, 4) == "_hot") return true;
       return false;
       };
     bool a_hot = is_hot(a);
@@ -582,6 +584,12 @@ void ImageCacheManager::startPreload(const std::string& root_path) {
       _ensureFileListCached(full_path);
       _queueBackgroundSync(full_path);
     }
+  }
+
+  // If no items were queued, the background task was never created.
+  // Set EVT_IDLE now so waitUntilIdle() does not block forever.
+  if (items.empty()) {
+    xEventGroupSetBits(status_events, EVT_IDLE);
   }
 
   ESP_LOGI(TAG, "Queued %d items for preload", items.size());

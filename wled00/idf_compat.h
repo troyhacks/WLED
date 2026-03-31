@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <stdio.h>
 #include <math.h>
 #include <algorithm>
 #include <string>
@@ -317,10 +319,11 @@ class IPAddress;
 // This stub lets code that still uses Serial compile during incremental migration.
 struct _WledSerial {
     void begin(unsigned long, ...) {}
-    int  available() { return 0; }
-    int  read()      { return -1; }
-    int  read(uint8_t* buf, size_t len) { (void)buf; (void)len; return 0; }
-    void flush()     {}
+    int available() { return 0; }  // no buffered input available
+    int read()      { return -1; }  // no input
+    int read(uint8_t* buf, size_t len) { (void)buf; (void)len; return 0; }
+    int peek()      { return -1; }
+    void flush()   {}
     void setTimeout(unsigned long) {}   // no-op — IDF UART has no stream timeout concept
     void setTxTimeoutMs(uint32_t)  {}   // Arduino CDC-on-boot stub
     void setDebugOutput(bool)      {}   // Arduino debug output stub
@@ -335,11 +338,6 @@ struct _WledSerial {
     size_t print(double v, int d = 2)  { return printf("%.*f", d, v); }
 
     // String overloads (String extends std::string; forward to c_str())
-    // Must be declared after the String class is defined (WString_compat.h is
-    // included later in this file), so these are defined inline here using the
-    // forward declaration — the compiler resolves them at call sites which are
-    // always after WString_compat.h has been seen.
-    // We use a template-based forwarding trick to defer the String type dependency.
     template<typename S, typename = typename S::value_type>
     size_t print(const S& s)   { return print(s.c_str()); }
     template<typename S, typename = typename S::value_type>
@@ -358,12 +356,10 @@ struct _WledSerial {
     template<typename... Args>
     size_t printf(const char* fmt, Args... args) { return ::printf(fmt, args...); }
 
-    // printf_P: Arduino AVR progmem variant — on ESP32 PSTR is a no-op so identical
     template<typename... Args>
     size_t printf_P(const char* fmt, Args... args) { return ::printf(fmt, args...); }
 
-    int  peek()  { return -1; }   // no buffered read-ahead in this stub
-    void end()   {}               // Arduino Serial.end() — stop UART; no-op here
+    void end()   {}               // Arduino Serial.end() — no-op here
 
     // operator bool: allows "if (Serial)" checks
     explicit operator bool() const { return true; }

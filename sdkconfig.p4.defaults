@@ -4,6 +4,9 @@
 # ─── Target ───────────────────────────────────────────────────────────────────
 CONFIG_IDF_TARGET="esp32p4"
 
+# ─── Experimental features (needed for SPIRAM_SPEED_200M) ─────────────────────
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
 # ─── Task / stack sizes ───────────────────────────────────────────────────────
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
 CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0=y
@@ -13,10 +16,11 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_FORCE_DISABLE=n
 
 # ─── Flash / partitions ───────────────────────────────────────────────────────
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 
 # ─── LittleFS ─────────────────────────────────────────────────────────────────
 CONFIG_LITTLEFS_FOR_IDF_5_0=y

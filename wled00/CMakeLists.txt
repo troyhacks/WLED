@@ -29,6 +29,7 @@ idf_component_register(
     INCLUDE_DIRS  "."
                   "idf_shims"
     PRIV_REQUIRES esp_psram
+                  joltwallet__littlefs
                   espressif__esp_hosted
 )
 

@@ -11013,6 +11013,10 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   // Author: @TroyHacks
   // @license GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
 
+  static uint32_t akemi_t0 = 0, akemi_t_bus = 0, akemi_t_color = 0, akemi_t_fill = 0, akemi_t_loop = 0, akemi_t_clear = 0, akemi_t_srm = 0;
+  static uint32_t akemi_count = 0;
+  uint32_t t0 = esp_timer_get_time();
+
   if (!strip.isMatrix) return mode_static();
 
   const uint16_t width = SEGMENT.virtualWidth();
@@ -11027,6 +11031,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   static uint8_t* akemiBuffer = nullptr;
 
   if (!SEGENV.allocateData(4)) return mode_static();
+
+  uint32_t t1 = esp_timer_get_time();
 
   if (SEGENV.call == 0) {
     SEGMENT.setUpLeds();
@@ -11048,6 +11054,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   } else {
     return mode_static();
   }
+  uint32_t t2 = esp_timer_get_time();
+  akemi_t_bus += (t2 - t1);
 
   // --- Pre-calculate colors (same logic as original Akemi) ---
   uint16_t counter = (strip.now * ((SEGMENT.speed >> 2) + 2)) >> 8;
@@ -11095,6 +11103,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
     {eyesMouthColor.r, eyesMouthColor.g, eyesMouthColor.b},  // 7: eyes/mouth
     {cheekColor.r, cheekColor.g, cheekColor.b}               // 8: cheeks (audio reactive)
   };
+  uint32_t t3 = esp_timer_get_time();
+  akemi_t_color += (t3 - t2);
 
   // --- Clear the 32x32 buffer using PPA fill ---
   ppa_fill_oper_config_t fill_config = {};
@@ -11114,6 +11124,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   fill_config.mode = PPA_TRANS_MODE_BLOCKING;
 
   ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &fill_config));
+  uint32_t t4 = esp_timer_get_time();
+  akemi_t_fill += (t4 - t3);
 
   // --- Draw Akemi pixel by pixel into the 32x32 buffer ---
   // For a 32x32 source with mostly contiguous color regions,
@@ -11137,6 +11149,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
       akemiBuffer[pos + 2] = colorLUT[ak].b;
     }
   }
+  uint32_t t5 = esp_timer_get_time();
+  akemi_t_loop += (t5 - t4);
 
   // --- Scale from 32x32 to segment size using PPA SRM ---
   // Calculate scale factors (fixed point: 1.0 = 1.0, supports up to ~16x)
@@ -11160,6 +11174,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   clearConfig.fill_argb_color.a = 255;
   clearConfig.mode = PPA_TRANS_MODE_BLOCKING;
   ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &clearConfig));
+  uint32_t t6 = esp_timer_get_time();
+  akemi_t_clear += (t6 - t5);
 
   // SRM (Scale-Rotate-Mirror) operation
   ppa_srm_oper_config_t srm_config = {};
@@ -11191,6 +11207,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   srm_config.mode = PPA_TRANS_MODE_BLOCKING;
 
   ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+  uint32_t t7 = esp_timer_get_time();
+  akemi_t_srm += (t7 - t6);
 
   // --- Optional: GEQ overlay on hands (if check1 is enabled) ---
   // Render 16 bands into a tiny 16x17 buffer, then PPA scale to hand positions
@@ -11297,6 +11315,21 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   }
 
   #endif
+  uint32_t t8 = esp_timer_get_time();
+  akemi_t0 += (t8 - t0);
+  if (++akemi_count >= 120) {
+    printf("AkemiPPA[%dx%d]: total=%lumS bus=%lumS color=%lumS fill=%lumS loop=%lumS clear=%lumS srm=%lumS\n",
+      width, height,
+      akemi_t0 / akemi_count,
+      akemi_t_bus / akemi_count,
+      akemi_t_color / akemi_count,
+      akemi_t_fill / akemi_count,
+      akemi_t_loop / akemi_count,
+      akemi_t_clear / akemi_count,
+      akemi_t_srm / akemi_count);
+    akemi_t0 = akemi_t_bus = akemi_t_color = akemi_t_fill = akemi_t_loop = akemi_t_clear = akemi_t_srm = 0;
+    akemi_count = 0;
+  }
   return FRAMETIME;
 } // mode_AkemiPPA
 static const char _data_FX_MODE_AKEMIPPA[] PROGMEM = "Akemi PPA ☾🐺@Speed,Intensity,,,,GEQ Overlay;Face,Arms,Eyes;;2f;pal=11,c1=1";

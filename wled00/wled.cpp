@@ -354,6 +354,12 @@ void WLED::loop() { // loopTask
   static unsigned long maxStripMillis = 0;
   static uint16_t avgStripMillis = 0;
   #endif
+  // Debug: print task list every 20 seconds
+  static unsigned long lastTaskListMs = 0;
+  if (millis() - lastTaskListMs >= 20000) {
+    lastTaskListMs = millis();
+    task_list();
+  }
 
   if (!interfacesInited || strip.getBrightness() == 0) {
     taskYIELD();  // Just yield, don't sleep
@@ -366,10 +372,23 @@ void WLED::loop() { // loopTask
     #endif
 
     if (!offMode || strip.isOffRefreshRequired()) {
+      static uint32_t strip_us_total = 0, strip_count = 0, strip_us_max = 0;
+      static uint32_t strip_log_ms = 0;
+      uint32_t t0 = esp_timer_get_time();
       if (xSemaphoreTake(busMutex, 0)) {
         strip.service();
         xSemaphoreGive(busMutex);
       }
+      uint32_t dt = esp_timer_get_time() - t0;
+      strip_us_total += dt;
+      if (dt > strip_us_max) strip_us_max = dt;
+      if (millis() - strip_log_ms >= 5000) {
+        printf("strip.service: avg=%lumS max=%lumS\n",
+          strip_count ? strip_us_total / strip_count : 0, strip_us_max);
+        strip_us_total = strip_count = 0; strip_us_max = 0;
+        strip_log_ms = millis();
+      }
+      if (++strip_count == 0) strip_us_total = 0;
     } else {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -396,7 +415,21 @@ void WLED::loop() { // loopTask
   }
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
+  // Time from strip.service() completion to hdmi_blit() completion
+  static uint32_t loop_us_total = 0, loop_count = 0, loop_us_max = 0;
+  uint32_t loop_t0 = esp_timer_get_time();
   hdmi_blit();
+  uint32_t loop_t1 = esp_timer_get_time();
+  static uint32_t loop_log_ms = 0;
+  uint32_t dt = loop_t1 - loop_t0;
+  loop_us_total += dt;
+  if (dt > loop_us_max) loop_us_max = dt;
+  if (++loop_count >= 150) {
+    printf("loop[%dcpu]: strip+blit avg=%lumS max=%lumS\n", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+      loop_us_total / loop_count, loop_us_max);
+    loop_us_total = loop_count = 0; loop_us_max = 0;
+    loop_log_ms = millis();
+  }
 #endif
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)

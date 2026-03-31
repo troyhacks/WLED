@@ -3,6 +3,7 @@
 #ifdef WLED_IDF_BUILD
 
 #include "wled.h"
+#include "esp_littlefs.h"
 
 #ifdef WLED_DEBUG_HEAP
 static void heap_caps_alloc_failed_hook(size_t requested_size, uint32_t caps, const char* function_name) {
@@ -16,6 +17,27 @@ static void heap_caps_alloc_failed_hook(size_t requested_size, uint32_t caps, co
 }
 #endif
 
+static void mount_littlefs(void) {
+  // Mount LittleFS VFS at /littlefs using the "spiffs" partition.
+  // This must be called before WLED_FS.begin() in setup().
+  // format_if_mount_failed=true matches the true argument to WLED_FS.begin(true).
+  if (esp_littlefs_mounted("spiffs")) {
+    printf("[LittleFS] Already mounted\n");
+    return;
+  }
+  esp_vfs_littlefs_conf_t conf = {
+    .base_path = "/littlefs",
+    .partition_label = "spiffs",
+    .format_if_mount_failed = true,
+  };
+  esp_err_t err = esp_vfs_littlefs_register(&conf);
+  if (err != ESP_OK) {
+    printf("[LittleFS] Mount failed: %s\n", esp_err_to_name(err));
+  } else {
+    printf("[LittleFS] Mounted at /littlefs\n");
+  }
+}
+
 static void wled_main_task_fn(void*) {
 #ifdef WLED_DEBUG_HEAP
   heap_caps_register_failed_alloc_callback(heap_caps_alloc_failed_hook);
@@ -28,6 +50,9 @@ static void wled_main_task_fn(void*) {
 }
 
 extern "C" void app_main(void) {
+  // Mount LittleFS before the WLED task starts (WLED_FS.begin() runs in setup())
+  mount_littlefs();
+
   // Spawn WLED on Core 0 with a generous stack (setup() allocates a lot).
   // app_main() itself can return once the task is running.
   xTaskCreatePinnedToCore(

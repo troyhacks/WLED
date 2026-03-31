@@ -700,6 +700,7 @@ void hdmi_blit() {
   if (!back_fb || !ph) return;
 
   static uint32_t last_blit_us = 0;
+  static uint32_t ppa_us_max = 0;
   uint32_t now_us = esp_timer_get_time();
   if (1 || now_us - last_blit_us >= 33333) {  // ~30fps
     last_blit_us = now_us;
@@ -715,7 +716,10 @@ void hdmi_blit() {
 
         if (scale > 0.0f && scale <= 16.0f && scaledW > 0 && scaledH > 0) {
           static uint32_t blit_ok = 0, blit_fail = 0, blit_log_ms = 0;
+          static uint32_t blit_us_total = 0, blit_count = 0;
+          static uint32_t ppa_us_max = 0;
           const size_t fb_size = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+          uint32_t t0 = esp_timer_get_time();
 
           ppa_srm_oper_config_t srm_cfg = {};
           srm_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
@@ -738,27 +742,34 @@ void hdmi_blit() {
           srm_cfg.byte_swap          = false;
           srm_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
 
+          uint32_t t1 = esp_timer_get_time();
           if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
             blit_ok++;
             // Present the back buffer at next vsync, then swap so next blit writes to the old front.
+            uint32_t t2 = esp_timer_get_time();
             esp_lcd_panel_draw_bitmap(ph, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, back_fb);
+            uint32_t t3 = esp_timer_get_time();
             uint8_t* tmp          = display_front_framebuffer;
             display_front_framebuffer = back_fb;
             display_framebuffer       = tmp;
+            uint32_t total_us = t3 - t0;
+            blit_us_total += total_us;
+            uint32_t ppa_us = t2 - t1;
+            if (ppa_us > ppa_us_max) ppa_us_max = ppa_us;
+            blit_count++;
+            // Log every 5s
+            uint32_t now_ms = millis();
+            if (now_ms - blit_log_ms >= 5000) {
+              blit_log_ms = now_ms;
+              USER_PRINTF("HDMI blit: ok=%u fail=%u avg=%uumS ppa_max=%uumS\n",
+                blit_ok, blit_fail,
+                blit_count ? blit_us_total / blit_count : 0,
+                ppa_us_max);
+              blit_ok = blit_fail = blit_us_total = blit_count = 0;
+              ppa_us_max = 0;
+            }
           } else {
             blit_fail++;
-          }
-
-          // Diagnostic: every 5s — always log if HPD=0 (no monitor), silent when HPD=1
-          uint32_t now_ms = millis();
-          if (now_ms - blit_log_ms >= 5000) {
-            blit_log_ms = now_ms;
-            uint8_t r_c1 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xC1) : 0;
-            bool hpd = (r_c1 >> 7) & 1;
-            if (!hpd) {
-              USER_PRINTF("HDMI: no monitor connected (HPD=0) blit ok=%u fail=%u\n", blit_ok, blit_fail);
-            }
-            blit_ok = blit_fail = 0;
           }
         }
       }
