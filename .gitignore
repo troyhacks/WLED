@@ -30,3 +30,4 @@ compile_commands.json
 /wled00/*.off
 .vscode/extensions.json
 platformio_override.ini.off
+managed_components/
