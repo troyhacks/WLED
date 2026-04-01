@@ -1444,12 +1444,21 @@ void WLED::setup() {
     }
 
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
-    scanI2C_IDF(global_i2c_bus_handle);  // use IDF v5 API on P4
+    scanI2C_IDF(global_i2c_bus_handle, "(I2C_NUM_0 SDA=7/SCL=8)");  // use IDF v5 API on P4
     // probeI2C_unknown: diagnostic function used to identify the 9 I2C devices on this board.
     // Result: 0x37/0x3A/0x4B/0x50 = LT8912B internal banks + EDID proxy; 0x54 = FE1.1s EEPROM.
     // Removed from runtime — writing to 0x3A/0x37 (undocumented LT8912B banks) corrupted bridge state.
     #elif !defined(CONFIG_IDF_TARGET_ESP32C5)
     scanI2C(Wire);
+    #endif
+
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    // Scan second I2C bus if I2C_2 pins are configured
+    if (i2c_sda_2 >= 0 && i2c_scl_2 >= 0) {
+      if (pinManager.initI2C_2()) {
+        scanI2C_IDF(global_i2c_bus_handle_2, "(I2C_NUM_1 SDA=20/SCL=21)");
+      }
+    }
     #endif
 
     strip.createLedmapBinaryCache();

@@ -103,11 +103,14 @@ class PinManagerClass {
 
   // WLEDMM: central handling of Wire (only for first bus)
   bool wire0isStarted = false;  // true is wire.begin() was done already
-  int8_t wire0PinSDA = -1;       // GPIO currently in use for SDA 
-  int8_t wire0PinSCL = -1;       // GPIO currently in use for SCL 
+  int8_t wire0PinSDA = -1;       // GPIO currently in use for SDA
+  int8_t wire0PinSCL = -1;       // GPIO currently in use for SCL
+  bool wire1isStarted = false;  // true is wire.begin() was done already for bus 2
+  int8_t wire1PinSDA = -1;       // GPIO currently in use for SDA on bus 2
+  int8_t wire1PinSCL = -1;       // GPIO currently in use for SCL on bus 2
 
   public:
-  PinManagerClass() : i2cAllocCount(0), spiAllocCount(0), wire0isStarted(false) {}  // WLEDMM: initialize wire0isStarted=false
+  PinManagerClass() : i2cAllocCount(0), spiAllocCount(0), wire0isStarted(false), wire1isStarted(false) {}  // WLEDMM: initialize wire0isStarted=false
   // De-allocates a single pin
   bool deallocatePin(byte gpio, PinOwner tag);
   // De-allocates multiple pins but only if all can be deallocated (PinOwner has to be specified)
@@ -136,6 +139,9 @@ class PinManagerClass {
   // WLEDMM: central initialization of Wire  (Wire1 not supported yet)
   bool joinWire();                                          // shortcut - use global pins when no parameters provided
   bool joinWire(int8_t pinSDA, int8_t pinSCL);              // use this instead of Wire.begin(SDA, SCL)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  bool initI2C_2();                                         // initialize second I2C bus on ESP32-P4
+#endif
   // toDo: may need to add calls for Wire.setClock, Wire.setPins Wire.end 
 
   // will return true for reserved pins

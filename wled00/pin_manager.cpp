@@ -146,6 +146,7 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
       if (gpio >= 34 && gpio <= 38) return (F("(strapping pin)"));
       if (gpio == 26 || gpio == 27) return (F("Extra USB (usable)"));
       if (gpio == 6) return (F("ESP32-C6 wakeup (usable)"));
+      if (gpio == 9) return (F("Usually I2S-related"));
       if (gpio == 53) return (F("Audio Amp Enable (usable)"));
       if (gpio == 45) return (F("Might be N/C on some boards."));
     #else
@@ -702,6 +703,57 @@ bool PinManagerClass::joinWire(int8_t pinSDA, int8_t pinSCL) {
   return(true);
 }
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+// Initialize second I2C bus on ESP32-P4 using IDF v5 API
+bool PinManagerClass::initI2C_2() {
+  if (i2c_sda_2 < 0 || i2c_scl_2 < 0) {
+    DEBUG_PRINTLN(F("PIN Manager: I2C_2 pins not configured"));
+    return false;
+  }
+
+  if (wire1isStarted) {
+    DEBUG_PRINTLN(F("PIN Manager: I2C bus 2 already started"));
+    return true;
+  }
+
+  // Validate pins
+  if (!isPinOk(i2c_sda_2, true) || !isPinOk(i2c_scl_2, true)) {
+    DEBUG_PRINTF("PIN Manager: invalid GPIO for I2C_2: SDA=%d, SCL=%d\n", i2c_sda_2, i2c_scl_2);
+    return false;
+  }
+
+  // Allocate pins
+  PinManagerPinType pins[2] = {{(int8_t)i2c_scl_2, true}, {(int8_t)i2c_sda_2, true}};
+  if (!allocateMultiplePins(pins, 2, PinOwner::HW_I2C)) {
+    DEBUG_PRINTF("PIN Manager: failed to allocate GPIO for I2C_2: SDA=%d, SCL=%d\n", i2c_sda_2, i2c_scl_2);
+    return false;
+  }
+
+  // Create second IDF I2C master bus on port I2C_NUM_1
+  i2c_master_bus_config_t i2c_mst_config = {};
+  i2c_mst_config.clk_source      = I2C_CLK_SRC_DEFAULT;
+  i2c_mst_config.i2c_port       = I2C_NUM_1;
+  i2c_mst_config.scl_io_num     = gpio_num_t(i2c_scl_2);
+  i2c_mst_config.sda_io_num     = gpio_num_t(i2c_sda_2);
+  i2c_mst_config.glitch_ignore_cnt = 7;
+  i2c_mst_config.flags.enable_internal_pullup = false;
+
+  esp_err_t ret = i2c_new_master_bus(&i2c_mst_config, &global_i2c_bus_handle_2);
+  if (ret != ESP_OK) {
+    USER_PRINTF("PIN Manager: i2c_new_master_bus for bus 2 failed (err %d)!\n", ret);
+    return false;
+  }
+
+  USER_PRINTF("PIN Manager: IDF I2C master bus 2 on port %d, SDA=%d SCL=%d\n",
+              I2C_NUM_1, i2c_sda_2, i2c_scl_2);
+
+  wire1isStarted = true;
+  wire1PinSDA = i2c_sda_2;
+  wire1PinSCL = i2c_scl_2;
+  return true;
+}
+#endif
+
 
   // WLEDMM more additions
 
@@ -839,7 +891,7 @@ bool PinManagerClass::isPinOk(byte gpio, bool output) const
     // strapping pins: 34,35,36,37,38
     // Hide all pins not available on connector except pins we need to assign to things later, like I2S
     if (             gpio <   2) return false;     // NC unless you mod the board.
-    if (             gpio ==  9) return false;     // I2S Sound Output Pin
+    // if (             gpio ==  9) return false;     // I2S Sound Output Pin
     if (gpio > 13 && gpio <  20) return false;     // ESP-Hosted WiFi pins
     // if (gpio > 23 && gpio <  26) return false;     // USB Pins
     if (gpio > 27 && gpio <  32) return false;     // Ethernet pins

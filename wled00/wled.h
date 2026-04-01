@@ -370,9 +370,19 @@ WLED_GLOBAL bool update_screen _INIT(true);
 WLED_GLOBAL bool update_screen_background _INIT(true);
 WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
 WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
-// WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
-// WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
-// WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
+WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle_2 _INIT(NULL);
+#endif
+
+// global I2C bus 2 pins (used when I2C_2_SDA/I2C_2_SCL build flags are set)
+#ifndef I2C_2_SDA
+WLED_GLOBAL int8_t i2c_sda_2 _INIT(-1);
+#else
+WLED_GLOBAL int8_t i2c_sda_2 _INIT(I2C_2_SDA);
+#endif
+#ifndef I2C_2_SCL
+WLED_GLOBAL int8_t i2c_scl_2 _INIT(-1);
+#else
+WLED_GLOBAL int8_t i2c_scl_2 _INIT(I2C_2_SCL);
 #endif
 
 #ifdef USERMOD_PIONEER_PROLINK
@@ -381,7 +391,11 @@ WLED_GLOBAL bool  prolink_presetMover   _INIT(false);
 #endif
 
 WLED_GLOBAL bool ES7210_present _INIT(false); // we'll check for this during boot I2C scan.
+#if defined(BUS_NETWORK_DUMMY_MODE)
+WLED_GLOBAL bool busNetworkDummyMode _INIT(true); // Skip network transmit; keep pixel buffer for HDMI blit
+#else
 WLED_GLOBAL bool busNetworkDummyMode _INIT(false); // Skip network transmit; keep pixel buffer for HDMI blit
+#endif
 
 // Global Variable definitions
 WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));

@@ -242,8 +242,11 @@ static void msc_event_cb(const msc_host_event_t *event, void *arg) {
     xQueueSend(app_queue, &message, portMAX_DELAY);
   } else if (event->event == event->MSC_DEVICE_DISCONNECTED) {
     int usb_addr = find_usb_addr_by_handle(event->device.handle);
-    if (usb_addr >= 0) DEBUG_PRINTF("MSC device disconnected (usb_addr=%d)\n", usb_addr);
-    else               DEBUG_PRINTLN("MSC device disconnected, but failed to retrieve USB address");
+    if (usb_addr >= 0) {
+      DEBUG_PRINTF("MSC device disconnected (usb_addr=%d)\n", usb_addr);
+    } else {
+      DEBUG_PRINTLN("MSC device disconnected, but failed to retrieve USB address");
+    }
     app_message_t message = {};
     message.id = app_message_t::APP_DEVICE_DISCONNECTED;
     message.data.device_handle = event->device.handle;

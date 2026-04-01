@@ -5,6 +5,89 @@
 #include <sys/stat.h>
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "driver/i2c_master.h"
+
+// XL9535 16-bit I2C I/O expander helper.
+// Datasheet: https://www.xlsemi.com/datasheet/XL9535%20DS.pdf
+// I2C address: 0x20-0x27 (A2:A0 pins). Default 0x20 if all address pins low.
+// Registers: 0x00=InputPort(read), 0x01=OutputPort, 0x02=PolarityInv, 0x03=Config(1=input,0=output)
+class XL9535 {
+public:
+  static constexpr uint8_t ADDR_BASE   = 0x20;
+  static constexpr uint8_t REG_INPUT     = 0x00;
+  static constexpr uint8_t REG_OUTPUT   = 0x01;
+  static constexpr uint8_t REG_POLARITY = 0x02;
+  static constexpr uint8_t REG_CONFIG   = 0x03;
+
+  XL9535(i2c_master_bus_handle_t bus, uint8_t addr = ADDR_BASE)
+    : _bus(bus), _addr(addr), _out(0xFFFF), _cfg(0xFFFF) { }  // all pins input by default
+
+  // Write output register (doesn't affect direction — pins set as output will drive)
+  void write(uint16_t val) {
+    _out = val;
+    _sendReg(REG_OUTPUT, val);
+  }
+
+  // Set individual pins (1=high, 0=low), only affects output register
+  void setPin(uint8_t pin, bool high) {
+    if (pin >= 16) return;
+    if (high) _out |=  (1u << pin);
+    else      _out &= ~(1u << pin);
+    _sendReg(REG_OUTPUT, _out);
+  }
+
+  // Configure pin direction: 1=input (Hi-Z), 0=output
+  void setDir(uint8_t pin, bool input) {
+    if (pin >= 16) return;
+    if (input)  _cfg |=  (1u << pin);
+    else        _cfg &= ~(1u << pin);
+    _sendReg(REG_CONFIG, _cfg);
+  }
+
+  // Read current input levels (actual pin states)
+  uint16_t read() {
+    return _readReg(REG_INPUT);
+  }
+
+  // Read output register (what was last written)
+  uint16_t outputReg() const { return _out; }
+
+  uint8_t address() const { return _addr; }
+
+private:
+  i2c_master_bus_handle_t _bus;
+  uint8_t _addr;
+  uint16_t _out;   // last written output value
+  uint16_t _cfg;   // last written direction value (1=input)
+
+  void _sendReg(uint8_t reg, uint16_t val) {
+    i2c_device_config_t cfg = {};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address  = _addr;
+    cfg.scl_speed_hz   = 100000;
+    i2c_master_dev_handle_t dev = NULL;
+    if (i2c_master_bus_add_device(_bus, &cfg, &dev) != ESP_OK) return;
+    // Lower byte at reg, upper byte at reg | 0x40 (XL9535 register map)
+    uint8_t lo[2] = { reg,       (uint8_t)(val & 0xFF) };
+    uint8_t hi[2] = { reg | 0x40, (uint8_t)(val >> 8) };
+    i2c_master_transmit(dev, lo, 2, pdMS_TO_TICKS(50));
+    i2c_master_transmit(dev, hi, 2, pdMS_TO_TICKS(50));
+    i2c_master_bus_rm_device(dev);
+  }
+
+  uint16_t _readReg(uint8_t reg) {
+    i2c_device_config_t cfg = {};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address  = _addr;
+    cfg.scl_speed_hz   = 100000;
+    i2c_master_dev_handle_t dev = NULL;
+    if (i2c_master_bus_add_device(_bus, &cfg, &dev) != ESP_OK) return 0;
+    uint8_t buf[2] = {0};
+    // Write register address, then read 2 bytes (P0 then P1)
+    i2c_master_transmit_receive(dev, &reg, 1, buf, 2, pdMS_TO_TICKS(50));
+    i2c_master_bus_rm_device(dev);
+    return (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
+  }
+};
 #endif
 
 void scanI2C(TwoWire& wire) {
@@ -16,15 +99,16 @@ void scanI2C(TwoWire& wire) {
     {0x18, "ES8311 (common ESP32-P4 on-board mic codec)"},
     {0x1A, "WM8978/AC101"},
     {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
-    
+
     // Common sensors & devices
     {0x14, "GT911 Touch Panel Controller (alt)"},
     {0x19, "LIS3DH (alt)"},
     {0x1C, "MMA8452Q"},
     {0x1D, "ADXL345/MMA8452Q"},
-    {0x20, "PCF8574/TCA6408"},
+    {0x20, "XL9535/PCF8574/TCA6408"},
     {0x23, "BH1750"},
     {0x27, "PCF8574/LCD"},
+    {0x28, "SGM38121 (display/driver?)"},
     {0x29, "VL53L0X/VL53L1X/VL53L8CX"},
     {0x38, "FT6336/AHT10/VEML6070"},
     {0x39, "APDS9960/TSL2561"},
@@ -38,14 +122,16 @@ void scanI2C(TwoWire& wire) {
     {0x51, "PCF8563 RTC"},
     {0x52, "Nunchuk/VL53L8CX (LP)"},
     {0x53, "ADXL345 (alt)"},
+    {0x55, "BQ27220 battery fuel gauge"},
     {0x57, "MAX30102"},
+    {0x58, "AW86224 haptic driver"},
     {0x5A, "MLX90614/CCS811/MPR121"},
     {0x5B, "CCS811 (alt)/MPR121"},
     {0x5C, "AM2320/BH1750 (alt)"},
-    {0x5D, "GT911 Touch Panel Controller"},
+    {0x5D, "GT911/GT9895 Touch Panel Controller"},
     {0x60, "SI1145/MCP4725"},
     {0x62, "SCD30/TSL2591"},
-    {0x68, "DS3231 RTC/MPU6050/ICM20948"},
+    {0x68, "DS3231 RTC/MPU6050/ICM20948/HI8561 touch"},
     {0x69, "MPU6050 (alt)/ICM20948"},
     {0x76, "BME280/BMP280/MS5611"},
     {0x77, "BME280/BMP180/BMP085"},
@@ -78,7 +164,7 @@ void scanI2C(TwoWire& wire) {
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 // IDF v5 I2C scan using i2c_master_probe() — used on ESP32-P4 instead of Arduino Wire
-void scanI2C_IDF(i2c_master_bus_handle_t bus) {
+void scanI2C_IDF(i2c_master_bus_handle_t bus, const char* bus_name) {
   if (!bus) { USER_PRINTLN("scanI2C_IDF: no bus handle"); return; }
 
   // Reuse the known-device lookup from scanI2C by declaring a local lambda
@@ -88,22 +174,26 @@ void scanI2C_IDF(i2c_master_bus_handle_t bus) {
     {0x13, "ES7243"},
     {0x18, "ES8311 (common ESP32-P4 on-board mic codec)"},
     {0x1A, "WM8978/AC101"},
-    {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
-    {0x14, "GT911 Touch Panel Controller (alt)"},
+    {0x20, "XL9535 I/O expander"},
+    {0x28, "SGM38121 (display/driver?)"},
+    {0x37, "LT8912B internal video pipeline state (streaming 16-entry FIFO, undocumented)"},
     {0x38, "FT6336/AHT10/VEML6070"},
+    {0x3A, "LT8912B phantom/undocumented register bank"},
     {0x3C, "SSD1306 OLED"},
     {0x3D, "SSD1306 OLED (alt)"},
+    {0x40, "ES7210 (common ESP32-P4 audio processor) but also matches INA219/HDC1080/PCA9685"},
     {0x44, "SHT30/SHT31"},
-    {0x37, "LT8912B internal video pipeline state (streaming 16-entry FIFO, undocumented)"},
-    {0x3A, "LT8912B phantom/undocumented register bank"},
     {0x48, "LT8912B HDMI bridge (main control)"},
     {0x49, "LT8912B HDMI bridge (MIPI/DSI timing)"},
     {0x4A, "LT8912B HDMI bridge (AVI InfoFrame)"},
     {0x4B, "LT8912B HDMI bridge (EDID emulation write page — zeros = no custom EDID)"},
     {0x50, "LT8912B DDC/EDID proxy (connected monitor's EDID)"},
+    {0x51, "PCF8563 RTC"},
     {0x54, "FE1.1s USB hub config EEPROM (24Cxx, A2=1)"},
-    {0x5D, "GT911 Touch Panel Controller"},
-    {0x68, "DS3231 RTC/MPU6050"},
+    {0x55, "BQ27220 battery fuel gauge"},
+    {0x58, "AW86224 haptic driver"},
+    {0x5D, "GT911/GT9895 Touch Panel Controller"},
+    {0x68, "DS3231 RTC/ICM20948/HI8561 touch/MPU6050"},
     {0x76, "BME280/BMP280"},
     {0x77, "BME280/BMP180"},
   };
@@ -116,7 +206,7 @@ void scanI2C_IDF(i2c_master_bus_handle_t bus) {
     return nullptr;
   };
 
-  Serial.println(F("\n--- I2C Scan (IDF) ---"));
+  Serial.printf("\n--- I2C Scan (IDF) %s ---\n", bus_name);
   int found = 0;
   for (uint8_t addr = 0x08; addr < 0x78; addr++) {
     if (i2c_master_probe(bus, addr, 10) == ESP_OK) {

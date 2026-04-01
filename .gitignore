@@ -9,18 +9,15 @@
 .piolibdeps
 .vscode
 .claude
-
 esp01-update.sh
 platformio_override.ini
 replace_fs.py
 wled-update.sh
 qodana.yaml
 compile_commands.json
-
 /build/
 /build_output/
 /node_modules/
-
 /wled00/extLibs
 /wled00/LittleFS
 /wled00/my_config.h
@@ -30,3 +27,4 @@ compile_commands.json
 /wled00/*.off
 .vscode/extensions.json
 platformio_override.ini.off
+managed_components/

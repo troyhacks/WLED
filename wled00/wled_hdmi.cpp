@@ -48,17 +48,17 @@
 // ============================================================
 #define HDMI_MODE_LIST \
   /* ===== 30 MHz — DPI=240/8, PHY=360Mbps (M=18 N=1) ===== */ \
-  X(P4_720x576_50HZ,      17, 50,  720, 576, 30000,  12,  64, 164,  5,  5, 39, HDMI_AR_4_3 ) /* Htot=960  Vtot=625  50.0Hz PAL  DMA=62MB/s  VIC17=720x576p@50 4:3 */ \
+  X(P4_720x576_50HZ,      17, 50,  720, 576, 30000,  12,  64, 164,  5,  5, 39, HDMI_AR_4_3,  2) /* Htot=960  Vtot=625  50.0Hz PAL  DMA=62MB/s  VIC17=720x576p@50 4:3 */ \
   \
   /* ===== 40 MHz — DPI=240/6, PHY=480Mbps (N=24) ===== */ \
-  X(P4_800x600_60HZ,       0, 60,  800, 600, 40000,  40, 128,  88,  1,  4, 23, HDMI_AR_4_3 ) /* Htot=1056 Vtot=628  60.3Hz       DMA=87MB/s  no CEA VIC */ \
-  X(P4_1024x576_57HZ,      0, 57, 1024, 576, 40000,   8,  48,  40,  3,  5, 42, HDMI_AR_16_9) /* Htot=1120 Vtot=626  57.1Hz       DMA=84MB/s  no CEA VIC */ \
+  X(P4_800x600_60HZ,       0, 60,  800, 600, 40000,  40, 128,  88,  1,  4, 23, HDMI_AR_4_3,  2) /* Htot=1056 Vtot=628  60.3Hz       DMA=87MB/s  no CEA VIC */ \
+  X(P4_1024x576_57HZ,      0, 57, 1024, 576, 40000,   8,  48,  40,  3,  5, 42, HDMI_AR_16_9, 2) /* Htot=1120 Vtot=626  57.1Hz       DMA=84MB/s  no CEA VIC */ \
   \
   /* ===== 60 MHz — DPI=240/4, PHY=720Mbps (N=36) ===== */ \
-  X(P4_1280x720_50HZ,     19, 50, 1280, 720, 60000, 110,  40, 170,  5,  5, 20, HDMI_AR_16_9) /* Htot=1600 Vtot=750  50.00Hz      DMA=115MB/s VIC19=1280x720p@50 */ \
-  X(P4_1280x720_60HZ,      4, 60, 1280, 720, 60000,  10,  32,  28,  3,  5, 13, HDMI_AR_16_9) /* Htot=1350 Vtot=741  59.98Hz      DMA=123MB/s VIC4=1280x720p@60  */ \
-  X(P4_1280x800_50HZ,      0, 50, 1280, 800, 60000,  48,  32,  80,  3,  5, 25, HDMI_AR_NONE) /* Htot=1440 Vtot=833  50.0Hz       DMA=128MB/s no CEA VIC (16:10) */ \
-  X(P4_1024x768_60HZ,      0, 60, 1024, 768, 60000,  48,  32,  80,  3,  5, 69, HDMI_AR_4_3 ) /* Htot=1184 Vtot=845  59.9Hz       DMA=132MB/s no CEA VIC */ \
+  X(P4_1280x720_50HZ,     19, 50, 1280, 720, 60000, 110,  40, 170,  5,  5, 20, HDMI_AR_16_9, 2) /* Htot=1600 Vtot=750  50.00Hz      DMA=115MB/s VIC19=1280x720p@50 */ \
+  X(P4_1280x720_60HZ,      4, 60, 1280, 720, 60000,  10,  32,  28,  3,  5, 13, HDMI_AR_16_9, 2) /* Htot=1350 Vtot=741  59.98Hz      DMA=123MB/s VIC4=1280x720p@60  */ \
+  X(P4_1280x800_50HZ,      0, 50, 1280, 800, 60000,  48,  32,  80,  3,  5, 25, HDMI_AR_NONE, 2) /* Htot=1440 Vtot=833  50.0Hz       DMA=128MB/s no CEA VIC (16:10) */ \
+  X(P4_1024x768_60HZ,      0, 60, 1024, 768, 60000,  48,  32,  80,  3,  5, 69, HDMI_AR_4_3,  2) /* Htot=1184 Vtot=845  59.9Hz       DMA=132MB/s no CEA VIC */ \
 
 enum hdmi_mode_t : uint8_t {
 #define X(name, ...) name,
@@ -80,6 +80,7 @@ struct hdmi_cea861_entry_t {
   uint8_t  vsw;  // vsync_pulse_width
   uint8_t  vbp;  // vsync_back_porch
   uint8_t  aspect_ratio;  // HDMI_AR_NONE/4_3/16_9
+  uint8_t  num_data_lanes = 2;  // MIPI DSI lane count (default=2 for HDMI/LT8912B)
 };
 
 static const char* const hdmi_mode_names[HDMI_MODE_COUNT] = {
@@ -89,8 +90,8 @@ static const char* const hdmi_mode_names[HDMI_MODE_COUNT] = {
 };
 
 static const hdmi_cea861_entry_t hdmi_cea861_table[HDMI_MODE_COUNT] = {
-#define X(name, vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar) \
-  { vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar },
+#define X(name, vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar, ...) \
+  { vic, fps, w, h, pclk, hfp, hsw, hbp, vfp, vsw, vbp, ar, ## __VA_ARGS__ },
   HDMI_MODE_LIST
 #undef X
 };
@@ -113,6 +114,7 @@ struct hdmi_dpi_config_t {
   uint8_t  aspect_ratio;        // HDMI_AR_NONE/4_3/16_9
   bool     disable_lp;          // false = allow LP during blanking (helps DMA at high pclk); true = HS-only
   mipi_dsi_dpi_clock_source_t dpi_clk_src;  // PLL source for DPI pixel clock
+  uint8_t  num_data_lanes;     // MIPI DSI lane count
 };
 
 static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_config_t &out) {
@@ -135,6 +137,7 @@ static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_co
   out.aspect_ratio       = t.aspect_ratio;
   out.disable_lp         = true;  // LP mode universally breaks LT8912B output on this hardware
   out.dpi_clk_src        = MIPI_DSI_DPI_CLK_SRC_DEFAULT;  // PLL_F240M — only source that gives integer ratio
+  out.num_data_lanes     = t.num_data_lanes;
   return true;
 }
 
@@ -419,7 +422,7 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
 
   esp_lcd_dsi_bus_config_t bus_config = {};
   bus_config.bus_id         = 0;
-  bus_config.num_data_lanes = 2;
+  bus_config.num_data_lanes = timing.num_data_lanes;
   bus_config.phy_clk_src    = (mipi_dsi_phy_clock_source_t)4; // MIPI_DSI_PHY_CLK_SRC_DEFAULT
 
   wledmm_display_w = timing.width;
@@ -473,7 +476,7 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
     .mipi_config = {
       .dsi_bus    = lt8912b_dsi_bus,
       .dpi_config = &dpi_config,
-      .lane_num   = 2,
+      .lane_num   = timing.num_data_lanes,
     },
   };
   vendor_config.video_timing.hfp         = timing.hsync_front_porch;

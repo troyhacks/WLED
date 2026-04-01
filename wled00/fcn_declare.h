@@ -410,7 +410,7 @@ bool is_sdcard_mounted(void);
 void scanI2C(TwoWire& wire = Wire);
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "driver/i2c_master.h"
-void scanI2C_IDF(i2c_master_bus_handle_t bus);
+void scanI2C_IDF(i2c_master_bus_handle_t bus, const char* bus_name = "I2C");
 void probeI2C_unknown(i2c_master_bus_handle_t bus);
 #endif
 void dumpAllTaskHWMs(void);
