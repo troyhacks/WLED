@@ -126,6 +126,7 @@ void handleUpload(AsyncWebServerRequest *request, const String& filename, size_t
         request->send(200, "text/plain", F("File Uploaded!"));
     }
     cacheInvalidate++;
+    updateFSInfo(); // refresh memory usage info
   }
 }
 

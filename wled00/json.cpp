@@ -1078,6 +1078,9 @@ void serializeInfo(JsonObject root)
   wifi_info[F("channel")] = WiFi.channel();
   wifi_info[F("ap")] = apActive;
 
+#if defined(ARDUINO_ARCH_ESP32) && !defined(WLEDMM_FILEWAIT)
+  updateFSInfo(); // refresh flash usage info - may cause flicker unless we have the RMTHI driver
+#endif
   JsonObject fs_info = root.createNestedObject("fs");
   fs_info["u"] = fsBytesUsed / 1000;
   fs_info["t"] = fsBytesTotal / 1000;
@@ -1145,12 +1148,15 @@ void serializeInfo(JsonObject root)
     root[F("tpsram")] = ESP.getPsramSize(); //WLEDMM
     root[F("psram")] = ESP.getFreePsram();
     root[F("psusedram")] = ESP.getMinFreePsram();
-    #if CONFIG_ESP32S3_SPIRAM_SUPPORT  // WLEDMM -S3 has "qspi" or "opi" PSRAM mode
+    // WLEDMM -S3 has "qspi" or "opi" PSRAM mode, -P4 has "hex"
     #if CONFIG_SPIRAM_MODE_OCT
       root[F("psrmode")]  = F("🚀 OPI");
     #elif CONFIG_SPIRAM_MODE_QUAD
       root[F("psrmode")]  = F("qspi");
-    #endif
+    #elif CONFIG_SPIRAM_MODE_HEX
+      root[F("psrmode")]  = F("🚀🚀 HEX");
+    #else
+      root[F("psrmode")]  = F("dio");
     #endif
   }
   #endif
@@ -1191,8 +1197,10 @@ void serializeInfo(JsonObject root)
     case FM_QOUT: root[F("e32flashtext")] = F(" (QOUT)");break;
     case FM_DIO:  root[F("e32flashtext")] = F(" (DIO)"); break;
     case FM_DOUT: root[F("e32flashtext")] = F(" (DOUT or other)");break;
-    #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_ESPTOOLPY_FLASHMODE_OPI
+    #if CONFIG_ESPTOOLPY_FLASHMODE_OPI
       case FM_FAST_READ: root[F("e32flashtext")] = F(" (🚀OPI)");break;
+    #elif CONFIG_ESPTOOLPY_FLASHMODE_HEX
+      case FM_FAST_READ: root[F("e32flashtext")] = F(" (🚀🚀HEX)");break;
     #else
       case FM_FAST_READ: root[F("e32flashtext")] = F(" (fast_read)");break;
     #endif

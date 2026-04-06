@@ -263,11 +263,19 @@ bool canUseSerial(void);   // WLEDMM (wled_serial.cpp) returns true if Serial ca
 #endif
 
 //APA102
-#ifdef WLED_USE_ETHERNET
+#if defined(WLED_USE_ETHERNET) || (defined(BOARD_HAS_PSRAM) && defined(CONFIG_SPIRAM_OCCUPY_VSPI_HOST) && (defined(CONFIG_SPIRAM_TYPE_ESPPSRAM32) || defined(CONFIG_SPIRAM_TYPE_AUTO)))
 // fix for #2542 (by @BlackBird77)
+// fix for esp32 with PSRAM: if SPI RAM is of type 32MBit, one of the SPI hosts (HSPI or VSPI) will be occupied by the system. Application code should never touch this SPI host.
 #define B_HS_DOT_3 NeoPixelBusLg<DotStarBgrFeature, DotStarEsp32HspiHzMethod, NeoGammaNullMethod> //hardware HSPI (was DotStarEsp32DmaHspi5MhzMethod in NPB @ 2.6.9)
+#warning "APA102 cannot use VSPI, falling back to HSPI"
+#if CONFIG_SPIRAM_OCCUPY_HSPI_HOST
+#warning "APA102 uses HSPI driver which might be needed for PSRAM"
+#endif
 #else
 #define B_HS_DOT_3 NeoPixelBusLg<DotStarBgrFeature, DotStarSpiHzMethod, NeoGammaNullMethod> //hardware VSPI
+#if CONFIG_SPIRAM_OCCUPY_VSPI_HOST
+#warning "APA102 uses VSPI driver which might be needed for PSRAM"
+#endif
 #endif
 #define B_SS_DOT_3 NeoPixelBusLg<DotStarBgrFeature, DotStarMethod, NeoGammaNullMethod>    //soft SPI
 

@@ -1142,7 +1142,7 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::setPixelColor(uint16_t pix, 
 uint32_t IRAM_ATTR BusHub75Matrix::getPixelColor(uint16_t pix) const {
 // if (pix >= _len || !_ledBuffer) return BLACK; // not necessary - this was already checked at busses.getPixelColor()
 #if defined(WLEDMM_FASTPATH) && !defined(WLEDMM_SAVE_FLASH) 
-  return color_fade(uint32_t(_ledBuffer[pix]) & 0x00FFFFFF, _bri);   // this is slightly faster if we have inline color_fade()
+  return color_fade_fast(uint32_t(_ledBuffer[pix]) & 0x00FFFFFF, _bri);   // this is slightly faster if we have inline color_fade()
 #else
   return uint32_t(_ledBuffer[pix].scale8(_bri)) & 0x00FFFFFF;        // do it the FastLED way
 #endif
@@ -1171,12 +1171,14 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::show(void) {
 
   if (_ledBuffer) {
     // write out buffered LEDs
+    // cache values, to avoid repeated global access inside the hot path
     VirtualMatrixPanel*  fourScanPanel = BusHub75Matrix::activeFourScanPanel;
-    bool isFourScan = (fourScanPanel != nullptr);
+    const bool isFourScan = (fourScanPanel != nullptr);
     //if (isFourScan) fourScanPanel->setRotation(0);
-    unsigned height = isFourScan ? fourScanPanel->height() : display->height();
-    unsigned width = _panelWidth;
-
+    const unsigned height = isFourScan ? fourScanPanel->height() : display->height();
+    const unsigned width = _panelWidth;
+    const uint_fast8_t colOrder = _colorOrder & 0x0F;
+    const bool needReorder = colOrder != COL_ORDER_RGB; // fast path when no color re-ordering needed
     // Cache pointers to LED array and bitmask array, to avoid repeated accesses
     const byte* ledsDirty = _ledsDirty;
     const CRGB* ledBuffer = _ledBuffer;
@@ -1197,19 +1199,22 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::show(void) {
         uint8_t g = c.g;
         uint8_t b = c.b;
         #endif
-        // apply color order mapping (COL_ORDER_* values from const.h)
-        uint8_t r2=r, g2=g, b2=b;
-        switch (_colorOrder & 0x0F) {
-          case COL_ORDER_RGB: /* 1 */                           break; // no swap (HUB75 default)
-          case COL_ORDER_GRB: /* 0 */ r2=g; g2=r;              break; // swap R and G
-          case COL_ORDER_BRG: /* 2 */ r2=b; g2=r; b2=g;        break;
-          case COL_ORDER_RBG: /* 3 */       g2=b; b2=g;        break; // swap G and B
-          case COL_ORDER_BGR: /* 4 */ r2=b;       b2=r;        break; // swap R and B
-          case COL_ORDER_GBR: /* 5 */ r2=g; g2=b; b2=r;        break;
-          default:                                              break;
+        if (needReorder) {
+          // apply color order mapping (COL_ORDER_* values from const.h)
+          uint8_t r2=r, g2=g, b2=b;
+          switch (colOrder) {
+            case COL_ORDER_RGB: /* 1 */                          break; // no swap (HUB75 default)
+            case COL_ORDER_GRB: /* 0 */ r2=g; g2=r;              break; // swap R and G
+            case COL_ORDER_BRG: /* 2 */ r2=b; g2=r; b2=g;        break;
+            case COL_ORDER_RBG: /* 3 */       g2=b; b2=g;        break; // swap G and B
+            case COL_ORDER_BGR: /* 4 */ r2=b;       b2=r;        break; // swap R and B
+            case COL_ORDER_GBR: /* 5 */ r2=g; g2=b; b2=r;        break;
+            default:                                             break;
+          }
+          r=r2; g=g2; b=b2;
         }
-        if (isFourScan) fourScanPanel->drawPixelRGB888(int16_t(x), int16_t(y), r2, g2, b2);
-        else display->drawPixelRGB888(int16_t(x), int16_t(y), r2, g2, b2);
+        if (isFourScan) fourScanPanel->drawPixelRGB888(int16_t(x), int16_t(y), r, g, b);
+        else display->drawPixelRGB888(int16_t(x), int16_t(y), r, g, b);
       }
       pix ++;
     }

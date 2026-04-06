@@ -32,6 +32,28 @@ bool getBitFromArray(const uint8_t* byteArray, size_t position)  __attribute__((
 size_t getBitArrayBytes(size_t num_bits) __attribute__((const)); // number of bytes needed for an array with num_bits bits
 void setBitArray(uint8_t* byteArray, size_t numBits, bool value);  // set all bits to same value
 
+/**
+ * fast color fading / scaling - based on upstream color_fade() and color_scale() by @DedeHai
+ */
+
+// fast color fade without "video" option - fades color toward black
+static inline uint32_t color_fade_fast(uint32_t c1, uint_fast8_t amount) {
+  if (c1 == 0 || amount == 0) return 0; // black or no change
+  if (amount == 255) return c1;
+  constexpr uint32_t TWO_CHANNEL_MASK = 0x00FF00FF;
+  uint32_t rb = c1 & TWO_CHANNEL_MASK;        // extract R and B channels
+  uint32_t wg = (c1 >> 8) & TWO_CHANNEL_MASK; // extract W and G channels (shifted for multiplication)
+  uint32_t rb_scaled = ((rb * (amount + 1)) >> 8) & TWO_CHANNEL_MASK; // scale red and blue
+  uint32_t  wg_scaled = ((wg * (amount + 1)) & ~TWO_CHANNEL_MASK);    // scale white and green
+  return (rb_scaled | wg_scaled);
+}
+// faster than fastled color scaling as it does in place scaling
+static inline void CRGB_scale_fast(CRGB &c, const uint8_t scale) {
+  c.r = ((c.r * scale) >> 8);
+  c.g = ((c.g * scale) >> 8);
+  c.b = ((c.b * scale) >> 8);
+}
+
 
 #define GET_BIT(var,bit)    (((var)>>(bit))&0x01)
 #define SET_BIT(var,bit)    ((var)|=(uint16_t)(0x0001<<(bit)))

@@ -702,10 +702,74 @@ void WLED::setup()
   }
 
   #endif
+
+  #ifdef CONFIG_ESPTOOLPY_FLASH_SAMPLE_MODE_DTR
+    DEBUG_PRINTLN(F("FLASH access: DTR")); // faster
+  #elif CONFIG_ESPTOOLPY_FLASH_SAMPLE_MODE_STR
+    DEBUG_PRINTLN(F("FLASH access: STR")); // standard
+  #endif
+  #ifdef CONFIG_SPI_FLASH_HPM_ENA
+    DEBUG_PRINTLN(F("FLASH high performance mode: enabled"));
+  #endif
+  #ifdef CONFIG_SPI_FLASH_HPM_ON
+    DEBUG_PRINTLN(F("FLASH high performance mode: on")); // faster with STR
+  #endif
+
   #if (defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3)) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))       // WLEDMM
   if (psramFound()) {
-    DEBUG_PRINT(F("Total PSRAM: ")); DEBUG_PRINT(ESP.getPsramSize()/1024); DEBUG_PRINTLN("kB");
+    USER_PRINTLN();
+    USER_PRINT(F("Total PSRAM: ")); USER_PRINT(ESP.getPsramSize()/1024); USER_PRINTLN("kB");
     DEBUG_PRINT(F("Free PSRAM : ")); DEBUG_PRINT(ESP.getFreePsram()/1024); DEBUG_PRINTLN("kB");
+    #if CONFIG_SPIRAM_MODE_HEX
+      USER_PRINT(F("PSRAM mode: hex, "));
+      #ifdef SPIRAM_USE_8LINE_MODE
+        USER_PRINTLN(F("8-line"));
+      #else
+        USER_PRINTLN(F("16-line"));
+      #endif
+    #elif CONFIG_SPIRAM_MODE_OCT
+      USER_PRINTLN(F("PSRAM mode: octal, DTR"));
+    #elif CONFIG_SPIRAM_MODE_QUAD
+      USER_PRINTLN(F("PSRAM mode: quad, STR"));
+    #endif
+    #ifdef SPIRAM_ECC_ENABLE
+      DEBUG_PRINTLN(F("PSRAM error correction: ECC enabled"));
+    #endif
+    #if defined(CONFIG_SPIRAM_SPEED_250M)
+      USER_PRINTLN(F("PSRAM speed: 250 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_200M)
+      USER_PRINTLN(F("PSRAM speed: 200 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_160M)
+      USER_PRINTLN(F("PSRAM speed: 160 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_120M)
+      USER_PRINTLN(F("PSRAM speed: 120 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_80M)
+      USER_PRINTLN(F("PSRAM speed: 80 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_40M)
+      USER_PRINTLN(F("PSRAM speed: 40 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_26M)
+      USER_PRINTLN(F("PSRAM speed: 26 MHz"));
+    #elif defined(CONFIG_SPIRAM_SPEED_20M)
+      USER_PRINTLN(F("PSRAM speed: 20 MHz"));
+    #endif
+    #ifdef CONFIG_SPIRAM_OCCUPY_HSPI_HOST
+      DEBUG_PRINTLN(F("PSRAM host: HSPI"));
+    #elif CONFIG_SPIRAM_OCCUPY_VSPI_HOST
+      DEBUG_PRINTLN(F("PSRAM host: VSPI"));
+    #elif CONFIG_SPIRAM_OCCUPY_NO_HOST
+      DEBUG_PRINTLN(F("PSRAM host: none"));
+    #endif
+    #if ESP_IDF_VERSION_MAJOR > 4
+    #ifdef CONFIG_SOC_PSRAM_DMA_CAPABLE
+      USER_PRINTLN(F("PSRAM is DMA capable."));
+    #else
+      USER_PRINTLN(F("PSRAM does not support DMA."));
+    #endif
+    #ifdef CONFIG_SOC_MEMSPI_FLASH_PSRAM_INDEPENDENT
+      DEBUG_PRINTLN(F("PSRAM speed is independant from flash."));
+    #endif
+    #endif
+    USER_PRINTLN();
   }
   #else
     DEBUG_PRINTLN(F("PSRAM not used."));

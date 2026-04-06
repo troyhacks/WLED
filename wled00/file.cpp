@@ -223,9 +223,10 @@ bool appendObjectToFile(const char* key, JsonDocument* content, uint32_t s, uint
   uint32_t pos = 0;
   if (!f) return false;
 
-  if (f.size() < 3) {
+  if (f.size() < 4) { // file uninitialized -> write minimal skeleton
     char init[12];
     strcpy_P(init, PSTR("{\"0\":{}}"));
+    f.seek(0, SeekSet);           // rewind to ensure we overwrite from the start
     f.print(init);
   }
 
