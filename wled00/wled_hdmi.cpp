@@ -613,6 +613,18 @@ static int hdmi_edid_best_mode() {
 // Call once from WLED::setup().
 // ============================================================
 void hdmi_setup() {
+  // WLEDMM: ensure I2C bus is initialized before HDMI bridge needs it.
+  // The LT8912B HDMI bridge communicates via I2C. If no bus handle exists yet,
+  // initialize it with the board's default I2C pins (GPIO 7/8 on P4).
+  if (!global_i2c_bus_handle) {
+    USER_PRINTLN("HDMI: initializing I2C bus for LT8912B bridge");
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    pinManager.joinWire(HW_PIN_SDA, HW_PIN_SCL);
+    #else
+    pinManager.joinWire();     // use default pins from config
+    #endif
+  }
+
   int selected = (int)WLEDMM_DISPLAY_MODE;
   Serial.printf("HDMI: starting mode %d: %s (type 'm' to switch)\n", selected, hdmi_mode_names[selected]);
   hdmi_display_init(selected);
