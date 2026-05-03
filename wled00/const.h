@@ -309,7 +309,7 @@
 #define BTN_TYPE_TOUCH_SWITCH     9    //WLEDMM not yet supported
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       15 //WLEDMM +1 for Olimex ESP32-Gateway
+#define WLED_NUM_ETH_TYPES        16
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
@@ -325,7 +325,8 @@
 #define WLED_ETH_ESP32_POE_WROVER 11
 #define WLED_ETH_LILYGO_T_POE_PRO 12
 #define WLED_ETH_GLEDOPTO         13
-#define WLED_ETH_OLIMEX_GTW      14
+#define WLED_ETH_QUINLED_V4_UNOQUAD  14
+#define WLED_ETH_QUINLED_V4_OCTA     15
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0
