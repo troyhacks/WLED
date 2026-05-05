@@ -391,6 +391,7 @@
 #define ERR_LOW_BUF     37  // WLEDMM: low memory (LED buffer from allocLEDs)
 #define ERR_SYS_REBOOT  90  // WLEDMM: reboot after error
 #define ERR_SYS_BROWNOUT  91 // WLEDMM: reboot after brownout alert
+#define ERR_PERSISTENT    98 // threshold: errors below this value are non-persistent; persistent errors stay in the UI until restart
 #define ERR_REBOOT_NEEDED 98 // WLEDMM: reboot needed after changing hardware setting
 #define ERR_POWEROFF_NEEDED 99 // WLEDMM: power-cycle needed after changing hardware setting
 
