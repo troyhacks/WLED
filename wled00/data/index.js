@@ -2042,10 +2042,12 @@ function readState(s,command=false)
 		case 91:
 			errstr = "Brownout Restart.";
 		  break;
-		case 98:
+		case 98: // legacy value - falls through
+		case 100:
 			errstr = "Please reboot WLED to activate changed settings.";
 		  break;
-		case 99:
+		case 99: // legacy value - falls through
+		case 101:
 			errstr = "Please switch your device off and back on.";
 		  break;
 		}
