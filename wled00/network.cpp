@@ -57,7 +57,7 @@ const ethernet_settings ethernetBoards[] = {
     ETH_CLOCK_GPIO0_IN	  // eth_clk_mode
   },
 
-  // QuinLed-ESP32-Ethernet
+  // QuinLed-ESP32-Ethernet or Olimex-ESP32-Gateway
   {
     0,			              // eth_address,
     5,			              // eth_power,
@@ -156,18 +156,11 @@ const ethernet_settings ethernetBoards[] = {
     33,                   // eth_mdio, 
     ETH_PHY_LAN8720,      // eth_type,
     ETH_CLOCK_GPIO0_IN	 // eth_clk_mode
-  },
+  }
 
 
   //WLEDMM: Olimex-ESP32-Gateway (like QuinLed-ESP32-Ethernet
-  {
-    0,			              // eth_address,
-    5,			              // eth_power,
-    23,			              // eth_mdc,
-    18,			              // eth_mdio,
-    ETH_PHY_LAN8720,      // eth_type,
-    ETH_CLOCK_GPIO17_OUT	// eth_clk_mode
-  }
+   // -> duplicate of QuinLed-ESP32 -> removed.
 
 };
 #endif
