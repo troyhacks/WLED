@@ -316,6 +316,7 @@
 #define WLED_ETH_ESP32_POE        2
 #define WLED_ETH_WESP32           3
 #define WLED_ETH_QUINLED          4
+#define WLED_ETH_OLIMEX_GTW      (WLED_ETH_QUINLED)  // WLEDMM legacy value for Olimex ETH-Gateway - same config as WLED_ETH_QUINLED
 #define WLED_ETH_TWILIGHTLORD     5
 #define WLED_ETH_ESP32DEUX        6
 #define WLED_ETH_ESP32ETHKITVE    7
