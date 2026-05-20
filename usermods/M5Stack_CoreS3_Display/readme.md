@@ -2,6 +2,8 @@
 
 Display usermod for the ILI9342C 320x240 TFT display on the M5Stack Core S3, using LovyanGFX.
 
+**NOTE:** The M5Stack Core S3 has 8MB of PSRAM, but it's uncommonly **QSPI PSRAM**. This was likely a design tradeoff to free up more pins for add-on modules over using octal PSRAM which blocks off more pins. 
+
 ## Pin Mapping (M5Stack Core S3)
 
 | ESP32-S3 | ILI9342C | Description     |
