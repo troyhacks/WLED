@@ -72,23 +72,19 @@ public:
 
 static LGFX_ILI9342_M5StackS3 tft;
 
-extern int getSignalQuality(int rssi);
-
 
 //class name. Use something descriptive and leave the ": public Usermod" part :)
 class M5StackCoreS3DisplayUsermod : public Usermod {
   private:
     bool enabled = true;
 
-    bool displayTurnedOff = false;
-    long lastRedraw = 0;
     // needRedraw marks if redraw is required to prevent often redrawing.
     bool needRedraw = true;
     // Next variables hold the previous known values to determine if redraw is required.
     String knownSsid = "";
     IPAddress knownIp;
 
-    long lastUpdate = 0;
+    unsigned long lastUpdate = 0;
 
     // GEQ display constants
     static constexpr uint8_t NUM_GEQ_BANDS = 16;
@@ -102,19 +98,19 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         case  0: return 0xF800;  // red
         case  1: return 0xFC00;  // orange
         case  2: return 0xFC40;  // amber
-        case  3: return 0xFCC0;  // yellow-orange
-        case  4: return 0xFFE0;  // yellow
-        case  5: return 0xC700;  // yellow-green
-        case  6: return 0x07E0;  // green
-        case  7: return 0x07EF;  // green-cyan
-        case  8: return 0x07FF;  // cyan
-        case  9: return 0x041F;  // cyan-blue
-        case 10: return 0x001F;  // blue
-        case 11: return 0x281F;  // blue-indigo
-        case 12: return 0x601F;  // indigo
-        case 13: return 0x781F;  // violet
-        case 14: return 0xF81F;  // magenta
-        case 15: return 0xF81F;  // magenta
+        case  3: return 0xFFC0;  // yellow
+        case  4: return 0x07E0;  // green
+        case  5: return 0x07EF;  // green-cyan
+        case  6: return 0x07FF;  // cyan
+        case  7: return 0x001F;  // blue
+        case  8: return 0x281F;  // blue-indigo
+        case  9: return 0x481F;  // indigo
+        case 10: return 0x701F;  // violet
+        case 11: return 0x881F;  // violet-magenta
+        case 12: return 0xF81F;  // magenta
+        case 13: return 0xF81C;  // magenta-red
+        case 14: return 0xF800;  // red
+        case 15: return 0xF808;  // red-orange
         default: return 0xF800;
       }
     }
@@ -130,11 +126,13 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
     {
         Serial.println("M5StackS3Display: starting setup");
 
-        // Ensure Wire is initialized
+        // Ensure Wire is initialized (safe to call even if WLED already started it)
         if (i2c_sda >= 0 && i2c_scl >= 0) {
             Wire.begin(i2c_sda, i2c_scl);
-            Wire.setTimeout(50);
+        } else {
+            Wire.begin();
         }
+        Wire.setTimeout(50);
 
         // AXP2101 - enable DLDO1 (VCC_BL per user)
         // Read current state first
@@ -217,6 +215,19 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         Serial.println("M5StackS3Display: init TFT");
         tft.init();
 
+        // Lock SPI pins so they can't be reassigned to other usermods
+        PinManagerPinType pins[] = {
+            { (gpio_num_t)TFT_MOSI, true },
+            { (gpio_num_t)TFT_SCLK, true },
+            { (gpio_num_t)TFT_CS,   true },
+            { (gpio_num_t)TFT_DC,  true }
+        };
+        if (pinManager.allocateMultiplePins(pins, 4, PinOwner::UM_Unspecified)) {
+            Serial.println("M5StackS3Display: SPI pins allocated");
+        } else {
+            Serial.println("M5StackS3Display: SPI pin allocation FAILED");
+        }
+
         Serial.printf("M5StackS3Display: TFT width: %d, height: %d\n", tft.width(), tft.height());
 
         // Dynamic header sizing
@@ -243,59 +254,54 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
      * loop() is called continuously. Here you can check for events, read sensors, etc.
      */
     void loop() {
-        // Faster refresh for bouncing bars
-        if (millis() - lastUpdate < 100)  // 50ms = 20fps
-        {
+        if (!enabled) return;
+
+        unsigned long now = millis();
+
+        // Standard max framerate cap (~100 FPS, matches audio reactive update rate)
+        if (now - lastUpdate < 10) return;
+
+        // Fallback: if LEDs are hogging CPU, only block if we refreshed recently enough
+        // Otherwise punch through to guarantee minimum 5 FPS on display
+        if (strip.isUpdating() && (now - lastUpdate < 200)) {
             return;
         }
-        lastUpdate = millis();
 
-        // Turn off display after 5 minutes with no change.
-        if (!displayTurnedOff && millis() - lastRedraw > 5*60*1000)
-        {
-            displayTurnedOff = true;
-        }
+        lastUpdate = now;
 
-        // Check if values which are shown on display changed from the last time.
-        #if defined(ESP8266)
+        // Skip content/header updates while LEDs are being updated
+        if (!strip.isUpdating()) {
+            // Check if values which are shown on display changed from the last time.
             String currentSsid = apActive ? String(apSSID) : WiFi.SSID();
-        #else
-            String currentSsid = WiFi.SSID();
-        #endif
-        IPAddress currentIp = apActive ? IPAddress(4, 3, 2, 1) : Network.localIP();
+            IPAddress currentIp = apActive ? IPAddress(4, 3, 2, 1) : Network.localIP();
 
-        if (currentSsid != knownSsid || currentIp != knownIp)
-        {
-            needRedraw = true;
-            knownSsid = currentSsid;
-            knownIp = currentIp;
-        }
+            if (currentSsid != knownSsid || currentIp != knownIp)
+            {
+                needRedraw = true;
+                knownSsid = currentSsid;
+                knownIp = currentIp;
+            }
 
-        if (displayTurnedOff)
-        {
-            displayTurnedOff = false;
-        }
-        lastRedraw = millis();
+            // === HEADER: Only redraw when needed ===
+            if (needRedraw) {
+                // Gray background
+                tft.fillRect(0, 0, tft.width(), HEADER_HEIGHT, TFT_DARKGREY);
 
-        // === HEADER: Only redraw when needed ===
-        if (needRedraw) {
-            // Gray background
-            tft.fillRect(0, 0, tft.width(), HEADER_HEIGHT, TFT_DARKGREY);
+                // Text vertically centered in header
+                int16_t textY = (HEADER_HEIGHT - tft.fontHeight()) / 2;
+                tft.setTextSize(2);
+                tft.setTextColor(TFT_WHITE);
 
-            // Text vertically centered in header
-            int16_t textY = (HEADER_HEIGHT - tft.fontHeight()) / 2;
-            tft.setTextSize(2);
-            tft.setTextColor(TFT_WHITE);
+                // SSID on left
+                tft.setTextDatum(TL_DATUM);
+                tft.drawString(knownSsid.c_str(), 10, textY);
 
-            // SSID on left
-            tft.setTextDatum(TL_DATUM);
-            tft.drawString(knownSsid.c_str(), 10, textY);
+                // IP on right
+                tft.setTextDatum(TR_DATUM);
+                tft.drawString(knownIp.toString().c_str(), tft.width() - 10, textY);
 
-            // IP on right
-            tft.setTextDatum(TR_DATUM);
-            tft.drawString(knownIp.toString().c_str(), tft.width() - 10, textY);
-
-            needRedraw = false;
+                needRedraw = false;
+            }
         }
 
         // === 16 BOUNCING BARS - differential drawing ===
@@ -369,20 +375,12 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
     void addToConfig(JsonObject& root)
     {
       JsonObject top = root.createNestedObject("M5StackS3Display");
-      top["CS"] = TFT_CS;
-      top["DC"] = TFT_DC;
-      top["MOSI"] = TFT_MOSI;
-      top["SCLK"] = TFT_SCLK;
       top["enabled"] = enabled;
     }
 
     void appendConfigData()
     {
       oappend(SET_F("addHB('M5StackS3Display');"));
-      oappend(SET_F("addInfo('M5StackS3Display:CS',0,'SPI Chip Select (GPIO3)');"));
-      oappend(SET_F("addInfo('M5StackS3Display:DC',0,'Data/Command (GPIO35)');"));
-      oappend(SET_F("addInfo('M5StackS3Display:MOSI',0,'SPI MOSI (GPIO37)');"));
-      oappend(SET_F("addInfo('M5StackS3Display:SCLK',0,'SPI Clock (GPIO36)');"));
     }
 
     /*

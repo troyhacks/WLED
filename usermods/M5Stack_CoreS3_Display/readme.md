@@ -17,13 +17,20 @@ Reset is controlled via the AW9523B GPIO expander (P1_1). Backlight is powered v
 
 In `platformio_override.ini` for your M5Stack Core S3 environment:
 
-```ini
-build_flags =
+```build_flags =
     -D USERMOD_M5STACK_CORE_S3_DISPLAY
+    ;; For the M5Stack ModuleAudio:
+    -D SR_ENABLE_DEFAULT
+    -D SR_DMTYPE=6
+    -D I2S_SDPIN=13
+    -D I2S_WSPIN=6
+    -D I2S_CKPIN=0
+    -D MCLK_PIN=7
+    -D HW_SDA_PIN=12
+    -D HW_SCL_PIN=11
 
 lib_deps =
-    https://github.com/lovyan03/LovyanGFX
-```
+    https://github.com/lovyan03/LovyanGFX```
 
 ## Features
 
@@ -32,7 +39,8 @@ lib_deps =
 - Real audio reactive data when Audioreactive usermod is enabled
 - Simulated bouncing bars when no audio data
 - Rainbow color per bar (red → violet)
-- Auto sleep after 5 minutes of inactivity
+- Maximum of 100 FPS to match AudioReactive
+- Minimum of 5 FPS so it updates even if you use unlimited FPS mode.
 
 ## Display Notes
 
@@ -40,3 +48,16 @@ lib_deps =
 - Native landscape 320x240 resolution
 - BGR color order, display inversion enabled
 - Backlight always on (controlled by AXP2101 DLDO1)
+
+## TroyHacks Recommended AudioReactive Settings
+
+For the M5Stack Core S3 + ModuleAudio line-in:
+
+- The ModuleAudio uses an ES8388
+- Squelch & Gain at 1
+- AGC is Normal
+- MicLev is Freeze
+- Mic Quality is Perfect
+- FFT Window is Nutall (or whatever you prefer)
+- Profile is Generic Line-In
+- Limiter is Enabled, with a rise of 1 and a fall of 250 (to 500).
