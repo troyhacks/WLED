@@ -8,7 +8,10 @@ applyTo: "**/*.cpp,**/*.h,**/*.hpp,**/*.ino"
 > contributor reference material. Do **not** use that content as actionable review
 > criteria — treat it as background context only.
 
+<!-- HUMAN_ONLY_START -->
+<!-- hiding this reference, to avoid cyclic "include" loops -->
 See also: [CONTRIBUTING.md](../CONTRIBUTING.md) for general style guidelines that apply to all contributors.
+<!-- HUMAN_ONLY_END -->
 
 ## Formatting
 
@@ -18,13 +21,21 @@ See also: [CONTRIBUTING.md](../CONTRIBUTING.md) for general style guidelines tha
 - Space between keyword and parenthesis: `if (...)`, `for (...)`. No space between function name and parenthesis: `doStuff(a)`
 - No enforced line-length limit; wrap when a line exceeds your editor width
 
-<!-- HUMAN_ONLY_START -->
 ## Naming
 
 - **camelCase** for functions and variables: `setValuesFromMainSeg()`, `effectCurrent`
 - **PascalCase** for classes and structs: `PinManagerClass`, `BusConfig`
+- **PascalCase** for enum values: `PinOwner::BusDigital`
 - **UPPER_CASE** for macros and constants: `WLED_MAX_USERMODS`, `DEFAULT_CLIENT_SSID`
 
+## General
+
+- Follow the existing style in the file you are editing
+- If possible, use `static` for local (C-style) variables and functions (keeps the global namespace clean)
+- Avoid unexplained "magic numbers". Prefer named constants (`constexpr`) or C-style `#define` constants for repeated numbers that have the same meaning
+- Include `"wled.h"` as the primary project header where needed
+
+<!-- HUMAN_ONLY_START -->
 ## Header Guards
 
 Most headers use `#ifndef` / `#define` guards. Some newer headers add `#pragma once` before the guard:
@@ -58,12 +69,13 @@ Most headers use `#ifndef` / `#define` guards. Some newer headers add `#pragma o
 void calculateCRC(const uint8_t* data, size_t len) {
   ...
 }
-// AI: end of AI-generated section
+// AI: end
 ```
 
   Single-line AI-assisted edits do not need the marker — use it when the AI produced a contiguous block that a human did not write line-by-line.
 
 <!-- HUMAN_ONLY_START -->
+<!-- hidden from AI for now, as it created too many "please add a description" review findings in my first tests -->
 - **Function & feature comments:** Every non-trivial function should have a brief comment above it describing what it does. Include a note about each parameter when the names alone are not self-explanatory:
 
 ```cpp
@@ -76,7 +88,6 @@ void calculateCRC(const uint8_t* data, size_t len) {
 uint8_t gammaCorrect(uint8_t value, float gamma);
 ```
 <!-- HUMAN_ONLY_END -->
-
 
   Short accessor-style functions (getters/setters, one-liners) may skip this if their purpose is obvious from the name.
 
@@ -106,31 +117,61 @@ uint8_t gammaCorrect(uint8_t value, float gamma);
 - **PSRAM-aware allocation**: use `d_malloc()` (prefer DRAM), `p_malloc()` (prefer PSRAM) from `util.h`
 - **Avoid Variable Length Arrays (VLAs)**: FreeRTOS task stacks are typically 2–8 KB. A runtime-sized VLA can silently exhaust the stack. Use fixed-size arrays or heap allocation (`d_malloc` / `p_malloc`). Any VLA must be explicitly justified in source or PR.
 <!-- HUMAN_ONLY_START -->
-   GCC/Clang support VLAs as an extension (they are not part of the C++ standard), so they look like a legitimate feature — but they are allocated on the stack at runtime. On ESP32/ESP8266, a VLA whose size depends on a runtime parameter (segment dimensions, pixel counts, etc.) can silently exhaust the stack and cause the program to behave in unexpected ways or crash.
+GCC/Clang support VLAs as an extension (they are not part of the C++ standard), so they look like a legitimate feature — but they are allocated on the stack at runtime. On ESP32/ESP8266, a VLA whose size depends on a runtime parameter (segment dimensions, pixel counts, etc.) can silently exhaust the stack and cause the program to behave in unexpected ways or crash.
 <!-- HUMAN_ONLY_END -->
 - **Larger buffers** (LED data, JSON documents) should use PSRAM when available and technically feasible
 - **Hot-path**: some data should stay in DRAM or IRAM for performance reasons
 - Memory efficiency matters, but is less critical on boards with PSRAM
 
-## `const` and `constexpr`
-Add `const` to cached locals in hot-path code (helps the compiler keep values in registers). Pass and store objects by `const&` to avoid copies in loops. 
+Heap fragmentation is a concern:
+<!-- HUMAN_ONLY_START -->
+   - Fragmentation can lead to crashes, even when the overall amount of available heap is still good. The C++ runtime doesn't do any "garbage collection".
+<!-- HUMAN_ONLY_END -->
+   - Avoid frequent `d_malloc` and `d_free` inside a function, especially for small sizes.
+   - Avoid frequent creation / destruction of objects.
+   - Allocate buffers early, and try to re-use them.
+   - Instead of incrementally appending to a `String`,  reserve the expected max buffer upfront by using the `reserve()` method.
+<!-- HUMAN_ONLY_START -->
 
+```cpp
+  String result;
+  result.reserve(65);  // pre-allocate to avoid realloc fragmentation
+```
+
+```cpp
+  // prefer DRAM; falls back gracefully and enforces MIN_HEAP_SIZE guard
+  _ledsDirty = (byte*) d_malloc(getBitArrayBytes(_len));
+```
+
+```cpp
+  _mode.reserve(_modeCount);     // allocate memory to prevent initial fragmentation - does not increase size()
+  _modeData.reserve(_modeCount); // allocate memory to prevent initial fragmentation - does not increase size()
+```
+<!-- HUMAN_ONLY_END -->
+
+## `const` and `constexpr`
 <!-- HUMAN_ONLY_START -->
 `const` is a promise to the compiler that a value (or object) will not change - a function declared with a `const char* message` parameter is not allowed to modify the content of `message`.
 This pattern enables optimizations and makes intent clear to reviewers.
 
-### `const` locals
+`constexpr` allows to define constants that are *guaranteed* to be evaluated by the compiler (zero run-time costs).
 
-Adding `const` to a local variable that is only assigned once is not necessary — but it **is** required when the variable is passed to a function that takes a `const` parameter (pointer or reference). In hot-path code, `const` on cached locals helps the compiler keep values in registers:
-
-```cpp
-const uint_fast16_t cols = virtualWidth();
-const uint_fast16_t rows = virtualHeight();
-```
 <!-- HUMAN_ONLY_END -->
-### `const` references to avoid copies
+- For function parameters that are read-only, prefer `const &` or `const`.
 
-Pass and store objects by `const &` (or `&`) instead of copying them implicitly. This avoids constructing temporary objects on every access — especially important in loops.
+### `const` locals
+<!-- HUMAN_ONLY_START -->
+* Adding `const` to a local variable that is only assigned once is optional, but *not* strictly necessary.
+<!-- HUMAN_ONLY_END -->
+* In hot-path code, `const` on cached locals may help the compiler keep values in registers.
+  ```cpp
+  const uint_fast16_t cols = vWidth();
+  const uint_fast16_t rows = vHeight();
+  ```
+
+### `const` references to avoid copies
+- Pass objects by `const &` (or `&`) instead of copying them implicitly.
+- Use `const &` (or `&`) inside loops - This avoids constructing temporary objects on every access.
 
 <!-- HUMAN_ONLY_START -->
 ```cpp
@@ -144,11 +185,14 @@ For function parameters that are read-only, prefer `const &`:
 BusDigital(BusConfig &bc, uint8_t nr, const ColorOrderMap &com);
 ```
 <!-- HUMAN_ONLY_END -->
+- Class **Data Members:** Avoid reference data members (`T&` or `const T&`) in a class. 
+  A reference member can outlive the object it refers to, causing **dangling reference** bugs that are hard to diagnose. Prefer value storage or use a pointer and document the expected lifetime.
 
-### `constexpr` over `#define`
 <!-- HUMAN_ONLY_START -->
+<!-- hidden from AI for now - codebase is not compliant to this rule (slowly migrating) -->
+### `constexpr` over `#define`
 
-Prefer `constexpr` for compile-time constants. Unlike `#define`, `constexpr` respects scope and type safety, keeping the global namespace clean:
+- Prefer `constexpr` for compile-time constants. Unlike `#define`, `constexpr` respects scope and type safety, keeping the global namespace clean.
 
 ```cpp
 // Prefer:
@@ -160,11 +204,14 @@ constexpr int WLED_MAX_BUSSES = WLED_MAX_DIGITAL_CHANNELS + WLED_MAX_ANALOG_CHAN
 ```
 
 Note: `#define` is still needed for conditional compilation guards (`#ifdef`), platform macros, and values that must be overridable from build flags.
+<!-- HUMAN_ONLY_END -->
 
 ### `static_assert` over `#error`
 
-Use `static_assert` instead of the C-style `#if … #error … #endif` pattern when validating compile-time constants. It provides a clear message and works with `constexpr` values:
+- Use `static_assert` instead of the C-style `#if … #error … #endif` pattern when validating compile-time constants. It provides a clear message and works with `constexpr` values.
+- `#define` and `#if ... #else ... #endif` is still needed for conditional-compilation guards and build-flag-overridable values.
 
+<!-- HUMAN_ONLY_START -->
 ```cpp
 // Prefer:
 constexpr int WLED_MAX_BUSSES = WLED_MAX_DIGITAL_CHANNELS + WLED_MAX_ANALOG_CHANNELS;
@@ -175,11 +222,13 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
   #error "WLED_MAX_BUSSES exceeds hard limit"
 #endif
 ```
+
+```cpp
+  // using static_assert() to validate enumerated types (zero cost at runtime)
+  static_assert(0u == static_cast<uint8_t>(PinOwner::None),
+               "PinOwner::None must be zero, so default array initialization works as expected");
+```
 <!-- HUMAN_ONLY_END -->
-
-Prefer `constexpr` over `#define` for typed constants (scope-safe, debuggable). Use `static_assert` instead of `#if … #error` for compile-time validation.
-Exception: `#define` is required for conditional-compilation guards and build-flag-overridable values.
-
 ### `static` and `const` class methods
 
 #### `const` member functions
@@ -389,7 +438,7 @@ Move invariant calculations before the loop. Pre-compute reciprocals to replace 
 ```cpp
 const uint_fast16_t cols = virtualWidth();
 const uint_fast16_t rows = virtualHeight();
-uint_fast8_t fadeRate = (255 - rate) >> 1;
+uint_fast8_t fadeRate = (255U - rate) >> 1;
 float mappedRate_r = 1.0f / (float(fadeRate) + 1.1f);  // reciprocal — avoid division inside loop
 ```
 
@@ -405,13 +454,14 @@ uint32_t wg = (((c1 >> 8) & TWO_CHANNEL_MASK) * amount) & ~TWO_CHANNEL_MASK;
 return rb | wg;
 ```
 
-### Bit Shifts Over Division (mainly for RISC-V boards)
+### Bit Shifts Over Division (mainly for RISC-V and ESP8266 boards)
 
 ESP32 and ESP32-S3 (Xtensa core) have a fast "integer divide" instruction, so manual shifts rarely help. 
-On RISC-V targets (ESP32-C3/C6/P4), prefer explicit bit-shifts for power-of-two arithmetic — the compiler does **not** always convert divisions to shifts on RISC-V at `-O2`. Always use unsigned operands; signed right-shift is implementation-defined.
+On RISC-V targets (ESP32-C3/C6/P4) and ESP8266, prefer explicit bit-shifts for power-of-two arithmetic — the compiler does **not** always convert divisions to shifts. 
+Always use unsigned operands for right shifts; signed right-shift is implementation-defined.
 
 <!-- HUMAN_ONLY_START -->
-On RISC-V-based boards (ESP32-C3, ESP32-C6, ESP32-C5) explicit shifts can be beneficial.
+Explicit shifts can be beneficial on RISC-V-based boards (ESP32-C3, ESP32-C6, ESP32-C5) and on ESP8266 boards.
 ```cpp
 position >> 3     // instead of position / 8
 (255U - rate) >> 1 // instead of (255 - rate) / 2
@@ -452,6 +502,9 @@ if (lastKelvin != kelvin) {
   ```
 
 <!-- HUMAN_ONLY_END -->
+
+---
+
 ## Multi-Task Synchronization
 
 ESP32 runs multiple FreeRTOS tasks concurrently (e.g. network handling, LED output, JSON parsing). Use the WLED-MM mutex macros for synchronization — they expand to FreeRTOS recursive semaphore calls on ESP32 and compile to no-ops on ESP8266:
@@ -486,22 +539,28 @@ Always pair every `esp32SemTake` with a matching `esp32SemGive`. Choose a timeou
 **Important**: Not every shared resource needs a mutex. Some synchronization is guaranteed by the overall control flow. For example, `volatile bool` flags like `suspendStripService`, `doInitBusses`, `loadLedmap`, and `OTAisRunning` (declared in `wled.h`) are checked sequentially in the main loop (`wled.cpp`), so they serialize access without requiring a semaphore. Use mutexes when true concurrent access from multiple FreeRTOS tasks is possible and race-conditions can lead to unexpected behaviour. Rely on control-flow ordering when operations are sequenced within the same loop iteration.
 
 ### `delay()` vs `yield()` in FreeRTOS Tasks
+<!-- HUMAN_ONLY_START -->
+* On ESP32, `delay(ms)` calls `vTaskDelay(ms / portTICK_PERIOD_MS)`, which **suspends only the calling task**. The FreeRTOS scheduler immediately runs all other ready tasks. 
+* The Arduino `loop()` function runs inside `loopTask`. Calling `delay()` there does *not* block the network stack, audio FFT, LED DMA, nor any other FreeRTOS task.
+* This differs from ESP8266, where `delay()` stalls the entire system unless `yield()` was called inside.
+<!-- HUMAN_ONLY_END -->
 
-On ESP32, `delay(ms)` calls `vTaskDelay(ms / portTICK_PERIOD_MS)`, which **suspends only the calling task**. The FreeRTOS scheduler immediately runs all other ready tasks. This differs from ESP8266, where `delay()` stalled the entire system unless `yield()` was called inside.
+- On ESP32, `delay()` is generally allowed, as it helps to efficiently manage CPU usage of all tasks.
+- On ESP8266, only use `delay()` and `yield()` in the main `loop()` context. If not sure, protect with `if (can_yield()) ...`.
+- Do *not* use `delay()` in effects (FX.cpp) or in the hot pixel path.
+- `delay()` on ``busses`` level is allowed, it might be needed to achieve exact timing in LED drivers.
+- **`yield()` is a no-op in WLED-MM on ESP32.** `WLEDMM_FASTPATH` redefines `yield()` to an empty macro.
+  ```cpp
+     #define yield() {}  // WLEDMM: yield() is completely unnecessary on ESP32
+  ```
 
-**`delay()` in `loopTask` is allowed.** The Arduino `loop()` function runs inside `loopTask`. Calling `delay()` there does not block the network stack, audio FFT, LED DMA, or any other FreeRTOS task.
+### IDLE Watchdog and Custom Tasks on ESP32
 
-**`yield()` is a no-op in WLED-MM on ESP32.** `WLEDMM_FASTPATH` redefines `yield()` to an empty macro:
+- **Do NOT use `yield()` to pace ESP32 tasks or assume it feeds any watchdog**.
 
-```cpp
-#define yield() {}  // WLEDMM: yield() is completely unnecessary on ESP32
-```
+- Even in stock arduino-esp32, `yield()` calls `vTaskDelay(0)`, which only switches to tasks at equal or higher priority — the IDLE task (priority 0) is never reached. 
 
-Even in stock arduino-esp32, `yield()` calls `vTaskDelay(0)`, which only switches to tasks at equal or higher priority — the IDLE task (priority 0) is never reached. 
-**Do not use `yield()` to pace ESP32 tasks or assume it feeds any watchdog**.
-
-**Custom `xTaskCreate()` tasks must call `delay(1)` in their loop, not `yield()`.** Without a real blocking call, the IDLE task is starved. The IDLE watchdog panic is the first visible symptom — but the damage starts earlier: deleted task memory leaks, software timers stop firing, light sleep is disabled, and Wi-Fi/BT idle hooks don't run. See `esp-idf.instructions.md` for a full explanation of what IDLE does. Structure custom tasks like this:
-
+- **Custom `xTaskCreate()` tasks must call `delay(1)` in their loop, not `yield()`.** Without a real blocking call, the IDLE task is starved. The IDLE watchdog panic is the first visible symptom — but the damage starts earlier: deleted task memory leaks, software timers stop firing, light sleep is disabled, and Wi-Fi/BT idle hooks don't run. See `esp-idf.instructions.md` for a full explanation of what IDLE does. Structure custom tasks like this:
 ```cpp
 // WRONG — IDLE task is never scheduled; yield() does not feed the idle task watchdog.
 void myTask(void*) {
@@ -520,17 +579,16 @@ void myTask(void*) {
 }
 ```
 
-Prefer blocking FreeRTOS primitives (`xQueueReceive`, `ulTaskNotifyTake`, `vTaskDelayUntil`) over `delay(1)` polling where precise timing or event-driven behaviour is needed.
+- Prefer blocking FreeRTOS primitives (`xQueueReceive`, `ulTaskNotifyTake`, `vTaskDelayUntil`) over `delay(1)` polling where precise timing or event-driven behaviour is needed.
+- **Watchdog note.** WLED-MM disables the Task Watchdog by default (`WLED_WATCHDOG_TIMEOUT 0` in `wled.h`). When enabled, `esp_task_wdt_reset()` is called at the end of each `loop()` iteration. Long blocking operations inside `loop()` — such as OTA downloads or slow file I/O — must call `esp_task_wdt_reset()` periodically, or be restructured so the main loop is not blocked for longer than the configured timeout.
 
-**Watchdog note.** WLED-MM disables the Task Watchdog by default (`WLED_WATCHDOG_TIMEOUT 0` in `wled.h`). When enabled, `esp_task_wdt_reset()` is called at the end of each `loop()` iteration. Long blocking operations inside `loop()` — such as OTA downloads or slow file I/O — must call `esp_task_wdt_reset()` periodically, or be restructured so the main loop is not blocked for longer than the configured timeout.
+## Caveats and Pitfalls
 
-## General
+- **LittleFS filenames**: File paths passed to `file.open()` must not exceed 255 bytes (`LFS_NAME_MAX`). Validate constructed paths (e.g., `/ledmap_` + segment name + `.json`) stay within this limit (assume standard configurations, like WLED_MAX_SEGNAME_LEN = 64).
 
-- Follow the existing style in the file you are editing
-- If possible, use `static` for local (C-style) variables and functions (keeps the global namespace clean)
-- Avoid unexplained "magic numbers". Prefer named constants (`constexpr`) or C-style `#define` constants for repeated numbers that have the same meaning
-- Include `"wled.h"` as the primary project header where needed
-- **Float-to-unsigned conversion is undefined behavior when the value is out of range.** Converting a negative `float` directly to an unsigned integer type (`uint8_t`, `uint16_t`, …) is UB per the C++ standard — the Xtensa (ESP32) toolchain may silently wrap, but RISC-V (ESP32-C3/C6) can produce different results due to clamping. Cast through a signed integer first:
+- In C/C++, additive operators (`+`, `-`) have HIGHER precedence than shift operators (`<<`, `>>`). Therefore `x - edge0 << 8` correctly parses as `(x - edge0) << 8`. Do NOT flag this pattern as a precedence bug. When reviewing WLED-MM fixed-point code or any C/C++ shift expressions, verify against cppreference before claiming precedence issues with mixed `-`/`+` and `<<`/`>>` expressions.
+
+- **Float-to-unsigned conversion is undefined behavior when the value is out of range.** Converting a negative `float` directly to an unsigned integer type (`uint8_t`, `uint16_t`, …) is UB per the C++ standard — the Xtensa (ESP32) toolchain may silently wrap, but RISC-V (ESP32-C3/C5/C6/P4) can produce different results due to clamping. Cast through a signed integer first:
   ```cpp
   // Undefined behavior — avoid:
   uint8_t angle = 40.74f * atan2f(dy, dx);   // negative float → uint8_t is UB

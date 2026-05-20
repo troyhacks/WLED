@@ -482,8 +482,12 @@ void WLED::setup()
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detection
   #endif
 
-  #ifdef ARDUINO_ARCH_ESP32
-  pinMode(hardwareRX, INPUT_PULLDOWN); delay(1);        // suppress noise in case RX pin is floating (at low noise energy) - see issue #3128
+  #if defined(ARDUINO_ARCH_ESP32) && !defined(ARDUINO_USB_CDC_ON_BOOT)
+    #if ESP_IDF_VERSION_MAJOR > 3
+      gpio_pulldown_en((gpio_num_t)hardwareRX); // pinMode() routes GPIO through the GPIO matrix and detaches UART0 RX - use gpio_pulldown_en() instead. See upstream issue #5501
+    #else
+      pinMode(hardwareRX, INPUT_PULLDOWN); delay(1);        // suppress noise in case RX pin is floating (at low noise energy) - see issue #3128
+    #endif
   #endif
   #ifdef WLED_BOOTUPDELAY
   delay(WLED_BOOTUPDELAY); // delay to let voltage stabilize, helps with boot issues on some setups

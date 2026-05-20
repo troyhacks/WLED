@@ -309,13 +309,14 @@
 #define BTN_TYPE_TOUCH_SWITCH     9    //WLEDMM not yet supported
 
 //Ethernet board types
-#define WLED_NUM_ETH_TYPES       15 //WLEDMM +1 for Olimex ESP32-Gateway
+#define WLED_NUM_ETH_TYPES        16
 
 #define WLED_ETH_NONE             0
 #define WLED_ETH_WT32_ETH01       1
 #define WLED_ETH_ESP32_POE        2
 #define WLED_ETH_WESP32           3
 #define WLED_ETH_QUINLED          4
+#define WLED_ETH_OLIMEX_GTW      (WLED_ETH_QUINLED)  // WLEDMM legacy value for Olimex ETH-Gateway - same config as WLED_ETH_QUINLED
 #define WLED_ETH_TWILIGHTLORD     5
 #define WLED_ETH_ESP32DEUX        6
 #define WLED_ETH_ESP32ETHKITVE    7
@@ -325,7 +326,8 @@
 #define WLED_ETH_ESP32_POE_WROVER 11
 #define WLED_ETH_LILYGO_T_POE_PRO 12
 #define WLED_ETH_GLEDOPTO         13
-#define WLED_ETH_OLIMEX_GTW      14
+#define WLED_ETH_QUINLED_V4_UNOQUAD  14
+#define WLED_ETH_QUINLED_V4_OCTA     15
 
 //Hue error codes
 #define HUE_ERROR_INACTIVE        0
@@ -391,8 +393,9 @@
 #define ERR_LOW_BUF     37  // WLEDMM: low memory (LED buffer from allocLEDs)
 #define ERR_SYS_REBOOT  90  // WLEDMM: reboot after error
 #define ERR_SYS_BROWNOUT  91 // WLEDMM: reboot after brownout alert
-#define ERR_REBOOT_NEEDED 98 // WLEDMM: reboot needed after changing hardware setting
-#define ERR_POWEROFF_NEEDED 99 // WLEDMM: power-cycle needed after changing hardware setting
+#define ERR_PERSISTENT    100 // threshold: errors below this value are non-persistent; persistent errors stay in the UI until restart
+#define ERR_REBOOT_NEEDED 100 // WLEDMM: reboot needed after changing hardware setting
+#define ERR_POWEROFF_NEEDED 101 // WLEDMM: power-cycle needed after changing hardware setting
 
 // Timer mode types
 #define NL_MODE_SET               0            //After nightlight time elapsed, set to target brightness

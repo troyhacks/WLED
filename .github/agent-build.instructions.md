@@ -11,7 +11,7 @@ Use these timeout values when running builds:
 
 | Command | Typical Time | Minimum Timeout | Notes |
 |---|---|---|---|
-| `npm run build` | ~3 s | 30 s | Web UI → `wled00/html_*.h` headers |
+| `npm run build` | ~3 s | 30 s | Web UI → `wled00/html_*.h` `wled00/js_*.h` headers |
 | `npm test` | ~40 s | 2 min | Validates build system |
 | `npm run dev` | continuous | — | Watch mode, auto-rebuilds on changes |
 | `pio run -e <env>` | 15–20 min | 30 min | First build downloads toolchains; subsequent builds are faster |
@@ -20,16 +20,21 @@ Use these timeout values when running builds:
 
 ## Development Workflow
 
+### Code Style Summary
+- **C++** files in `wled00/` and `usermods/`: 2-space indentation (no tabs), camelCase functions/variables, PascalCase classes, UPPER_CASE macros. No C++ exceptions — use return codes and debug macros.
+- **Web UI** files in `wled00/data`: indent HTML and JavaScript with tabs, CSS with tabs.
+- **CI/CD workflows** in `.github/workflows`: 2-space indentation, descriptive `name:` on every workflow/job/step. Third-party actions must be pinned to a specific version tag — branch pins such as `@main` or `@master` are not allowed. SHA pinning recommended.
+
 ### Web UI Changes
 
 1. Edit files in `wled00/data/`
-2. Run `npm run build` to regenerate `wled00/html_*.h` headers
+2. Run `npm run build` to regenerate `wled00/html_*.h` `wled00/js_*.h` headers
 3. Test with local HTTP server (see Manual Testing below)
 4. Run `npm test` to validate
 
 ### Firmware Changes
 
-1. Edit files in `wled00/` (but **never** `html_*.h` files)
+1. Edit files in `wled00/` (but **never** `html_*.h` and `js_*.h` files)
 2. Ensure web UI is built first: `npm run build`
 3. Build firmware: `pio run -e esp32_4MB_V4_M` (set timeout ≥ 30 min)
 4. Flash to device: `pio run -e [target] --target upload`
@@ -85,8 +90,8 @@ Test these scenarios after every web UI change:
 ### Recovery Steps
 
 - **Force web UI rebuild**: `npm run build -- -f`
-- **Clear generated files**: `rm -f wled00/html_*.h` then `npm run build`
-- **Clean PlatformIO cache**: `pio run --target clean`
+- **Clear generated files**: `rm -f wled00/html_*.h wled00/js_*.h` then `npm run build`
+- **Clean PlatformIO build artifacts**: `pio run --target clean`
 - **Reinstall Node deps**: `rm -rf node_modules && npm ci`
 
 ## CI/CD Validation
@@ -106,7 +111,8 @@ Match this workflow in local development to catch failures before pushing.
 
 ## Important Reminders
 
-- **Never edit or commit** `wled00/html_*.h` — auto-generated from `wled00/data/`
+- Always **commit source code**
+- **Never edit or commit** `wled00/html_*.h` and  `wled00/js_*.h` — auto-generated from `wled00/data/`
 - Web UI rebuild is part of the PlatformIO firmware compilation pipeline
-- Common firmware environments: `esp32_4MB_V4_M`, `esp32_16MB_V4_S_HUB75`, `esp32S3_8MB_PSRAM_M_qspi`, `esp32_16MB_V4_M_eth`, `esp8266_4MB_S` (deprecated), `esp32dev_compat`
+- Common firmware environments: `esp32_4MB_V4_M`, `esp32_16MB_V4_S_HUB75`, `esp32S3_8MB_PSRAM_M_qspi`, `esp32S3_16MB_PSRAM_M_HUB75`, `esp32_16MB_V4_M_eth` (ethernet support), `esp32_16MB_V4_M_debug` (debug), `esp8266_4MB_S` (deprecated), `esp32dev_compat` (V3 legacy framework)
 - List all PlatformIO targets: `pio run --list-targets`
