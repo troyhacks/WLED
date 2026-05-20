@@ -48,10 +48,11 @@ def enable_lto(env):
         # Strip trailing "gcc" or "g++" (with optional .exe suffix) from basename only
         if cc_basename.endswith(".exe"):
             cc_basename = cc_basename[:-4]
-        if cc_basename.endswith("gcc"):
-            cc_basename = cc_basename[:-3]
-        elif cc_basename.endswith("g++"):
-            cc_basename = cc_basename[:-3]
+        # Strip trailing "-gcc" or "-g++" including the dash
+        if cc_basename.endswith("-gcc"):
+            cc_basename = cc_basename[:-4]
+        elif cc_basename.endswith("-g++"):
+            cc_basename = cc_basename[:-4]
         # cc_basename is now something like "xtensa-esp32s3-elf"
         new_ar     = cc_basename + "-gcc-ar"
         new_ranlib = cc_basename + "-gcc-ranlib"
