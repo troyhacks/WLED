@@ -313,7 +313,9 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
 
         // Get audio data if available
         um_data_t *um_data = nullptr;
-        if (usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)) {
+        if (usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)
+            && um_data != nullptr
+            && um_data->u_data[2] != nullptr) {
             // Real audio data
             memcpy(geq, um_data->u_data[2], NUM_GEQ_BANDS);
         } else {
