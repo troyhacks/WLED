@@ -44,10 +44,17 @@ def enable_lto(env):
     # library archives carry IR that the linker can optimise across.
     cc = str(env.get("CC", ""))
     if cc:
-        toolchain_prefix = cc.replace("gcc", "").replace("g++", "")
-        # toolchain_prefix is something like "xtensa-esp32s3-elf-"
-        new_ar     = toolchain_prefix + "gcc-ar"
-        new_ranlib = toolchain_prefix + "gcc-ranlib"
+        cc_basename = os.path.basename(cc)
+        # Strip trailing "gcc" or "g++" (with optional .exe suffix) from basename only
+        if cc_basename.endswith(".exe"):
+            cc_basename = cc_basename[:-4]
+        if cc_basename.endswith("gcc"):
+            cc_basename = cc_basename[:-3]
+        elif cc_basename.endswith("g++"):
+            cc_basename = cc_basename[:-3]
+        # cc_basename is now something like "xtensa-esp32s3-elf"
+        new_ar     = cc_basename + "-gcc-ar"
+        new_ranlib = cc_basename + "-gcc-ranlib"
 
         # Resolve CC to its real path so we can search the same directory
         cc_resolved = shutil.which(cc) or cc

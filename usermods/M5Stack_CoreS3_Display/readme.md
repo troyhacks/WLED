@@ -19,7 +19,8 @@ Reset is controlled via the AW9523B GPIO expander (P1_1). Backlight is powered v
 
 In `platformio_override.ini` for your M5Stack Core S3 environment:
 
-```build_flags =
+```ini
+build_flags =
     -D USERMOD_M5STACK_CORE_S3_DISPLAY
     ;; For the M5Stack ModuleAudio:
     -D SR_ENABLE_DEFAULT
@@ -32,7 +33,8 @@ In `platformio_override.ini` for your M5Stack Core S3 environment:
     -D HW_SCL_PIN=11
 
 lib_deps =
-    https://github.com/lovyan03/LovyanGFX```
+    https://github.com/lovyan03/LovyanGFX
+```
 
 ## Features
 
@@ -48,7 +50,7 @@ lib_deps =
 
 - Uses LovyanGFX with `SPI3_HOST` (HSPI)
 - Native landscape 320x240 resolution
-- BGR color order, display inversion enabled
+- RGB color order, display inversion enabled
 - Backlight always on (controlled by AXP2101 DLDO1)
 
 ## TroyHacks Recommended AudioReactive Settings

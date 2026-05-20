@@ -77,6 +77,7 @@ static LGFX_ILI9342_M5StackS3 tft;
 class M5StackCoreS3DisplayUsermod : public Usermod {
   private:
     bool enabled = true;
+    bool _initOk = false;
 
     // needRedraw marks if redraw is required to prevent often redrawing.
     bool needRedraw = true;
@@ -140,7 +141,7 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         Wire.write(0x90);
         Wire.endTransmission(false);
         Wire.requestFrom((uint8_t)AXP2101_ADDR, (uint8_t)1);
-        byte pwr_orig = Wire.read();
+        byte pwr_orig = Wire.available() ? Wire.read() : 0x00;
         Serial.printf("M5StackS3Display: 0x90 orig: 0x%02X\n", pwr_orig);
 
         // Set DLDO1 voltage to 3.3V (voltage reg 0x99)
@@ -155,7 +156,7 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         Wire.write(0x99);
         Wire.endTransmission(false);
         Wire.requestFrom((uint8_t)AXP2101_ADDR, (uint8_t)1);
-        byte dldo1_v = Wire.read();
+        byte dldo1_v = Wire.available() ? Wire.read() : 0x00;
         Serial.printf("M5StackS3Display: DLDO1 0x99: 0x%02X\n", dldo1_v);
 
         // Enable DLDO1 via bit 7 of 0x90
@@ -172,7 +173,7 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         Wire.write(0x90);
         Wire.endTransmission(false);
         Wire.requestFrom((uint8_t)AXP2101_ADDR, (uint8_t)1);
-        byte pwr_after = Wire.read();
+        byte pwr_after = Wire.available() ? Wire.read() : 0x00;
         Serial.printf("M5StackS3Display: 0x90 after: 0x%02X\n", pwr_after);
 
         // AW9523 GPIO expander for LCD reset
@@ -209,7 +210,7 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         Wire.write(0x03);  // P1 output register
         Wire.endTransmission(false);
         Wire.requestFrom((uint8_t)AW9523B_ADDR, (uint8_t)1);
-        byte p1_state = Wire.read();
+        byte p1_state = Wire.available() ? Wire.read() : 0x00;
         Serial.printf("M5StackS3Display: AW9523B P1 state: 0x%02X\n", p1_state);
 
         Serial.println("M5StackS3Display: init TFT");
@@ -222,11 +223,13 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
             { (gpio_num_t)TFT_CS,   true },
             { (gpio_num_t)TFT_DC,  true }
         };
-        if (pinManager.allocateMultiplePins(pins, 4, PinOwner::UM_Unspecified)) {
-            Serial.println("M5StackS3Display: SPI pins allocated");
-        } else {
-            Serial.println("M5StackS3Display: SPI pin allocation FAILED");
+        if (!pinManager.allocateMultiplePins(pins, 4, PinOwner::UM_Unspecified)) {
+            Serial.println("M5StackS3Display: SPI pin allocation FAILED — disabling usermod");
+            enabled = false;
+            _initOk = false;
+            return;
         }
+        Serial.println("M5StackS3Display: SPI pins allocated");
 
         Serial.printf("M5StackS3Display: TFT width: %d, height: %d\n", tft.width(), tft.height());
 
@@ -248,13 +251,14 @@ class M5StackCoreS3DisplayUsermod : public Usermod {
         tft.drawString("Loading...", tft.width() - 10, textY);
 
         Serial.println("M5StackS3Display: setup complete");
+        _initOk = true;
     }
 
     /*
      * loop() is called continuously. Here you can check for events, read sensors, etc.
      */
     void loop() {
-        if (!enabled) return;
+        if (!enabled || !_initOk) return;
 
         unsigned long now = millis();
 
