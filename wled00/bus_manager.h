@@ -129,9 +129,7 @@ struct ColorOrderMap {
     }
 
     const ColorOrderMapEntry* get(uint8_t n) const {
-      if (n > _count) {
-        return nullptr;
-      }
+      if (n >= count()) return nullptr;
       return &(_mappings[n]);
     }
 
