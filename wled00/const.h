@@ -437,6 +437,14 @@
 #endif
 #endif
 #endif
+#ifdef ARDUINO_ARCH_ESP32
+  static_assert((MAX_LEDS) > 1023, "MAX_LEDS must be at least 1024."); // small values can lead to UI errors, see https://github.com/MoonModules/WLED-MM/issues/365
+#else
+  static_assert((MAX_LEDS) > 511, "MAX_LEDS must be at least 512."); // reduced lower limit for 8266
+#endif
+#if MAX_LEDS > INT16_MAX
+  #warning "MAX_LEDS > 32767 will not work in some effects !"
+#endif
 
 #ifndef MAX_LED_MEMORY
   #ifdef ESP8266
@@ -461,6 +469,7 @@
   #endif
 #endif  
 #endif
+static_assert( (MAX_LEDS_PER_BUS) <= (MAX_LEDS), "configuration error: MAX_LEDS_PER_BUS must not exceed MAX_LEDS");  // WLEDMM sanity check
 
 // string temp buffer (now stored in stack locally) // WLEDMM ...which is actually not the greatest design choice on ESP32
 #ifdef ESP8266

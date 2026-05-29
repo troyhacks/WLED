@@ -187,7 +187,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       uint8_t colorOrder = (int)elm[F("order")]; // contains white channel swap option in upper nibble
       uint8_t skipFirst = elm[F("skip")];
       uint16_t start = elm["start"] | 0;
-      if (length==0 || start + length > MAX_LEDS) continue; // zero length or we reached max. number of LEDs, just stop
+      unsigned totalLength = (unsigned)start + length;   // WLEDMM prevent uint16 wrap-around
+      if (length==0 || totalLength > MAX_LEDS) continue; // zero length or we reached max. number of LEDs, just stop
+
       uint8_t ledType = elm["type"] | TYPE_WS2812_RGB;
       bool reversed = elm["rev"];
       bool refresh = elm["ref"] | false;
@@ -200,7 +202,9 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       if (fromFS) {
         BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
         mem += BusManager::memUsage(bc);
+#if !defined(ARDUINO_ARCH_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) // WLEDMM only for boards with small RAM
         if (mem <= MAX_LED_MEMORY) if (busses.add(bc) == -1) break;  // finalization will be done in WLED::beginStrip()
+#endif
       } else {
         if (busConfigs[s] != nullptr) delete busConfigs[s];
         busConfigs[s] = new BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
