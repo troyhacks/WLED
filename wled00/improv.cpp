@@ -117,8 +117,8 @@ void handleImprovPacket() {
             return;
           }
         } else if (packetByte > 9) { //RPC data
-          rpcData[packetByte - 10] = next;
           if (packetByte > 137) return; //prevent buffer overflow
+          rpcData[packetByte - 10] = next;
         }
       }
     }
@@ -238,8 +238,8 @@ void handleImprovWifiScan() {
     bool isOpen = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
     #endif
 
-    char ssidStr[33];
-    strcpy(ssidStr, WiFi.SSID(i).c_str());
+    char ssidStr[33] = {'\0'};
+    strlcpy(ssidStr, WiFi.SSID(i).c_str(), sizeof(ssidStr));
     const char *str[3] = {ssidStr, rssiStr, isOpen ? "NO":"YES"};
     sendImprovRPCResult(ImprovRPCType::Request_Scan, 3, str);
   }
@@ -258,14 +258,13 @@ static void parseWiFiCommand(char* rpcData) {
 
   uint8_t ssidLen = rpcData[1];
   if (ssidLen > len -1 || ssidLen > 32) return;
-  memset(clientSSID, 0, 32);
-  memcpy(clientSSID, rpcData+2, ssidLen);
+  memset(clientSSID, 0, sizeof(clientSSID));
+  memcpy(clientSSID, rpcData+2, min(size_t(ssidLen), sizeof(clientSSID)-1));
 
-  memset(clientPass, 0, 64);
+  memset(clientPass, 0, sizeof(clientPass));
   if (len > ssidLen +1) {
     uint8_t passLen = rpcData[2+ssidLen];
-    memset(clientPass, 0, 64);
-    memcpy(clientPass, rpcData+3+ssidLen, passLen);
+    memcpy(clientPass, rpcData+3+ssidLen, min(size_t(passLen), sizeof(clientPass)-1));
   }
 
   sendImprovStateResponse(0x03); //provisioning
