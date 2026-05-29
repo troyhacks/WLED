@@ -202,24 +202,6 @@ reviews:
           - platformio_override.ini.sample entries that contain only
             placeholder/example values.
 
-    - path: "usermods/**/library.json"
-      instructions: >
-        Scan for secrets and sensitive information in usermod dependency manifests.
-
-        Flag any of the following:
-          - Dependency URLs that embed credentials in the URL itself (e.g., any URL containing credential-bearing userinfo).
-          - Personal access tokens, OAuth tokens, or API keys as literal strings
-            anywhere in the file.
-          - Values matching well-known secret patterns: GitHub PATs (ghp_...,
-            github_pat_...), AWS access keys (AKIA...), or similarly structured
-            high-entropy tokens.
-
-        Do NOT flag:
-          - Plain HTTPS or SSH URLs without embedded credentials.
-          - Version specifiers, semver ranges, or commit SHA references that
-            contain no credential prefix.
-          - Repository owner/name path segments (not credential material).
-
     - path: "usermods/**/{readme,README,Readme}.md"
       instructions: >
         Scan for secrets, passwords, and sensitive information in usermod
