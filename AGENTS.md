@@ -201,7 +201,10 @@ class MyUsermod : public Usermod {
 ### Usermod `loop()`
 
 - Called once per main loop iteration. Usermods should simply `return` when `!enabled`.
-- Frequency of calls varies with system load - up to 2000 times/sec with few LEDs and little background activity, down to 1-3 times/sec during FS activity or during high workload from effects and other usermods.
+- Frequency of calls varies with system load:
+    * up to 2000 times/sec with few LEDs and little background activity,
+    * between 20 and 300 times/second during high workload from effects and other usermods,
+    * (worst case) down to 1-3 times/sec during FS activity or when serving lots of network API requests.
 
 ### Usermod IDs
 - Add usermod IDs to `wled00/const.h`, integrate new usermods via `wled00/usermods_list.cpp`
