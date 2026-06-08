@@ -123,6 +123,9 @@ reviews:
         #ifdef). Usermods do not use library.json. Follow the same C++ conventions
         as the core firmware (docs/cpp.instructions.md).
 
+        If the usermod implements `appendConfigData()`, check that the buffer usage (`oappend`) 
+        leaves some margin w.r.t. SETTINGS_STACK_BUF_SIZE on esp32.
+
     # ── Security hardening — usermods (trust-boundary-aware, narrow scope) ───
     - path: "usermods/**/*.{cpp,h,hpp}"
       instructions: >
