@@ -10,23 +10,9 @@
 #define UDP_IN_MAXSIZE 1472
 #define PRESUMED_NETWORK_DELAY 3 //how many ms could it take on avg to reach the receiver? This will be added to transmitted times
 
-void notify(byte callMode, bool followUp)
-{
-  if (!udpConnected) return;
-  if (!syncGroups) return;
-  switch (callMode)
-  {
-    case CALL_MODE_INIT:          return;
-    case CALL_MODE_DIRECT_CHANGE: if (!notifyDirect) return; break;
-    case CALL_MODE_BUTTON:        if (!notifyButton) return; break;
-    case CALL_MODE_BUTTON_PRESET: if (!notifyButton) return; break;
-    case CALL_MODE_NIGHTLIGHT:    if (!notifyDirect) return; break;
-    case CALL_MODE_HUE:           if (!notifyHue)    return; break;
-    case CALL_MODE_PRESET_CYCLE:  if (!notifyDirect) return; break;
-    case CALL_MODE_ALEXA:         if (!notifyAlexa)  return; break;
-    default: return;
-  }
-  byte udpOut[WLEDPACKETSIZE];
+static void do_notify(byte callMode, bool followUp) { // WLEDMM split into two functions, to avoid stack smashing - do_notify needs 1200 bytes on stack
+  // DEBUG_PRINTF("[%8u %s]\tnotify(%d, %s)\tmin stack %d\n", millis(), pcTaskGetTaskName(NULL), callMode, followUp?"true ":"false", uxTaskGetStackHighWaterMark(NULL));
+  byte udpOut[WLEDPACKETSIZE] = {0};
   Segment& mainseg = strip.getMainSegment();
   udpOut[0] = 0; //0: wled notifier protocol 1: WARLS protocol
   udpOut[1] = callMode;
@@ -149,6 +135,27 @@ void notify(byte callMode, bool followUp)
   notificationSentTime = millis();
   notificationCount = followUp ? notificationCount + 1 : 0;
 }
+
+// WLEDMM wrapper function to avoid stack smashing - do_notify needs 1200 bytes on stack, but its not actually sending anything on most notify() calls
+void notify(byte callMode, bool followUp)
+{
+  if (!udpConnected) return;
+  if (!syncGroups) return;
+  switch (callMode)
+  {
+    case CALL_MODE_INIT:          return;
+    case CALL_MODE_DIRECT_CHANGE: if (!notifyDirect) return; break;
+    case CALL_MODE_BUTTON:        if (!notifyButton) return; break;
+    case CALL_MODE_BUTTON_PRESET: if (!notifyButton) return; break;
+    case CALL_MODE_NIGHTLIGHT:    if (!notifyDirect) return; break;
+    case CALL_MODE_HUE:           if (!notifyHue)    return; break;
+    case CALL_MODE_PRESET_CYCLE:  if (!notifyDirect) return; break;
+    case CALL_MODE_ALEXA:         if (!notifyAlexa)  return; break;
+    default: return;
+  }
+  do_notify(callMode, followUp);
+}
+
 
 // WLEDMM cache current main segment: updated in realtimeLock, reset in exitRealtime, used in setRealTimePixel
 static Segment* theMainSeg = nullptr;
@@ -328,7 +335,7 @@ void handleNotifications()
     if (packetSize) {
 #ifdef ARDUINO_ARCH_ESP32
       if (!receiveDirect) {rgbUdp.flush(); notifierUdp.flush(); notifier2Udp.flush(); return;}
-      if (packetSize > UDP_IN_MAXSIZE || packetSize < 3) {rgbUdp.flush(); notifierUdp.flush(); notifier2Udp.flush(); return;}
+      if (packetSize > UDP_IN_MAXSIZE || packetSize < 3) {rgbUdp.flush(); notifierUdp.flush(); notifier2Udp.flush(); return;} // packetSize must not exceed buffersize (UDP_IN_MAXSIZE)
 #else
       if (!receiveDirect) {return;}
       if (packetSize > UDP_IN_MAXSIZE || packetSize < 3) {return;}
@@ -461,6 +468,7 @@ void handleNotifications()
         uint8_t numSrcSegs = udpIn[39];
         for (size_t i = 0; i < numSrcSegs; i++) {
           uint16_t ofs = 41 + i*udpIn[40]; //start of segment offset byte
+          if (ofs + 36 > UDP_IN_MAXSIZE) break; // WLEDMM avoid reading outsize of array
           uint8_t id = udpIn[0 +ofs];
           if (id > strip.getSegmentsNum()) break;
 
@@ -594,6 +602,7 @@ void handleNotifications()
     if (tpmPacketCount == 1) tpmPayloadFrameSize = (udpIn[2] << 8) + udpIn[3]; //save frame size for the whole payload if this is the first packet
     byte packetNum = udpIn[4]; //starts with 1!
     byte numPackets = udpIn[5];
+    tpmPayloadFrameSize = min(tpmPayloadFrameSize, uint16_t(UDP_IN_MAXSIZE - 6)); // WLEDMM clamp to buffer size
 
     uint16_t id = (tpmPayloadFrameSize/3)*(packetNum-1); //start LED
     uint16_t totalLen = strip.getLengthTotal();
@@ -736,6 +745,7 @@ void refreshNodeList()
 void sendSysInfoUDP()
 {
   if (!udp2Connected) return;
+  // DEBUG_PRINTF("[%8u %s]\tsendSysInfoUDP()\tmin stack %d\n", millis(), pcTaskGetTaskName(NULL), uxTaskGetStackHighWaterMark(NULL));
 
   IPAddress ip = Network.localIP();
   if (!ip || ip == IPAddress(255,255,255,255)) ip = IPAddress(4,3,2,1);
@@ -790,24 +800,6 @@ void sendSysInfoUDP()
 /*********************************************************************************************\
  * Art-Net, DDP, E131 output - work in progress
 \*********************************************************************************************/
-
-#define DDP_HEADER_LEN 10
-#define DDP_SYNCPACKET_LEN 10
-
-#define DDP_FLAGS1_VER 0xc0  // version mask
-#define DDP_FLAGS1_VER1 0x40 // version=1
-#define DDP_FLAGS1_PUSH 0x01
-#define DDP_FLAGS1_QUERY 0x02
-#define DDP_FLAGS1_REPLY 0x04
-#define DDP_FLAGS1_STORAGE 0x08
-#define DDP_FLAGS1_TIME 0x10
-
-#define DDP_ID_DISPLAY 1
-#define DDP_ID_CONFIG 250
-#define DDP_ID_STATUS 251
-
-// 1440 channels per packet
-#define DDP_CHANNELS_PER_PACKET 1440 // 480 leds
 
 //
 // Send real time UDP updates to the specified client
@@ -877,11 +869,11 @@ uint8_t IRAM_ATTR_YN realtimeBroadcast(uint8_t type, IPAddress client, uint16_t 
         // the amount of data is AFTER the header in the current packet
         size_t packetSize = DDP_CHANNELS_PER_PACKET;
 
-        uint8_t flags = DDP_FLAGS1_VER1;
+        uint8_t flags = DDP_FLAGS_VER1;
         if (currentPacket == (packetCount - 1U)) {
           // last packet, set the push flag
           // TODO: determine if we want to send an empty push packet to each destination after sending the pixel data
-          flags = DDP_FLAGS1_VER1 | DDP_FLAGS1_PUSH;
+          flags = DDP_FLAGS_VER1 | DDP_FLAGS_PUSH;
           if (channelCount % DDP_CHANNELS_PER_PACKET) {
             packetSize = channelCount % DDP_CHANNELS_PER_PACKET;
           }

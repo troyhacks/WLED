@@ -2,6 +2,14 @@
 
 Here are a few suggestions to make it easier for you to contribute!
 
+## Important Developer Infos
+
+* [Project Structure, Files and Directories](AGENTS.md#project-structure) (in our AI instructions)
+* KB: [Compiling WLED](https://kno.wled.ge/advanced/compiling-wled/) - slightly outdated but still helpful 😊
+* Arduino IDE is not supported any more. Use VSCode with the PlatformIO extension. 
+* [Compiling in VSCode/Platformio](https://github.com/wled/WLED-Docs/issues/161) - modern way.
+* If you add a new feature, consider making a PR to [``wled-docs``](https://github.com/MoonModules/WLED-Docs) for updating our official documentation.
+
 ## Describe your PR
 
 Please add a description of your proposed code changes. It does not need to be an exhaustive essay, however a PR with no description or just a few words might not get accepted, simply because very basic information is missing.
@@ -62,8 +70,17 @@ You can find a collection of very useful tips and tricks here: https://github.co
 
 ## Code style
 
+Don't stress too much about coding style.
 When in doubt, it is easiest to replicate the code style you find in the files you want to edit :)
-Below are the guidelines we use in the WLED repository.
+
+Our review bot (coderabbit) has learned lots of detailed guides and hints - it will suggest them automatically when you submit a PR for review.
+
+If you are curious, these are the detailed guides:
+* [C++ Coding](https://github.com/MoonModules/WLED-MM/blob/mdev/docs/cpp.instructions.md)
+* [WebUi: HTML, JS, CSS](https://github.com/MoonModules/WLED-MM/blob/mdev/docs/web.instructions.md)
+* [Using ESP-IDF directly](https://github.com/MoonModules/WLED-MM/blob/mdev/docs/esp-idf.instructions.md)
+
+Below are the main rules used the WLED-MM repository.
 
 ### Indentation
 
@@ -97,7 +114,7 @@ if (a == b)
 
 
 There should always be a space between a keyword and its condition and between the condition and brace.  
-Within the condition, no space should be between the paranthesis and variables.  
+Within the condition, no space should be between the parenthesis and variables.  
 Spaces between variables and operators are up to the authors discretion.
 There should be no space between function names and their argument parenthesis.
 

@@ -47,16 +47,25 @@ void closeFile() {
   //    --> file reads rarely cause refill stalls compared to writes, but large/fragmented reads can still exceed the ~0.08–0.12 ms budget.
   //        esp32 recommendations: use f.setBufferSize() (512–1024 for reads is reasonable); use delay(0) after file reads, to reduce task contention
 
-  if (!f) {doCloseFile = false; return;} // WLEDMM only do all this hick-hack when f is an open file
+  if (!doCloseFile || !f) { doCloseFile = false; return; }  // file not open, or no request to close -> nothing to do, nothing to wait
+  doCloseFile = false; // consume flag early, to reduce the time window for concurrent closing attempts from several tasks.
 
   bool oldLock = suspendStripService;
-  #if defined(WLEDMM_FILEWAIT) // only wait if we don't have the flicker-free RMTHI driver
+  #if defined(WLEDMM_FILEWAIT) || !defined(ARDUINO_ARCH_ESP32) // only wait if we don't have the flicker-free RMTHI driver
   unsigned long t_wait = millis();
   if (strip.isUpdating()) suspendStripService = true;             // WLEDMM schedule short pause to prevent LEDs glitching during flash write
-  while(strip.isUpdating() && (millis() - t_wait < 72)) delay(1); // WLEDMM try to catch a moment when strip is idle
-  while(strip.isUpdating() && (millis() - t_wait < 96)) delay(0); //        try harder
-  //if (strip.isUpdating()) USER_PRINTLN("closeFile: strip still updating.");
-  delay(2); // might help
+  #if defined(ARDUINO_ARCH_ESP32)
+    while(strip.isUpdating() && (millis() - t_wait < 72)) delay(1); // WLEDMM try to catch a moment when strip is idle
+    while(strip.isUpdating() && (millis() - t_wait < 96)) delay(0); //        try harder
+    //if (strip.isUpdating()) USER_PRINTLN("closeFile: strip still updating.");
+    delay(2); // might help
+  #else // 8266: only wait in case that can_yield() tells us we can yield and delay
+    if (can_yield()) {
+      yield();
+      while(strip.isUpdating() && (millis() - t_wait < 96)) delay(1);
+      yield(); // might help
+    }
+  #endif 
   #endif
   #else
     bool oldLock = suspendStripService; // fix build f***u* on 8266
@@ -72,7 +81,6 @@ void closeFile() {
   #endif
   suspendStripService = oldLock; // restore previous lock
   DEBUGFS_PRINTF("took %d ms\n", millis() - s);
-  doCloseFile = false;
 }
 
 //find() that reads and buffers data from file stream in 256-byte blocks.
@@ -215,9 +223,10 @@ bool appendObjectToFile(const char* key, JsonDocument* content, uint32_t s, uint
   uint32_t pos = 0;
   if (!f) return false;
 
-  if (f.size() < 3) {
+  if (f.size() < 4) { // file uninitialized -> write minimal skeleton
     char init[12];
     strcpy_P(init, PSTR("{\"0\":{}}"));
+    f.seek(0, SeekSet);           // rewind to ensure we overwrite from the start
     f.print(init);
   }
 
@@ -460,7 +469,7 @@ static const uint8_t *getPresetCache(size_t &size) {
 
   if ((presetsModifiedTime != presetsCachedTime) || (presetsCachedValidate != cacheInvalidate)) {
     if (presetsCached) {
-      free(presetsCached);
+      p_free(presetsCached);
       presetsCached = nullptr;
     }
   }
@@ -475,7 +484,7 @@ static const uint8_t *getPresetCache(size_t &size) {
       presetsCachedTime = presetsModifiedTime;
       presetsCachedValidate = cacheInvalidate;
       presetsCachedSize = 0;
-      presetsCached = (uint8_t*)ps_malloc(file.size() + 1);
+      presetsCached = (uint8_t*)p_malloc(file.size() + 1);
       if (presetsCached) {
         presetsCachedSize = file.size();
         file.read(presetsCached, presetsCachedSize);
@@ -506,14 +515,16 @@ void invalidateFileNameCache() { // reset "file not found" cache
   haveICOFile = true;
   haveCpalFile = true;
 
-  #if defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
+  #if (defined(BOARD_HAS_PSRAM) || ESP_IDF_VERSION_MAJOR > 3) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
   // WLEDMM hack to clear presets.json cache
-  size_t dummy;
-  unsigned long realpresetsTime = presetsModifiedTime;
-  presetsModifiedTime = toki.second();   // pretend we have changes
-  (void) getPresetCache(dummy);          // clear presets.json cache
-  presetsModifiedTime = realpresetsTime; // restore correct value
-#endif
+  if (psramFound()) {
+    size_t dummy;
+    unsigned long realpresetsTime = presetsModifiedTime;
+    presetsModifiedTime = toki.second();   // pretend we have changes
+    (void) getPresetCache(dummy);          // clear presets.json cache
+    presetsModifiedTime = realpresetsTime; // restore correct value
+  }
+  #endif
   //USER_PRINTLN("WS FileRead cache cleared");
 }
 

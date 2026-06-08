@@ -34,7 +34,7 @@ void WS2812FX::setUpMatrix() {
     // safety check 
     // WLEDMM no check on Segment::maxWidth * Segment::maxHeight > MAX_LEDS || 
     if (Segment::maxWidth <= 1 || Segment::maxHeight <= 1) {
-      DEBUG_PRINTF("2D Bounds error. %d x %d\n", Segment::maxWidth, Segment::maxHeight);
+      USER_PRINTF("Matrix 2D bounds (%d x %d) invalid.\n", Segment::maxWidth, Segment::maxHeight);
       isMatrix = false;
       Segment::maxWidth = _length;
       Segment::maxHeight = 1;
@@ -76,11 +76,12 @@ void WS2812FX::setUpMatrix() {
 
       // don't use new / delete
       if ((size > 0) && (customMappingTable != nullptr)) {  // resize
-        customMappingTable = (uint16_t*) reallocf(customMappingTable, sizeof(uint16_t) * size); // reallocf will free memory if it cannot resize
+        //customMappingTable = (uint16_t*) reallocf(customMappingTable, sizeof(uint16_t) * size); // reallocf will free memory if it cannot resize
+        customMappingTable = (uint16_t*) d_realloc_malloc(customMappingTable, sizeof(uint16_t) * size); // will free memory if it cannot resize
       }
       if ((size > 0) && (customMappingTable == nullptr)) { // second try
         DEBUG_PRINTLN("setUpMatrix: trying to get fresh memory block.");
-        customMappingTable = (uint16_t*) calloc(size, sizeof(uint16_t));
+        customMappingTable = (uint16_t*) d_calloc(size, sizeof(uint16_t));
         if (customMappingTable == nullptr) { 
           USER_PRINTLN("setUpMatrix: alloc failed");
           errorFlag = ERR_LOW_MEM; // WLEDMM raise errorflag
@@ -122,7 +123,7 @@ void WS2812FX::setUpMatrix() {
           JsonArray map = doc.as<JsonArray>();
           gapSize = map.size();
           if (!map.isNull() && (gapSize > 0) && gapSize >= customMappingSize) { // not an empty map //softhack also check gapSize>0 
-            gapTable = new(std::nothrow) int8_t[gapSize];
+            gapTable = static_cast<int8_t*>(p_malloc(gapSize));
             if (gapTable) for (size_t i = 0; i < gapSize; i++) {
               gapTable[i] = constrain(map[i], -1, 1);
             }
@@ -152,7 +153,7 @@ void WS2812FX::setUpMatrix() {
       }
 
       // delete gap array as we no longer need it
-      if (gapTable) {delete[] gapTable; gapTable=nullptr;}   // softhack prevent dangling pointer
+      if (gapTable) {p_free(gapTable); gapTable=nullptr;}   // softhack prevent dangling pointer
 
       #ifdef WLED_DEBUG_MAPS
       DEBUG_PRINTF("Matrix ledmap: \n");
@@ -185,7 +186,7 @@ void WS2812FX::setUpMatrix() {
       if (customMappingTable[i] != (uint16_t)i ) isIdentity = false;
     }
     if (isIdentity) {
-      free(customMappingTable); customMappingTable = nullptr;      
+      d_free(customMappingTable); customMappingTable = nullptr;      
       USER_PRINTF("!setupmatrix: customMappingTable is not needed. Dropping %d bytes.\n", customMappingTableSize * sizeof(uint16_t));
       customMappingTableSize = 0;
       customMappingSize = 0;
@@ -246,7 +247,7 @@ void Segment::startFrame(void) {
 void IRAM_ATTR __attribute__((hot)) Segment::setPixelColorXY_fast(int x, int y, uint32_t col, uint32_t scaled_col, int cols, int rows) const //WLEDMM
 {
   unsigned i = UINT_MAX;
-  bool sameColor = false;
+  [[maybe_unused]] bool sameColor = false;
   if (ledsrgb) { // WLEDMM small optimization
     i = x + y*cols; // avoid error checking done by XY() - be optimistic about ranges of x and y
     CRGB fastled_col = CRGB(col);
@@ -303,7 +304,7 @@ void IRAM_ATTR_YN Segment::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM:
   if (x<0 || y<0 || x >= cols || y >= rows) return;  // if pixel would fall out of virtual segment just exit
 
   unsigned i = UINT_MAX;
-  bool sameColor = false;
+  [[maybe_unused]] bool sameColor = false;
   if (ledsrgb) { // WLEDMM small optimization
     i = XY(x,y);
     CRGB fastled_col = CRGB(col);
@@ -913,7 +914,7 @@ void Segment::drawText(const unsigned char* text, size_t maxLen, int16_t x, int1
   size_t textLength = min(strnlen((char*)text, maxLen), numberOfChars);
 #endif
   // pass characters to drawCharacter()
-  for (int i = 0; i < textLength; i++) {
+  for (size_t i = 0; i < textLength; i++) {
     SEGMENT.drawCharacter((unsigned char) decoded_text[i], x + w*i, y, w, h, color, col2, drawShadow);
   }
 }

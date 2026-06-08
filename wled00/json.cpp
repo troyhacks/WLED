@@ -475,14 +475,16 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
   }
   #endif
 
-  bool onBefore = bri;
-  getVal(root["bri"], &bri);
+  bool onBefore = bri > 0;
+  //if (onBefore && briLast == 0) briLast = bri;
+  (void) getVal(root["bri"], &bri);
 
   bool on = root["on"] | (bri > 0);
   if (!on != !bri) toggleOnOff();
 
   if (root["on"].is<const char*>() && root["on"].as<const char*>()[0] == 't') {
-    if (onBefore || !bri) toggleOnOff(); // do not toggle off again if just turned on by bri (makes e.g. "{"on":"t","bri":32}" work)
+    // WLEDMM bugfix: do not toggle twice when bri > 0
+    if (onBefore && !bri) toggleOnOff(); // do not toggle off again if just turned on by bri (makes e.g. "{"on":"t","bri":32}" work)
   }
 
   if (bri && !onBefore) { // unfreeze all segments when turning on
@@ -666,6 +668,7 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
     //do not notify here, because the first playlist entry will do
     if (root["on"].isNull()) callMode = CALL_MODE_NO_NOTIFY;
     else callMode = CALL_MODE_DIRECT_CHANGE;  // possible bugfix for playlist only containing HTTP API preset FX=~
+    stateChanged = false; // WLEDMM: prevent premature LED update, let first preset handle it
   }
 
   if (root.containsKey(F("rmcpal")) && root[F("rmcpal")].as<bool>()) {
@@ -782,9 +785,21 @@ void serializeState(JsonObject root, bool forPreset, bool includeBri, bool segme
     // USER_PRINTF("serializeState %d\n", netDebugEnabled);
     #endif
 
+    constexpr unsigned ERROR_HOLD_MILLIS = 15000;  // minimum hold time for any error code
+    static byte lastErrorFlag = ERR_NONE;  // last error seen
+    static unsigned lastErrorTime = 0;
+
     // WLEDMM print error message to netDebug - esp32 only, as 8266 flash is very limited
-    if (errorFlag) { USER_PRINT(F("\nWLED error code = ")); USER_PRINTLN(errorFlag); }
-    if (errorFlag) {root[F("error")] = errorFlag; errorFlag = ERR_NONE;} //prevent error message to persist on screen
+    if (errorFlag && (errorFlag != lastErrorFlag)) { // only print each error code once
+      USER_PRINT(F("\nWLED-MM error code = ")); USER_PRINTLN(errorFlag); USER_FLUSH();
+      lastErrorTime = millis();
+    }
+    if (errorFlag) {
+      root[F("error")] = errorFlag; 
+      if (    (millis() > 60000) && (millis() - lastErrorTime > ERROR_HOLD_MILLIS)
+           && (errorFlag < ERR_PERSISTENT)) errorFlag = ERR_NONE; // prevent error message to stay on screen forever - hold them for 60 seconds after startup, persist "please reboot"
+    }
+    lastErrorFlag = errorFlag;
 
     root["ps"] = (currentPreset > 0) ? currentPreset : -1;
     root[F("pl")] = currentPlaylist;
@@ -1067,13 +1082,17 @@ void serializeInfo(JsonObject root)
     outputs.add(busses.getBus(b)->getLength());
   }
 
-  JsonObject wifi_info = root.createNestedObject("wifi");
+  JsonObject wifi_info = root.createNestedObject(F("wifi"));
   wifi_info[F("bssid")] = WiFi.BSSIDstr();
   int qrssi = WiFi.RSSI();
   wifi_info[F("rssi")] = qrssi;
   wifi_info[F("signal")] = getSignalQuality(qrssi);
   wifi_info[F("channel")] = WiFi.channel();
+  wifi_info[F("ap")] = apActive;
 
+#if defined(ARDUINO_ARCH_ESP32) && !defined(WLEDMM_FILEWAIT)
+  updateFSInfo(); // refresh flash usage info - may cause flicker unless we have the RMTHI driver
+#endif
   JsonObject fs_info = root.createNestedObject("fs");
   fs_info["u"] = fsBytesUsed / 1000;
   fs_info["t"] = fsBytesTotal / 1000;
@@ -1132,25 +1151,27 @@ void serializeInfo(JsonObject root)
   #if defined(ARDUINO_ARCH_ESP32)
     root[F("freestack")] = uxTaskGetStackHighWaterMark(NULL); //WLEDMM
     root[F("minfreeheap")] = ESP.getMinFreeHeap();
+    auto maxFreeBlock = getContiguousFreeHeap();
+    root[F("maxalloc")] = maxFreeBlock;  // for upstream WLED compatibility
   #endif
-  #if defined(ARDUINO_ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+  #if defined(ARDUINO_ARCH_ESP32)
+  #if defined(BOARD_HAS_PSRAM) || (ESP_IDF_VERSION_MAJOR > 3) // V4 can auto-detect PSRAM
   if (psramFound()) {
     root[F("tpsram")] = ESP.getPsramSize(); //WLEDMM
     root[F("psram")] = ESP.getFreePsram();
     root[F("psusedram")] = ESP.getMinFreePsram();
-    #if CONFIG_ESP32S3_SPIRAM_SUPPORT  // WLEDMM -S3 has "qspi" or "opi" PSRAM mode
+    // WLEDMM -S3 has "qspi" or "opi" PSRAM mode, -P4 has "hex"
     #if CONFIG_SPIRAM_MODE_OCT
       root[F("psrmode")]  = F("🚀 OPI");
     #elif CONFIG_SPIRAM_MODE_QUAD
       root[F("psrmode")]  = F("qspi");
-    #endif
+    #elif CONFIG_SPIRAM_MODE_HEX
+      root[F("psrmode")]  = F("🚀🚀 HEX");
+    #else
+      root[F("psrmode")]  = F("dio");
     #endif
   }
-  #else
-  // for testing
-  //  root[F("tpsram")] = 4194304; //WLEDMM
-  //  root[F("psram")] = 4193000;
-  //  root[F("psusedram")] = 3083000;
+  #endif
   #endif
 
   // begin WLEDMM
@@ -1188,8 +1209,10 @@ void serializeInfo(JsonObject root)
     case FM_QOUT: root[F("e32flashtext")] = F(" (QOUT)");break;
     case FM_DIO:  root[F("e32flashtext")] = F(" (DIO)"); break;
     case FM_DOUT: root[F("e32flashtext")] = F(" (DOUT or other)");break;
-    #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_ESPTOOLPY_FLASHMODE_OPI
+    #if CONFIG_ESPTOOLPY_FLASHMODE_OPI
       case FM_FAST_READ: root[F("e32flashtext")] = F(" (🚀OPI)");break;
+    #elif CONFIG_ESPTOOLPY_FLASHMODE_HEX
+      case FM_FAST_READ: root[F("e32flashtext")] = F(" (🚀🚀HEX)");break;
     #else
       case FM_FAST_READ: root[F("e32flashtext")] = F(" (fast_read)");break;
     #endif
@@ -1224,6 +1247,9 @@ void serializeInfo(JsonObject root)
   // end WLEDMM
 
   root[F("uptime")] = millis()/1000 + rolloverMillis*4294967;
+  char time[48];
+  getTimeString(time);
+  root[F("time")] = time;
 
   usermods.addToJsonInfo(root);
 

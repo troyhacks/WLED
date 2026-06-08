@@ -8,7 +8,7 @@
 
 // version code in format yymmddb (b = daily build)
 #ifndef WLED_BUILD_VERSION // WLEDMM allow override by nightly build script
-  #define VERSION 2601281
+  #define VERSION 2603101
 #else
   #define VERSION WLED_BUILD_VERSION
 #endif
@@ -204,17 +204,18 @@
 #undef  ALL_JSON_TO_PSRAM
 #define ALL_JSON_TO_PSRAM
 
+// global WLED memory functions (util.cpp)
+#include "util.h"
+
 struct PSRAM_Allocator {
   void* allocate(size_t size) {
-    if (psramFound()) return ps_malloc(size); // use PSRAM if it exists
-    else              return malloc(size);    // fallback
+    return p_malloc(size); // use PSRAM if it exists
   }
   void* reallocate(void* ptr, size_t new_size) {
-    if (psramFound()) return ps_realloc(ptr, new_size); // use PSRAM if it exists
-    else              return realloc(ptr, new_size);    // fallback
+    return p_realloc_malloc_nofree(ptr, new_size); // use PSRAM if it exists
   }
   void deallocate(void* pointer) {
-    free(pointer);
+    p_free(pointer);
   }
 };
 using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
@@ -229,6 +230,7 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
 #include "pin_manager.h"
 #include "bus_manager.h"
 #include "FX.h"
+#include "wled_metadata.h"
 
 #ifndef CLIENT_SSID
   #define CLIENT_SSID DEFAULT_CLIENT_SSID
@@ -313,9 +315,9 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator>;
 #endif
 
 // Global Variable definitions
-WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));
-WLED_GLOBAL char releaseString[] _INIT_PROGMEM(TOSTRING(WLED_RELEASE_NAME)); //WLEDMM: to show on update page // somehow this will not work if using "const char releaseString[]
-WLED_GLOBAL char repoString[] _INIT(WLED_REPO);
+//WLED_GLOBAL char versionString[] _INIT(TOSTRING(WLED_VERSION));
+//WLED_GLOBAL char releaseString[] _INIT_PROGMEM(TOSTRING(WLED_RELEASE_NAME)); //WLEDMM: to show on update page // somehow this will not work if using "const char releaseString[]
+extern const __FlashStringHelper* repoString;                       // Github repository (if available)
 #define WLED_CODENAME "Hoshi"
 
 // AP and OTA default passwords (for maximum security change them!)
