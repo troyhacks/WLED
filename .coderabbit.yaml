@@ -126,6 +126,8 @@ reviews:
         If the usermod implements `appendConfigData()`, check that the buffer usage (`oappend`) 
         leaves some margin w.r.t. SETTINGS_STACK_BUF_SIZE on esp32.
 
+        If I2C is needed, verify that `pinManager.joinWire()` is used instead of `Wire.begin()`. I2C is shared between all usermods in WLED-MM.
+
     # ── Security hardening — usermods (trust-boundary-aware, narrow scope) ───
     - path: "usermods/**/*.{cpp,h,hpp}"
       instructions: >
