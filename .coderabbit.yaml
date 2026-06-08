@@ -31,6 +31,13 @@ reviews:
     enabled: true
     ignore_title_keywords:
       - WIP
+  tools:
+    fbinfer:
+      enabled: false   # Arduino.h not available on Linux analysis host
+    cppcheck:
+      enabled: true    # cppcheck works fine without Arduino headers
+    clang:
+      enabled: true    # clang tidy likewise works
 
   path_instructions:
     - path: "**/*.{cpp,h,hpp,ino}"
