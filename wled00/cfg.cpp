@@ -202,9 +202,10 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       if (fromFS) {
         BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
         mem += BusManager::memUsage(bc);
-#if !defined(ARDUINO_ARCH_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) // WLEDMM only for boards with small RAM
-        if (mem <= MAX_LED_MEMORY) if (busses.add(bc) == -1) break;  // finalization will be done in WLED::beginStrip()
+#if !defined(ARDUINO_ARCH_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
+        if (mem <= MAX_LED_MEMORY)  // WLEDMM only apply memory limits for boards with small RAM
 #endif
+        if (busses.add(bc) == -1) break;  // finalization will be done in WLED::beginStrip()
       } else {
         if (busConfigs[s] != nullptr) delete busConfigs[s];
         busConfigs[s] = new BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, artnet_outputs, artnet_leds_per_output, artnet_fps_limit);
