@@ -33,29 +33,28 @@ Always reference these instructions first and fallback to search or bash command
 
 | Command | Purpose | Typical Time |
 |---|---|---|
-| `npm run build` | Build web UI → generates `wled00/html_*.h` headers | ~3 s |
+| `npm run build` | Build web UI → generates `wled00/html_*.h` and `wled00/js_*.h` headers | ~3 s |
 | `npm test` | Run test suite | ~40 s |
 | `npm run dev` | Watch mode — auto-rebuilds web UI on file changes | — |
 | `pio run -e <env>` | Build firmware for a hardware target | 15–20 min |
 
 <!-- HUMAN_ONLY_END -->
 
-**Always run `npm ci; npm run build` before `pio run`.** The web UI build generates `wled00/html_*.h` header files required by firmware compilation.
-**Build firmware to validate code changes**: `pio run -e esp32_4MB_V4_M` — must succeed, never skip this step.
-Common firmware environments: `esp32_4MB_V4_M`, `esp32_16MB_V4_S_HUB75`, `esp32S3_8MB_PSRAM_M_qspi`, `esp32_16MB_V4_M_eth`, `esp32dev_compat`, `esp8266_4MB_S` (deprecated)
+- **Always run `npm run build` before any `pio run`** (and run `npm ci` first on fresh clones or when lockfile/dependencies change).
+- The web UI build generates required `wled00/html_*.h` and `wled00/js_*.h` headers for firmware compilation.
+- **Build firmware to validate code changes**: `pio run -e esp32_4MB_V4_M` — must succeed, never skip this step.
+- Common firmware environments: `esp32_4MB_V4_M`, `esp32_16MB_V4_S_HUB75`, `esp32S3_8MB_PSRAM_M_qspi`, `esp32_16MB_V4_M_eth`, `esp32dev_compat`, `esp8266_4MB_S` (deprecated)
 
 For detailed build timeouts, development workflows, troubleshooting, and validation steps, see [agent-build.instructions.md](agent-build.instructions.md).
 
 ## Repository Structure
 
 tl;dr: 
-* Firmware source: `wled00/` (C++).
-* Build targets: `platformio.ini`.
-* Web UI source: `wled00/data/`.
-* Auto-generated headers: `wled00/html_*.h` — **never edit or commit**.
-* ArduinoJSON + AsyncJSON: `wled00/src/dependencies/json`
+* Firmware source: `wled00/` (C++). Web UI source: `wled00/data/`. Build targets: `platformio.ini`.
+* Auto-generated headers: `wled00/html_*.h` and `wled00/js_*.h` — **never edit or commit**.
+* ArduinoJSON + AsyncJSON: `wled00/src/dependencies/json` (included via `wled.h`). CI/CD: `.github/workflows/`.
 * Usermods: `usermods/` (`.h` files, included via `usermods_list.cpp`).
-* CI/CD: `.github/workflows/`.
+* Contributor docs: `docs/` (coding guidelines, design docs).
 
 Main development trunk: `mdev` branch. Make PRs against this branch.
 
@@ -73,37 +72,55 @@ usermods/                   # Community addons (.h files, included via usermods_
 lib/                           # Project specific custom libraries. PlatformIO will compile them to separate static libraries and link them
 platformio.ini                 # Build targets and configuration
 platformio_override.sample.ini # examples for custom build configurations - entries must be copied into platformio_override.ini to use them.
-                               # platformio_override.ini is _not_ stored in the WLED repository!
+                               # platformio_override.ini is _not_ stored in the WLED-MM repository!
 pio-scripts/                # Build tools (platformio)
 tools/                      # Build tools (Node.js), partition files, and generic utilities
 tools/cdata.js              # Web UI → header build script
 tools/cdata-test.js         # Test suite
 package.json                # Node.js scripts and release ID
+docs/                       # Contributor docs: coding guidelines and design documentation
 .github/workflows/          # CI/CD pipelines
+```
+
+<!-- HUMAN_ONLY_END -->
+## General Guidelines
+
+- **Repository language is English.** Suggest translations for non-English content.
+- **Use VS Code with PlatformIO extension** for best development experience.
+- **Never edit or commit** `wled00/html_*.h` and `wled00/js_*.h` — auto-generated from `wled00/data/`.
+- **When unsure, say so.** Gather more information rather than guessing.
+- **Acknowledge good patterns** when you see them. Positive feedback always helps.
+- **Provide references** when making analyses or recommendations. Base them on the correct branch or PR.
+- **Highlight user-visible breaking changes and ripple effects**. Ask for confirmation that these were introduced intentionally.
+- **Unused / dead code must be justified or removed**. This helps to keep the codebase clean, maintainable and readable.
+- **C++ formatting available**: `clang-format` is installed but not in CI
+- No automated linting is configured — match existing code style in files you edit. 
+
+Refer to `docs/cpp.instructions.md`, `docs/esp-idf.instructions.md` and `docs/web.instructions.md` for language-specific conventions, and `docs/cicd.instructions.md` for GitHub Actions workflows.
+
+### Feature Flags
+- **Verify feature-flag names.** Every `WLED_ENABLE_*` / `WLED_DISABLE_*` flag must exactly match one of the names below — misspellings are silently ignored by the preprocessor (e.g. `WLED_IR_DISABLE` instead of `WLED_DISABLE_INFRARED`), causing silent build variations. Flag unrecognised names as likely typos and suggest the correct spelling.
+
+**`WLED_DISABLE_*`**: `2D`, `ADALIGHT`, `ALEXA`, `BROWNOUT_DET`, `ESPNOW`, `FILESYSTEM`, `HUESYNC`, `IMPROV_WIFISCAN`, `INFRARED`, `LOXONE`, `MQTT`, `OTA`, `PARTICLESYSTEM1D`, `PARTICLESYSTEM2D`, `PIXELFORGE`, `WEBSOCKETS`
+
+**`WLED_ENABLE_*`**: `ADALIGHT`, `AOTA`, `DMX`, `DMX_INPUT`, `DMX_OUTPUT`, `FS_EDITOR`, `GIF`, `HUB75MATRIX`, `JSONLIVE`, `LOXONE`, `MQTT`, `PIXART`, `PXMAGIC`, `USERMOD_PAGE`, `WEBSOCKETS`, `WPA_ENTERPRISE`
+
+<!-- HUMAN_ONLY_START -->
+```cpp
+#ifdef WLED_DMX_ENABLED // wrong flag - initialization silently skipped
+  initDMX();
+#endif
+
+#ifdef WLED_ENABLE_DMX // correct flag - initialization performed only when the build supports DMX
+  initDMX();  
+#endif
 ```
 <!-- HUMAN_ONLY_END -->
 
-## General Guidelines
 
-- **Never edit or commit** `wled00/html_*.h` — auto-generated from `wled00/data/`.
-- **Repository language is English.** Suggest translations for non-English content.
-- **Use VS Code with PlatformIO extension** for best development experience.
-- **When unsure, say so.** Gather more information rather than guessing.
-- **Acknowledge good patterns** when you see them. Summarize good practices as part of your review - positive feedback always helps.
-- **Provide references** when making analyses or recommendations. Base them on the correct branch or PR.
-- **Look for user-visible breaking changes and ripple effects**. Ask for confirmation that these were introduced intentionally.
-- **Unused / dead code must be justified or removed**. This helps to keep the codebase clean, maintainable and readable.
-- **C++ formatting available**: `clang-format` is installed but not in CI
-- No automated linting is configured — match existing code style in files you edit. See `cpp.instructions.md` and `web.instructions.md` for language-specific conventions, and `cicd.instructions.md` for GitHub Actions workflows.
-
-### Attribution for AI-generated code
-Using AI-generated code can hide the source of the inspiration / knowledge / sources it used. 
-- Document attribution of inspiration / knowledge / sources used in the code, e.g. link to GitHub repositories or other websites describing the principles / algorithms used.
-- When a larger block of code is generated by an AI tool, mark it with an `// AI: below section was generated by an AI` comment (see C++ guidelines).
-- Every non-trivial AI-generated function should have a brief comment describing what it does. Explain parameters when their names alone are not self-explanatory.
-- AI-generated code must be well documented; comment-to-code ratio > 15% is expected. Do not rephrase source code, but explain the concepts/logic behind the code.
 
 ### Pull Request Expectations
 
 - **No force-push on open PRs.** Once a pull request is open and being reviewed, do not force-push (`git push --force`) to the branch. Force-pushing rewrites history that reviewers may have already commented on, making it impossible to track incremental changes. Use regular commits or `git merge` to incorporate feedback; the branch will be squash-merged when it is accepted.
+- **Modifications to ``platformio.ini`` MUST be approved explicitly** by a *maintainer*. Modifications to the global build environment may break github action builds. Always flag them.
 - **Document your changes in the PR.** Every pull request should include a clear description of *what* changed and *why*. If the change affects user-visible behavior, describe the expected impact. Link to related issues where applicable. Provide screenshots to showcase new features.

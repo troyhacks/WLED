@@ -31,7 +31,7 @@ Use `CONFIG_IDF_TARGET_*` macros to gate chip-specific code at compile time. The
 
 <!-- HUMAN_ONLY_END -->
 ### Build-time validation
-WLED validates at compile time that exactly one target is defined and that it is a supported chip (`wled.cpp` lines 39–61). Follow this pattern when adding new chip-specific branches:
+WLED-MM validates at compile time that exactly one target is defined and that it is a supported chip (`wled.cpp` lines 39–61). Follow this pattern when adding new chip-specific branches:
 
 <!-- HUMAN_ONLY_START -->
 ```cpp
@@ -193,7 +193,7 @@ On ESP32-S3 modules with OPI flash (e.g. N8R8 modules where the SPI flash itself
 
 ## Migrating from ESP-IDF v4.4.x to v5.x
 
-The jump from IDF v4.4 (arduino-esp32 v2.x) to IDF v5.x (arduino-esp32 v3.x) is the largest API break in ESP-IDF history. This section documents the critical changes and recommended migration patterns based on the upstream WLED `V5-C6` branch (`https://github.com/wled/WLED/tree/V5-C6`). Note: WLED-MM has not yet migrated to IDF v5 — these patterns prepare for the future migration.
+The jump from IDF v4.4 (arduino-esp32 v2.x) to IDF v5.x (arduino-esp32 v3.x) is the largest API break in ESP-IDF history. This section documents the critical changes and recommended migration patterns based on the upstream WLED `V5` branch (`https://github.com/wled/WLED/tree/V5`). Note: WLED-MM has not yet migrated to IDF v5 — these patterns prepare for the future migration.
 
 <!-- HUMAN_ONLY_START -->
 ### Compiler changes
@@ -295,7 +295,7 @@ The new API is channel-based:
 | `rmt_item32_t` | `rmt_symbol_word_t` | Different struct layout |
 
 <!-- HUMAN_ONLY_END -->
-**WLED impact**: NeoPixelBus LED output and IR receiver both use legacy RMT. The upstream `V5-C6` branch adds `-D WLED_USE_SHARED_RMT` and disables IR until the library is ported.
+**WLED-MM impact**: NeoPixelBus LED output and IR receiver both use legacy RMT. The upstream `V5-C6` branch adds `-D WLED_USE_SHARED_RMT` and disables IR until the library is ported.
 
 #### I2S (Inter-IC Sound)
 
@@ -331,7 +331,7 @@ Legacy `i2s_driver_install()` + `i2s_read()` API is deprecated. When touching au
 #endif
 ```
 <!-- HUMAN_ONLY_END -->
-**WLED impact**: The audioreactive usermod (`audio_source.h`) heavily uses legacy I2S. Migration requires rewriting the `I2SSource` class for channel-based API.
+**WLED-MM impact**: The audioreactive usermod (`audio_source.h`) heavily uses legacy I2S. Migration requires rewriting the `I2SSource` class for channel-based API.
 
 <!-- HUMAN_ONLY_START -->
 #### ADC (Analog-to-Digital Converter)
@@ -352,7 +352,7 @@ Legacy `adc1_get_raw()` and `esp_adc_cal_*` are deprecated:
 | `spi_flash_write()` | `esp_flash_write()` |
 | `spi_flash_erase_range()` | `esp_flash_erase_region()` |
 
-WLED already has a compatibility shim in `ota_update.cpp` that maps old names to new ones.
+WLED-MM already has a compatibility shim in `ota_update.cpp` that maps old names to new ones.
 
 #### GPIO
 
@@ -413,7 +413,7 @@ WLED-MM provides convenience wrappers with automatic fallback. **Always prefer t
 
 ### PSRAM guidelines
 
-- **Check availability**: always test `psramFound()` before assuming PSRAM is present.
+- **Check availability**: test availability with `psramFound() && ESP.getPsramSize() > 0` before assuming PSRAM is present. Never rely on `BOARD_HAS_PSRAM`only.
 - **DMA compatibility**: on ESP32 (classic), PSRAM buffers are **not DMA-capable** — use `d_malloc_only()` to allocate DMA buffers in DRAM only. On ESP32-S3 with octal PSRAM (`CONFIG_SPIRAM_MODE_OCT`), PSRAM buffers *can* be used with DMA when `CONFIG_SOC_PSRAM_DMA_CAPABLE` is defined.
 - **JSON documents**: use the `PSRAMDynamicJsonDocument` allocator (defined in `wled.h`) to put large JSON documents in PSRAM:
   ```cpp
@@ -499,6 +499,9 @@ The ESP32 has an audio PLL for precise sample rates. Rules:
 
 - Not supported on ESP32-C3 (`SOC_I2S_SUPPORTS_PDM_RX` not defined).
 - ESP32-S3 PDM has known issues: sample rate at 50% of expected, very low amplitude.
+  - **16-bit data width**: Espressif's IDF documentation states that in PDM mode the data unit width is always 16 bits, regardless of the configured `bits_per_sample`.
+  - See [espressif/esp-idf#8660](https://github.com/espressif/esp-idf/issues/8660) for the upstream issue.
+  - **Flag `bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT` in PDM mode** — this causes the S3 low-amplitude symptom.
 - No clock pin (`I2S_CKPIN = -1`) triggers PDM mode in WLED-MM.
 
 ---
@@ -579,13 +582,21 @@ if (!pinManager.allocatePin(myPin, true, PinOwner::UM_MyUsermod)) {
 
 ### Microsecond timing
 
-For high-resolution timing, prefer `esp_timer_get_time()` (microsecond resolution, 64-bit) over `millis()` or `micros()`:
+For high-resolution timing, prefer `esp_timer_get_time()` (microsecond resolution, 64-bit) over `millis()` or `micros()`.
+<!-- HUMAN_ONLY_START -->
 
 ```cpp
 #include <esp_timer.h>
 int64_t now_us = esp_timer_get_time();  // monotonic, not affected by NTP
 ```
 
+> **Note**: In arduino-esp32, both `millis()` and `micros()` are thin wrappers around `esp_timer_get_time()` — they share the same monotonic clock source. Prefer the direct call when you need the full 64-bit value or ISR-safe access without truncation:
+> ```cpp
+> // arduino-esp32 internals (cores/esp32/esp32-hal-misc.c):
+> // unsigned long micros() { return (unsigned long)(esp_timer_get_time()); }
+> // unsigned long millis() { return (unsigned long)(esp_timer_get_time() / 1000ULL); }
+> ```
+<!-- HUMAN_ONLY_END -->
 <!-- HUMAN_ONLY_START -->
 ### Periodic timers
 
@@ -605,6 +616,27 @@ esp_timer_start_periodic(timer, 1000);  // 1 ms period
 <!-- HUMAN_ONLY_END -->
 
 Always prefer `ESP_TIMER_TASK` dispatch over `ESP_TIMER_ISR` unless you need ISR-level latency — ISR callbacks have severe restrictions (no logging, no heap allocation, no FreeRTOS API calls).
+
+### Precision waiting: coarse delay then spin-poll
+
+When waiting for a precise future deadline (e.g., FPS limiting, protocol timing), avoid spinning the entire duration — that wastes CPU and starves other tasks. Instead, yield to FreeRTOS while time allows, then spin only for the final window.
+<!-- HUMAN_ONLY_START -->
+```cpp
+// Wait until 'target_us' (a micros() / esp_timer_get_time() timestamp)
+long time_to_wait = (long)(target_us - micros());
+// Coarse phase: yield to FreeRTOS while we have more than ~2 ms remaining.
+// vTaskDelay(1) suspends the task for one RTOS tick, letting other task run freely.
+while (time_to_wait > 2000) {
+  vTaskDelay(1);
+  time_to_wait = (long)(target_us - micros());
+}
+// Fine phase: busy-poll the last ≤2 ms for microsecond accuracy.
+// micros() wraps esp_timer_get_time() so this is low-overhead.
+while ((long)(target_us - micros()) > 0) { /* spin */ }
+```
+<!-- HUMAN_ONLY_END -->
+
+> The threshold (2000 µs as an example) should be at least one RTOS tick (default 1 ms on ESP32) plus some margin. A value of 1500–3000 µs works well in practice.
 
 ---
 
@@ -672,14 +704,15 @@ RMT drives NeoPixel LED output (via NeoPixelBus) and IR receiver input. Both use
 - New chips (C6, P4) have different RMT channel counts — use `SOC_RMT_TX_CANDIDATES_PER_GROUP` to check availability.
 - The new RMT API requires an "encoder" object (`rmt_encoder_t`) to translate data formats — this is more flexible but requires more setup code.
 
+<!-- HUMAN_ONLY_END -->
 ---
 
 ## Espressif Best Practices (from official examples)
 
 ### Error handling
 
-Always check `esp_err_t` return values. Use `ESP_ERROR_CHECK()` in initialization code, but handle errors gracefully in runtime code:
-
+Always check `esp_err_t` return values. Use `ESP_ERROR_CHECK()` in initialization code, but handle errors gracefully in runtime code.
+<!-- HUMAN_ONLY_START -->
 ```cpp
 // Initialization — crash early on failure
 ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_0, &config, 0, nullptr));
@@ -693,6 +726,17 @@ if (err != ESP_OK) {
 ```
 <!-- HUMAN_ONLY_END -->
 
+For situations between these two extremes — where you want the `ESP_ERROR_CHECK` formatted log message (file, line, error name) but must not abort — use `ESP_ERROR_CHECK_WITHOUT_ABORT()`.
+
+<!-- HUMAN_ONLY_START -->
+```cpp
+// Logs in the same format as ESP_ERROR_CHECK, but returns the error code instead of aborting.
+// Useful for non-fatal driver calls where you want visibility without crashing.
+esp_err_t err = ESP_ERROR_CHECK_WITHOUT_ABORT(i2s_set_clk(AR_I2S_PORT, rate, bits, ch));
+if (err != ESP_OK) return;  // handle as needed
+```
+
+<!-- HUMAN_ONLY_END -->
 ### Logging
 
 WLED-MM uses its own logging macros — **not** `ESP_LOGx()`. For application-level code, always use the WLED-MM macros defined in `wled.h`:
@@ -706,13 +750,14 @@ All of these wrap `Serial` output through the `DEBUGOUT` / `DEBUGOUTLN` / `DEBUG
 
 **Exception — low-level driver code**: When writing code that interacts directly with ESP-IDF APIs (e.g., I2S initialization, RMT setup), use `ESP_LOGx()` macros instead. They support tag-based filtering and compile-time log level control:
 
+<!-- HUMAN_ONLY_START -->
 ```cpp
 static const char* TAG = "my_module";
 ESP_LOGI(TAG, "Initialized with %d buffers", count);
 ESP_LOGW(TAG, "PSRAM not available, falling back to DRAM");
 ESP_LOGE(TAG, "Failed to allocate %u bytes", size);
 ```
-
+<!-- HUMAN_ONLY_END -->
 ### Task creation and pinning
 
 <!-- HUMAN_ONLY_START -->
