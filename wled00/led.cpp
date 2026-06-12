@@ -45,7 +45,7 @@ void applyValuesToSelectedSegs()
   auto pre_mode  = selsegRef.mode;
   auto pre_col0  = selsegRef.colors[0];
   auto pre_col1  = selsegRef.colors[1];
-  auto pre_col2  = selsegRef.colors[2];
+  // [[maybe_unused]] auto pre_col2  = selsegRef.colors[2];
 
   for (uint8_t i = 0; i < strip.getSegmentsNum(); i++) {
     Segment& seg = strip.getSegment(i);

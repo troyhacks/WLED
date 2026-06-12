@@ -13,7 +13,22 @@ static byte e131LastSequenceNumber[E131_MAX_UNIVERSE_COUNT] = {0}; // to detect 
 //handles RGB data only
 void handleDDPPacket(e131_packet_t* p) {
   static bool ddpSeenPush = false;  // have we seen a push yet?
-  int lastPushSeq = e131LastSequenceNumber[0];
+  [[maybe_unused]] int lastPushSeq = e131LastSequenceNumber[0];
+
+  // reject unsupported color data types (only RGB and RGBW are supported)
+  uint8_t maskedType = p->dataType & 0x3F; // mask out custom and reserved flags, only type bits are relevant
+  // WLEDMM allow legacy "undefined" datatype, and legacy (but wrong) datatype=0x01
+  if ( maskedType != 0 && maskedType != 0x01 &&
+       maskedType != DDP_TYPE_RGB24 && maskedType != DDP_TYPE_RGBW32) {
+    DEBUG_PRINTF("handleDDPPacket(); unsupported datatype 0x%02x\n", p->dataType);
+    return;
+  }
+
+  // reject status and config packets (not implemented)
+  if (p->destination == DDP_ID_STATUS || p->destination == DDP_ID_CONFIG) {
+    DEBUG_PRINTF("handleDDPPacket(): unsupported destination 0x%02x\n", p->destination);
+    return;
+  }
 
   //reject late packets belonging to previous frame (assuming 4 packets max. before push)
 #if 0  // WLEDMM fixme - we definitely have more than 5-10 packets per frame !!!
@@ -32,7 +47,7 @@ void handleDDPPacket(e131_packet_t* p) {
   uint8_t ddpChannelsPerLed = ((p->dataType & 0b00111000)>>3 == 0b011) ? 4 : 3; // data type 0x1B (formerly 0x1A) is RGBW (type 3, 8 bit/channel)
 
   // WLEDMM for debugging
-  static unsigned lastPush = millis();
+  [[maybe_unused]] static unsigned lastPush = millis();
   static unsigned packets = 0;
   static unsigned pixels = 0;
 
@@ -41,8 +56,8 @@ void handleDDPPacket(e131_packet_t* p) {
   uint16_t dataLen = htons(p->dataLen);
   unsigned stop = start + dataLen / ddpChannelsPerLed;
   uint8_t* data = p->data;
-  uint16_t c = 0;
-  if (p->flags & DDP_TIMECODE_FLAG) c = 4; //packet has timecode flag, we do not support it, but data starts 4 bytes later
+  unsigned c = 0;
+  if (p->flags & DDP_FLAGS_TIME) c = 4; //packet has timecode flag, we do not support it, but data starts 4 bytes later
 
   unsigned numLeds = stop - start; // stop >= start is guaranteed
   unsigned maxDataIndex = c + numLeds * ddpChannelsPerLed; // validate bounds before accessing data array
@@ -67,7 +82,7 @@ void handleDDPPacket(e131_packet_t* p) {
     }
   }
 
-  bool push = p->flags & DDP_PUSH_FLAG;
+  bool push = p->flags & DDP_FLAGS_PUSH;
   ddpSeenPush |= push;
   if (!ddpSeenPush || push) { // if we've never seen a push, or this is one, render display
     #ifdef WLED_DEBUG
@@ -90,6 +105,7 @@ void handleE131Packet(e131_packet_t* p, IPAddress clientIP, byte protocol){
   uint8_t seq = 0, mde = REALTIME_MODE_E131;
 
   if (!receiveDirect) { exitRealtime(); return; } // WLEDMM kill switch
+  if (p == nullptr) return; // WLEDMM should not happen
 
   if (protocol == P_ARTNET)
   {
@@ -469,7 +485,7 @@ void prepareArtnetPollReply(ArtPollReply *reply) {
 
   reply->reply_port = ARTNET_DEFAULT_PORT;
 
-  char * numberEnd = versionString;
+  char * numberEnd = (char*) versionString; // strtol promises not to try to edit this.
   reply->reply_version_h = (uint8_t)strtol(numberEnd, &numberEnd, 10);
   numberEnd++;
   reply->reply_version_l = (uint8_t)strtol(numberEnd, &numberEnd, 10);

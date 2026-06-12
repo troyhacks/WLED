@@ -77,16 +77,11 @@ static void doSaveState() {
 */
   #if defined(ARDUINO_ARCH_ESP32)
   if (!persist) {
-    if (tmpRAMbuffer!=nullptr) free(tmpRAMbuffer);
+    if (tmpRAMbuffer!=nullptr) p_free(tmpRAMbuffer);
     size_t len = measureJson(*fileDoc) + 1;
     DEBUG_PRINTLN(len);
     // if possible use SPI RAM on ESP32
-    #if defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))        // WLEDMM
-    if (psramFound())
-      tmpRAMbuffer = (char*) ps_malloc(len);
-    else
-    #endif
-      tmpRAMbuffer = (char*) malloc(len);
+    tmpRAMbuffer = (char*) p_malloc(len);
     if (tmpRAMbuffer!=nullptr) {
       serializeJson(*fileDoc, tmpRAMbuffer, len);
     } else {
@@ -128,7 +123,15 @@ bool getPresetName(byte index, String& name)
 
 void initPresetsFile()
 {
-  if (WLED_FS.exists(getFileName())) return;
+  if (WLED_FS.exists(getFileName())) {
+    // treat an empty JSON file (e.g. "{}", "{ }") the same as a missing file:
+    // f.size() < 4 is the same threshold used in appendObjectToFile() to detect an uninitialized file
+    File f = WLED_FS.open(getFileName(), "r");
+    bool empty = f && f.size() < 4;             // file does exist due to previous "if"
+    if (f) f.close();
+    if (empty) WLED_FS.remove(getFileName());   // remove the empty file so it can be recreated below
+    else return;                                // file not empty -> keep (nothing to init)
+  }
 
   StaticJsonDocument<64> doc;
   JsonObject sObj = doc.to<JsonObject>();
@@ -258,7 +261,7 @@ void handlePresets()
   unsigned long waitstart = millis();
   while (strip.isServicing() && millis() - waitstart < FRAMETIME_FIXED) delay(1); // wait for effects to finish updating
 
-  strip.fill(BLACK); strip.show(); // experimental: set LEDs to black while new preset loads (instead of freezing effects)
+  strip.fill(BLACK); strip.trigger(); // experimental: set LEDs to black while new preset loads (shortly freezing effects, but starts clean. Still better than a short black-out.)
 
   unsigned long start = millis();
   while (strip.isUpdating() && millis() - start < FRAMETIME_FIXED) delay(1); // wait for strip to finish updating, accessing FS during sendout causes glitches // WLEDMM delay instead of yield
@@ -298,7 +301,7 @@ void handlePresets()
   #if defined(ARDUINO_ARCH_ESP32)
   //Aircoookie recommended not to delete buffer
   if (tmpPreset==255 && tmpRAMbuffer!=nullptr) {
-    free(tmpRAMbuffer);
+    p_free(tmpRAMbuffer);
     tmpRAMbuffer = nullptr;
   }
   #endif

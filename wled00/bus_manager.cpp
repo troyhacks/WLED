@@ -57,6 +57,8 @@ uint8_t realtimeBroadcast(uint8_t type, IPAddress client, uint16_t length, byte 
   #define DEBUGOUT Serial
 #endif
 
+#include "util.h"
+
 #ifdef WLED_DEBUG
   #ifndef ESP8266
   #include <rom/rtc.h>
@@ -358,8 +360,10 @@ void BusPwm::setPixelColor(uint16_t pix, uint32_t c) {
     case TYPE_ANALOG_5CH: //RGB + warm white + cold white
       _data[4] = cw;
       w = ww;
+      // falls through
     case TYPE_ANALOG_4CH: //RGBW
       _data[3] = w;
+      // falls through
     case TYPE_ANALOG_3CH: //standard dumb RGB
       _data[0] = r; _data[1] = g; _data[2] = b;
       break;
@@ -502,7 +506,8 @@ BusNetwork::BusNetwork(BusConfig &bc, const ColorOrderMap &com) : Bus(bc.type, b
   }
   _UDPchannels = _rgbw ? 4 : 3;
   #ifdef ESP32
-  _data = (byte*) heap_caps_calloc_prefer((bc.count * _UDPchannels)+15, sizeof(byte), 3, MALLOC_CAP_DEFAULT, MALLOC_CAP_SPIRAM);
+  // _data = (byte*) heap_caps_calloc_prefer((bc.count * _UDPchannels)+15, sizeof(byte), 3, MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT|MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  _data = (byte*) d_calloc((bc.count * _UDPchannels)+15, sizeof(byte));
   #else
   _data = (byte*) calloc((bc.count * _UDPchannels)+15, sizeof(byte));
   #endif
@@ -592,7 +597,11 @@ uint8_t BusNetwork::getPins(uint8_t* pinArray) const {
 void BusNetwork::cleanup() {
   _type = I_NONE;
   _valid = false;
-  if (_data != nullptr) free(_data);
+  #ifdef ESP32
+    if (_data != nullptr) heap_caps_free(_data);
+  #else
+    if (_data != nullptr) free(_data);
+  #endif
   _data = nullptr;
   _len = 0;
 }
@@ -925,7 +934,18 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   USER_PRINTF("MatrixPanel_I2S_DMA config - %ux%u (type %u) length: %u, %u bits/pixel.\n", mxconfig.mx_width, mxconfig.mx_height, bc.type, mxconfig.chain_length, mxconfig.getPixelColorDepthBits() * 3);
   USER_PRINTF("MatrixPanel_I2S_DMA config - clock phase = %s, latch_blanking = %d, min refresh = %d fps.\n", 
               mxconfig.clkphase ? "positive edge":"negative edge", int(mxconfig.latch_blanking), int(mxconfig.min_refresh_rate));
-  DEBUG_PRINT(F("Free heap: ")); DEBUG_PRINTLN(ESP.getFreeHeap()); lastHeap = ESP.getFreeHeap();
+  USER_PRINTLN("MatrixPanel_I2S_DMA data pins:");
+  USER_FLUSH();
+  USER_PRINTF("\t R1 = %2d,  G1 = %2d,  B1 = %2d,\n", mxconfig.gpio.r1, mxconfig.gpio.g1, mxconfig.gpio.b1);
+  USER_PRINTF("\t R2 = %2d,  G2 = %2d,  B2 = %2d,\n", mxconfig.gpio.r2, mxconfig.gpio.g2, mxconfig.gpio.b2);
+  USER_PRINTF("\t  A = %2d,   B = %2d,   C = %2d,\n", mxconfig.gpio.a, mxconfig.gpio.b, mxconfig.gpio.c);
+  USER_FLUSH();
+  USER_PRINTF("\t  D = %2d,   E = %2d,\n", mxconfig.gpio.d, mxconfig.gpio.e);
+  USER_PRINTF("\tLAT = %2d,  OE = %2d, CLK = %2d\n\n", mxconfig.gpio.lat, mxconfig.gpio.oe, mxconfig.gpio.clk);
+  USER_FLUSH();
+
+  lastHeap = ESP.getFreeHeap();
+  DEBUG_PRINT(F("Free heap: ")); DEBUG_PRINTLN(lastHeap);
 
   // check if we can re-use the existing display driver
   if (activeDisplay) {
@@ -1015,25 +1035,22 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
     
     USER_PRINT(F("heap usage: ")); USER_PRINTLN(int(lastHeap - ESP.getFreeHeap()));
     delay(18);   // experiment - give the driver a moment (~ one full frame @ 60hz) to settle
+    _colorOrder = bc.colorOrder;
     _valid = true;
     display->setBrightness8(_bri);    // range is 0-255, 0 - 0%, 255 - 100% //  [setBrightness()] Tried to set output brightness before begin()
     display->clearScreen();   // initially clear the screen buffer
     USER_PRINTLN("MatrixPanel_I2S_DMA clear ok");
 
-    if (_ledBuffer) free(_ledBuffer);                 // should not happen
-    if (_ledsDirty) free(_ledsDirty);                 // should not happen
+    if (_ledBuffer) p_free(_ledBuffer);                 // should not happen
+    if (_ledsDirty) d_free(_ledsDirty);                 // should not happen
 
-    _ledsDirty = (byte*) malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
+    _ledsDirty = (byte*) d_malloc(getBitArrayBytes(_len));  // create LEDs dirty bits
     if (_ledsDirty) setBitArray(_ledsDirty, _len, false); // reset dirty bits
 
-    #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM) && (defined(WLED_USE_PSRAM) || defined(WLED_USE_PSRAM_JSON))
-      if (psramFound()) {
-        _ledBuffer = (CRGB*) ps_calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
-      } else {
-        _ledBuffer = (CRGB*) calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
-      }
+    #if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_SPIRAM_MODE_OCT && defined(BOARD_HAS_PSRAM)
+      _ledBuffer = (CRGB*) p_calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
     #else
-      _ledBuffer = (CRGB*) calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
+      _ledBuffer = (CRGB*) d_calloc(_len, sizeof(CRGB));  // create LEDs buffer (initialized to BLACK)
     #endif
   }
 
@@ -1125,7 +1142,7 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::setPixelColor(uint16_t pix, 
 uint32_t IRAM_ATTR BusHub75Matrix::getPixelColor(uint16_t pix) const {
 // if (pix >= _len || !_ledBuffer) return BLACK; // not necessary - this was already checked at busses.getPixelColor()
 #if defined(WLEDMM_FASTPATH) && !defined(WLEDMM_SAVE_FLASH) 
-  return color_fade(uint32_t(_ledBuffer[pix]) & 0x00FFFFFF, _bri);   // this is slightly faster if we have inline color_fade()
+  return color_fade_fast(uint32_t(_ledBuffer[pix]) & 0x00FFFFFF, _bri);   // this is slightly faster if we have inline color_fade()
 #else
   return uint32_t(_ledBuffer[pix].scale8(_bri)) & 0x00FFFFFF;        // do it the FastLED way
 #endif
@@ -1154,12 +1171,14 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::show(void) {
 
   if (_ledBuffer) {
     // write out buffered LEDs
+    // cache values, to avoid repeated global access inside the hot path
     VirtualMatrixPanel*  fourScanPanel = BusHub75Matrix::activeFourScanPanel;
-    bool isFourScan = (fourScanPanel != nullptr);
+    const bool isFourScan = (fourScanPanel != nullptr);
     //if (isFourScan) fourScanPanel->setRotation(0);
-    unsigned height = isFourScan ? fourScanPanel->height() : display->height();
-    unsigned width = _panelWidth;
-
+    const unsigned height = isFourScan ? fourScanPanel->height() : display->height();
+    const unsigned width = _panelWidth;
+    const uint_fast8_t colOrder = _colorOrder & 0x0F;
+    const bool needReorder = colOrder != COL_ORDER_RGB; // fast path when no color re-ordering needed
     // Cache pointers to LED array and bitmask array, to avoid repeated accesses
     const byte* ledsDirty = _ledsDirty;
     const CRGB* ledBuffer = _ledBuffer;
@@ -1180,6 +1199,20 @@ void __attribute__((hot)) IRAM_ATTR BusHub75Matrix::show(void) {
         uint8_t g = c.g;
         uint8_t b = c.b;
         #endif
+        if (needReorder) {
+          // apply color order mapping (COL_ORDER_* values from const.h)
+          uint8_t r2=r, g2=g, b2=b;
+          switch (colOrder) {
+            case COL_ORDER_RGB: /* 1 */                          break; // no swap (HUB75 default)
+            case COL_ORDER_GRB: /* 0 */ r2=g; g2=r;              break; // swap R and G
+            case COL_ORDER_BRG: /* 2 */ r2=b; g2=r; b2=g;        break;
+            case COL_ORDER_RBG: /* 3 */       g2=b; b2=g;        break; // swap G and B
+            case COL_ORDER_BGR: /* 4 */ r2=b;       b2=r;        break; // swap R and B
+            case COL_ORDER_GBR: /* 5 */ r2=g; g2=b; b2=r;        break;
+            default:                                             break;
+          }
+          r=r2; g=g2; b=b2;
+        }
         if (isFourScan) fourScanPanel->drawPixelRGB888(int16_t(x), int16_t(y), r, g, b);
         else display->drawPixelRGB888(int16_t(x), int16_t(y), r, g, b);
       }
@@ -1217,8 +1250,8 @@ void BusHub75Matrix::cleanup() {
 #endif
 
   if (instanceCount > 0) instanceCount--;
-  if (_ledBuffer != nullptr) free(_ledBuffer); _ledBuffer = nullptr;
-  if (_ledsDirty != nullptr) free(_ledsDirty); _ledsDirty = nullptr;      
+  if (_ledBuffer != nullptr) p_free(_ledBuffer); _ledBuffer = nullptr;
+  if (_ledsDirty != nullptr) d_free(_ledsDirty); _ledsDirty = nullptr;      
 }
 
 void BusHub75Matrix::deallocatePins() {

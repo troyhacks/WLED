@@ -67,7 +67,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
   //int ap_pskl = ap[F("pskl")];
 
   CJSON(apChannel, ap[F("chan")]);
-  if (apChannel > 13 || apChannel < 1) apChannel = 1;
+  if (apChannel > 13 || apChannel < 1) apChannel = 6; // reset to default if invalid
 
   CJSON(apHide, ap[F("hide")]);
   if (apHide > 1) apHide = 1;
@@ -659,7 +659,7 @@ void deserializeConfigFromFS() {
   DEBUG_PRINTLN(F("Reading settings from /cfg.json..."));
 
   success = readObjectFromFile("/cfg.json", nullptr, &doc);
-  if (!success) { // if file does not exist, optionally try reading from EEPROM and then save defaults to FS
+  if (!success || doc.size() == 0) { // if file does not exist or contains only empty JSON (e.g. "{}"), try reading from EEPROM (if supported) and then save defaults to FS
     releaseJSONBufferLock();
     #ifdef WLED_ADD_EEPROM_SUPPORT
     deEEPSettings();
@@ -1122,7 +1122,7 @@ bool deserializeConfigSec() {
   if (!requestJSONBufferLock(3)) return false;
 
   bool success = readObjectFromFile("/wsec.json", nullptr, &doc);
-  if (!success) {
+  if (!success || doc.size() == 0) { // treat empty JSON (e.g. "{}") the same as a missing file
     releaseJSONBufferLock();
     return false;
   }

@@ -152,7 +152,7 @@ static uint16_t mode_oops(void) {
   strip._colors_t[0] = RED;
   strip._colors_t[1] = BLUE;
   strip._colors_t[2] = GREEN;
-  errorFlag = ERR_NORAM_PX;
+  //errorFlag = ERR_NORAM_PX;
   if (SEGLEN <= 1) return mode_static();
   const uint16_t width  = SEGMENT.is2D() ? SEGMENT.virtualWidth() : SEGMENT.virtualLength();
   const uint16_t height = SEGMENT.virtualHeight();
@@ -3007,24 +3007,24 @@ static const char _data_FX_MODE_TRI_STATIC_PATTERN[] PROGMEM = "Solid Pattern Tr
 
 uint16_t spots_base(uint16_t threshold)
 {
-  if (SEGLEN == 1) return mode_oops();
+  if (SEGLEN <= 1) return mode_oops();
   if (!SEGMENT.check2) SEGMENT.fill(SEGCOLOR(1));
 
-  uint16_t maxZones = SEGLEN >> 2;
-  uint16_t zones = 1 + ((SEGMENT.intensity * maxZones) >> 8);
-  uint16_t zoneLen = SEGLEN / zones;
-  uint16_t offset = (SEGLEN - zones * zoneLen) >> 1;
+  unsigned maxZones = max(1, SEGLEN / 4); // prevents "0 zones"
+  int zones         = 1U + ((uint32_t(SEGMENT.intensity) * maxZones + 127) >> 8); // with rounding
+  unsigned zoneLen  = (uint32_t(SEGLEN) + zones-1) / zones;  // round up (ceil)
+  int offset = ((int)SEGLEN - (zones * zoneLen)) / 2; // center the zones on the segment (can not use bit shift on negative number)
 
-  for (int z = 0; z < zones; z++)
+  for (unsigned z = 0; z < zones; z++)
   {
-    uint16_t pos = offset + z * zoneLen;
+    int pos = offset + (z * zoneLen);
     for (int i = 0; i < zoneLen; i++)
     {
-      uint16_t wave = triwave16((i * 0xFFFF) / zoneLen);
+      unsigned wave = triwave16((i * 0xFFFF) / zoneLen);
       if (wave > threshold) {
-        uint16_t index = 0 + pos + i;
-        uint8_t s = (wave - threshold)*255 / (0xFFFF - threshold);
-        SEGMENT.setPixelColor(index, color_blend(SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0), SEGCOLOR(1), 255-s));
+        int index = pos + i;
+        unsigned s = ((wave - threshold)*255 / (0xFFFF - threshold)) & 0xFF; // & 0xFF prevents overflow in next line
+        SEGMENT.setPixelColor(index, color_blend(SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0), SEGCOLOR(1), uint8_t(255-s)));
       }
     }
   }
@@ -3049,7 +3049,7 @@ uint16_t mode_spots_fade()
   uint16_t tr = (t >> 1) + (t >> 2);
   return spots_base(tr);
 }
-static const char _data_FX_MODE_SPOTS_FADE[] PROGMEM = "Spots Fade@Spread,Width,,,,,Overlay;!,!;!";
+static const char _data_FX_MODE_SPOTS_FADE[] PROGMEM = "Spots Fade@Speed,Width,,,,,Overlay;!,!;!";
 
 
 //each needs 12 bytes
@@ -4464,29 +4464,29 @@ static const char _data_FX_MODE_SINEWAVE[] PROGMEM = "Sine";
  */
 uint16_t mode_flow(void)
 {
-  uint16_t counter = 0;
+  unsigned counter = 0;
   if (SEGMENT.speed != 0)
   {
     counter = strip.now * ((SEGMENT.speed >> 2) +1);
     counter = counter >> 8;
   }
 
-  uint16_t maxZones = SEGLEN / 6; //only looks good if each zone has at least 6 LEDs
-  uint16_t zones = (SEGMENT.intensity * maxZones) >> 8;
+  unsigned maxZones = SEGLEN / 6; //only looks good if each zone has at least 6 LEDs
+  int zones = (SEGMENT.intensity * maxZones) >> 8;
   if (zones & 0x01) zones++; //zones must be even
   if (zones < 2) zones = 2;
-  uint16_t zoneLen = SEGLEN / zones;
-  uint16_t offset = (SEGLEN - zones * zoneLen) >> 1;
-
+  int zoneLen = SEGLEN / zones;
+  zones += 2; //add two extra zones to cover beginning and end of segment (compensate integer truncation)
+  int offset = ((int)SEGLEN - (zones * zoneLen)) / 2; // center the zones on the segment (can not use bit shift on negative number)
   SEGMENT.fill(SEGMENT.color_from_palette(-counter, false, true, 255));
 
   for (int z = 0; z < zones; z++)
   {
-    uint16_t pos = offset + z * zoneLen;
+    int pos = offset + z * zoneLen;
     for (int i = 0; i < zoneLen; i++)
     {
       uint8_t colorIndex = (i * 255 / zoneLen) - counter;
-      uint16_t led = (z & 0x01) ? i : (zoneLen -1) -i;
+      int led = (z & 0x01) ? i : (zoneLen -1) -i;
       if (SEGMENT.reverse) led = (zoneLen -1) -led;
       SEGMENT.setPixelColor(pos + led, SEGMENT.color_from_palette(colorIndex, false, true, 255));
     }
@@ -5030,6 +5030,85 @@ uint16_t mode_aurora(void) {
   return FRAMETIME;
 }
 static const char _data_FX_MODE_AURORA[] PROGMEM = "Aurora@!,!;1,2,3;!;;sx=24,pal=50";
+
+
+/** Softly floating colorful clouds.
+ * This is a very smooth effect that moves colorful clouds randomly around the LED strip.
+ * It was initially intended for rather unobtrusive ambient lights (with very slow speed settings).
+ * Nevertheless, it appears completely different and quite vibrant when the sliders are moved near
+ * to their limits. No matter in which direction or in which combination...
+ * Ported to WLED from https://github.com/JoaDick/EyeCandy/blob/master/ColorClouds.h
+ */
+uint16_t mode_ColorClouds()
+{
+  // Set random start points for clouds and color.
+  if (SEGENV.call == 0) {
+    SEGENV.aux0 = hw_random16();
+    SEGENV.aux1 = hw_random16();
+  }
+  const uint32_t volX0 = SEGENV.aux0;
+  const uint32_t hueX0 = SEGENV.aux1;
+  const uint8_t hueOffset0 = volX0 + hueX0; // derive a 3rd random number
+
+  // Makes a very soft wraparound of the color palette by putting more emphasis on the begin & end
+  // of the palette (or on the red'ish colors in case of a rainbow spectrum).
+  // This gives the effect oftentimes an even more calm perception.
+  const bool cozy = SEGMENT.check3;
+
+  // Higher values make the clouds move faster.
+  const uint32_t volSpeed = 1 + SEGMENT.speed;
+  
+  // Higher values make the color change faster.
+  const uint32_t hueSpeed = 1 + SEGMENT.intensity;
+  
+  // Higher values make more clouds (but smaller ones).
+  const uint32_t volSqueeze = 8 + SEGMENT.custom1;
+  
+  // Higher values make the clouds more colorful.
+  const uint32_t hueSqueeze = SEGMENT.custom2;
+
+  // Higher values make larger gaps between the clouds.
+  const int32_t volCutoff   = 12500 + SEGMENT.custom3 * 900;
+  const int32_t volSaturate = 52000;
+  // Note: When adjusting these calculations, ensure that volCutoff is always smaller than volSaturate.
+
+  const uint32_t now = strip.now;
+  const uint32_t volT = now * volSpeed / 8;
+  const uint32_t hueT = now * hueSpeed / 8;
+  const uint8_t hueOffset = beat88(64) >> 8;
+
+  bool doGammaCorrection = false; // WLEDMM gamma correction only needed when color is _not_ from a palette
+  if (SEGMENT.palette == 0) doGammaCorrection = true;
+  for (int i = 0; i < SEGLEN; i++) {
+    const uint32_t volX = i * volSqueeze * 64;
+    int32_t vol = perlin16(volX0 + volX, volT);
+    vol = map2(vol, volCutoff, volSaturate, 0, 255);
+    vol = min(max(vol, int32_t(0)), int32_t(255));
+
+    const uint32_t hueX = i * hueSqueeze * 8;
+    uint8_t hue = perlin16(hueX0 + hueX, hueT) >> 7;
+    hue += hueOffset0;
+    hue += hueOffset;
+    if (cozy) {
+      hue = cos8_t(128 + hue / 2);
+    }
+
+    uint32_t pixel;
+    if (SEGMENT.palette) { pixel = SEGMENT.color_from_palette(hue, false, true, 0, vol); }
+    else { hsv2rgb(CHSV32(hue, 255, vol), pixel); }
+
+    // Suppress extremely dark pixels to avoid flickering of plain r/g/b.
+    if (int(R(pixel)) + G(pixel) + B(pixel) <= 2) {
+      pixel = 0;
+    }
+
+    if (doGammaCorrection) pixel = gamma32(pixel);
+    SEGMENT.setPixelColor(i, pixel);
+  }
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_COLORCLOUDS[] PROGMEM = "Color Clouds@!,!,Clouds,Colors,Distance,,,Cozy;;!;;sx=24,ix=32,c1=48,c2=64,c3=12,pal=0";
+
 
 // WLED-SR effects
 
@@ -9371,9 +9450,9 @@ uint16_t mode_particlefireworks(void) {
   // check each rocket's state and emit particles according to its state: moving up = emit exhaust, at top = explode; falling down = standby time
   uint32_t emitparticles, frequency, baseangle, hueincrement; // number of particles to emit for each rocket's state
   // variables for circular explosions
-  [[maybe_unused]] int32_t speed, currentspeed, speedvariation, percircle;
+  [[maybe_unused]] int32_t speed = 0, currentspeed, speedvariation, percircle;
   int32_t counter = 0;
-  [[maybe_unused]] uint16_t angle;
+  [[maybe_unused]] uint16_t angle = 0;
   [[maybe_unused]] unsigned angleincrement;
   bool circularexplosion = false;
 
@@ -12150,6 +12229,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_COLOR_SWEEP_RANDOM, &mode_color_sweep_random, _data_FX_MODE_COLOR_SWEEP_RANDOM);
   addEffect(FX_MODE_RUNNING_COLOR, &mode_running_color, _data_FX_MODE_RUNNING_COLOR);
   addEffect(FX_MODE_AURORA, &mode_aurora, _data_FX_MODE_AURORA);
+  addEffect(FX_MODE_COLORCLOUDS, &mode_ColorClouds, _data_FX_MODE_COLORCLOUDS);
   addEffect(FX_MODE_RUNNING_RANDOM, &mode_running_random, _data_FX_MODE_RUNNING_RANDOM);
   addEffect(FX_MODE_LARSON_SCANNER, &mode_larson_scanner, _data_FX_MODE_LARSON_SCANNER);
   addEffect(FX_MODE_COMET, &mode_comet, _data_FX_MODE_COMET);
