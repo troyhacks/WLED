@@ -615,6 +615,17 @@ static_assert( (MAX_LEDS_PER_BUS) <= (MAX_LEDS), "configuration error: MAX_LEDS_
 #define PIN_RETRY_COOLDOWN   3000 // time in ms after an incorrect attempt PIN and OTA pass will be rejected even if correct
 #define PIN_TIMEOUT        900000 // time in ms after which the PIN will be required again, 15 minutes
 
+// WLEDMM upstream WLED compatibility: allow to over-override HW_PIN_SDA / HW_PIN_SCL with I2CDSAPIN/I2CSCLPIN
+//        * WLEDMM uses HW_PIN_SDA / HW_PIN_SCL for default I2C init. Pins can be changed in usermod settings.
+//        * The I2C bus driver is _not_ started by default on startup. Its initialized when the first usermod calls pinManager.joinWire().
+//        * This approach improves UX (changing I2C pins does not always require a restart), and it simplifies usermod code because a UM only calls pinManager.joinWire() to attach itself to the I2C bus.
+#if defined(I2CSCLPIN) && !defined(HW_PIN_SCL)
+  #define HW_PIN_SCL I2CSCLPIN
+#endif
+#if defined(I2CSDAPIN) && !defined(HW_PIN_SDA)
+  #define HW_PIN_SDA I2CSDAPIN
+#endif
+
 // HW_PIN_SCL & HW_PIN_SDA are used for information in usermods settings page and usermods themselves
 // which GPIO pins are actually used in a hardware layout (controller board)
 //WLEDMM: unchangeable pins are not treated here by undef them, but elsewhere in the code 
@@ -624,6 +635,17 @@ static_assert( (MAX_LEDS_PER_BUS) <= (MAX_LEDS), "configuration error: MAX_LEDS_
 #endif
 #ifndef HW_PIN_SDA
   #define HW_PIN_SDA -1 //WLEDMM if not defined, -1 will be used (not SDA/21) (also for esp8266?)
+#endif
+
+// WLEDMM upstream WLED compatibility: allow to over-override SPI pins with SPISCLKPIN/SPIMOSIPIN/SPIMISOPIN
+#if defined(SPISCLKPIN) && !defined(HW_PIN_CLOCKSPI)
+  #define HW_PIN_CLOCKSPI SPISCLKPIN
+#endif
+#if defined(SPIMOSIPIN) && !defined(HW_PIN_MOSISPI)
+  #define HW_PIN_MOSISPI SPIMOSIPIN
+#endif
+#if defined(SPIMISOPIN) && !defined(HW_PIN_MISOSPI)
+  #define HW_PIN_MISOSPI SPIMISOPIN
 #endif
 
 // HW_PIN_SCLKSPI & HW_PIN_MOSISPI & HW_PIN_MISOSPI are used for information in usermods settings page and usermods themselves
