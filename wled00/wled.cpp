@@ -893,6 +893,12 @@ void WLED::setup()
 
   DEBUG_PRINTLN(F("Initializing strip"));
   beginStrip();
+  // wait for strip to finish updating, to prevent glitches
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FILEWAIT)  // only wait if we don't have the flicker-free RMTHI driver
+  unsigned wait_start = millis();
+  while (strip.isUpdating() && (millis() - wait_start < 150)) delay(1); // wait max 150ms
+  #endif
+
   DEBUG_PRINT(F("heap ")); DEBUG_PRINTLN(getFreeHeapSize());
 
   USER_PRINTLN(F("\nUsermods setup ..."));
