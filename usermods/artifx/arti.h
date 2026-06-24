@@ -2142,11 +2142,14 @@ public:
                   //check already defined in this scope
 
                   // RUNLOG_ARTI("%s levels %u-%u\n", spaces+50-depth, variable_level,  variable_index );
-                  if (variable_level != 0) { //var already exist
+                  if ((variable_level != 0) && (this->callStack->peek() != nullptr)) { //var already exist // WLEDMM prevent nullptr access
                     //calculate the index in the call stack to find the right ar
                     uint8_t index = this->callStack->recordsCounter - 1 - (this->callStack->peek()->nesting_level - variable_level);
                     //  RUNLOG_ARTI("%s %s %s.%s = %s (push) %s %d-%d = %d (%d)\n", spaces+50-depth, key, ar->name, variable_name, varValue, variable_symbol->name, this->callStack->peek()->nesting_level,variable_symbol->scope_level, index,  this->callStack->recordsCounter); //key is variable_declaration name is ID
-                    ar = this->callStack->records[index];
+                    if (index < this->callStack->recordsCounter) 
+                      ar = this->callStack->records[index]; // WLEDMM prevent stale/out-of-range activation record access
+                    else 
+                      ar = nullptr;
                   }
                   else //var created here
                     ar = this->callStack->peek();
