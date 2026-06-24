@@ -13,27 +13,34 @@
 
 #include "arti_wled.h"
 
+#ifdef ARDUINO_ARCH_ESP32
+#include "esp_timer.h"
+static uint64_t artiLooptime = 1000; // for measuring FPS
+#endif
+
 //declare global variables
 static ARTI * arti;
+static char artiPreviousEffect[charLength]; // current effect name, or "" for no effect
+static bool artiSuccessful = false;
+static bool artiNotEnoughHeap = false;
+static bool artiSetupError = false;
 
 //effect function
 uint16_t mode_ARTIFX(void) { 
   //tbd: move statics to SEGMENT.data
-  static bool successful;
-  static bool notEnoughHeap;
 
-  static char previousEffect[charLength];
   if (SEGENV.call == 0) {
-    strcpy(previousEffect, ""); //force init
+    artiLooptime = 0;
+    strcpy(artiPreviousEffect, ""); //force init
     SEGMENT.fill(BLACK); //in case not all leds used e.g. when using expand 1d Circle. Tbd: fill black should never be used to allow for blends/transitions
   }
 
   char currentEffect[charLength];
   strlcpy(currentEffect, (SEGMENT.name != nullptr)?SEGMENT.name:"default", sizeof(currentEffect)); //note: switching preset with segment name to preset without does not clear the SEGMENT.name variable, but not gonna solve here ;-)
 
-  if (strcmp(previousEffect, currentEffect) != 0) 
+  if (strcmp(artiPreviousEffect, currentEffect) != 0) 
   {
-    strcpy(previousEffect, currentEffect);
+    strcpy(artiPreviousEffect, currentEffect);
 
     // if (artiWrapper != nullptr && artiWrapper->arti != nullptr) {
     if (arti != nullptr) 
@@ -45,21 +52,23 @@ uint16_t mode_ARTIFX(void) {
     // if (!SEGENV.allocateData(sizeof(ArtiWrapper))) return mode_static();  // We use this method for allocating memory for static variables.
     // artiWrapper = reinterpret_cast<ArtiWrapper*>(SEGENV.data);
     arti = new ARTI();
+    artiLooptime = 0;
 
-    successful = arti->setup("/wledv033.json", currentEffect);
-
-    if (!successful)
+    artiSuccessful = arti->setup("/wledv033.json", currentEffect);
+    artiSetupError = !artiSuccessful;
+    if (!artiSuccessful)
       ERROR_ARTI("Setup not successful\n");
   }
   else 
   {
-    if (successful) // && SEGENV.call < 250 for each frame
+    if (artiSuccessful) // && SEGENV.call < 250 for each frame
     {
       if (FREE_SIZE <= 20000) 
       {
         ERROR_ARTI("Not enough free heap (%u <= 30000)\n", FREE_SIZE);
-        notEnoughHeap = true;
-        successful = false;
+        artiNotEnoughHeap = true;
+        artiSuccessful = false;
+        artiLooptime = 0;
       }
       else
       {
@@ -70,18 +79,29 @@ uint16_t mode_ARTIFX(void) {
         //   MEMORY_ARTI("Heap renderFrame %u %u fps\n", FREE_SIZE, (SEGENV.call - previousCall)/5);
         //   previousCall = SEGENV.call;
         // }
+        #ifdef ARDUINO_ARCH_ESP32
+          uint64_t t0 = esp_timer_get_time();
+        #endif
         
-        successful = arti->loop();
+        artiSuccessful = arti->loop();
+
+        #ifdef ARDUINO_ARCH_ESP32
+          // runtime statistics
+          uint64_t t1 = esp_timer_get_time();
+          uint64_t detaT = t1 - t0;
+          artiLooptime = (artiLooptime * 3 + detaT) / 4; // some filtering
+        #endif
+
       }
     }
     else 
     {
       arti->closeLog();
-      if (notEnoughHeap && FREE_SIZE > 20000) {
+      if (artiNotEnoughHeap && FREE_SIZE > 20000) {
         ERROR_ARTI("Again enough free heap, restart effect (%u > 30000)\n", FREE_SIZE);
-        successful = true;
-        notEnoughHeap = false;
-        strcpy(previousEffect, ""); // force new create
+        artiSuccessful = true;
+        artiNotEnoughHeap = false;
+        strcpy(artiPreviousEffect, ""); // force new create
       }
       else {
         //mode_static
@@ -113,6 +133,7 @@ class ARTIFXUserMod : public Usermod {
         strip.addEffect(FX_MODE_ARTIFX, &mode_ARTIFX, _data_FX_MODE_ARTIFX);
       initDone = true;
       enabled = true;
+      artiLooptime = 0;
     }
 
     void connected() {
@@ -128,6 +149,27 @@ class ARTIFXUserMod : public Usermod {
      */
     void addToJsonInfo(JsonObject& root)
     {
+      if (!initDone || !enabled) return;  // prevent crash on boot applyPreset()
+      JsonObject user = root["u"];
+      if (user.isNull()) user = root.createNestedObject("u");
+      JsonArray infoArr = user.createNestedArray(FPSTR(_name));
+
+      if (!artiSetupError && (arti != nullptr)) {
+        String effectFile = strlen(artiPreviousEffect)>0 ? String(artiPreviousEffect)+".wled " : String("");
+        infoArr.add(effectFile);
+        infoArr.add(artiNotEnoughHeap? " no RAM": artiSuccessful ? " running": " failed");
+      } else {
+        if (artiSetupError) infoArr.add(F(" please download wled json first!"));
+        else infoArr.add(F(" standby"));
+      }
+
+      #ifdef ARDUINO_ARCH_ESP32
+      if (artiLooptime > 200) {
+        infoArr = user.createNestedArray(F("ARTIFX Frame Time"));
+        infoArr.add(float(artiLooptime/100ULL)/10.0f);
+        infoArr.add(" ms");
+      }
+      #endif
     }
 
 
