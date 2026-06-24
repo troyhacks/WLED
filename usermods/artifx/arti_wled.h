@@ -105,9 +105,9 @@ float ARTI::arti_external_function(uint8_t function, float par1, float par2, flo
     switch (function) {
       case F_setPixelColor: {
         if (par3 == floatNull)
-          SEGMENT.setPixelColor(((uint16_t)par1)%SEGLEN, (uint32_t)par2);
+          SEGMENT.setPixelColor(((int)par1)%SEGLEN, (uint32_t)par2);
         else
-          SEGMENT.setPixelColorXY((uint16_t)par1, (uint16_t)par2, (uint32_t)par3);
+          SEGMENT.setPixelColorXY((int)par1, (int)par2, (uint32_t)par3);
         return floatNull;
       }
       case F_hsv:
@@ -169,7 +169,7 @@ float ARTI::arti_external_function(uint8_t function, float par1, float par2, flo
         uint32_t saveFirstPixel = SEGMENT.getPixelColor(0);
         for (uint16_t i=0; i<SEGLEN-1; i++)
         {
-          SEGMENT.setPixelColor(i, SEGMENT.getPixelColor((uint16_t)(i + par1)%SEGLEN));
+          SEGMENT.setPixelColor(int(i), SEGMENT.getPixelColor((int)(i + par1)%SEGLEN));
         }
         SEGMENT.setPixelColor(SEGLEN - 1, saveFirstPixel);
         return floatNull;
@@ -467,9 +467,9 @@ void ARTI::arti_set_external_variable(float value, uint8_t variable, float par1,
           errorOccurred = true;
         }
         else if (par2 == floatNull)
-          SEGMENT.setPixelColor((uint16_t)par1%SEGLEN, value);
+          SEGMENT.setPixelColor((int)par1%SEGLEN, value);
         else
-          SEGMENT.setPixelColorXY((uint16_t)par1%SEGMENT.virtualWidth(), (uint16_t)par2%SEGMENT.virtualHeight(), value); //2D value!!
+          SEGMENT.setPixelColorXY((int)par1%SEGMENT.virtualWidth(), (int)par2%SEGMENT.virtualHeight(), value); //2D value!!
 
         return;
       case F_frameTime:

@@ -87,8 +87,8 @@
   // #define OPTIMIZED_TREE 1
 #endif
 
-bool logToFile = true; //print output to file (e.g. default.wled.log)
-uint32_t frameCounter = 0; //tbd move to class if more instances run 
+static bool logToFile = true; //print output to file (e.g. default.wled.log)
+static uint32_t frameCounter = 0; //tbd move to class if more instances run 
 
 void artiPrintf(char const * format, ...)
 {
@@ -107,7 +107,7 @@ void artiPrintf(char const * format, ...)
     // logFile.printf(format, argp);
     for (size_t i = 0; i < strlen(format); i++) 
     {
-      if (format[i] == '%') 
+      if ((format[i] == '%') && (strlen(format) > i)) // WLEDMM robustness improvement
       {
         switch (format[i+1]) 
         {
@@ -116,6 +116,9 @@ void artiPrintf(char const * format, ...)
             break;
           case 'u':
             if (logToFile) logFile.print(va_arg(argp, unsigned int)); else USER_PRINT(va_arg(argp, unsigned int));
+            break;
+          case 'd':
+            if (logToFile) logFile.print(va_arg(argp, int)); else USER_PRINT(va_arg(argp, int));
             break;
           case 'c':
             if (logToFile) logFile.print((char)va_arg(argp, int)); else USER_PRINT(va_arg(argp, int));
@@ -494,7 +497,7 @@ uint8_t stringToNode(const char * node)
   return F_NoNode;
 }
 
-bool errorOccurred = false;
+static bool errorOccurred = false;
 
 struct Token {
     uint16_t lineno;
@@ -2260,12 +2263,16 @@ public:
                           evaluation = fmod(left, right);
                         break;
                       }
-                      case F_bitShiftLeft: 
-                        evaluation = (int)left << (int)right; //only works on integers
+                      case F_bitShiftLeft: {
+                        uint32_t r = (unsigned)(int)right;
+                        evaluation = (r < 33) ? ((unsigned)(int)left << r) : 0; // only works on unsigned integers; allow max 32bit for shit
                         break;
-                      case F_bitShiftRight: 
-                        evaluation = (int)left >> (int)right; //only works on integers
+                      }
+                      case F_bitShiftRight: {
+                        uint32_t r = (unsigned)(int)right;
+                        evaluation = (r < 33) ? ((unsigned)(int)left >> r) : 0;  // only works on unsigned integers; allow max 32bit for shit
                         break;
+                      }
                       case F_equal: 
                         evaluation = left == right;
                         break;
@@ -2802,7 +2809,7 @@ public:
     closeLog();
 
     #if ARTI_PLATFORM == ARTI_ARDUINO
-      WLED_FS.remove(logFileName); //cleanup the /edit folder a bit
+      if (strlen(logFileName) > 0) WLED_FS.remove(logFileName); //cleanup the /edit folder a bit
     #endif
   }
 }; //ARTI
