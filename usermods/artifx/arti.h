@@ -548,7 +548,8 @@ class Lexer {
     }
     this->pos++;
 
-    if (this->pos > strlen(this->text) - 1)
+    size_t lenTxt = strlen(this->text);   // WLEDMM prevent unsigned wrap-around
+    if ((lenTxt == 0) || (this->pos > lenTxt - 1))
       this->current_char = -1;
     else 
     {
@@ -578,32 +579,35 @@ class Lexer {
     strcpy(current_token.type, "");
     strcpy(current_token.value, "");
 
-    char result[charLength] = "";
+    char result[charLength] = {'\0'}; // WLEDMM bugfix: explicitly init to "all zeros"
     while (this->current_char != -1 && isdigit(this->current_char)) 
     {
-      result[strlen(result)] = this->current_char;
+      size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
+      if (resLen < sizeof(result)) result[resLen] = this->current_char;
       this->advance();
     }
     if (this->current_char == '.') 
     {
-      result[strlen(result)] = this->current_char;
+      size_t resLen = strlen(result);
+      if (resLen < sizeof(result)) result[resLen] = this->current_char;
       this->advance();
 
       while (this->current_char != -1 && isdigit(this->current_char)) 
       {
-        result[strlen(result)] = this->current_char;
+        size_t resLen = strlen(result);
+        if (resLen < sizeof(result)) result[resLen] = this->current_char;
         this->advance();
       }
 
-      result[strlen(result)] = '\0';
+      result[min(strlen(result), sizeof(result)-1)] = '\0';
       strcpy(current_token.type, "REAL_CONST");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
     else 
     {
-      result[strlen(result)] = '\0';
+      result[min(strlen(result), sizeof(result)-1)] = '\0';
       strcpy(current_token.type, "INTEGER_CONST");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
 
   }
@@ -615,27 +619,28 @@ class Lexer {
     strcpy(current_token.type, "");
     strcpy(current_token.value, "");
 
-    char result[charLength] = "";
+    char result[charLength] = {'\0'}; // WLEDMM bugfix: explicitly init to "all zeros";
     while (this->current_char != -1 && (isalnum(this->current_char) || this->current_char == '_')) 
     {
-        result[strlen(result)] = this->current_char;
-        this->advance();
+      size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
+      if (resLen < sizeof(result)) result[resLen] = this->current_char;
+      this->advance();
     }
-    result[strlen(result)] = '\0';
+    result[min(strlen(result), sizeof(result)-1)] = '\0';
 
     char resultUpper[charLength];
-    strcpy(resultUpper, result);
+    strlcpy(resultUpper, result, sizeof(resultUpper));
     strupr(resultUpper);
 
     if (definitionJson["TOKENS"].containsKey(resultUpper)) 
     {
-      strcpy(current_token.type, definitionJson["TOKENS"][resultUpper]);
-      strcpy(current_token.value, resultUpper);
+      strlcpy(current_token.type, definitionJson["TOKENS"][resultUpper], sizeof(current_token.type));
+      strlcpy(current_token.value, resultUpper, sizeof(current_token.value));
     }
     else 
     {
       strcpy(current_token.type, "ID");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
   }
 
@@ -648,7 +653,7 @@ class Lexer {
 
     if (errorOccurred) return;
 
-    while (this->current_char != -1 && this->pos <= strlen(this->text) - 1 && !errorOccurred) 
+    while (this->current_char != -1 && this->pos < strlen(this->text) && !errorOccurred) // WLEDMM prevent unsigned wrap-around
     {
       if (isspace(this->current_char)) {
         this->skip_whitespace();
@@ -693,16 +698,16 @@ class Lexer {
         strncpy(currentValue, this->text + this->pos, charLength);
         currentValue[strlen(value)] = '\0';
         if (strcmp(value, currentValue) == 0 && strlen(value) > longestTokenLength) {
-          strcpy(token_type, tokenPair.key().c_str());
-          strcpy(token_value, value);
+          strlcpy(token_type, tokenPair.key().c_str(), sizeof(token_type));
+          strlcpy(token_value, value, sizeof(token_value));
           longestTokenLength = strlen(value);
         }
       }
 
       if (strcmp(token_type, "") != 0 && strcmp(token_value, "") != 0) 
       {
-        strcpy(current_token.type, token_type);
-        strcpy(current_token.value, token_value);
+        strlcpy(current_token.type, token_type, sizeof(current_token.type));
+        strlcpy(current_token.value, token_value, sizeof(current_token.value));
         for (size_t i=0; i<strlen(token_value); i++)
           this->advance();
         return;
@@ -732,8 +737,8 @@ class Lexer {
       positions[positions_index].current_char = this->current_char;
       positions[positions_index].lineno = this->lineno;
       positions[positions_index].column = this->column;
-      strcpy(positions[positions_index].type, current_token.type);
-      strcpy(positions[positions_index].value, current_token.value);
+      strlcpy(positions[positions_index].type, current_token.type, charLength);
+      strlcpy(positions[positions_index].value, current_token.value, charLength);
       positions_index++;
     }
     else
@@ -747,8 +752,8 @@ class Lexer {
       this->current_char = positions[positions_index].current_char;
       this->lineno = positions[positions_index].lineno;
       this->column = positions[positions_index].column;
-      strcpy(current_token.type, positions[positions_index].type);
-      strcpy(current_token.value, positions[positions_index].value);
+      strlcpy(current_token.type, positions[positions_index].type, charLength);
+      strlcpy(current_token.value, positions[positions_index].value, charLength);
     }
     else
       ERROR_ARTI("no positions saved\n");
@@ -778,7 +783,8 @@ class Symbol {
 
   Symbol(uint8_t symbol_type, const char * name, uint8_t type = 9) {
     this->symbol_type = symbol_type;
-    strcpy(this->name, name);
+    if (name != nullptr) strlcpy(this->name, name, charLength);  // WLEDMM robustness improvement
+    else strcpy(this->name, "");
     this->type = type;
     this->scope_level = 0;
   }
@@ -806,7 +812,7 @@ class ScopedSymbolTable {
   uint8_t child_scopesIndex = 0;
 
   ScopedSymbolTable(const char * scope_name, int scope_level, ScopedSymbolTable *enclosing_scope = nullptr) {
-    strcpy(this->scope_name, scope_name);
+    strlcpy(this->scope_name, scope_name, charLength);
     this->scope_level = scope_level;
     this->enclosing_scope = enclosing_scope;
   }
@@ -874,8 +880,8 @@ class ActivationRecord
 
     ActivationRecord(const char * name, const char * type, int nesting_level) 
     {
-        strcpy(this->name, name);
-        strcpy(this->type, type);
+        strlcpy(this->name, name, charLength);
+        strlcpy(this->type, type, charLength);
         this->nesting_level = nesting_level;
     }
 
@@ -942,7 +948,8 @@ public:
     if (recordsCounter > 0)
     {
       // RUNLOG_ARTI("%s\n", "Pop ", this->peek()->name);
-      return this->records[recordsCounter--];
+      recordsCounter--; // WLEDMM bugfix: recordsCounter points to the next free record! decrement first.
+      return this->records[recordsCounter];
     }
     else 
     {
@@ -953,7 +960,16 @@ public:
 
   ActivationRecord* peek() 
   {
-    return this->records[recordsCounter-1];
+    if (recordsCounter > 0) // WLEDMM robustness improvement
+    {
+      return this->records[recordsCounter-1];
+    }
+    else 
+    {
+      ERROR_ARTI("no ar left on callstack\n");
+      errorOccurred = true;
+      return nullptr;
+    }
   }
 }; //CallStack
 
@@ -1007,8 +1023,18 @@ public:
 
   float peekFloat() 
   {
-    // RUNLOG_ARTI("Calc Peek %s\n", floatStack[stack_index-1]);
-    return floatStack[stack_index-1];
+    if (stack_index>0) 
+    {
+      // RUNLOG_ARTI("Calc Peek %s\n", floatStack[stack_index-1]);
+      return floatStack[stack_index-1];
+    }
+    else 
+    {
+      ERROR_ARTI("Peek floatStack empty\n");
+      // RUNLOG_ARTI("Calc Pop %s\n", floatStack[stack_index]);
+      errorOccurred = true;
+      return -1;
+    }
   }
 
   // const char * popChar() {
@@ -1059,7 +1085,7 @@ private:
 
   uint8_t stages = 5; //for debugging: 0:parseFile, 1:Lexer, 2:parse, 3:optimize, 4:analyze, 5:interpret should be 5 if no debugging
 
-  char logFileName[fileNameLength];
+  char logFileName[fileNameLength] = {'\0'};  // WLEDMM init to empty string
 
   uint32_t startMillis;
 
@@ -2303,6 +2329,7 @@ public:
 
                 bool continuex = true;
                 uint16_t counter = 0;
+                if (ar == nullptr) continuex = false; // WLEDMM avoid nullptr access
                 while (continuex && counter < 2000) //to avoid endless loops
                 {
                   RUNLOG_ARTI("%s iteration\n", spaces+50-depth);
