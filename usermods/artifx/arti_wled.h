@@ -581,7 +581,7 @@ bool ARTI::loop()
   if (frameCounter == 1)
     startMillis = millis();
 
-  if (millis() - startMillis > 3000) //startMillis != 0 && logToFile && 
+  if (millis() - startMillis > 4000) //startMillis != 0 && logToFile && 
   {
     // ERROR_ARTI("time %u\n", millis() - startMillis);
     closeLog();

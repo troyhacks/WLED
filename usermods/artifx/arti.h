@@ -107,7 +107,7 @@ void artiPrintf(char const * format, ...)
     // logFile.printf(format, argp);
     for (size_t i = 0; i < strlen(format); i++) 
     {
-      if ((format[i] == '%') && (strlen(format) > i)) // WLEDMM robustness improvement
+      if ((format[i] == '%') && (strlen(format) > i+1)) // WLEDMM robustness improvement
       {
         switch (format[i+1]) 
         {
@@ -598,7 +598,7 @@ class Lexer {
       while (this->current_char != -1 && isdigit(this->current_char)) 
       {
         size_t resLen = strlen(result);
-        if (resLen < sizeof(result)) result[resLen] = this->current_char;
+        if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
         this->advance();
       }
 
@@ -886,6 +886,9 @@ class ActivationRecord
         strlcpy(this->name, name, charLength);
         strlcpy(this->type, type, charLength);
         this->nesting_level = nesting_level;
+        memset(floatMembers, 0, sizeof(floatMembers)); // WLEDMM make sure all vars are initialized to 0
+        memset(lastSet, 0, sizeof(lastSet));
+        lastSetIndex = 0;
     }
 
     ~ActivationRecord() 
@@ -986,6 +989,7 @@ public:
 
   ValueStack() 
   {
+    memset(floatStack, 0, sizeof(floatStack)); // WLEDMM make sure all vars are initialized to 0
   }
 
   ~ValueStack() 
@@ -1979,7 +1983,7 @@ public:
 
                   float returnValue = floatNull;
 
-                  returnValue = arti_external_function(value["external"], valueStack->floatStack[oldIndex]
+                  returnValue = arti_external_function(value["external"], (valueStack->stack_index - oldIndex>0)?valueStack->floatStack[oldIndex]  :floatNull
                                                                         , (valueStack->stack_index - oldIndex>1)?valueStack->floatStack[oldIndex+1]:floatNull
                                                                         , (valueStack->stack_index - oldIndex>2)?valueStack->floatStack[oldIndex+2]:floatNull
                                                                         , (valueStack->stack_index - oldIndex>3)?valueStack->floatStack[oldIndex+3]:floatNull
