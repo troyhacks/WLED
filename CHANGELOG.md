@@ -1,7 +1,7 @@
 # WARNING - Outdated List
 > [!CAUTION]
 > This changelog is no longer maintained actively. The WLED-MM project is still active ;-).
-> It only serves as a historical reference.
+> The changelog only serves as a historical reference.
 
 
 ## [WLED upstream](https://github.com/wled/WLED/tree/0_14_1) changelog
