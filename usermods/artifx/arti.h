@@ -194,9 +194,9 @@ void artiPrintf(char const * format, ...)
     #define MEMORY_ARTI(...)
 #endif
 
-#define charLength 30
-#define fileNameLength 50
-#define arrayLength 30
+#define charLength 32     // softhack007 was 30
+#define fileNameLength 64 // softhack007 was 50
+#define arrayLength 32    // softhack007 was 30
 
 #define floatNull -32768
 
@@ -586,13 +586,13 @@ class Lexer {
     while (this->current_char != -1 && isdigit(this->current_char)) 
     {
       size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
-      if (resLen < sizeof(result)) result[resLen] = this->current_char;
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
       this->advance();
     }
     if (this->current_char == '.') 
     {
       size_t resLen = strlen(result);
-      if (resLen < sizeof(result)) result[resLen] = this->current_char;
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
       this->advance();
 
       while (this->current_char != -1 && isdigit(this->current_char)) 
@@ -626,7 +626,7 @@ class Lexer {
     while (this->current_char != -1 && (isalnum(this->current_char) || this->current_char == '_')) 
     {
       size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
-      if (resLen < sizeof(result)) result[resLen] = this->current_char;
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
       this->advance();
     }
     result[min(strlen(result), sizeof(result)-1)] = '\0';
@@ -867,7 +867,7 @@ class ScopedSymbolTable {
 
 }; //ScopedSymbolTable
 
-#define nrOfVariables 20
+#define nrOfVariables 24  // softhack007 was 20
 
 class ActivationRecord 
 {
@@ -2268,12 +2268,12 @@ public:
                       }
                       case F_bitShiftLeft: {
                         uint32_t r = (unsigned)(int)right;
-                        evaluation = (r < 33) ? ((unsigned)(int)left << r) : 0; // only works on unsigned integers; allow max 32bit for shit
+                        evaluation = (r < 32) ? ((unsigned)(int)left << r) : 0; // only works on unsigned integers; allow max 32bit for shit
                         break;
                       }
                       case F_bitShiftRight: {
                         uint32_t r = (unsigned)(int)right;
-                        evaluation = (r < 33) ? ((unsigned)(int)left >> r) : 0;  // only works on unsigned integers; allow max 32bit for shit
+                        evaluation = (r < 32) ? ((unsigned)(int)left >> r) : 0;  // only works on unsigned integers; allow max 32bit for shit
                         break;
                       }
                       case F_equal: 
@@ -2575,7 +2575,7 @@ public:
       return false;
     }
 
-    char programFileName[fileNameLength];
+    char programFileName[fileNameLength] = {'\0'};
     #if ARTI_PLATFORM == ARTI_ARDUINO
       strcpy(programFileName, "/");
     #endif

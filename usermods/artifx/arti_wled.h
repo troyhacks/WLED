@@ -367,9 +367,9 @@ float ARTI::arti_get_external_variable(uint8_t variable, float par1, float par2,
           return floatNull;
         }
         else if (par2 == floatNull)
-          return SEGMENT.getPixelColor((uint16_t)par1);
+          return SEGMENT.getPixelColor((int)par1);
         else
-          return SEGMENT.getPixelColorXY((uint16_t)par1, (uint16_t)par2); //2D value!!
+          return SEGMENT.getPixelColorXY((int)par1, (int)par2); //2D value!!
 
       case F_counter:
         return SEGENV.call;

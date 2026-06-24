@@ -14,7 +14,7 @@
 #include "arti_wled.h"
 
 //declare global variables
-ARTI * arti;
+static ARTI * arti;
 
 //effect function
 uint16_t mode_ARTIFX(void) { 
