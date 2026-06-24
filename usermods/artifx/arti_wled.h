@@ -96,7 +96,7 @@ enum Externals
 #if ARTI_PLATFORM != ARTI_ARDUINO
   #define PI 3.141592654
 #endif
-uint32_t frameTime = 0;
+static uint32_t frameTime = 0;
 
 float ARTI::arti_external_function(uint8_t function, float par1, float par2, float par3, float par4, float par5)
 {
