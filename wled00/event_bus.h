@@ -73,7 +73,11 @@ struct Event {
     struct { int16_t playlist; uint8_t entry; } playlistStarted;
     struct { int16_t playlist; bool hadEndPreset; uint8_t endPreset; } playlistEnded;
     struct { bool wasOff; bool isOff; } powerEdge;
-    struct { uint8_t newIndex; } effectIndexChanged;
+    struct {
+      uint8_t seg_id;        // segment whose effect index changed (0 = whole strip / unsegmented)
+      uint8_t oldIndex;      // previous FX index, 255 = "unknown / first observation"
+      uint8_t newIndex;      // new FX index (mirrors SEGMENT.mode after the change)
+    } effectIndexChanged;
     struct { bool connected; uint16_t vid; uint16_t pid; char name[24]; } usbDevice;
     uint8_t raw[32];  // sized floor for the union; not used by any current event
   } payload;

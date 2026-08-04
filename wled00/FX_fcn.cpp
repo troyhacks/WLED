@@ -593,9 +593,30 @@ void Segment::setMode(uint8_t fx, bool loadDefaults, bool sliderDefaultsOnly) {
   // if we have a valid mode & is not reserved
   if (fx < strip.getModeCount() && strncmp_P("RSVD", strip.getModeData(fx), 4)) {
     if (fx != mode) {
+      const uint8_t previousMode = mode;  // WLEDMM v3: capture pre-mutation for EffectIndexChanged event
       startTransition(strip.getTransition()); // set effect transitions
       //markForReset(); // transition will handle this
       mode = fx;
+
+      // WLEDMM v3: publish EffectIndexChanged on the v3 event bus.
+      // Segment ids aren't stored on the Segment object itself; resolve
+      // via pointer identity against strip._segments. Falls back to 0 if
+      // somehow not found (single-segment is the common case anyway).
+      { uint8_t publishSegId = 0;
+        const uint8_t segCount = strip.getSegmentsNum();
+        for (uint8_t i = 0; i < segCount; i++) {
+          if (&strip.getSegment(i) == this) { publishSegId = i; break; }
+        }
+        wled::Event ev = {};
+        ev.type = wled::EventType::EffectIndexChanged;
+        ev.timestamp_ms = millis();
+        ev.source_id = 0;
+        ev.payload.effectIndexChanged.seg_id   = publishSegId;
+        ev.payload.effectIndexChanged.oldIndex = previousMode;
+        ev.payload.effectIndexChanged.newIndex = fx;
+        wled::EventBus::publish(ev);
+      }
+
 
       // load default values from effect string
       if (loadDefaults) {

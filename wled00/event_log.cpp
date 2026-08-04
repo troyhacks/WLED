@@ -67,6 +67,8 @@ namespace {
         obj["isOff"]  = p.powerEdge.isOff;
         break;
       case EventType::EffectIndexChanged:
+        obj["seg_id"]   = p.effectIndexChanged.seg_id;
+        obj["oldIndex"] = p.effectIndexChanged.oldIndex;
         obj["newIndex"] = p.effectIndexChanged.newIndex;
         break;
       case EventType::PresetCycleRequested:

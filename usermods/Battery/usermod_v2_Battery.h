@@ -54,7 +54,7 @@ class UsermodBattery : public Usermod
     int8_t lowPowerIndicatorDuration = USERMOD_BATTERY_LOW_POWER_INDICATOR_DURATION;
     bool lowPowerIndicationDone = false;
     unsigned long lowPowerActivationTime = 0; // used temporary during active time
-    int8_t lastPreset = 0;
+    int8_t lastPreset = 0;          // WLEDMM v3: latched by onEvent(PresetApplied) instead of inline capture
 
     bool initDone = false;
     bool initializing = true;
@@ -103,7 +103,8 @@ class UsermodBattery : public Usermod
       if (lowPowerIndicationDone) return;
       if (lowPowerActivationTime <= 1) {
         lowPowerActivationTime = millis();
-        lastPreset = currentPreset;
+        // lastPreset was latched by onEvent(PresetApplied) right before
+        // we entered this branch; no inline capture needed.
         applyPreset(lowPowerIndicatorPreset);
       }
 
@@ -111,7 +112,22 @@ class UsermodBattery : public Usermod
         lowPowerIndicationDone = true;
         lowPowerActivationTime = 0;
         applyPreset(lastPreset);
-      }      
+      }
+    }
+
+    // WLEDMM v3: subscribe to PresetApplied to latch the user's
+    // selected preset. We exclude the low-power preset itself so the
+    // restore path has the value the user was ON before the
+    // indication kicked in. This replaces the inline
+    // `lastPreset = currentPreset;` that lived inside
+    // lowPowerIndicator() in v2 — see the migration note above.
+    void onEvent(const wled::Event& ev) override {
+      if (ev.type == wled::EventType::PresetApplied) {
+        const uint8_t applied = ev.payload.presetApplied.preset;
+        if (applied != (uint8_t)lowPowerIndicatorPreset) {
+          lastPreset = (int8_t)applied;
+        }
+      }
     }
 
     float readVoltage()

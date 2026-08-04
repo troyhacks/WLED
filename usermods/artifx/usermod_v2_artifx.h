@@ -23,6 +23,13 @@ uint16_t mode_ARTIFX(void) {
   static bool notEnoughHeap;
 
   static char previousEffect[charLength];
+  // WLEDMM v3: previousEffect keys on SEGMENT.name (a free-text string),
+  // NOT on the FX index. EffectIndexChanged only fires when the FX index
+  // changes, so it cannot replace this shadow — a segment-name-only
+  // change (same FX, different preset name) wouldn't fire the event but
+  // still requires the heap teardown + re-init. Keeping the shadow for
+  // now; when a future SegmentPropertyChanged event exists, this can
+  // collapse to subscribing.
   if (SEGENV.call == 0) {
     strcpy(previousEffect, ""); //force init
     SEGMENT.fill(BLACK); //in case not all leds used e.g. when using expand 1d Circle. Tbd: fill black should never be used to allow for blends/transitions
@@ -119,6 +126,18 @@ class ARTIFXUserMod : public Usermod {
     }
 
     void loop() {
+    }
+
+    // WLEDMM v3 hooks. Currently no-ops; the segment-name-aware heap
+    // lifecycle inside mode_ARTIFX() can't be replaced by EffectIndexChanged
+    // alone (see the comment on previousEffect above). Future work:
+    // when a SegmentPropertyChanged event exists, subscribe here and
+    // drop the previousEffect shadow. Also enables the heap teardown
+    // on out-of-FX transitions if we want to free memory when the
+    // user switches away from ARTIFX.
+    void onEvent(const wled::Event& ev) override {
+      (void)ev;
+      // intentionally a no-op for now — see comment above
     }
 
     /*
