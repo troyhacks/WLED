@@ -1041,6 +1041,7 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
 
     size_t bufferOffset = 0;
     uint16_t universe = 1;
+    const uint32_t channelsPerOutput = leds_per_output * bpp;
 
     sequenceNumber = (sequenceNumber + 1) & 0xFF;
     if (sequenceNumber == 0) sequenceNumber = 1;
@@ -1071,46 +1072,51 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
     packet_buffer[121] = 0x00; packet_buffer[122] = 0x01;
     packet_buffer[125] = 0x00;
 
-    for (size_t pkt = 0; pkt < packetCount; pkt++) {
-      size_t remaining = totalChannels - bufferOffset;
-      size_t packetSize = (remaining < maxChannels) ? remaining : maxChannels;
+    for (uint32_t output = 0; output < outputs; output++) {
+      bufferOffset = output * channelsPerOutput;
+      uint32_t channels_remaining = channelsPerOutput;
 
-      uint16_t rootLen = 110 + packetSize;
-      packet_buffer[16] = 0x70 | ((rootLen >> 8) & 0x0F);
-      packet_buffer[17] = rootLen & 0xFF;
+      while (channels_remaining > 0) {
+        uint32_t packetSize = (channels_remaining < maxChannels) ? channels_remaining : maxChannels;
+        channels_remaining -= packetSize;
 
-      uint16_t framingLen = 88 + packetSize;
-      packet_buffer[38] = 0x70 | ((framingLen >> 8) & 0x0F);
-      packet_buffer[39] = framingLen & 0xFF;
+        uint16_t rootLen = 110 + packetSize;
+        packet_buffer[16] = 0x70 | ((rootLen >> 8) & 0x0F);
+        packet_buffer[17] = rootLen & 0xFF;
 
-      uint16_t dmpLen = 11 + packetSize;
-      packet_buffer[115] = 0x70 | ((dmpLen >> 8) & 0x0F);
-      packet_buffer[116] = dmpLen & 0xFF;
+        uint16_t framingLen = 88 + packetSize;
+        packet_buffer[38] = 0x70 | ((framingLen >> 8) & 0x0F);
+        packet_buffer[39] = framingLen & 0xFF;
 
-      uint16_t propCount = packetSize + 1;
-      packet_buffer[123] = (propCount >> 8) & 0xFF;
-      packet_buffer[124] = propCount & 0xFF;
+        uint16_t dmpLen = 11 + packetSize;
+        packet_buffer[115] = 0x70 | ((dmpLen >> 8) & 0x0F);
+        packet_buffer[116] = dmpLen & 0xFF;
 
-      packet_buffer[111] = sequenceNumber;
-      packet_buffer[113] = (universe >> 8) & 0xFF;
-      packet_buffer[114] = universe & 0xFF;
+        uint16_t propCount = packetSize + 1;
+        packet_buffer[123] = (propCount >> 8) & 0xFF;
+        packet_buffer[124] = propCount & 0xFF;
 
-      processPixelData(packet_buffer + E131_HEADER_LEN, buffer_in, packetSize, bufferOffset, bri, isRGBW, color_order, length);
+        packet_buffer[111] = sequenceNumber;
+        packet_buffer[113] = (universe >> 8) & 0xFF;
+        packet_buffer[114] = universe & 0xFF;
 
-      IPAddress dest = e131_multicast ? e131MulticastIP(universe) : client;
+        processPixelData(packet_buffer + E131_HEADER_LEN, buffer_in, packetSize, bufferOffset, bri, isRGBW, color_order, length);
 
-      if (!e131Udp.writeTo(packet_buffer, packetSize + E131_HEADER_LEN, dest, E131_DEFAULT_PORT, send_interface)) {
-        DEBUG_PRINTLN(F("E1.31 writeTo error"));
-        return 1;
+        IPAddress dest = e131_multicast ? e131MulticastIP(universe) : client;
+
+        if (!e131Udp.writeTo(packet_buffer, packetSize + E131_HEADER_LEN, dest, E131_DEFAULT_PORT, send_interface)) {
+          DEBUG_PRINTLN(F("E1.31 writeTo error"));
+          return 1;
+        }
+
+        #ifdef REALTIME_OUTPUT_TIMER
+        packetstotal++;
+        datatotal += packetSize + E131_HEADER_LEN + 46;
+        #endif
+
+        bufferOffset += packetSize;
+        universe++;
       }
-
-      #ifdef REALTIME_OUTPUT_TIMER
-      packetstotal++;
-      datatotal += packetSize + E131_HEADER_LEN + 46;
-      #endif
-
-      bufferOffset += packetSize;
-      universe++;
     }
 
     #ifdef E131_SYNC_ENABLED
@@ -1170,15 +1176,15 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
 
     if (artnetMap && artnetMap->isEnabled() && artnetMap->getNumOutputs() > 0) {
       // Use usermod configuration - each output has its own start universe and LED count
-      uint16_t numOutputs = artnetMap->getNumOutputs();
+      uint32_t numOutputs = artnetMap->getNumOutputs();
       // length = artnetMap->getTotalLeds();
-      for (uint_fast16_t output = 0; output < numOutputs; output++) {
+      for (uint32_t output = 0; output < numOutputs; output++) {
         uint_fast16_t universe = artnetMap->getStartUniverse(output);
-        uint_fast16_t output_leds = artnetMap->getLedsPerOutput(output);
-        uint_fast16_t channels_remaining = output_leds * bpp;
+        uint32_t output_leds = artnetMap->getLedsPerOutput(output);
+        uint32_t channels_remaining = output_leds * bpp;
 
         while (channels_remaining > 0) {
-          uint_fast16_t packetSize = (channels_remaining < maxChannels)
+          uint32_t packetSize = (channels_remaining < maxChannels)
             ? channels_remaining : maxChannels;
           channels_remaining -= packetSize;
 
@@ -1211,11 +1217,11 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
       // Default behavior - sequential universes, uniform leds_per_output
       uint_fast16_t universe = 0;
 
-      for (uint_fast16_t output = 0; output < outputs; output++) {
-        uint_fast16_t channels_remaining = leds_per_output * bpp;
+      for (uint32_t output = 0; output < outputs; output++) {
+        uint32_t channels_remaining = leds_per_output * bpp;
 
         while (channels_remaining > 0) {
-          uint_fast16_t packetSize = (channels_remaining < maxChannels)
+          uint32_t packetSize = (channels_remaining < maxChannels)
             ? channels_remaining : maxChannels;
           channels_remaining -= packetSize;
 

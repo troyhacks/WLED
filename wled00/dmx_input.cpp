@@ -224,8 +224,8 @@ void DMXInput::update()
 void DMXInput::turnOnAllLeds()
 {
   // TODO not sure if this is the correct way?
-  const uint16_t numPixels = strip.getLengthTotal();
-  for (uint16_t i = 0; i < numPixels; ++i)
+  const uint32_t numPixels = strip.getLengthTotal();
+  for (uint32_t i = 0; i < numPixels; ++i)
   {
     strip.setPixelColor(i, 255, 255, 255, 255);
   }

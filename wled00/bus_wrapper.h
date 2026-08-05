@@ -774,7 +774,7 @@ class PolyBus {
     }
     return true;
   };
-  static void setPixelColor(void* busPtr, uint8_t busType, uint16_t pix, uint32_t c, uint8_t co) {
+  static void setPixelColor(void* busPtr, uint8_t busType, uint32_t pix, uint32_t c, uint8_t co) {
     uint8_t r = c >> 16;
     uint8_t g = c >> 8;
     uint8_t b = c >> 0;

@@ -268,7 +268,7 @@ class MidiUsermod : public Usermod {
   // (see cores/esp32/pgmspace.h), so these can be defined inline as constexpr
   // to avoid ODR violations when the header is included from multiple TUs
   // (usermods_list.cpp + wled.cpp via midi_usb_host.cpp).
-  static constexpr const char _name[]    PROGMEM = "MidiUsb";
+  static constexpr const char _name[]    PROGMEM = "MIDI-USB";
   static constexpr const char _key_enabled[] PROGMEM = "enabled";
   static constexpr const char _key_feedback_enabled[] PROGMEM = "feedback_enabled";
 
@@ -861,7 +861,7 @@ class MidiUsermod : public Usermod {
   // ---------------------------------------------------------------------------
   // Construction / lifecycle
   // ---------------------------------------------------------------------------
-  MidiUsermod(const char* name = "MidiUsb", bool enabled = true)
+  MidiUsermod(const char* name = "MIDI-USB", bool enabled = true)
       : Usermod(name, enabled) {
     // Pad layout: top-left = preset 1, left-to-right then top-to-bottom.
     // The APC Mini MK2 sends notes 0..63 with note 0 = bottom-left and
@@ -1888,7 +1888,7 @@ class MidiUsermod : public Usermod {
     auto emit_dropdown = [&](const char* group, uint8_t idx, bool shift) {
       char path[24];
       snprintf(path, sizeof(path), "%s:%d", group, (int)(idx + 1));
-      oappend(SET_F("var __s = addDropdown('MidiUsb','"));
+      oappend(SET_F("var __s = addDropdown('MIDI-USB','"));
       oappend(path);
       oappend(SET_F("');"));
       // Empty option so the user can clear an assignment.

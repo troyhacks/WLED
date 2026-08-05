@@ -2189,9 +2189,9 @@ void WS2812FX::estimateCurrentAndLimitBri() {
     Bus *bus = busses.getBus(bNum);
     auto btype = bus->getType();
     if (EXCLUDE_FROM_ABL(btype)) continue; // WLEDMM exclude non-ABL and network busses
-    uint16_t len = bus->getLength();
+    uint32_t len = bus->getLength();
     uint32_t busPowerSum = 0;
-    for (uint_fast16_t i = 0; i < len; i++) { //sum up the usage of each LED
+    for (uint32_t i = 0; i < len; i++) { //sum up the usage of each LED
       uint32_t c = bus->getPixelColor(i);
       byte r = R(c), g = G(c), b = B(c), w = W(c);
 
