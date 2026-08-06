@@ -1863,7 +1863,7 @@ void WLED::setup() {
     USER_PRINTLN("Done!");
     USER_PRINT("Starting SD card preload... ");
     ImageCacheManager::getInstance().startPreload("/sdcard");
-    ImageCacheManager::getInstance().waitUntilIdle();
+    // ImageCacheManager::getInstance().waitUntilIdle(); // TroyHacks: TODO/Investigate/FIXME
     USER_PRINTLN("Done!");
   }
   #endif 
