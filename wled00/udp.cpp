@@ -1150,12 +1150,29 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
     #else
     static AsyncUDP artnetUdp;
     #endif
-    
-    static IPAddress lastClient((uint32_t)0);
 
-    if ((uint32_t)client != (uint32_t)lastClient || last_netif != sender_netif) {
-      artnetUdp.connect(client, ARTNET_DEFAULT_PORT);
-      lastClient = client;
+    #ifdef USERMOD_ARTNETMAP
+    ArtNetMapUsermod* artnetMap = (ArtNetMapUsermod*)usermods.lookup(USERMOD_ID_ARTNETMAP);
+    const bool artnetMapActive = artnetMap && artnetMap->isEnabled();
+    #else
+    const bool artnetMapActive = false;
+    #endif
+
+    static IPAddress lastDest((uint32_t)0);
+    IPAddress dest = client;
+    #ifdef USERMOD_ARTNETMAP
+    if (artnetMapActive) {
+      const char* tip = artnetMap->getTargetIP();
+      if (tip && tip[0]) {
+        IPAddress parsed;
+        if (parsed.fromString(tip)) dest = parsed;
+      }
+    }
+    #endif
+
+    if ((uint32_t)dest != (uint32_t)lastDest || last_netif != sender_netif) {
+      artnetUdp.connect(dest, ARTNET_DEFAULT_PORT);
+      lastDest = dest;
       last_netif = sender_netif;
     }
 
@@ -1163,7 +1180,10 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
       memcpy(packet_buffer, ART_NET_HEADER, 12);
     }
 
-    const uint16_t maxChannels = isRGBW ? 512 : 510;
+    uint16_t maxChannels = isRGBW ? 512 : 510;
+    #ifdef USERMOD_ARTNETMAP
+    if (artnetMapActive) maxChannels = artnetMap->getChannelsPerUniverse();
+    #endif
 
     sequenceNumber = (sequenceNumber + 1) & 0xFF;
     if (sequenceNumber == 0) sequenceNumber = 1;
@@ -1171,10 +1191,7 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
     uint_fast32_t bufferOffset = 0;
 
     #ifdef USERMOD_ARTNETMAP
-    // Get the ArtNetMap usermod for per-output universe mapping
-    ArtNetMapUsermod* artnetMap = (ArtNetMapUsermod*)usermods.lookup(USERMOD_ID_ARTNETMAP);
-
-    if (artnetMap && artnetMap->isEnabled() && artnetMap->getNumOutputs() > 0) {
+    if (artnetMapActive && artnetMap->getNumOutputs() > 0) {
       // Use usermod configuration - each output has its own start universe and LED count
       uint32_t numOutputs = artnetMap->getNumOutputs();
       // length = artnetMap->getTotalLeds();
@@ -1288,7 +1305,7 @@ uint8_t __attribute__((hot)) realtimeBroadcast(
     return 1;
   }
 
-if (fps_limit > 0) {
+  if (fps_limit > 0) {
     frame_limiter = timer + (1000000 / fps_limit);
   }
 

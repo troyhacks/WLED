@@ -42,17 +42,19 @@ private:
   char currentPreset[32] = "";
   int16_t testingOutput = -1;
   unsigned long testStartTime = 0;
+  unsigned long lastTestSend = 0;
 
   // String constants
   static const char _name[];
   static const char _enabled[];
   static const char _currentPreset[];
 
-  // Calculate universes needed for LED count
+  // Calculate universes needed for LED count.
+  // Assumes RGB (bpp=3). For RGBW the actual span is slightly larger; the
+  // OUTPUT sender in udp.cpp is the authoritative source for emission.
   uint16_t calcUniverses(uint32_t leds) {
     if (leds == 0) return 0;
-    uint32_t ledsPerUni = channelsPerUniverse / 3;
-    return (leds + ledsPerUni - 1) / ledsPerUni;
+    return (uint16_t)((leds * 3ULL + channelsPerUniverse - 1) / channelsPerUniverse);
   }
 
   // Calculate end universe for output
@@ -127,36 +129,48 @@ private:
       return false;
     }
 
-    numOutputs = min((uint16_t)ARTNETMAP_MAX_OUTPUTS, doc["n"] | (uint16_t)0);
-    channelsPerUniverse = doc["ch"] | 510;
-    strlcpy(targetIP, doc["ip"] | "255.255.255.255", sizeof(targetIP));
-    padMode = doc["pad"] | 0;
+    // Tentative count from metadata; arrays may be shorter if the file is truncated
+    uint16_t expected = min((uint16_t)ARTNETMAP_MAX_OUTPUTS, doc["n"] | (uint16_t)0);
 
     // Read startUniverse array - parse manually to avoid JSON memory limits
     line = f.readStringUntil('\n');
+    uint16_t parsedStart = 0;
     if (line.length() > 2 && line[0] == '[') {
-      uint16_t i = 0;
       char* ptr = (char*)line.c_str() + 1;  // Skip '['
-      while (i < numOutputs && *ptr && *ptr != ']') {
-        startUniverse[i++] = strtoul(ptr, &ptr, 10);
+      while (parsedStart < expected && *ptr && *ptr != ']') {
+        startUniverse[parsedStart++] = strtoul(ptr, &ptr, 10);
         if (*ptr == ',') ptr++;  // Skip comma
       }
     }
 
     // Read ledsPerOutput array - parse manually
     line = f.readStringUntil('\n');
+    uint16_t parsedLeds = 0;
     if (line.length() > 2 && line[0] == '[') {
-      uint16_t i = 0;
       char* ptr = (char*)line.c_str() + 1;  // Skip '['
-      while (i < numOutputs && *ptr && *ptr != ']') {
-        ledsPerOutput[i++] = strtoul(ptr, &ptr, 10);
+      while (parsedLeds < expected && *ptr && *ptr != ']') {
+        ledsPerOutput[parsedLeds++] = strtoul(ptr, &ptr, 10);
         if (*ptr == ',') ptr++;  // Skip comma
       }
     }
 
     f.close();
+
+    // Refuse the load if either array came up short: keeps existing state intact
+    // rather than exposing partially-parsed entries under a misleading count.
+    if (parsedStart < expected || parsedLeds < expected) {
+      USER_PRINTF("ArtNetMap: Preset '%s' truncated (start %u/%u, leds %u/%u). Load aborted.\n",
+                  name, parsedStart, expected, parsedLeds, expected);
+      return false;
+    }
+
+    numOutputs = expected;
+    channelsPerUniverse = doc["ch"] | 510;
+    strlcpy(targetIP, doc["ip"] | "255.255.255.255", sizeof(targetIP));
+    padMode = doc["pad"] | 0;
     strlcpy(currentPreset, name, sizeof(currentPreset));
-    USER_PRINTF("ArtNetMap: Loaded preset with %d outputs, first LED count: %lu\n", numOutputs, ledsPerOutput[0]);
+    USER_PRINTF("ArtNetMap: Loaded preset '%s' with %d outputs, first LED count: %lu\n",
+                name, numOutputs, ledsPerOutput[0]);
     return true;
   }
 
@@ -172,6 +186,10 @@ private:
 
   // Handle API requests
   void handleApi(AsyncWebServerRequest* request);
+
+  // Send one burst of Art-Net DMX packets for the output under test.
+  // Fills each universe's DMX slots with white (0xFF) so the receiver lights up.
+  void sendTestPacket();
 
 public:
 
@@ -225,10 +243,14 @@ public:
       initWeb();
     }
 
-    // Handle test timeout (5 seconds)
+    // Drive test mode: send an Art-Net DMX burst to targetIP every ~25ms for 5 seconds
     if (testingOutput >= 0) {
-      if (millis() - testStartTime > 5000) {
+      unsigned long now = millis();
+      if (now - testStartTime > 5000) {
         testingOutput = -1;
+      } else if (now - lastTestSend > 25) {
+        lastTestSend = now;
+        sendTestPacket();
       }
     }
   }
@@ -327,6 +349,58 @@ inline const char ArtNetMapUsermod::_currentPreset[] PROGMEM = "currentPreset";
 // ============================================================================
 // Web page implementation
 // ============================================================================
+
+inline void ArtNetMapUsermod::sendTestPacket() {
+  if (testingOutput < 0 || (uint16_t)testingOutput >= numOutputs) return;
+
+  // Static socket persists across loop iterations; reconnects only when target changes
+  static AsyncUDP testUdp;
+  static IPAddress lastTestDest((uint32_t)0);
+  static uint8_t testSeq = 0;
+
+  IPAddress dest;
+  if (!dest.fromString(targetIP)) return;
+  if ((uint32_t)dest != (uint32_t)lastTestDest) {
+    testUdp.connect(dest, ARTNET_PORT);
+    lastTestDest = dest;
+  }
+
+  uint16_t startUni = startUniverse[testingOutput];
+  uint32_t leds = ledsPerOutput[testingOutput];
+  uint16_t unis = calcUniverses(leds);
+  if (unis == 0) return;
+
+  uint16_t bytesPerUni = channelsPerUniverse;
+  if (bytesPerUni > 512) bytesPerUni = 512;
+
+  // ArtDmx packet: 8-byte ID "Art-Net\0", 2-byte OpDmx (LE 0x5000),
+  // 2-byte ProtVer (LE 14), 1-byte Seq, 1-byte Physical,
+  // 2-byte Universe (LE), 2-byte Length (LE), then DMX data.
+  uint8_t packet[18 + 512];
+  packet[0] = 0x41; packet[1] = 0x72; packet[2] = 0x74; packet[3] = 0x2d;
+  packet[4] = 0x4e; packet[5] = 0x65; packet[6] = 0x74; packet[7] = 0x00;
+  packet[8] = 0x00; packet[9] = 0x50;                          // OpDmx
+  packet[10] = 0x0e; packet[11] = 0x00;                        // ProtVer 14
+  packet[12] = ++testSeq;                                       // Sequence
+  packet[13] = 0;                                               // Physical
+
+  uint32_t channelsTotal = leds * 3;  // assumes RGB
+  for (uint16_t u = 0; u < unis; u++) {
+    uint16_t uni = startUni + u;
+    uint32_t chOffset = (uint32_t)u * bytesPerUni;
+    uint16_t len = bytesPerUni;
+    if (chOffset >= channelsTotal) len = 0;
+    else if (chOffset + len > channelsTotal) len = (uint16_t)(channelsTotal - chOffset);
+    packet[14] = uni & 0xFF;
+    packet[15] = (uni >> 8) & 0xFF;
+    packet[16] = (len >> 8) & 0xFF;
+    packet[17] = len & 0xFF;
+    if (len > 0) {
+      memset(packet + 18, 0xFF, len);  // white test pattern
+      testUdp.write(packet, 18 + len);
+    }
+  }
+}
 
 inline void ArtNetMapUsermod::servePage(AsyncWebServerRequest* request) {
   AsyncResponseStream* response = request->beginResponseStream("text/html");
@@ -588,8 +662,11 @@ inline void ArtNetMapUsermod::handleApi(AsyncWebServerRequest* request) {
     if (request->hasArg("ip")) strlcpy(targetIP, request->arg("ip").c_str(), sizeof(targetIP));
     if (request->hasArg("ch")) channelsPerUniverse = request->arg("ch").toInt();
     if (request->hasArg("pad")) padMode = request->arg("pad").toInt();
+    // The OUTPUT sender in udp.cpp reads getStartUniverse()/getLedsPerOutput() on every
+    // realtime push, so in-memory edits take effect on the next frame. Only persistence
+    // needs an explicit call here, so a reboot doesn't roll back to the old preset.
+    serializeConfig();
     USER_PRINTLN(F("ArtNetMap: Configuration applied."));
-    // TODO: Trigger actual Art-Net reconfiguration here
   } else if (action == "get") {
     doc["n"] = numOutputs;
     doc["ip"] = targetIP;
