@@ -567,8 +567,8 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
       USER_PRINTF("JSON Loading map %d\n", root[F("ledmap")].as<uint8_t>());
       strip.deserializeMap(root[F("ledmap")].as<uint8_t>());
     }
+    loadedLedmap = root[F("ledmap")].as<uint8_t>();
   }
-  loadedLedmap = root[F("ledmap")].as<uint8_t>();
   if (savemapstuff) doSerializeConfig = true;
 
   byte ps = root[F("psave")];
