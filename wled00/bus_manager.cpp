@@ -643,7 +643,11 @@ void IRAM_ATTR BusNetwork::show() {
   if (!_valid || !canShow()) return;
 
   uint32_t mapSize = uint32_t(Segment::maxWidth) * Segment::maxHeight;
-  uint32_t temp_len = min(_len, mapSize);
+  // For inverted mapping, the bus pixel buffer is the LOGICAL-position source.
+  // The mapping can refer to any logical position up to mapSize-1, so the source
+  // buffer must cover the FULL matrix size (not just _len, which is the physical
+  // pixel count). Use max() so logical positions >= _len are still in-bounds.
+  uint32_t temp_len = max(_len, mapSize);
 
   if (!ensureCapacity(temp_len)) {  // Only need capacity for what we're actually sending
     return;

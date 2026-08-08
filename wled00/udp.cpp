@@ -681,7 +681,7 @@ extern "C" {
 static inline void processPixelData(
   uint8_t* dest,
   const uint8_t* src,
-  uint_fast16_t packetSize,
+  uint32_t packetSize,
   uint_fast32_t bufferOffset,
   uint8_t bri,
   bool isRGBW,
@@ -722,7 +722,7 @@ static inline void processPixelData(
     if (fullBrightness) {
       memcpy(dest, src + bufferOffset, packetSize);
     } else {
-      for (uint_fast16_t i = 0; i < packetSize; i += bpp) {
+      for (uint32_t i = 0; i < packetSize; i += bpp) {
         dest[i] = (src[bufferOffset + i] * bri) >> 8;
         dest[i + 1] = (src[bufferOffset + i + 1] * bri) >> 8;
         dest[i + 2] = (src[bufferOffset + i + 2] * bri) >> 8;
@@ -734,10 +734,10 @@ static inline void processPixelData(
   }
 
   // Slow path: mapping and/or color reorder
-  const uint_fast16_t numPixels = packetSize / bpp;
+  const uint32_t numPixels = packetSize / bpp;
   const uint32_t startPixel = bufferOffset / bpp;
 
-  for (uint_fast16_t i = 0; i < numPixels; ++i) {
+  for (uint32_t i = 0; i < numPixels; ++i) {
     const uint8_t* pixel;
 
     if (hasMappingTable) {

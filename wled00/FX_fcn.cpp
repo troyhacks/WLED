@@ -957,9 +957,9 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(uint32_t i, uint32
 {
   if (!isActive()) return; // not active
 #ifndef WLED_DISABLE_2D
-  int vStrip = i>>16; // hack to allow running on virtual strips (2D segment columns/rows)
+  int vStrip = is2D() ? int(i >> 16) : 0; // only decode vStrip for 2D; for 1D the upper 16 bits are part of the pixel index
+  if (is2D()) i &= 0xFFFF;                 // for 2D, strip vStrip; for 1D, preserve the full uint32_t index
 #endif
-  i &= 0xFFFF;
 
   if (i >= virtualLength() || i<0) return;  // if pixel would fall out of segment just exit
 
@@ -1148,7 +1148,7 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(uint32_t i, uint32
 
   if (ledsrgb) ledsrgb[i] = col;
 
-  uint16_t len = length();
+  uint32_t len = length();
   uint8_t _bri_t = currentBri(on ? opacity : 0);
   if (!_bri_t && !transitional && fadeTransition) return; // if _bri_t == 0 && segment is not transitioning && transitions are enabled then save a few CPU cycles
   if (_bri_t < 255) {
@@ -1179,10 +1179,10 @@ void IRAM_ATTR_YN __attribute__((hot)) Segment::setPixelColor(uint32_t i, uint32
 
   // set all the pixels in the group
   for (int j = 0; j < grouping; j++) {
-    uint16_t indexSet = i + ((reverse) ? -j : j);
+    uint32_t indexSet = i + ((reverse) ? -j : j);
     if (indexSet >= start && indexSet < stop) {
       if (mirror) { //set the corresponding mirrored pixel
-        uint16_t indexMir = stop - indexSet + start - 1;
+        uint32_t indexMir = stop - indexSet + start - 1;
         indexMir += offset; // offset/phase
         if (indexMir >= stop) indexMir -= len; // wrap
         strip.setPixelColor(indexMir, col);
@@ -1231,9 +1231,9 @@ uint32_t __attribute__((hot)) Segment::getPixelColor(uint32_t i) const
 {
   if (!isActive()) return 0; // not active
 #ifndef WLED_DISABLE_2D
-  int vStrip = i>>16;
+  int vStrip = is2D() ? int(i >> 16) : 0; // see setPixelColor for rationale
+  if (is2D()) i &= 0xFFFF;                 // strip vStrip for 2D; keep full index for 1D
 #endif
-  i &= 0xFFFF;
 
 #ifndef WLED_DISABLE_2D
   if (is2D()) {

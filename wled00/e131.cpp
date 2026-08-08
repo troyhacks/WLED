@@ -31,7 +31,7 @@ void handleDDPPacket(e131_packet_t* p) {
 
   uint32_t start =  htonl(p->channelOffset) / ddpChannelsPerLed;
   start += DMXAddress / ddpChannelsPerLed;
-  uint16_t stop = start + htons(p->dataLen) / ddpChannelsPerLed;
+  uint32_t stop = start + htons(p->dataLen) / ddpChannelsPerLed;
   uint8_t* data = p->data;
   uint16_t c = 0;
   if (p->flags & DDP_TIMECODE_FLAG) c = 4; //packet has timecode flag, we do not support it, but data starts 4 bytes later
@@ -40,7 +40,7 @@ void handleDDPPacket(e131_packet_t* p) {
   realtimeLock(realtimeTimeoutMs, REALTIME_MODE_DDP);
 
   if (!realtimeOverride || (realtimeMode && useMainSegmentOnly)) {
-    for (uint16_t i = start; i < stop; i++) {
+    for (uint32_t i = start; i < stop; i++) {
       setRealtimePixel(i, data[c], data[c+1], data[c+2], ddpChannelsPerLed >3 ? data[c+3] : 0);
       c += ddpChannelsPerLed;
     }
@@ -131,7 +131,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
 
 
   byte wChannel = 0;
-  uint16_t totalLen = strip.getLengthTotal();
+  uint32_t totalLen = strip.getLengthTotal();
   uint16_t availDMXLen = 0;
   uint16_t dataOffset = DMXAddress;
 
@@ -162,7 +162,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
       if (realtimeOverride && !(realtimeMode && useMainSegmentOnly)) return;
 
       wChannel = (availDMXLen > 3) ? e131_data[dataOffset+3] : 0;
-      for (uint16_t i = 0; i < totalLen; i++)
+      for (uint32_t i = 0; i < totalLen; i++)
         setRealtimePixel(i, e131_data[dataOffset+0], e131_data[dataOffset+1], e131_data[dataOffset+2], wChannel);
       break;
 
@@ -179,7 +179,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
         strip.setBrightness(bri, true);
       }
 
-      for (uint16_t i = 0; i < totalLen; i++)
+      for (uint32_t i = 0; i < totalLen; i++)
         setRealtimePixel(i, e131_data[dataOffset+1], e131_data[dataOffset+2], e131_data[dataOffset+3], wChannel);
       break;
 
@@ -283,7 +283,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
         const uint16_t dmxChannelsPerLed = is4Chan ? 4 : 3;
         const uint16_t ledsPerUniverse = is4Chan ? MAX_4_CH_LEDS_PER_UNIVERSE : MAX_3_CH_LEDS_PER_UNIVERSE;
         uint8_t stripBrightness = bri;
-        uint16_t previousLeds, dmxOffset, ledsTotal;
+        uint32_t previousLeds, dmxOffset, ledsTotal;
 
         if (previousUniverses == 0) {
           if (availDMXLen < 1) return;
@@ -300,7 +300,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
           // All subsequent universes start at the first channel.
           dmxOffset = (mde == REALTIME_MODE_ARTNET) ? 0 : 1;
           const uint16_t dimmerOffset = (DMXMode == DMX_MODE_MULTIPLE_DRGB) ? 1 : 0;
-          uint16_t ledsInFirstUniverse = (((MAX_CHANNELS_PER_UNIVERSE - DMXAddress) + dmxLenOffset) - dimmerOffset) / dmxChannelsPerLed;
+          uint32_t ledsInFirstUniverse = (((MAX_CHANNELS_PER_UNIVERSE - DMXAddress) + dmxLenOffset) - dimmerOffset) / dmxChannelsPerLed;
           previousLeds = ledsInFirstUniverse + (previousUniverses - 1) * ledsPerUniverse;
           ledsTotal = previousLeds + (dmxChannels / dmxChannelsPerLed);
         }
@@ -325,7 +325,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
         }
 
         if (!is4Chan) {
-          for (uint16_t i = previousLeds; i < ledsTotal; i++) {
+          for (uint32_t i = previousLeds; i < ledsTotal; i++) {
             setRealtimePixel(i, e131_data[dmxOffset], e131_data[dmxOffset+1], e131_data[dmxOffset+2], 0);
             dmxOffset+=3;
           }
@@ -344,7 +344,7 @@ void handleDMXData(uint16_t uni, uint16_t dmxChannels, uint8_t* e131_data, uint8
           }
           memcpy(busPixelData + previousLeds, e131_data + dmxOffset, availDMXLen); // may need availDMXLen-1 ?
           #else
-          for (uint16_t i = previousLeds; i < ledsTotal; i++) {
+          for (uint32_t i = previousLeds; i < ledsTotal; i++) {
             setRealtimePixel(i, e131_data[dmxOffset], e131_data[dmxOffset + 1], e131_data[dmxOffset + 2], e131_data[dmxOffset + 3]);
             dmxOffset+=4;
           }
