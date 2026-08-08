@@ -146,8 +146,8 @@ void WS2812FX::setUpMatrix() {
           gapTable = nullptr;
         }
 
-        if (bakeMap && customMappingTable != nullptr && customMappingTableSize > 0) {
-          saveBakedLedMap("Panel_Map", Segment::maxWidth, Segment::maxHeight, customMappingTable, customMappingTableSize);
+        if (bakeMap && customMappingTable != nullptr && customMappingSize > 0) {
+          saveBakedLedMap("Panel_Map", Segment::maxWidth, Segment::maxHeight, customMappingTable, customMappingSize);
         }
 
         #ifdef WLED_DEBUG_MAPS
