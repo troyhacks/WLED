@@ -691,13 +691,11 @@ static inline void processPixelData(
   const uint8_t bpp = isRGBW ? 4 : 3;
 
   #ifdef WLEDMM_REMAP_AT_OUTPUT
-  // Hold busMutex for the entire remapping section to prevent setUpMatrix()
-  // from freeing/swapping the mapping table while we're reading it.
-  // Non-blocking: if the mutex is unavailable (e.g. setUpMatrix is running),
-  // fall through to the direct-copy path for this one frame.
-  bool tookMutex = (xSemaphoreTake(busMutex, 0) == pdTRUE);
-  uint32_t* mappingTable = tookMutex ? strip.getCustomMappingTable() : nullptr;
-  uint32_t  mappingTableSize = tookMutex ? strip.getCustomMappingTableSize() : 0;
+  // Caller (WLED::loop) already holds busMutex around strip.service(), so the
+  // mapping table is stable here. Read it directly without re-taking the mutex
+  // (busMutex is non-recursive — a re-take from the same thread would deadlock).
+  uint32_t* mappingTable = strip.getCustomMappingTable();
+  uint32_t  mappingTableSize = strip.getCustomMappingTableSize();
 
   // Must have valid table AND valid size
   const bool hasMappingTable = (mappingTable != nullptr && mappingTableSize > 0);
@@ -717,7 +715,6 @@ static inline void processPixelData(
 
   // Fast path: no mapping, no color reorder
   if (!hasMappingTable && !needsColorReorder) {
-    if (tookMutex) xSemaphoreGive(busMutex);
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
     p4_mul16x16(dest, &bri, (packetSize >> 4) + 1, (uint8_t*)(src + bufferOffset));
     return;
@@ -784,7 +781,6 @@ static inline void processPixelData(
     }
     dest += bpp;
   }
-  if (tookMutex) xSemaphoreGive(busMutex);
   #else
   // No WLEDMM_REMAP_AT_OUTPUT - simple path
   #if defined(CONFIG_IDF_TARGET_ESP32P4)
