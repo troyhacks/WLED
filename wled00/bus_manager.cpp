@@ -584,8 +584,9 @@ void IRAM_ATTR_YN BusNetwork::setPixelColor(uint32_t pix, uint32_t c) {
 }
 
 uint32_t IRAM_ATTR_YN BusNetwork::getPixelColor(uint32_t pix) const {
+  // See setPixelColor above — bound on _bufferCapacity, not _len, so reads
+  // of logicalPos >= _len (i.e. the high-end of the canvas) succeed.
   if (pix >= _bufferCapacity) return 0;
-  if (pix >= _len) return 0;
   uint32_t offset = pix * _UDPchannels;
   uint8_t co = _colorOrderMap.getPixelColorOrder(pix + _start, _colorOrder);
 
@@ -643,10 +644,15 @@ void IRAM_ATTR BusNetwork::show() {
   if (!_valid || !canShow()) return;
 
   uint32_t mapSize = uint32_t(Segment::maxWidth) * Segment::maxHeight;
-  // For inverted mapping, the bus pixel buffer is the LOGICAL-position source.
-  // The mapping can refer to any logical position up to mapSize-1, so the source
-  // buffer must cover the FULL matrix size (not just _len, which is the physical
-  // pixel count). Use max() so logical positions >= _len are still in-bounds.
+
+  // For inverted mapping, the bus's source buffer must cover the FULL matrix
+  // size (the mapping can refer to any logical position up to mapSize-1), but
+  // _len stays at the configured physical LED count (e.g. 21,552). The buffer
+  // grows via ensureCapacity() below; setPixelColor()/getPixelColor() bound
+  // their checks on _bufferCapacity (not _len), so writes to logicalPos up to
+  // mapSize-1 are accepted. _leds_per_output stays at the configured physical
+  // count, so realtimeBroadcast's OUTPUT loop still iterates only over real
+  // physical LEDs.
   uint32_t temp_len = max(_len, mapSize);
 
   if (!ensureCapacity(temp_len)) {  // Only need capacity for what we're actually sending
