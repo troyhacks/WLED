@@ -238,7 +238,11 @@ bool saveBakedLedMap(const char* name, uint16_t width, uint16_t height, uint32_t
   const uint16_t valuesPerRow = width > 0 ? width : 48;  // Match width or default
 
   for (uint32_t i = 0; i < tableSize; i++) {
-    f.print(mappingTable[i]);
+    if (mappingTable[i] == UINT32_MAX) {
+      f.print(F("-1"));
+    } else {
+      f.print(mappingTable[i]);
+    }
 
     if (i < tableSize - 1) {
       f.print(',');
