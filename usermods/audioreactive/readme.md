@@ -148,8 +148,111 @@ You can use the following additional flags in your `build_flags`
 * `-D MIC_LOGGER`     : (debugging) Logs samples from the microphone to serial USB. Use with serial plotter (Arduino IDE)
 * `-D SR_DEBUG`       : (debugging) Additional error diagnostics and debug info on serial USB.
 
+## Fixes and Known Issues
+
+### Fixes applied
+
+#### 2026-08 — ESP32-P4 I2S DIN not reading external mic data
+
+**Symptom:** on ESP32-P4 with any of the legacy `I2SSource`-derived audio
+sources (Generic I2S, Generic I2S with MCLK, ES8388, etc.) or even with
+the new `CodecDevSource` pointed at the same pins, `i2s_channel_read()`
+returns full blocks but every sample is `0xFFFFFFFF`. Info panel shows
+`I2S digital - quiet`, AGC stays pinned at `1.00x`, GEQ doesn't react.
+Same hardware + same pins worked correctly with the pre-IDFv5 audio code.
+
+**Root cause:** the IDF v5 new I2S driver's
+`i2s_channel_init_std_mode()` does not explicitly disable the GPIO
+output driver on the DIN pin on ESP32-P4. Post-init,
+`gpio_dump_io_configuration()` shows `OutputEn: 1` with
+`SigOut: 256 (simple GPIO output)` on the DIN pin — meaning the GPIO
+output register drives the pin, masking any external mic signal. The
+legacy `i2s_set_pin()` API cleared this implicitly via
+`gpio_set_direction(pin, GPIO_MODE_INPUT)`; the v5 driver does not.
+
+**Fix** (in `audio_source.h`): `gpio_set_direction(din, GPIO_MODE_INPUT)`
+is called immediately after `i2s_channel_init_std_mode()` in both
+`I2SSource::initialize()` and `CodecDevSource::_allocI2sRxChannel()`,
+gated to `CONFIG_IDF_TARGET_ESP32P4`.
+
+**Verified** on Waveshare ESP32-P4-Nano with GPIOs 45/46/47/2
+(SD/WS/BCK/MCLK) and an INMP441-style mic:
+- `OutputEn: 0` after fix (was `1` pre-fix)
+- Raw samples: `min=-1 max=-1` → real audio (`min≈-2.1B max≈2.1B`)
+- Info panel: `I2S digital - peak 78%`, AGC `0.43x`
+- All three source families (cases 4, 6, 10) confirmed working on these pins
+
+**Note on GPIO 45 specifically:** on the Waveshare ESP32-P4-Nano, GPIO 45
+is wired to the SD card power-enable circuit
+([micropython/micropython#19439](https://github.com/micropython/micropython/issues/19439)).
+Using GPIO 45 for I2S DIN disables the SD card power LDO; if you have an
+SD card in the slot, expect it to fail to mount. The same applies on
+GPIO 46 and 47 depending on your board's pinout.
+
+### Known follow-up issues (not yet fixed)
+
+These are real bugs found while diagnosing the P4 issue. They are
+unrelated to the current fix and should be addressed in separate
+commits so they don't get tangled with the regression fix:
+
+- **`audio_source.h` — `_slotMask` clobbered in `I2SSource::initialize()`.**
+  The base-class `initialize()` unconditionally overwrites `_slotMask`
+  with the value derived from the runtime `useRightSlot` parameter,
+  silently discarding whatever value a subclass constructor set (e.g.
+  `ES8388Source` configures a specific slot in its constructor). Dead,
+  misleading code — either remove the redundant assignment or move it to
+  the constructor.
+
+- **`audio_source.h` + `audio_reactive.h` — compile-time `I2S_datatype`
+  vs runtime `bitsPerSample` mismatch.** `I2S_datatype` is hard-wired to
+  `int32_t` (compile-time), but the legacy cases pass the *runtime*
+  `i2sBitsPerSample` (16/24/32) into the driver, while `getSamples()`
+  always reads `num_samples * sizeof(I2S_datatype)` bytes per block.
+  Selecting 16 or 24 bits in the UI yields packed garbage. Either clamp
+  `i2sBitsPerSample` to 32 for the legacy path, or have `getSamples()`
+  honor the runtime setting. At minimum, reject the mismatch with an
+  `ERRORSR_PRINTF` so it's not silent.
+
+- **`audio_reactive.h` — codec cases 10–18 ignore UI audio settings.**
+  Cases 10–18 (the `esp_codec_dev` sources) call `audioSource->initialize()`
+  with only the four pin args, so the UI's `bitsPerSample`,
+  `useRightSlot`, and `i2sMaster` controls silently do nothing for every
+  codec path. Wires up the dropped args.
+
+- **`audio_source.h` — `CodecDevSource::getSamples()` divides by 65536.0f
+  in both `#ifdef` arms.** When `I2S_USE_16BIT_SAMPLES` is defined,
+  `I2S_SAMPLE_DOWNSCALE_TO_16BIT` is *not* defined (see line ~91), but
+  `CodecDevSource::getSamples()` divides by `65536.0f` regardless. A
+  16-bit-sample build would attenuate the signal by 65536×. Compare
+  `I2SSource::getSamples()` which has the correct guard.
+
+- **`audio_source.h` — PDM init returns before `_initialized` on
+  S2/C3/P4.** Cases 5/51 (PDM mics) on `SOC_I2S_SUPPORTS_PDM_RX=false`
+  targets print the error and `return`, but never set `_initialized`.
+  Caller then sees `_initialized=false` and skips `getSamples()` — silent
+  failure. Set `_initialized = true` before returning or restructure.
+
+- **`audio_reactive.h` — `I2SAdcSource` instantiated but class deleted.**
+  Case (analog mic, ESP32 only) instantiates `I2SAdcSource` but the class
+  was removed during the IDFv5 migration. Guarded to classic ESP32 so
+  P4/S3 builds are unaffected, but the dead instantiation should be
+  cleaned up.
+
+- **`audio_reactive.h` `switch (dmType)` — `audioSource` leak on source
+  switch.** `audioSource` is never `delete`d before reassignment in any
+  case except 254/255. Each live source switch leaks the previous object
+  and its I2S channel. Add `if (audioSource) { audioSource->deinitialize();
+  delete audioSource; audioSource = nullptr; }` at the top of the switch.
+
 ## Release notes
 
+* 2026-08 Fix ESP32-P4 I2S DIN not reading external SD data: the IDF v5
+  driver's `i2s_channel_init_std_mode()` does not disable the GPIO output
+  driver on the DIN pin on P4, so the GPIO output register masks the mic
+  signal. Force `gpio_set_direction(din, GPIO_MODE_INPUT)` after the call
+  in both `I2SSource::initialize()` and `CodecDevSource::_allocI2sRxChannel()`,
+  gated to `CONFIG_IDF_TARGET_ESP32P4`. See "Fixes applied" above for
+  details.
 * 2026-06 Moved to pure Espressif IDF v5.5 calls and ESP-DSP FFT accelleration, added esp_codec_dev supported codecs and added AutoLevel experiments - by @TroyHacks
 * 2022-06 Ported from [soundreactive WLED](https://github.com/atuline/WLED) - by @blazoncek (AKA Blaz Kristan) and the [SR-WLED team](https://github.com/atuline/WLED/wiki#sound-reactive-wled-fork-team).
 * 2022-11 Updated to align with "[MoonModules/WLED](https://amg.wled.me)" audioreactive usermod - by @softhack007 (AKA Frank M&ouml;hle).

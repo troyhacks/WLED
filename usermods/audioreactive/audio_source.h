@@ -120,11 +120,6 @@ constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not c
 // max number of samples for a single i2s_read --> size of global buffer.
 #define I2S_SAMPLES_MAX 512  // same as samplesFFT
 
-// TEMPORARY DIAGNOSTIC - remove before release.
-// Dumps the raw (pre-scaling) I2S sample statistics and the resolved I2S pin/clock
-// config, to distinguish "no data on the wire" from "data present but mis-scaled".
-#define AR_DEBUG_RAW_SAMPLES
-
 /* Interface class
    AudioSource serves as base class for all microphone types
    This enables accessing all microphones with one single interface
@@ -602,20 +597,17 @@ class I2SSource : public AudioSource {
           _rx_handle = nullptr;
           return;
         }
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+        // P4 workaround: the IDF v5 new I2S driver does not explicitly disable
+        // the GPIO output driver on the DIN pin. Without this, the GPIO output
+        // register drives the pin (gpio_dump_io_configuration shows
+        // OutputEn:1, SigOut:256 on GPIO 45) and masks any external mic
+        // signal — every sample reads 0xFFFFFFFF. The legacy i2s_set_pin()
+        // cleared this implicitly via gpio_set_direction(pin, GPIO_MODE_INPUT).
+        gpio_set_direction((gpio_num_t)i2ssdPin, GPIO_MODE_INPUT);
+#endif
         DEBUGSR_PRINTF("AR: I2S#0 driver installed in %s mode, %u-bit.\n",
                        _i2sMaster ? "MASTER" : "SLAVE", bitsPerSample);
-#ifdef AR_DEBUG_RAW_SAMPLES
-        // TEMPORARY DIAGNOSTIC - remove before release.
-        USER_PRINTF("AR CFG: ws=%d sd=%d bck=%d mclk=%d | bits=%u slot=%s role=%s rate=%u mclk_mult=256\n",
-                    (int)i2swsPin, (int)i2ssdPin, (int)i2sckPin, (int)mclkPin,
-                    (unsigned)bitsPerSample,
-                    (_slotMask == I2S_STD_SLOT_RIGHT) ? "RIGHT" : "LEFT",
-                    _i2sMaster ? "MASTER" : "SLAVE",
-                    (unsigned)_sampleRate);
-        if (mclkPin == I2S_GPIO_UNUSED) {
-          USER_PRINTLN("AR CFG: *** MCLK pin is UNUSED - an external line-in ADC will output silence ***");
-        }
-#endif
       }
 
       err = i2s_channel_enable(_rx_handle);
@@ -625,24 +617,6 @@ class I2SSource : public AudioSource {
         _rx_handle = nullptr;
         return;
       }
-
-#ifdef AR_DEBUG_RAW_SAMPLES
-      // TEMPORARY DIAGNOSTIC - remove before release.
-      // Dump the post-init GPIO matrix state for the I2S pins. This shows the
-      // routed peripheral signal per pin, so we can confirm DIN is actually
-      // connected to the I2S RX signal and that BCLK/WS/MCLK are driven.
-      {
-        uint64_t mask = 0;
-        if (i2swsPin  != I2S_GPIO_UNUSED) mask |= (1ULL << (uint8_t)i2swsPin);
-        if (i2ssdPin  != I2S_GPIO_UNUSED) mask |= (1ULL << (uint8_t)i2ssdPin);
-        if (i2sckPin  != I2S_GPIO_UNUSED) mask |= (1ULL << (uint8_t)i2sckPin);
-        if (mclkPin   != I2S_GPIO_UNUSED) mask |= (1ULL << (uint8_t)mclkPin);
-        USER_PRINTF("AR GPIO DUMP [I2SSource] ws=%d sd=%d bck=%d mclk=%d:\n",
-                    (int)i2swsPin, (int)i2ssdPin, (int)i2sckPin, (int)mclkPin);
-        gpio_dump_io_configuration(stdout, mask);
-        fflush(stdout);
-      }
-#endif
 
       _initialized = true;
     }
@@ -691,28 +665,6 @@ class I2SSource : public AudioSource {
           buffer[i] = currSample;
           buffer[i] *= _sampleScale;
         }
-
-#ifdef AR_DEBUG_RAW_SAMPLES
-        // TEMPORARY DIAGNOSTIC - remove before release.
-        // Report raw pre-scale statistics roughly once per second.
-        {
-          static unsigned long lastRawDump = 0;
-          if (millis() - lastRawDump > 1000) {
-            lastRawDump = millis();
-            int32_t rawMin = newSamples[0], rawMax = newSamples[0];
-            uint16_t nonZero = 0;
-            for (int i = 0; i < num_samples; i++) {
-              int32_t v = newSamples[i];
-              if (v < rawMin) rawMin = v;
-              if (v > rawMax) rawMax = v;
-              if (v != 0) nonZero++;
-            }
-            USER_PRINTF("AR RAW: n=%u bytes=%u nonzero=%u min=%ld max=%ld scale=%.5f\n",
-                        (unsigned)num_samples, (unsigned)bytes_read, (unsigned)nonZero,
-                        (long)rawMin, (long)rawMax, _sampleScale);
-          }
-        }
-#endif
       }
     }
 
@@ -1454,27 +1406,6 @@ class CodecDevSource : public AudioSource {
         return;
       }
 
-#ifdef AR_DEBUG_RAW_SAMPLES
-      // TEMPORARY DIAGNOSTIC - remove before release.
-      {
-        static unsigned long lastRawDumpCD = 0;
-        if (millis() - lastRawDumpCD > 1000) {
-          lastRawDumpCD = millis();
-          int32_t rawMin = raw[0], rawMax = raw[0];
-          uint16_t nonZero = 0;
-          for (uint16_t i = 0; i < num_samples; i++) {
-            int32_t v = raw[i];
-            if (v < rawMin) rawMin = v;
-            if (v > rawMax) rawMax = v;
-            if (v != 0) nonZero++;
-          }
-          USER_PRINTF("AR RAW: n=%u bytes=%u nonzero=%u min=%ld max=%ld scale=%.5f [CodecDev]\n",
-                      (unsigned)num_samples, (unsigned)bytes_read, (unsigned)nonZero,
-                      (long)rawMin, (long)rawMax, _sampleScale);
-        }
-      }
-#endif
-
 #ifdef I2S_SAMPLE_DOWNSCALE_TO_16BIT
       for (uint16_t i = 0; i < num_samples; i++) {
         buffer[i] = ((float)raw[i] / 65536.0f) * _sampleScale;
@@ -1607,16 +1538,10 @@ class CodecDevSource : public AudioSource {
         _rx_handle = nullptr;
         return false;
       }
-#ifdef AR_DEBUG_RAW_SAMPLES
-      // TEMPORARY DIAGNOSTIC - remove before release.
-      // Same format as the I2SSource log, so the working codec config can be
-      // diffed directly against the failing legacy config.
-      USER_PRINTF("AR CFG: ws=%d sd=%d bck=%d mclk=%d | bits=%u slot=%s role=%s rate=%u mclk_mult=256 [CodecDev]\n",
-                  (int)i2swsPin, (int)i2ssdPin, (int)i2sckPin, (int)mclkPin,
-                  (unsigned)bitsPerSample,
-                  (slot == I2S_STD_SLOT_RIGHT) ? "RIGHT" : "LEFT",
-                  i2sMaster ? "MASTER" : "SLAVE",
-                  (unsigned)_sampleRate);
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+      // P4 workaround: see I2SSource::initialize() — the new I2S driver does
+      // not explicitly disable the GPIO output driver on the DIN pin.
+      gpio_set_direction((gpio_num_t)i2ssdPin, GPIO_MODE_INPUT);
 #endif
       err = i2s_channel_enable(_rx_handle);
       if (err != ESP_OK) {
