@@ -44,6 +44,13 @@ class AutoPlaylistUsermod : public Usermod {
     int timeout = 60;
     bool autoChange = false;
     byte lastAutoPlaylist = 0;
+    // v3 event-bus one-shot filter: arms in change() right before our
+    // own applyPreset(), consumed in onEvent(PresetApplied). Lets us
+    // tell user-initiated preset picks apart from our own picks even
+    // though WLED's PresetApplied event carries no source flag.
+    bool pendingAutoApply = false;
+    byte pendingAutoApplyPreset = 0; // preset id we expect to see in the next PresetApplied
+    byte lastAutoPreset = 0;         // preset id we most recently applied via applyPreset()
     unsigned long lastSoundTime = millis()-(timeout*1000)-100;
     unsigned long change_timer = millis();
     unsigned long autochange_timer = millis();
@@ -134,6 +141,43 @@ class AutoPlaylistUsermod : public Usermod {
     // interfaces here
     void connected() {
       // noop
+    }
+
+    // v3 event bus subscriber. Runs synchronously in the publisher's
+    // task context (handlePresets() for PresetApplied). Must stay
+    // short — no I/O, no blocking. The one-shot pendingAutoApply flag
+    // (set in change() before our own applyPreset()) lets us tell our
+    // own preset applications apart from user-initiated picks, since
+    // WLED's PresetApplied event carries no source flag.
+    void onEvent(const wled::Event& ev) override {
+      if (ev.type != wled::EventType::PresetApplied) return;
+
+      const uint8_t applied = ev.payload.presetApplied.preset;
+
+      // Is this the PresetApplied that we just queued?
+      if (pendingAutoApply && applied == pendingAutoApplyPreset) {
+        pendingAutoApply = false;
+        lastAutoPreset = applied;
+        return;
+      }
+
+      // Not our apply. While AutoChange is active we always suspend
+      // the playlist engine before applying (see change()), so the
+      // playlist engine CANNOT advance while functionality_enabled is
+      // true. Therefore any other PresetApplied now must be a
+      // user-initiated manual pick.
+      if (functionality_enabled) {
+        #ifdef USERMOD_AUTO_PLAYLIST_DEBUG
+        USER_PRINTF("AutoPlaylist: disable due to manual preset pick %u (was tracking %u)\n",
+                    applied, lastAutoPreset);
+        #endif
+        suspendPlaylist();
+        functionality_enabled = false;
+        autoChangeIds.clear(); // force refresh from current playlist on re-enable
+        pendingAutoApply = false;
+      }
+
+      lastAutoPreset = applied;
     }
 
     void change(um_data_t *um_data) {
@@ -280,10 +324,15 @@ class AutoPlaylistUsermod : public Usermod {
 
             // Make sure we have a statistically significant change and we aren't
             // just bouncing off change_lockout. That's valid for changing the
-            // thresholds, but might be a bit crazy for lighting changes. 
+            // thresholds, but might be a bit crazy for lighting changes.
             // When the music changes quite a bit, the distance calculation can
             // go into freefall - this logic stops that from triggering right
             // after change_lockout. Better for smaller change_lockout values.
+
+            // Arm the PresetApplied one-shot filter so onEvent() treats the
+            // matching PresetApplied as ours rather than a user pick.
+            pendingAutoApply = true;
+            pendingAutoApplyPreset = (byte)newpreset;
 
             suspendPlaylist();       // suspend the playlist engine before changing to another preset
             applyPreset(newpreset);
@@ -340,6 +389,9 @@ class AutoPlaylistUsermod : public Usermod {
           #endif
           suspendPlaylist();
           functionality_enabled = false;
+          autoChangeIds.clear(); // refresh from whatever currentPlaylist is now
+                                 // when change() next fires after re-enable
+          pendingAutoApply = false;
         } else if (currentPlaylist == musicPlaylist) {
           #ifdef USERMOD_AUTO_PLAYLIST_DEBUG
           USER_PRINTF("AutoPlaylist: enabled due to manual change of playlist back to %u\n", currentPlaylist);
@@ -572,6 +624,13 @@ class AutoPlaylistUsermod : public Usermod {
           applyPreset(id, CALL_MODE_NOTIFICATION);
         // }
         lastAutoPlaylist = id;
+        // changePlaylist loads a whole playlist, not a single preset;
+        // currentPreset isn't settled yet (handlePresets() applies the
+        // first entry asynchronously). Clear our one-shot claim so
+        // onEvent() doesn't misattribute the in-flight PresetApplied
+        // for the first entry as "ours".
+        lastAutoPreset = 0;
+        pendingAutoApply = false;
     }
 
 };
