@@ -265,6 +265,11 @@ bool deserializeSegment(JsonObject elem, byte it, byte presetId)
       }
     } else {
       // non RGB & non White segment (usually On/Off bus)
+      // Tripwire: if this fires, the _capabilities=0 bug regressed
+      // (see resetSegments(false) fix in FX_fcn.cpp). Should never
+      // trigger on hardware with a real RGB bus. Loud prefix is
+      // intentional — easy to grep serial logs for regression.
+      USER_PRINTLN(F("DLM-ULTRAWHITE!! segment hit non-RGB/non-W branch (capabilities regression?)"));
       seg.setColor(0, ULTRAWHITE);
       seg.setColor(1, BLACK);
     }

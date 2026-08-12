@@ -2491,6 +2491,22 @@ void WS2812FX::resetSegments(bool boundsOnly) { //WLEDMM add boundsonly
     #else
     segment seg = Segment(0, _length);
     #endif
+    // DLM: ProLink palette-break fix — the new Segment was constructed with
+    // _capabilities=0 (the constructor's //refreshLightCapabilities() is
+    // commented out at FX.h:554 because busses are not always initialized
+    // when the constructor runs). When ProLinkV3's
+    // resetSegments(false) -> applyPreset -> handlePresets path creates a
+    // fresh single segment here, deserializeSegment() then sees
+    // getLightCapabilities()&3 == 0 for the freshly-deserialized effect
+    // segment in the cases where setUp() either wasn't called or its
+    // !boundsUnchanged gate skipped refreshLightCapabilities (e.g., when
+    // JSON start/stop happen to equal the new segment's defaults), and
+    // hits the ULTRAWHITE branch at json.cpp:268 — every effect goes
+    // solid white and the palette picker becomes inert. Compute
+    // capabilities once on the freshly-pushed segment here so its
+    // _capabilities is correct from the moment it exists, regardless of
+    // any later setUp() optimization.
+    seg.refreshLightCapabilities();
     _segments.push_back(seg);
     _mainSegment = 0;
   } else { //WLEDMM boundsonly
