@@ -7109,7 +7109,7 @@ uint16_t mode_2Dscrollingtext(void) {
   if (!strip.isMatrix) return mode_static(); // not a 2D set-up
 
   // --- LINK TO PRO DJ LINK (in FX.h or MyEffect.h) ---
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // Use 'extern' to declare that these variables are defined elsewhere
   extern volatile float     prolink_bpm_public;
   extern volatile uint8_t   prolink_beat_public;
@@ -7214,7 +7214,7 @@ uint16_t mode_2Dscrollingtext(void) {
     else if (!strncmp_P(text, PSTR("#MM"), 3))   sprintf_P(text, zero ? PSTR("%02d") : PSTR("%d"), minute(localTime));
     else if ((!strncmp_P(text, PSTR("#AMP"), 4)) || (!strncmp_P(text, PSTR("#POW"), 4))) sprintf_P(text, PSTR("%3.1fA"), float(strip.currentMilliamps) / 1000.0f);
 
-    #ifdef USERMOD_PIONEER_PROLINK
+    #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
     // --- PRO DJ LINK MACRO REPLACEMENT ---
     else {
       char output[128] = { '\0' };
@@ -10421,7 +10421,7 @@ void drawSmartSection(LGFX_Sprite& fb, String text, int32_t x, int32_t& cursor_y
 #endif
 
 uint16_t mode_PRO_LINK() {
-  #if defined(SOC_PPA_SUPPORTED) && defined(USERMOD_PIONEER_PROLINK)
+  #if defined(SOC_PPA_SUPPORTED) && (defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3))
 
   // --- External Variables ---
   extern uint8_t*           prolink_artwork_data;       // Raw JPEG bytes

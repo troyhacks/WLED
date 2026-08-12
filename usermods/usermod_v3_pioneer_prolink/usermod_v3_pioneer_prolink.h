@@ -1659,6 +1659,11 @@ public:
   }
 
   void onEvent(const wled::Event& ev) override {
+    // Gated on `enabled` so a disabled usermod doesn't spam the log
+    // when something else (autoplaylist, autochange, API calls) drives
+    // the preset/effect state machine.
+    if (!enabled) return;
+
     // Log every v3 event the Pioneer v3 receives. Cheap (one
     // USER_PRINTLN per event, <WLED_MAX_USERMODS events/sec), and
     // gives us a record of what the v3 plumbing is doing on-device.

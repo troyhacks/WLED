@@ -239,7 +239,7 @@ byte getRandomPresetId();
 int getPreviousPreset(int currentId);
 int getNextPreset(int currentId);
 void initPresetMapping();
-#ifdef USERMOD_PIONEER_PROLINK
+#if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
 uint16_t getPioneerColorRGB565(uint8_t colorIndex);
 uint32_t getPioneerColorRGB(uint8_t colorIndex);
 uint32_t getWaveformRawRGB(uint16_t index);

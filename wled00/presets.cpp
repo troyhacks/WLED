@@ -540,7 +540,7 @@ std::vector<int> buildPresetPool() {
 
 // Call this once when starting a track
 void initPresetMapping() {
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   auto pool = buildPresetPool();
   if (!pool.empty()) {
     prolink_presetOffset = random(pool.size()); // randomized start
@@ -558,7 +558,7 @@ void initPresetMapping() {
 
 // --- Phrase → Preset mapping ---
 int getPresetForPhrase(int phraseIdx, const std::vector<int>& pool) {
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   if (pool.empty()) return -1;
   int presetCount = pool.size();
   return pool[(prolink_presetOffset + phraseIdx) % presetCount];
@@ -569,7 +569,7 @@ int getPresetForPhrase(int phraseIdx, const std::vector<int>& pool) {
 
 // --- No-repeat variant (avoids consecutive duplicates) ---
 int getPresetForPhraseNoRepeat(int phraseIdx, const std::vector<int>& pool) {
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   if (pool.empty()) return -1;
   int presetCount = pool.size();
   int preset = pool[(prolink_presetOffset + phraseIdx) % presetCount];
@@ -599,7 +599,7 @@ void printPhrasePreset(int phraseIdx, const std::vector<int>& pool) {
 }
 
 int getPresetByIndex(int presetIdx, const std::vector<int>& pool) {
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // Guard against invalid input
   if (presetIdx <= 0) return -1;
   if (pool.empty()) return -1;
@@ -619,7 +619,7 @@ int getPresetByIndex(int presetIdx, const std::vector<int>& pool) {
 }
   
 void handleSerialInput(char next) {
-  #ifdef USERMOD_PIONEER_PROLINK
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // Build a fresh pool each time
   auto pool = buildPresetPool();
   if (pool.empty()) return;

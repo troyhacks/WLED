@@ -362,7 +362,7 @@ WLED_GLOBAL bool update_screen_background _INIT(true);
 // WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
 #endif
 
-#ifdef USERMOD_PIONEER_PROLINK
+#if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
 WLED_GLOBAL int   prolink_presetOffset  _INIT(0);
 WLED_GLOBAL bool  prolink_presetMover   _INIT(false);
 #endif

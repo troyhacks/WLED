@@ -51,6 +51,14 @@ class AutoPlaylistUsermod : public Usermod {
     bool pendingAutoApply = false;
     byte pendingAutoApplyPreset = 0; // preset id we expect to see in the next PresetApplied
     byte lastAutoPreset = 0;         // preset id we most recently applied via applyPreset()
+    // Set in changePlaylist() to (millis() + window). For that window,
+    // any PresetApplied is consumed as the playlist's own slot load +
+    // first entry (both fire within ~one loop iteration of each other
+    // once handlePresets() has loaded the playlist). Without this, the
+    // slot PresetApplied triggers the disable path, which leaves
+    // functionality_enabled=false and the loop() early-return prevents
+    // silence/sound detection from ever switching back.
+    unsigned long pendingPlaylistLoadUntil = 0;
     unsigned long lastSoundTime = millis()-(timeout*1000)-100;
     unsigned long change_timer = millis();
     unsigned long autochange_timer = millis();
@@ -157,6 +165,18 @@ class AutoPlaylistUsermod : public Usermod {
       // Is this the PresetApplied that we just queued?
       if (pendingAutoApply && applied == pendingAutoApplyPreset) {
         pendingAutoApply = false;
+        lastAutoPreset = applied;
+        return;
+      }
+
+      // changePlaylist() opens a short window (pendingPlaylistLoadUntil)
+      // covering both the playlist-slot PresetApplied and the playlist
+      // engine's first-entry PresetApplied. Without suppressing disable
+      // here, the slot PresetApplied would flip functionality_enabled to
+      // false and the loop() early-return on !functionality_enabled
+      // would prevent silence/sound detection from ever switching back
+      // from ambient to music.
+      if (functionality_enabled && millis() < pendingPlaylistLoadUntil) {
         lastAutoPreset = applied;
         return;
       }
@@ -382,7 +402,16 @@ class AutoPlaylistUsermod : public Usermod {
 
       if (millis() < 10000) return; // Wait for device to settle
 
-      if (lastAutoPlaylist > 0 && currentPlaylist != lastAutoPlaylist && currentPreset != 0) {
+      // Suppress during the same changePlaylist() load window as the
+      // onEvent(PresetApplied) handler: unloadPlaylist() sets
+      // currentPlaylist=-1 for a few ms between our applyPreset() and
+      // handlePresets() loading the new playlist. Without this guard
+      // the loop's own playlist-changed check would fire disable in
+      // that window — which (combined with the loop() early-return on
+      // !functionality_enabled) prevents silence/sound detection from
+      // ever switching back from ambient to music.
+      if (lastAutoPlaylist > 0 && currentPlaylist != lastAutoPlaylist && currentPreset != 0
+          && millis() >= pendingPlaylistLoadUntil) {
         if (functionality_enabled) {
           #ifdef USERMOD_AUTO_PLAYLIST_DEBUG
           USER_PRINTF("AutoPlaylist: disable due to manual change of playlist from %u to %d, preset:%u\n", lastAutoPlaylist, currentPlaylist, currentPreset);
@@ -624,13 +653,17 @@ class AutoPlaylistUsermod : public Usermod {
           applyPreset(id, CALL_MODE_NOTIFICATION);
         // }
         lastAutoPlaylist = id;
-        // changePlaylist loads a whole playlist, not a single preset;
-        // currentPreset isn't settled yet (handlePresets() applies the
-        // first entry asynchronously). Clear our one-shot claim so
-        // onEvent() doesn't misattribute the in-flight PresetApplied
-        // for the first entry as "ours".
-        lastAutoPreset = 0;
-        pendingAutoApply = false;
+        // Open a 1500 ms window during which onEvent(PresetApplied)
+        // treats the playlist-slot load + playlist engine's first
+        // entry as ours. Both PresetApplied events fire within ~one
+        // loop iteration of each other once handlePresets() has
+        // loaded the playlist, so a 1500 ms window is plenty and
+        // keeps the false-negative window (user pick silenced)
+        // short. Without this, the slot PresetApplied triggers
+        // the disable path; once functionality_enabled is false
+        // the loop() early-return blocks silence/sound detection
+        // and the usermod never switches back from ambient to music.
+        pendingPlaylistLoadUntil = millis() + 1500;
     }
 
 };
