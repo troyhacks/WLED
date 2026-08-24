@@ -138,7 +138,7 @@
 #endif
 
 #ifdef USERMOD_AUDIOREACTIVE
-#include "../usermods/audioreactive/audio_reactive.h"
+#include <audio_reactive.h>
 #endif
 
 #ifdef USERMOD_ANALOG_CLOCK

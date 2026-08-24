@@ -1246,7 +1246,7 @@ function populateNodes(i,n)
 			gId(`pwr${nodeNr}`).innerHTML = "<button class=\"btn btn-xs\" onclick=\"callNode('"+info.ip+"','state',{'on':"+(state.on?"false":"true")+"});\"><i class=\"icons "+(state.on?"on":"off")+"\">&#xe08f;</i></button>";
 			gId(`type${nodeNr}`).innerText = info.arch;
 			gId(`vid${nodeNr}`).innerText = info.vid;
-			gId(`rel${nodeNr}`).innerText = info.rel;
+			gId(`rel${nodeNr}`).innerText = (info.repo?(info.repo+" \n"):"") + (info.rel?info.rel:info.release);  // upstream uses "release" not "rel"
 			gId(`ver${nodeNr}`).innerText = info.ver;
 			gId(`lvc${nodeNr}`).innerText = info.leds.count;
 			gId(`lpc${nodeNr}`).innerText = info.leds.countP;

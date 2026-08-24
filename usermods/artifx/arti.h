@@ -87,8 +87,8 @@
   // #define OPTIMIZED_TREE 1
 #endif
 
-bool logToFile = true; //print output to file (e.g. default.wled.log)
-uint32_t frameCounter = 0; //tbd move to class if more instances run 
+static bool logToFile = true; //print output to file (e.g. default.wled.log)
+static uint32_t frameCounter = 0; //tbd move to class if more instances run 
 
 void artiPrintf(char const * format, ...)
 {
@@ -107,7 +107,7 @@ void artiPrintf(char const * format, ...)
     // logFile.printf(format, argp);
     for (size_t i = 0; i < strlen(format); i++) 
     {
-      if (format[i] == '%') 
+      if ((format[i] == '%') && (strlen(format) > i+1)) // WLEDMM robustness improvement
       {
         switch (format[i+1]) 
         {
@@ -116,6 +116,9 @@ void artiPrintf(char const * format, ...)
             break;
           case 'u':
             if (logToFile) logFile.print(va_arg(argp, unsigned int)); else USER_PRINT(va_arg(argp, unsigned int));
+            break;
+          case 'd':
+            if (logToFile) logFile.print(va_arg(argp, int)); else USER_PRINT(va_arg(argp, int));
             break;
           case 'c':
             if (logToFile) logFile.print((char)va_arg(argp, int)); else USER_PRINT(va_arg(argp, int));
@@ -191,9 +194,9 @@ void artiPrintf(char const * format, ...)
     #define MEMORY_ARTI(...)
 #endif
 
-#define charLength 30
-#define fileNameLength 50
-#define arrayLength 30
+#define charLength 32     // softhack007 was 30
+#define fileNameLength 64 // softhack007 was 50
+#define arrayLength 32    // softhack007 was 30
 
 #define floatNull -32768
 
@@ -494,7 +497,7 @@ uint8_t stringToNode(const char * node)
   return F_NoNode;
 }
 
-bool errorOccurred = false;
+static bool errorOccurred = false;
 
 struct Token {
     uint16_t lineno;
@@ -548,7 +551,8 @@ class Lexer {
     }
     this->pos++;
 
-    if (this->pos > strlen(this->text) - 1)
+    size_t lenTxt = strlen(this->text);   // WLEDMM prevent unsigned wrap-around
+    if ((lenTxt == 0) || (this->pos > lenTxt - 1))
       this->current_char = -1;
     else 
     {
@@ -578,32 +582,35 @@ class Lexer {
     strcpy(current_token.type, "");
     strcpy(current_token.value, "");
 
-    char result[charLength] = "";
+    char result[charLength] = {'\0'}; // WLEDMM bugfix: explicitly init to "all zeros"
     while (this->current_char != -1 && isdigit(this->current_char)) 
     {
-      result[strlen(result)] = this->current_char;
+      size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
       this->advance();
     }
     if (this->current_char == '.') 
     {
-      result[strlen(result)] = this->current_char;
+      size_t resLen = strlen(result);
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
       this->advance();
 
       while (this->current_char != -1 && isdigit(this->current_char)) 
       {
-        result[strlen(result)] = this->current_char;
+        size_t resLen = strlen(result);
+        if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
         this->advance();
       }
 
-      result[strlen(result)] = '\0';
+      result[min(strlen(result), sizeof(result)-1)] = '\0';
       strcpy(current_token.type, "REAL_CONST");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
     else 
     {
-      result[strlen(result)] = '\0';
+      result[min(strlen(result), sizeof(result)-1)] = '\0';
       strcpy(current_token.type, "INTEGER_CONST");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
 
   }
@@ -615,27 +622,28 @@ class Lexer {
     strcpy(current_token.type, "");
     strcpy(current_token.value, "");
 
-    char result[charLength] = "";
+    char result[charLength] = {'\0'}; // WLEDMM bugfix: explicitly init to "all zeros";
     while (this->current_char != -1 && (isalnum(this->current_char) || this->current_char == '_')) 
     {
-        result[strlen(result)] = this->current_char;
-        this->advance();
+      size_t resLen = strlen(result);  // WLEDMM bugfix: prevent array bounds violation
+      if (resLen < sizeof(result)-1) result[resLen] = this->current_char;
+      this->advance();
     }
-    result[strlen(result)] = '\0';
+    result[min(strlen(result), sizeof(result)-1)] = '\0';
 
     char resultUpper[charLength];
-    strcpy(resultUpper, result);
+    strlcpy(resultUpper, result, sizeof(resultUpper));
     strupr(resultUpper);
 
     if (definitionJson["TOKENS"].containsKey(resultUpper)) 
     {
-      strcpy(current_token.type, definitionJson["TOKENS"][resultUpper]);
-      strcpy(current_token.value, resultUpper);
+      strlcpy(current_token.type, definitionJson["TOKENS"][resultUpper], sizeof(current_token.type));
+      strlcpy(current_token.value, resultUpper, sizeof(current_token.value));
     }
     else 
     {
       strcpy(current_token.type, "ID");
-      strcpy(current_token.value, result);
+      strlcpy(current_token.value, result, sizeof(current_token.value));
     }
   }
 
@@ -648,7 +656,7 @@ class Lexer {
 
     if (errorOccurred) return;
 
-    while (this->current_char != -1 && this->pos <= strlen(this->text) - 1 && !errorOccurred) 
+    while (this->current_char != -1 && this->pos < strlen(this->text) && !errorOccurred) // WLEDMM prevent unsigned wrap-around
     {
       if (isspace(this->current_char)) {
         this->skip_whitespace();
@@ -693,16 +701,16 @@ class Lexer {
         strncpy(currentValue, this->text + this->pos, charLength);
         currentValue[strlen(value)] = '\0';
         if (strcmp(value, currentValue) == 0 && strlen(value) > longestTokenLength) {
-          strcpy(token_type, tokenPair.key().c_str());
-          strcpy(token_value, value);
+          strlcpy(token_type, tokenPair.key().c_str(), sizeof(token_type));
+          strlcpy(token_value, value, sizeof(token_value));
           longestTokenLength = strlen(value);
         }
       }
 
       if (strcmp(token_type, "") != 0 && strcmp(token_value, "") != 0) 
       {
-        strcpy(current_token.type, token_type);
-        strcpy(current_token.value, token_value);
+        strlcpy(current_token.type, token_type, sizeof(current_token.type));
+        strlcpy(current_token.value, token_value, sizeof(current_token.value));
         for (size_t i=0; i<strlen(token_value); i++)
           this->advance();
         return;
@@ -732,8 +740,8 @@ class Lexer {
       positions[positions_index].current_char = this->current_char;
       positions[positions_index].lineno = this->lineno;
       positions[positions_index].column = this->column;
-      strcpy(positions[positions_index].type, current_token.type);
-      strcpy(positions[positions_index].value, current_token.value);
+      strlcpy(positions[positions_index].type, current_token.type, charLength);
+      strlcpy(positions[positions_index].value, current_token.value, charLength);
       positions_index++;
     }
     else
@@ -747,8 +755,8 @@ class Lexer {
       this->current_char = positions[positions_index].current_char;
       this->lineno = positions[positions_index].lineno;
       this->column = positions[positions_index].column;
-      strcpy(current_token.type, positions[positions_index].type);
-      strcpy(current_token.value, positions[positions_index].value);
+      strlcpy(current_token.type, positions[positions_index].type, charLength);
+      strlcpy(current_token.value, positions[positions_index].value, charLength);
     }
     else
       ERROR_ARTI("no positions saved\n");
@@ -778,7 +786,8 @@ class Symbol {
 
   Symbol(uint8_t symbol_type, const char * name, uint8_t type = 9) {
     this->symbol_type = symbol_type;
-    strcpy(this->name, name);
+    if (name != nullptr) strlcpy(this->name, name, charLength);  // WLEDMM robustness improvement
+    else strcpy(this->name, "");
     this->type = type;
     this->scope_level = 0;
   }
@@ -806,7 +815,7 @@ class ScopedSymbolTable {
   uint8_t child_scopesIndex = 0;
 
   ScopedSymbolTable(const char * scope_name, int scope_level, ScopedSymbolTable *enclosing_scope = nullptr) {
-    strcpy(this->scope_name, scope_name);
+    strlcpy(this->scope_name, scope_name, charLength);
     this->scope_level = scope_level;
     this->enclosing_scope = enclosing_scope;
   }
@@ -858,7 +867,7 @@ class ScopedSymbolTable {
 
 }; //ScopedSymbolTable
 
-#define nrOfVariables 20
+#define nrOfVariables 24  // softhack007 was 20
 
 class ActivationRecord 
 {
@@ -874,9 +883,12 @@ class ActivationRecord
 
     ActivationRecord(const char * name, const char * type, int nesting_level) 
     {
-        strcpy(this->name, name);
-        strcpy(this->type, type);
+        strlcpy(this->name, name, charLength);
+        strlcpy(this->type, type, charLength);
         this->nesting_level = nesting_level;
+        memset(floatMembers, 0, sizeof(floatMembers)); // WLEDMM make sure all vars are initialized to 0
+        memset(lastSet, 0, sizeof(lastSet));
+        lastSetIndex = 0;
     }
 
     ~ActivationRecord() 
@@ -942,7 +954,8 @@ public:
     if (recordsCounter > 0)
     {
       // RUNLOG_ARTI("%s\n", "Pop ", this->peek()->name);
-      return this->records[recordsCounter--];
+      recordsCounter--; // WLEDMM bugfix: recordsCounter points to the next free record! decrement first.
+      return this->records[recordsCounter];
     }
     else 
     {
@@ -953,7 +966,16 @@ public:
 
   ActivationRecord* peek() 
   {
-    return this->records[recordsCounter-1];
+    if (recordsCounter > 0) // WLEDMM robustness improvement
+    {
+      return this->records[recordsCounter-1];
+    }
+    else 
+    {
+      ERROR_ARTI("no ar left on callstack\n");
+      errorOccurred = true;
+      return nullptr;
+    }
   }
 }; //CallStack
 
@@ -967,6 +989,7 @@ public:
 
   ValueStack() 
   {
+    memset(floatStack, 0, sizeof(floatStack)); // WLEDMM make sure all vars are initialized to 0
   }
 
   ~ValueStack() 
@@ -1007,8 +1030,18 @@ public:
 
   float peekFloat() 
   {
-    // RUNLOG_ARTI("Calc Peek %s\n", floatStack[stack_index-1]);
-    return floatStack[stack_index-1];
+    if (stack_index>0) 
+    {
+      // RUNLOG_ARTI("Calc Peek %s\n", floatStack[stack_index-1]);
+      return floatStack[stack_index-1];
+    }
+    else 
+    {
+      ERROR_ARTI("Peek floatStack empty\n");
+      // RUNLOG_ARTI("Calc Pop %s\n", floatStack[stack_index]);
+      errorOccurred = true;
+      return -1;
+    }
   }
 
   // const char * popChar() {
@@ -1059,7 +1092,7 @@ private:
 
   uint8_t stages = 5; //for debugging: 0:parseFile, 1:Lexer, 2:parse, 3:optimize, 4:analyze, 5:interpret should be 5 if no debugging
 
-  char logFileName[fileNameLength];
+  char logFileName[fileNameLength] = {'\0'};  // WLEDMM init to empty string
 
   uint32_t startMillis;
 
@@ -1950,7 +1983,7 @@ public:
 
                   float returnValue = floatNull;
 
-                  returnValue = arti_external_function(value["external"], valueStack->floatStack[oldIndex]
+                  returnValue = arti_external_function(value["external"], (valueStack->stack_index - oldIndex>0)?valueStack->floatStack[oldIndex]  :floatNull
                                                                         , (valueStack->stack_index - oldIndex>1)?valueStack->floatStack[oldIndex+1]:floatNull
                                                                         , (valueStack->stack_index - oldIndex>2)?valueStack->floatStack[oldIndex+2]:floatNull
                                                                         , (valueStack->stack_index - oldIndex>3)?valueStack->floatStack[oldIndex+3]:floatNull
@@ -2113,11 +2146,14 @@ public:
                   //check already defined in this scope
 
                   // RUNLOG_ARTI("%s levels %u-%u\n", spaces+50-depth, variable_level,  variable_index );
-                  if (variable_level != 0) { //var already exist
+                  if ((variable_level != 0) && (this->callStack->peek() != nullptr)) { //var already exist // WLEDMM prevent nullptr access
                     //calculate the index in the call stack to find the right ar
                     uint8_t index = this->callStack->recordsCounter - 1 - (this->callStack->peek()->nesting_level - variable_level);
                     //  RUNLOG_ARTI("%s %s %s.%s = %s (push) %s %d-%d = %d (%d)\n", spaces+50-depth, key, ar->name, variable_name, varValue, variable_symbol->name, this->callStack->peek()->nesting_level,variable_symbol->scope_level, index,  this->callStack->recordsCounter); //key is variable_declaration name is ID
-                    ar = this->callStack->records[index];
+                    if (index < this->callStack->recordsCounter) 
+                      ar = this->callStack->records[index]; // WLEDMM prevent stale/out-of-range activation record access
+                    else 
+                      ar = nullptr;
                   }
                   else //var created here
                     ar = this->callStack->peek();
@@ -2234,12 +2270,16 @@ public:
                           evaluation = fmod(left, right);
                         break;
                       }
-                      case F_bitShiftLeft: 
-                        evaluation = (int)left << (int)right; //only works on integers
+                      case F_bitShiftLeft: {
+                        uint32_t r = (unsigned)(int)right;
+                        evaluation = (r < 32) ? ((unsigned)(int)left << r) : 0; // only works on unsigned integers; allow max 32bit for shit
                         break;
-                      case F_bitShiftRight: 
-                        evaluation = (int)left >> (int)right; //only works on integers
+                      }
+                      case F_bitShiftRight: {
+                        uint32_t r = (unsigned)(int)right;
+                        evaluation = (r < 32) ? ((unsigned)(int)left >> r) : 0;  // only works on unsigned integers; allow max 32bit for shit
                         break;
+                      }
                       case F_equal: 
                         evaluation = left == right;
                         break;
@@ -2303,6 +2343,7 @@ public:
 
                 bool continuex = true;
                 uint16_t counter = 0;
+                if (ar == nullptr) continuex = false; // WLEDMM avoid nullptr access
                 while (continuex && counter < 2000) //to avoid endless loops
                 {
                   RUNLOG_ARTI("%s iteration\n", spaces+50-depth);
@@ -2538,7 +2579,7 @@ public:
       return false;
     }
 
-    char programFileName[fileNameLength];
+    char programFileName[fileNameLength] = {'\0'};
     #if ARTI_PLATFORM == ARTI_ARDUINO
       strcpy(programFileName, "/");
     #endif
@@ -2775,7 +2816,7 @@ public:
     closeLog();
 
     #if ARTI_PLATFORM == ARTI_ARDUINO
-      WLED_FS.remove(logFileName); //cleanup the /edit folder a bit
+      if (strlen(logFileName) > 0) WLED_FS.remove(logFileName); //cleanup the /edit folder a bit
     #endif
   }
 }; //ARTI

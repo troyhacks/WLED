@@ -96,7 +96,7 @@ enum Externals
 #if ARTI_PLATFORM != ARTI_ARDUINO
   #define PI 3.141592654
 #endif
-uint32_t frameTime = 0;
+static uint32_t frameTime = 0;
 
 float ARTI::arti_external_function(uint8_t function, float par1, float par2, float par3, float par4, float par5)
 {
@@ -105,9 +105,9 @@ float ARTI::arti_external_function(uint8_t function, float par1, float par2, flo
     switch (function) {
       case F_setPixelColor: {
         if (par3 == floatNull)
-          SEGMENT.setPixelColor(((uint16_t)par1)%SEGLEN, (uint32_t)par2);
+          SEGMENT.setPixelColor(((int)par1)%SEGLEN, (uint32_t)par2);
         else
-          SEGMENT.setPixelColorXY((uint16_t)par1, (uint16_t)par2, (uint32_t)par3);
+          SEGMENT.setPixelColorXY((int)par1, (int)par2, (uint32_t)par3);
         return floatNull;
       }
       case F_hsv:
@@ -169,7 +169,7 @@ float ARTI::arti_external_function(uint8_t function, float par1, float par2, flo
         uint32_t saveFirstPixel = SEGMENT.getPixelColor(0);
         for (uint16_t i=0; i<SEGLEN-1; i++)
         {
-          SEGMENT.setPixelColor(i, SEGMENT.getPixelColor((uint16_t)(i + par1)%SEGLEN));
+          SEGMENT.setPixelColor(int(i), SEGMENT.getPixelColor((int)(i + par1)%SEGLEN));
         }
         SEGMENT.setPixelColor(SEGLEN - 1, saveFirstPixel);
         return floatNull;
@@ -367,9 +367,9 @@ float ARTI::arti_get_external_variable(uint8_t variable, float par1, float par2,
           return floatNull;
         }
         else if (par2 == floatNull)
-          return SEGMENT.getPixelColor((uint16_t)par1);
+          return SEGMENT.getPixelColor((int)par1);
         else
-          return SEGMENT.getPixelColorXY((uint16_t)par1, (uint16_t)par2); //2D value!!
+          return SEGMENT.getPixelColorXY((int)par1, (int)par2); //2D value!!
 
       case F_counter:
         return SEGENV.call;
@@ -467,9 +467,9 @@ void ARTI::arti_set_external_variable(float value, uint8_t variable, float par1,
           errorOccurred = true;
         }
         else if (par2 == floatNull)
-          SEGMENT.setPixelColor((uint16_t)par1%SEGLEN, value);
+          SEGMENT.setPixelColor((int)par1%SEGLEN, value);
         else
-          SEGMENT.setPixelColorXY((uint16_t)par1%SEGMENT.virtualWidth(), (uint16_t)par2%SEGMENT.virtualHeight(), value); //2D value!!
+          SEGMENT.setPixelColorXY((int)par1%SEGMENT.virtualWidth(), (int)par2%SEGMENT.virtualHeight(), value); //2D value!!
 
         return;
       case F_frameTime:
@@ -581,7 +581,7 @@ bool ARTI::loop()
   if (frameCounter == 1)
     startMillis = millis();
 
-  if (millis() - startMillis > 3000) //startMillis != 0 && logToFile && 
+  if (millis() - startMillis > 4000) //startMillis != 0 && logToFile && 
   {
     // ERROR_ARTI("time %u\n", millis() - startMillis);
     closeLog();

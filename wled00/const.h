@@ -393,7 +393,8 @@
 #define ERR_LOW_BUF     37  // WLEDMM: low memory (LED buffer from allocLEDs)
 #define ERR_SYS_REBOOT  90  // WLEDMM: reboot after error
 #define ERR_SYS_BROWNOUT  91 // WLEDMM: reboot after brownout alert
-#define ERR_PERSISTENT    100 // threshold: errors below this value are non-persistent; persistent errors stay in the UI until restart
+#define ERR_PERSISTENT_THRESHOLD 100 // WLEDMM: errors below this value are non-persistent; persistent errors stay in the UI until restart
+// ERR_PERSISTENT_THRESHOLD is a threshold value only - never assign directly to errorFlag
 #define ERR_REBOOT_NEEDED 100 // WLEDMM: reboot needed after changing hardware setting
 #define ERR_POWEROFF_NEEDED 101 // WLEDMM: power-cycle needed after changing hardware setting
 
@@ -437,6 +438,14 @@
 #endif
 #endif
 #endif
+#ifdef ARDUINO_ARCH_ESP32
+  static_assert((MAX_LEDS) > 1023, "MAX_LEDS must be at least 1024."); // small values can lead to UI errors, see https://github.com/MoonModules/WLED-MM/issues/365
+#else
+  static_assert((MAX_LEDS) > 511, "MAX_LEDS must be at least 512."); // reduced lower limit for 8266
+#endif
+#if MAX_LEDS > INT16_MAX
+  #warning "MAX_LEDS > 32767 will not work in some effects !"
+#endif
 
 #ifndef MAX_LED_MEMORY
   #ifdef ESP8266
@@ -452,7 +461,7 @@
 
 #ifndef MAX_LEDS_PER_BUS
 #if !defined(ARDUINO_ARCH_ESP32)
-  #define MAX_LEDS_PER_BUS 2048   // may not be enough for fast LEDs (i.e. APA102)
+  #define MAX_LEDS_PER_BUS 1664   // may not be enough for fast LEDs (i.e. APA102) // WLEDMM align with MAX_LEDS default value
 #else
   #if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S3
     #define MAX_LEDS_PER_BUS MAX_LEDS // for fast LEDs and fast MCUs (i.e. APA102, HUB75, ART.Net) - allows to have all LEDs on one bus
@@ -461,6 +470,7 @@
   #endif
 #endif  
 #endif
+static_assert( (MAX_LEDS_PER_BUS) <= (MAX_LEDS), "configuration error: MAX_LEDS_PER_BUS must not exceed MAX_LEDS");  // WLEDMM sanity check
 
 // string temp buffer (now stored in stack locally) // WLEDMM ...which is actually not the greatest design choice on ESP32
 #ifdef ESP8266
@@ -606,6 +616,17 @@
 #define PIN_RETRY_COOLDOWN   3000 // time in ms after an incorrect attempt PIN and OTA pass will be rejected even if correct
 #define PIN_TIMEOUT        900000 // time in ms after which the PIN will be required again, 15 minutes
 
+// WLEDMM upstream WLED compatibility: allow to over-override HW_PIN_SDA / HW_PIN_SCL with I2CDSAPIN/I2CSCLPIN
+//        * WLEDMM uses HW_PIN_SDA / HW_PIN_SCL for default I2C init. Pins can be changed in usermod settings.
+//        * The I2C bus driver is _not_ started by default on startup. Its initialized when the first usermod calls pinManager.joinWire().
+//        * This approach improves UX (changing I2C pins does not always require a restart), and it simplifies usermod code because a UM only calls pinManager.joinWire() to attach itself to the I2C bus.
+#if defined(I2CSCLPIN) && !defined(HW_PIN_SCL)
+  #define HW_PIN_SCL I2CSCLPIN
+#endif
+#if defined(I2CSDAPIN) && !defined(HW_PIN_SDA)
+  #define HW_PIN_SDA I2CSDAPIN
+#endif
+
 // HW_PIN_SCL & HW_PIN_SDA are used for information in usermods settings page and usermods themselves
 // which GPIO pins are actually used in a hardware layout (controller board)
 //WLEDMM: unchangeable pins are not treated here by undef them, but elsewhere in the code 
@@ -615,6 +636,17 @@
 #endif
 #ifndef HW_PIN_SDA
   #define HW_PIN_SDA -1 //WLEDMM if not defined, -1 will be used (not SDA/21) (also for esp8266?)
+#endif
+
+// WLEDMM upstream WLED compatibility: allow to over-override SPI pins with SPISCLKPIN/SPIMOSIPIN/SPIMISOPIN
+#if defined(SPISCLKPIN) && !defined(HW_PIN_CLOCKSPI)
+  #define HW_PIN_CLOCKSPI SPISCLKPIN
+#endif
+#if defined(SPIMOSIPIN) && !defined(HW_PIN_MOSISPI)
+  #define HW_PIN_MOSISPI SPIMOSIPIN
+#endif
+#if defined(SPIMISOPIN) && !defined(HW_PIN_MISOSPI)
+  #define HW_PIN_MISOSPI SPIMISOPIN
 #endif
 
 // HW_PIN_SCLKSPI & HW_PIN_MOSISPI & HW_PIN_MISOSPI are used for information in usermods settings page and usermods themselves
