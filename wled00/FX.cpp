@@ -562,6 +562,214 @@ static const char _data_FX_MODE_STROBE_RAINBOW[] PROGMEM = "Strobe Rainbow@!;,!;
 
 
 /*
+ * Beat-aware strobe with attack/decay envelopes.
+ *
+ *   REQUIRES the Pioneer ProLink v3 usermod to be enabled. There is NO
+ *   default BPM — when ProLink is not streaming beat data, the segment
+ *   goes to its off-color. The whole point of this effect is being locked
+ *   to the live music; fabricating a 120 BPM when disconnected would make
+ *   a half-loaded rig look "alive" when it isn't.
+ *
+ *   Slider[0] Flashes/Bar  = bucket 0..4 → 1, 2, 4, 8, 16 flashes per bar
+ *                            (capped at 16 — beyond that the LED refresh rate
+ *                            can't resolve individual flashes anyway)
+ *   Slider[1] Attack       = 0   → instant 100% at the beat (no ramp-up before the flash)
+ *                            255 → 50% ramp from 0% → 100% leading INTO the beat
+ *   Slider[2] Decay        = 0   → instant 0% after the flash (single-frame peak)
+ *                            255 → 50% ramp from 100% → 0% following the beat
+ *
+ *   Checkbox[1] Downbeat    = OFF → SEGCOLOR(0) for every flash, SEGCOLOR(1) in dark gap
+ *                             ON  → SEGCOLOR(2) on beat 1 (downbeat) of every bar,
+ *                                   SEGCOLOR(0) on beats 2/3/4, SEGCOLOR(1) in dark gap
+ *                             (with Palette mode, SEGCOLOR(2) becomes palette[0])
+ *
+ *   Checkbox[2] Palette     = OFF → colors come from color picker (3 slots above)
+ *                             ON  → colors come from active palette:
+ *                                   palette[tickIdx] for regular flashes
+ *                                   palette[0]      for the downbeat (when Downbeat checked)
+ *                                   SEGCOLOR(1) still used in the dark gap
+ *
+ *   Flash positions per bar (4/4 time, the user's confirmed pattern):
+ *     1/bar  → 1 alternation, starts on the downbeat              (beat 1)
+ *     2/bar  → 2 alternations                                     (beats 1, 3)
+ *     4/bar  → 4 alternations                                     (beats 1, 2, 3, 4)
+ *     8/bar  → 4 on-beat + 4 half-beat                            (1, 1.5, 2, 2.5, 3, 3.5, 4)
+ *     16/bar → 16 evenly-spaced subdivisions                      (1, 1.25, 1.5, ..., 3.75, 4)
+ *
+ *   Beat 1 is ALWAYS a flash position, regardless of rate.
+ *
+ *   Envelope model — each subinterval [0, 1) is partitioned as:
+ *
+ *     0 ...decayDur | dark gap... | (1-attackDur) ... 1
+ *     ramp 1→0      | intensity=0  | ramp 0→1
+ *
+ *   Invariants guaranteed by the floor/cap:
+ *     - sum(attackDur + decayDur) ≤ 50% of subinterval → at least half
+ *       the subinterval is guaranteed dark, so this stays strobe-like
+ *       even with both sliders at max (no fade-across-subinterval).
+ *     - decayDur is floored at ~3 frames (50 ms) so the 100% peak is
+ *       always visible, even when both sliders are 0.
+ *     - The flash boundary (withinTick = 0 = 1) is always at intensity 1.0
+ *       because the attack ramp ENDS at 100% and the decay ramp BEGINS
+ *       at 100% there. So the LED hits 100% exactly on-beat.
+ *     - There is always a zero point somewhere in the subinterval.
+ *
+ *   The four corners:
+ *     attack=0,  decay=0   → 50 ms peak at the beat (the floor), then dark
+ *     attack=0,  decay=255 → instant 100%, then linear decay over 25%
+ *     attack=255, decay=0  → dark gap 75%, then linear ramp into the beat
+ *     attack=255, decay=255 → 25% up, peak at beat, 25% down (50% total)
+ *
+ *   Beat-anchor architecture — the CDJ sends TWO different beat fields:
+ *     * `prolink_beat_public` (packet 0xA6, status) — beat-in-measure 1..4.
+ *       Updates only when a status packet arrives (~every 200 ms), so it
+ *       can lag the actual beat moment by up to one packet interval.
+ *     * `prolink_beat_progress_public` (locally computed) — 0..1 within
+ *       the current beat, resets to 0 when a beat packet (0x5C) ticks
+ *       the usermod's beat counter. Updates synchronously with the beat.
+ *
+ *   If we drive phase from `prolink_beat_public`, a 200 ms lag at low
+ *   flash rates (1/bar = 2000 ms/bar at 120 BPM; 2/bar = 1000 ms/bar)
+ *   is on the same order as the flash window itself (~16-33 ms), so the
+ *   flash visibly drifts relative to the beat. At 4+/bar the subinterval
+ *   shrinks below the lag, so each tick absorbs the jitter fine.
+ *
+ *   Fix: derive the in-bar beat position LOCALLY by tracking the wrap
+ *   edge of `beatProgress` (which is sample-accurate), and use
+ *   `prolink_beat_public` only as a "is data valid" gate and a one-shot
+ *   initial seed. SEGENV.aux0 = previous beatProgress in Q16.16;
+ *   SEGENV.aux1 = monotonic beat counter (low 2 bits = in-bar beat 0..3).
+ *   This keeps the flash locked to the beat even at 1/bar where the
+ *   status packet lag is comparable to the flash duration.
+ */
+static uint8_t bpmStrobeFlashesPerBarFromSlider(uint8_t v) {
+  // five monotonic buckets covering 0..255 ~ 51 slider units each.
+  // Capped at 16 flashes/bar — beyond that the LED refresh rate can't
+  // resolve individual flashes anyway (16/bar @ 120 BPM = 8 Hz, well within
+  // 30 fps render budget; 32/bar @ 120 BPM = 16 Hz starts aliasing).
+  if (v <  51) return 1;   // 0..50
+  if (v < 102) return 2;   // 51..101
+  if (v < 153) return 4;   // 102..152
+  if (v < 204) return 8;   // 153..203
+  return 16;               // 204..255
+}
+
+uint16_t mode_bpm_strobe(void) {
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+  // ProLink v3 globals — file-scope volatile in usermods_list.cpp.
+  // This is the canonical read pattern for future ProLink-aware effects.
+  extern volatile float   prolink_bpm_public;              // beats per minute (0 = unknown)
+  extern volatile uint8_t prolink_beat_public;            // beat-in-measure: 0 = no data, 1..4 = bar position (1 = downbeat) — STATUS packet only, lags up to ~200 ms
+  extern volatile float   prolink_beat_progress_public;    // 0..1 within the current beat — sample-accurate (resets on each beat packet)
+  extern volatile bool    prolink_connected_public;        // true while following a master CDJ
+
+  // No live ProLink data → effect is intentionally inert. Don't fabricate
+  // a default BPM — the user wants the strobe locked to real music. The
+  // beatInMeasure sentinel 0 ("no packet yet, see #BEAT at FX.cpp:7412")
+  // falls through here too, so we don't strobe before the first CDJ hello.
+  if (!prolink_connected_public || prolink_bpm_public <= 0.0f || prolink_beat_public == 0u) {
+    SEGMENT.fill(SEGCOLOR(1));                             // off-color
+    SEGENV.aux0 = 0;                                       // reset beat tracking so the
+    SEGENV.aux1 = 0;                                       // counter restarts cleanly on reconnect
+    return FRAMETIME;
+  }
+
+  const uint8_t  flashesPerBar  = bpmStrobeFlashesPerBarFromSlider(SEGMENT.speed);
+  const float    attackStrength = (float)SEGMENT.intensity / 255.0f;  // 0..1
+  const float    decayStrength  = (float)SEGMENT.custom1   / 255.0f;  // 0..1
+  const bool     downbeatColor  = SEGMENT.check1;                      // SEGCOLOR(2) on beat 1
+
+  // ---- Beat classification & phase ----
+  // The usermod publishes `prolink_beat_public` (1..4 beat-in-measure, 1 =
+  // downbeat — same convention as the `#BEAT` macro at FX.cpp:7471) and
+  // `prolink_beat_progress_public` (0..1 within the current beat, derived
+  // from `lastBeatTime` at usermod_v3_pioneer_prolink.h:1716). Both are
+  // updated in the usermod's main loop whenever the corresponding packet
+  // arrives, so they're realtime — no status-packet lag to worry about.
+  //
+  // `barBeat - 1` puts beat 1 at position 0, beat 2 at 1, ..., beat 4 at 3.
+  // Adding beatProg (0..1) gives a continuous bar position in [0, 4) that
+  // we map to the requested number of flashes per bar.
+  const uint8_t  barBeat   = prolink_beat_public;                       // 1..4, 1 = downbeat (usermod convention)
+  const float    beatProg  = prolink_beat_progress_public;
+  const float    barPos    = (float)(barBeat - 1u) + beatProg;          // [0, 4)
+  const float    subBarPos = barPos * ((float)flashesPerBar / 4.0f);     // [0, flashesPerBar)
+  const uint16_t tickIdx   = (uint16_t)subBarPos;                        // which subinterval we're in
+  const float    withinTick= subBarPos - (float)tickIdx;                 // [0, 1)
+
+  // Subinterval length in ms — used to compute the absolute floor for the
+  // flash window. Without a floor, very low BPMs + few flashes per bar
+  // can collapse decayDur below one render frame, making the flash
+  // invisible. The floor is a fixed 50 ms (~3 frames at 30 fps), which
+  // keeps the flash visible at any reasonable BPM.
+  //
+  // maxDur caps each half of the envelope at 25% of the subinterval — so
+  // with both sliders at 255, the flash window is 50% of the subinterval
+  // and the dark gap is also 50%. This keeps "1/bar" strobes from
+  // spanning half the bar (2 beats) with a single flash, which is more
+  // "fade" than "strobe".
+  float    bpm            = prolink_bpm_public;
+  if (bpm < 60.0f) bpm = 60.0f;                                       // sane floor, same as prior impl
+  const float subintervalMs = (60000.0f * 4.0f) / (bpm * (float)flashesPerBar);
+  const float minFlashMs   = 50.0f;                                   // ~3 frames at 30 fps
+  const float minFlashPct  = minFlashMs / subintervalMs;               // expressed as a fraction of subinterval
+  const float maxDur       = 0.25f;                                   // each slider caps at 25%
+
+  // Floor the decay so the peak is at least ~3 frames wide. If the
+  // subinterval is shorter than ~6 frames (i.e., minFlashPct >= maxDur),
+  // the floor would push decayDur past 25% — clamp to maxDur instead so
+  // attackDur stays valid.
+  const float minFlashFloor = (minFlashPct < maxDur) ? minFlashPct : maxDur;
+  const float decayDur  = min(max(decayStrength  * maxDur, minFlashFloor), maxDur);
+  const float attackDur = attackStrength * maxDur;                      // already ≤ maxDur
+
+  float intensity;
+  if (decayDur > 0.0f && withinTick < decayDur) {
+    // Decay ramp — linear 100% → 0% over [0, decayDur).
+    intensity = 1.0f - (withinTick / decayDur);
+  } else if (attackDur > 0.0f && withinTick > 1.0f - attackDur) {
+    // Attack ramp — linear 0% → 100% over (1 - attackDur, 1).
+    intensity = (withinTick - (1.0f - attackDur)) / attackDur;
+  } else {
+    // Dark gap (or both sliders at 0 → decayDur is the floor only).
+    intensity = 0.0f;
+  }
+
+  uint32_t peakColor;
+  DEBUG_PRINTF("prolink_beat_public: %d prolink_beat_progress_public: %0.3f tickIdx: %d subBarPos: %0.3f attackDur: %0.3f decayDur: %0.3f withinTick: %0.3f downbeatColor: %d intensity: %0.3f flashesPerBar: %d ", barBeat, prolink_beat_progress_public, tickIdx, subBarPos, attackDur, decayDur, withinTick, downbeatColor, intensity, flashesPerBar);
+  if (intensity == 0.0f) {
+    peakColor = SEGCOLOR(1);
+    DEBUG_PRINTLN("Color Picked: OFF");
+  } else if ((downbeatColor && tickIdx == 0 && subBarPos < decayDur) || (downbeatColor && tickIdx + 1 == flashesPerBar && withinTick >= 1.0f - attackDur)) {
+    peakColor = SEGCOLOR(2);   
+    DEBUG_PRINTLN("Color Picked: DOWNBEAT");                           // 3rd color slot for the downbeat (beat 1 of bar)
+  } else {
+    peakColor = SEGCOLOR(0);                              // regular flash
+    DEBUG_PRINTLN("Color Picked: BEAT");
+  }
+
+  // Blend peakColor toward SEGCOLOR(1) by (1 - intensity). At intensity 1,
+  // peakColor is shown unmodified; at intensity 0, SEGCOLOR(1) (off).
+  // color_blend(c1, c2, blend) leans c1→c2 as blend/255 increases; at 255 pure c2.
+  const uint8_t  blendAmt   = (uint8_t)((1.0f - intensity) * 255.0f + 0.5f);
+  const uint32_t fillColor  = color_blend(peakColor, SEGCOLOR(1), blendAmt);
+
+  for (uint32_t i = 0; i < SEGLEN; i++) {                              // uint32_t matches setPixelColor(uint32_t, uint32_t) unambiguously
+    SEGMENT.setPixelColor(i, fillColor);
+  }
+  return FRAMETIME;
+
+  #else
+  // ProLink usermod not compiled in. The effect has nothing to lock to.
+  SEGMENT.fill(SEGCOLOR(1));
+  return FRAMETIME;
+  #endif
+}
+
+static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Pro Link Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat;On,Off,Downbeat;;01;ix=255,c1=255,o1=0";
+
+
+/*
  * Color wipe function
  * LEDs are turned on (color1) in sequence, then turned off (color2) in sequence.
  * if (bool rev == true) then LEDs are turned off in reverse order
@@ -10194,7 +10402,7 @@ uint16_t mode_PPA_IMAGEPLAYER() {
     uint8_t transformer = SEGMENT.custom3;
 
     // PPA Transforms
-
+ 
     if (transformer < 4) {            // mirror everything on X 
       srm_config.mirror_x = true;
     } else if (transformer < 8) {     // mirror everything on Y
@@ -14251,6 +14459,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_GEQPPA, &mode_GEQPPA, _data_FX_MODE_GEQPPA); // audio
   addEffect(FX_MODE_PPA_IMAGEPLAYER, &mode_PPA_IMAGEPLAYER, _data_FX_MODE_PPA_IMAGEPLAYER); // audio
   addEffect(FX_MODE_PRO_LINK, &mode_PRO_LINK, _data_FX_MODE_PRO_LINK); // audio
+  addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // not PPA yet but needs PRO_LINK 
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   #endif

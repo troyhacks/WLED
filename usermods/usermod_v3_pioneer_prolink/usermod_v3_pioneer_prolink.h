@@ -203,6 +203,28 @@ private:
   // Phrase change tracking
   int previousPhraseIdx = -1;
 
+  // Effect/Fill playlist id (0 = off, 1..250 = playlist id in /presets.json).
+  // When non-zero and the playlist resolves to >=1 entries, Phrase-boundary
+  // preset picks draw from that playlist instead of cycling all presets.
+  // Fill phrases prefer prolinkFillPlaylist over prolinkEffectPlaylist.
+  int prolinkEffectPlaylistId_cfg = 0;
+  int prolinkFillPlaylistId_cfg   = 0;
+
+  // Cached resolved preset pools for the two playlist ids above. Refreshed:
+  //  (a) on usermod setup,
+  //  (b) whenever the configured id changes (readFromConfig),
+  //  (c) on a PresetListMutated v3 event.
+  std::vector<int> prolinkEffectPool;
+  std::vector<int> prolinkFillPool;
+
+  // Last id the cached pool reflects. Used to detect "id changed" so we
+  // know when to re-read the playlist JSON from disk.
+  int prolinkEffectPlaylistId_cached = -1;
+  int prolinkFillPlaylistId_cached   = -1;
+
+  // Anti-repeat memory for phrase-boundary preset picks. -1 = no constraint.
+  int previousEffectPresetId = -1;
+
   // Buffers
   std::vector<uint8_t> metadataBuffer;
   std::vector<uint8_t> waveformBuffer;
@@ -235,6 +257,8 @@ private:
   static const char _ipOverride[];
   static const char _deckNumber[];
   static const char _altcolors[];
+  static const char _effectPlaylist[];
+  static const char _fillPlaylist[];
 
   // Protocol constants
   const uint8_t DBSERVER_MAGIC[5] = { 0x11, 0x87, 0x23, 0x49, 0xae };
@@ -270,6 +294,65 @@ private:
       }
     }
     return count;
+  }
+
+  // --- Playlist pool resolver ---
+  // Reads the playlist stored at /presets.json keyed by `playlistId`,
+  // extracts its `ps` array (the referenced preset ids), and pushes
+  // those that exist in presetCache into `out`. Empty `out` means
+  // "playlist unavailable" — caller treats this as cycling/fills
+  // disabled per the user's confirmed UX.
+  //
+  // Acquires the JSON buffer lock briefly. If the lock is contended
+  // (e.g. handlePresets() is mid-apply) the call gives up silently and
+  // returns the prior cached pool — never blocks the loop.
+  void refreshPlaylistPool(int playlistId, std::vector<int>& out) {
+    if (playlistId <= 0 || playlistId > 250) return;
+    if (presetCache == nullptr || !presetCache[playlistId].exists || !presetCache[playlistId].isPlaylist) {
+      if (enableDebug) {
+        USER_PRINTF("[ProLink] Playlist %d unavailable (exists=%d isPlaylist=%d)\n",
+          playlistId,
+          presetCache ? presetCache[playlistId].exists : 0,
+          presetCache ? presetCache[playlistId].isPlaylist : 0);
+      }
+      return;
+    }
+    if (!requestJSONBufferLock(31)) {
+      if (enableDebug) USER_PRINTLN(F("[ProLink] Playlist pool refresh: buffer lock contended, deferring"));
+      return;
+    }
+    if (readObjectFromFileUsingId("/presets.json", playlistId, &doc)) {
+      JsonObject fdo = doc.as<JsonObject>();
+      JsonObject pl  = fdo["playlist"];
+      if (!pl.isNull()) {
+        JsonArray ps = pl["ps"];
+        if (!ps.isNull()) {
+          for (int v : ps) {
+            int pid = v;
+            if (pid > 0 && pid <= 250 && presetCache[pid].exists) {
+              out.push_back(pid);
+            }
+          }
+        }
+      }
+    }
+    releaseJSONBufferLock();
+    if (enableDebug) USER_PRINTF("[ProLink] Playlist %d pool resolved to %d entries\n", playlistId, (int)out.size());
+  }
+
+  // Wrapper to (id-change-detect) then refresh. Treats an already-attempted
+  // (cachedId == configuredId) as "no-op regardless of pool size" so a
+  // missing/empty playlist does not repeatedly hit the filesystem.
+  void ensurePlaylistPool(int configuredId, int& cachedId, std::vector<int>& pool,
+                          const char* whichPlaylist) {
+    if (configuredId == cachedId) return;
+    cachedId = configuredId;
+    pool.clear();
+    refreshPlaylistPool(configuredId, pool);
+    if (configuredId > 0 && pool.empty() && enableDebug) {
+      USER_PRINTF("[ProLink] %s playlist (id=%d) is empty/unresolved — cycling disabled\n",
+        whichPlaylist, configuredId);
+    }
   }
 
   // --- PSRAM Memory Management ---
@@ -501,8 +584,16 @@ private:
 
     // Beat in measure (0xA6)
     if (packet.length() > 0xA6) {
-      linkState.beatInMeasure = data[0xA6];
-      prolink_beat_public = linkState.beatInMeasure;
+      uint8_t newBeat = data[0xA6];
+      if (newBeat != linkState.beatInMeasure) {
+        // Beat changed — reset progress in lockstep so the consumer never sees
+        // (new beat, stale progress). The usermod loop's lastBeatTime /
+        // lastBeatInMeasure will catch up on its next iteration; meanwhile this
+        // write is the one the effect actually reads.
+        prolink_beat_progress_public = 0.0f;
+      }
+      linkState.beatInMeasure = newBeat;
+      prolink_beat_public = newBeat;
     }
 
     // Beats elapsed (0xA0-0xA3)
@@ -787,6 +878,19 @@ private:
       if (!pool.empty()) {
         prolink_presetOffset = random(pool.size());
         if (enableDebug) USER_PRINTF("[ProLink] Initialized preset offset: %d\n", prolink_presetOffset);
+      }
+      // Reset anti-repeat memory so the first phrase boundary has no
+      // prior to avoid. We re-refresh playlist pools here too in case
+      // a track change happens to coincide with a PresetListMutated
+      // event the usermod missed (e.g. between boot and the v3 hookup).
+      previousEffectPresetId = -1;
+      if (prolinkEffectPlaylistId_cfg > 0) {
+        prolinkEffectPool.clear();
+        refreshPlaylistPool(prolinkEffectPlaylistId_cfg, prolinkEffectPool);
+      }
+      if (prolinkFillPlaylistId_cfg > 0) {
+        prolinkFillPool.clear();
+        refreshPlaylistPool(prolinkFillPlaylistId_cfg, prolinkFillPool);
       }
     }
 
@@ -1388,30 +1492,72 @@ private:
     // static-guard hack in readFromConfig(). v3 uses the Pioneer-local
     // enableRandomPreset config directly.
     if (enableRandomPreset && activeIdx != previousPhraseIdx && previousPhraseIdx != -1 && activeIdx != -1) {
-      auto pool = buildPresetPool();
-      int newPreset = getPresetForPhraseNoRepeat(activeIdx, pool);
+      bool isFillPhrase = (phrases[activeIdx].label.indexOf("Fill") != -1);
+      // Pick the right configured playlist (0 = off, fall through to legacy).
+      const std::vector<int>* pickPool = nullptr;
+      int configuredId = 0;
+      if (isFillPhrase) {
+        pickPool     = &prolinkFillPool;
+        configuredId = prolinkFillPlaylistId_cfg;
+      } else {
+        pickPool     = &prolinkEffectPool;
+        configuredId = prolinkEffectPlaylistId_cfg;
+      }
 
-      if (phrases[activeIdx].label.indexOf("Fill") != -1) {
-        newPreset = 2;
-      } else if (newPreset == 2 && !pool.empty()) {
-        for (int attempts = 0; attempts < 10; attempts++) {
-          int candidate = pool[random(pool.size())];
-          if (candidate != 2) {
-            newPreset = candidate;
-            break;
+      int newPreset = -1;
+
+      if (configuredId > 0 && pickPool && !pickPool->empty()) {
+        // Configured-playlist branch: anti-repeat picker over the pool.
+        //   - 1 entry  → take it (nothing to shuffle)
+        //   - 2+       → random, retry until != previousEffectPresetId
+        const std::vector<int>& pool = *pickPool;
+        if (pool.size() == 1) {
+          newPreset = pool[0];
+        } else {
+          int prev = previousEffectPresetId;
+          for (int tries = 0; tries < 8; tries++) {
+            int c = pool[random(pool.size())];
+            if (c != prev) { newPreset = c; break; }
           }
+          if (newPreset < 0) newPreset = pool[random(pool.size())]; // give up anti-repeat
+        }
+        if (enableDebug) {
+          Serial.printf("[ProLink] Phrase %d -> %d. Playlist-%s pick=%d (%s)\n",
+            previousPhraseIdx, activeIdx, isFillPhrase ? "fill" : "effect",
+            newPreset, newPreset > 0 ? presetCache[newPreset].name : "(none)");
+        }
+      } else {
+        // Legacy behavior — cycle the full preset pool, force-fill
+        // behavior for "Fill"-labeled phrases. Same code as before,
+        // preserved verbatim except we still update previousEffectPresetId
+        // so a later switch to a configured playlist has a prior to avoid.
+        auto pool = buildPresetPool();
+        newPreset = getPresetForPhraseNoRepeat(activeIdx, pool);
+
+        if (isFillPhrase) {
+          newPreset = 2;
+        } else if (newPreset == 2 && !pool.empty()) {
+          for (int attempts = 0; attempts < 10; attempts++) {
+            int candidate = pool[random(pool.size())];
+            if (candidate != 2) {
+              newPreset = candidate;
+              break;
+            }
+          }
+        }
+        if (enableDebug) {
+          Serial.printf("[ProLink] Phrase %d -> %d. Legacy-pool pick=%d (%s)\n",
+            previousPhraseIdx, activeIdx, newPreset,
+            (newPreset > 0 && presetCache) ? presetCache[newPreset].name : "(none)");
         }
       }
 
       if (newPreset > 0) {
-        if (enableDebug) {
-          Serial.printf("[ProLink] Phrase %d -> %d. Applying Preset %d (%s)\n",
-            previousPhraseIdx, activeIdx, newPreset, presetCache[newPreset].name);
-        }
         if (strip.getSegmentsNum() > 1) strip.resetSegments(false);
         if (currentPlaylist >= 0) unloadPlaylist();
         applyPreset(newPreset);
         handlePresets();
+        previousEffectPresetId = newPreset;
       }
     }
     previousPhraseIdx = activeIdx;
@@ -1461,6 +1607,7 @@ private:
         prolink_phrase_index_public = -1;
         prolink_mood_public = "";
         previousPhraseIdx = -1;
+        previousEffectPresetId = -1;
         prolink_total_beats = 0;
 
         clearMetadata();
@@ -1483,6 +1630,13 @@ public:
     if (!enabled) return;
 
     startupTime = esp_timer_get_time();
+
+    // First-run playlist pool resolution. readFromConfig() handles
+    // refresh when the user changes the configured id later, but on the
+    // very first boot presetCache may already be populated (it is built
+    // during WLED boot from /presets.json) so we can pre-warm the pools.
+    ensurePlaylistPool(prolinkEffectPlaylistId_cfg, prolinkEffectPlaylistId_cached, prolinkEffectPool, "Effect");
+    ensurePlaylistPool(prolinkFillPlaylistId_cfg,   prolinkFillPlaylistId_cached,   prolinkFillPool,   "Fill");
 
     if (udpStatus.listen(PORT_STATUS)) {
       udpStatus.onPacket([this](AsyncUDPPacket packet) { parseStatusPacket(packet); });
@@ -1536,10 +1690,16 @@ public:
     // Beat timing
     static unsigned long lastBeatTime = 0;
     static uint32_t lastBeatNumber = 0;
+    static uint8_t  lastBeatInMeasure = 0;
     static unsigned long beatFlashStart = 0;
 
     if (linkState.beatNumber != lastBeatNumber && linkState.beatNumber > 0) {
-      lastBeatTime = millis();
+      // Note: do NOT reset lastBeatTime here. The beat packet and the status
+      // packet (which carries beatInMeasure / prolink_beat_public) arrive on
+      // independent streams, so resetting from beatNumber creates a window
+      // where the visible beat number lags the progress reset. The progress
+      // clock is anchored to beatInMeasure changes below; this branch only
+      // drives the flash, which is fine to fire on the more frequent packet.
       lastBeatNumber = linkState.beatNumber;
 
       if (enableBeatFlash) {
@@ -1547,6 +1707,14 @@ public:
         prolink_beat_flash_active = true;
         prolink_beat_flash_brightness = 255;
       }
+    }
+
+    // The visible beat number (beatInMeasure) comes from the status packet
+    // on a different stream than beatNumber (beat packet). Anchor lastBeatTime
+    // to whichever one the consumer is reading so progress and beat stay in sync.
+    if (linkState.beatInMeasure != lastBeatInMeasure && linkState.beatInMeasure > 0) {
+      lastBeatTime = millis();
+      lastBeatInMeasure = linkState.beatInMeasure;
     }
 
     // Beat flash animation
@@ -1568,9 +1736,10 @@ public:
       unsigned long timeSinceBeat = millis() - lastBeatTime;
 
       float progress = timeSinceBeat / beatDurationMs;
-      while (progress >= 1.0f) {
-        progress -= 1.0f;
-        lastBeatTime += (unsigned long)beatDurationMs;
+      if (progress >= 1.0f) {
+        // Don't roll over locally — let the next beat packet reset it.
+        // Cap so consumers see "almost a beat" until the real one lands.
+        progress = 0.999f;
       }
       prolink_beat_progress_public = progress;
     } else {
@@ -1595,6 +1764,8 @@ public:
     top[FPSTR(_ipOverride)] = playerIPOverride;
     top[FPSTR(_deckNumber)] = virtualDeckNumber;
     top[FPSTR(_altcolors)] = altWaveformColors;
+    top[FPSTR(_effectPlaylist)] = prolinkEffectPlaylistId_cfg;
+    top[FPSTR(_fillPlaylist)]   = prolinkFillPlaylistId_cfg;
   }
 
   bool readFromConfig(JsonObject& root) {
@@ -1610,6 +1781,35 @@ public:
     playerIPOverride = top[FPSTR(_ipOverride)] | "";
     virtualDeckNumber = top[FPSTR(_deckNumber)] | WLED_DEVICE_ID_DEFAULT;
     virtualDeckNumber = constrain(virtualDeckNumber, 1, 127);
+
+    // Effect / fill playlist ids. Default to 0 (off — legacy cycling/fill
+    // behavior). Cached pools are rebuilt only when the configured id changes,
+    // so toggling in the UI does not repeatedly hit the filesystem.
+    int newEffectPlId = top[FPSTR(_effectPlaylist)] | prolinkEffectPlaylistId_cfg;
+    int newFillPlId   = top[FPSTR(_fillPlaylist)]   | prolinkFillPlaylistId_cfg;
+    newEffectPlId = constrain(newEffectPlId, 0, 250);
+    newFillPlId   = constrain(newFillPlId,   0, 250);
+    prolinkEffectPlaylistId_cfg = newEffectPlId;
+    prolinkFillPlaylistId_cfg   = newFillPlId;
+
+    if (prolinkEffectPlaylistId_cfg != prolinkEffectPlaylistId_cached) {
+      prolinkEffectPlaylistId_cached = prolinkEffectPlaylistId_cfg;
+      prolinkEffectPool.clear();
+      refreshPlaylistPool(prolinkEffectPlaylistId_cfg, prolinkEffectPool);
+      if (prolinkEffectPlaylistId_cfg > 0 && prolinkEffectPool.empty() && enableDebug) {
+        USER_PRINTF("[ProLink] Effect playlist (id=%d) is empty/unresolved — cycling disabled\n",
+          prolinkEffectPlaylistId_cfg);
+      }
+    }
+    if (prolinkFillPlaylistId_cfg != prolinkFillPlaylistId_cached) {
+      prolinkFillPlaylistId_cached = prolinkFillPlaylistId_cfg;
+      prolinkFillPool.clear();
+      refreshPlaylistPool(prolinkFillPlaylistId_cfg, prolinkFillPool);
+      if (prolinkFillPlaylistId_cfg > 0 && prolinkFillPool.empty() && enableDebug) {
+        USER_PRINTF("[ProLink] Fill playlist (id=%d) is empty/unresolved — fills disabled\n",
+          prolinkFillPlaylistId_cfg);
+      }
+    }
 
     // WLEDMM v3: removed the static-guard hack that synced the
     // external `prolink_presetMover` global flag from enableRandomPreset.
@@ -1673,9 +1873,18 @@ public:
                     (unsigned)ev.payload.presetApplied.preset);
         break;
       case wled::EventType::PresetListMutated:
-        USER_PRINTF("[ProLinkV3] PresetListMutated kind=%u slot=%u\n",
-                    (unsigned)ev.payload.presetListMutated.kind,
-                    (unsigned)ev.payload.presetListMutated.slot);
+        {
+          USER_PRINTF("[ProLinkV3] PresetListMutated kind=%u slot=%u\n",
+                      (unsigned)ev.payload.presetListMutated.kind,
+                      (unsigned)ev.payload.presetListMutated.slot);
+          // A playlist was created/updated/deleted. Invalidate our cached
+          // pools so the next phrase boundary re-reads from disk. We
+          // don't know which playlist was affected, so refresh both.
+          prolinkEffectPool.clear();
+          prolinkFillPool.clear();
+          prolinkEffectPlaylistId_cached = -1;
+          prolinkFillPlaylistId_cached   = -1;
+        }
         break;
       case wled::EventType::PlaylistStarted:
         USER_PRINTF("[ProLinkV3] PlaylistStarted playlist=%d entry=%u\n",
@@ -1781,3 +1990,5 @@ const char ProLinkUsermodV3::_highResArt[] PROGMEM = "High-Res_Artwork_240x240";
 const char ProLinkUsermodV3::_ipOverride[] PROGMEM = "Player_IP_Override";
 const char ProLinkUsermodV3::_deckNumber[] PROGMEM = "Virtual_Deck_Number";
 const char ProLinkUsermodV3::_altcolors[] PROGMEM = "Use_Alt_Waveform_Colors";
+const char ProLinkUsermodV3::_effectPlaylist[] PROGMEM = "Effect_Playlist_Id";
+const char ProLinkUsermodV3::_fillPlaylist[] PROGMEM = "Fill_Playlist_Id";
