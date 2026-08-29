@@ -6,11 +6,11 @@ Use a class-compliant USB-MIDI controller (Akai APC Mini MK2, Donner Starrypad, 
 
 **This usermod is fully functional today with the Akai APC Mini Mk2 — that's the primary target.** Default button/pad mappings, LED feedback palette, and the two-press confirmation flow were all designed around it. Future revisions will aim to make it more generic for other class-compliant controllers (Donner Starrypad, Korg nanoKONTROL, etc.). Patches welcome — VID/PID additions and CC layout tweaks go in `midi_usb_host.cpp`'s `kMidiVendorIds` / `kMidiDevices` tables.
 
-**Hardware caveat — ESP32-P4 boards *without* an integrated USB hub only.** Many ESP32-P4 dev boards (e.g., the 4-port USB-A carrier boards) have an integrated High-Speed USB hub chip between the ESP32-P4 and the USB-A ports. Full-Speed MIDI controllers behind those HS hubs hit a known limitation in the current Espressif ESP-IDF USB Host stack — enumeration stalls and `usb_host_transfer_submit()` returns `ESP_ERR_INVALID_STATE`. This is **not a bug in this usermod** — it's a limitation of the Espressif IDF. The usermod is verified on the Espressif ESP32-P4 EVB, which exposes the P4's native USB OTG directly.
+**Hardware caveat — ESP32-P4 boards *without* an integrated USB hub only.** Many ESP32-P4 dev boards (e.g., the 4-port USB-A carrier boards) have an integrated High-Speed USB hub chip between the ESP32-P4 and the USB-A ports. Full-Speed MIDI controllers behind those HS hubs hit a known limitation in the current Espressif ESP-IDF USB Host stack — enumeration stalls and `usb_host_transfer_submit()` returns `ESP_ERR_INVALID_STATE`. This is **not a bug in this usermod** — it's a limitation of the Espressif IDF. 
 
-**The USB port must be powered.** Some ESP32-P4 boards (e.g., the WaveShare P4 box with the square display) expose a USB-C port for power only — there is no USB data path, so this usermod cannot work on those boards. Check your board schematic before assuming USB-MIDI will work.
+**The USB port must be powered.** Some ESP32-P4 boards (e.g., the WaveShare P4 box with the square display) expose a USB-C port for data transfer, but there's no power, so this usermod cannot work on those boards. I've had some success hacking external power into the path - or maybe an externally powered device, which the APC Mini Mk2 isn't. Check your board schematic before assuming USB-MIDI will work.
 
-**USB-MSC vs USB-MIDI — it's exclusive, not concurrent.** This usermod does not stop USB Mass Storage from working, but the P4's USB Host stack can only operate **one** class driver at a time per device. If you want USB-MIDI on the same USB-A port, you cannot also mount a USB stick there for `ImagePlayer`. The recommended workaround: put your media on the board's **microSD card slot** instead. The microSD path is faster than USB-MSC, supports hot-unmount cleanly, and leaves the USB-A port free for the MIDI controller.
+**USB-MSC vs USB-MIDI — it's exclusive, not concurrent.** This usermod does not stop USB Mass Storage from working, but the P4's USB Host stack can only operate **one** class driver at a time per device. If you want USB-MIDI on the same USB-A port, you cannot also mount a USB stick there for `ImagePlayer`. The recommended workaround: put your media on the board's **microSD card slot** instead. The microSD path has been found to be much faster than USB-MSC (at least at time of writing) and leaves the USB-A port free for the MIDI controller.
 
 ## Targets
 
@@ -169,20 +169,6 @@ The pad layout (top-left physical pad = preset 1) and CC map (faders → effect 
 - `selectMode` (hold to activate copy flow)
 - `""` (empty string) — button is unused
 
-## USB-HS / USB-FS caveat
-
-The P4's USB OTG controller runs **High-Speed OR Full-Speed, never both**. Plugging in a Full-Speed MIDI controller drops the bus to FS mode, slowing down the existing `/usb0` MSC mass-storage mount. Acceptable for MIDI — bandwidth is trivial — but `ImageCacheManager::startPreload("/usb0")` may be slower while a MIDI controller is attached.
-
-## Reliability caveat (important!)
-
-**The P4 EV board's ESP-IDF USB Host library has known issues bringing Full-Speed MIDI devices into `USB_DEVICE_STATE_CONFIGURED` state.** The host library's internal enum thread routinely fails on `CHECK_CONFIG` for the AKAI APC Mini MK2 and similar controllers. While in that failed state, `usb_host_transfer_submit()` returns `ESP_ERR_INVALID_STATE` for every URB — the device handle is allocated, the descriptors are read, the interface is claimed, but no transfers can be submitted.
-
-In practice this means **you may need to unplug and replug the controller several times before the host library happens to complete `SET_CONFIGURATION` successfully.** When it does, the lights come on, faders start working, and both paths stay alive until the next host-library hiccup.
-
-This is a known limitation of the P4 EV board's USB Host controller + ESP-IDF v5 USB Host library combination. The most likely effective fix is migrating to the TinyUSB host stack (which has a more tolerant enumeration state machine), but the current usermod sticks with ESP-IDF USB Host and accepts the intermittent behavior.
-
-**What NOT to do:** do not add aggressive retry/poll logic to `midi_usb_host.cpp`. Earlier debugging showed that adding heartbeat logging, safety-net IN resubmits, or AKAI Introduction SysEx sends interfered with the brief window where the host library reaches `CONFIGURED`, breaking the working state. Keep `midi_usb_host.cpp` minimal — only do work when the host library reports it has transfers to deliver or when our OUT ringbuffer has data to send.
-
 ## Build / flash
 
 ```bash
@@ -240,14 +226,7 @@ The usermod emits two log streams on the debug serial:
 - **`[MIDI]` (always on)** — lifecycle events: host client init, NEW_DEV / DEV_GONE, descriptor walk results, claimed interface + endpoints, IN submit failures, OUT queue traces. Goes through `Serial.printf` guarded by `canUseSerial()`, matching the rest of WLED's serial logging behaviour (silent when USB CDC is disconnected).
 - **`[MIDI]` from `MIDI_DEBUG` (gated by `-D WLED_DEBUG`)** — per-transfer chatter: OUT submit errors, IN re-submit errors. To enable, uncomment `-D WLED_DEBUG` in `platformio_override.ini` under `[env:esp32p4_8MB_troyhacks]`.
 
-If you see nothing at all, check:
-- Are you reading the right serial? On the P4-EV board the USB-A ports (where the MIDI controller plugs in) are *not* the CDC serial — the debug serial is on the GPIO UART pins or a separate USB-C port. Use the `monitor` command above, not a terminal on the controller port.
-- `canUseSerial()` returns false when the TX pin is allocated to LEDs or realtime. Check `WLED_USE_ETHERNET_ONLY` and bus pin assignments.
-
 ## Open caveats
 
 - The first MSI enumeration after a cold boot takes ~1-2s for class-compliant devices (the host controller has to drop to FS and re-enumerate).
-- Some early Donner Starrypad firmware revisions present under `bInterfaceClass == 0xFF` (vendor-specific) — `midi_open_and_configure` in `midi_usb_host.cpp` has a bulk-pair fallback that handles these.
-- The APC Mini MK2's master fader (Fader 9) is unidirectional (device→host); sending CC56 back has no visible effect on the controller. Fader feedback is implemented but cosmetic.
-- The host library's `USB_DEVICE_STATE_CONFIGURED` window is intermittent on the P4 EV board. When the window collapses, IN callbacks stop firing and OUT submits fail with `ESP_ERR_INVALID_STATE` until the user unplugs and replugs the controller. This is a hardware/library limitation that we can't fix without modifying the ESP-IDF USB Host source — see "Reliability caveat" above.
-- Earlier debugging explored sending an AKAI Introduction SysEx (`F0 47 7F 4F 60 00 04 00 <verh> <verl> <bugfix> F7`) on connect to initialize the firmware. This regressed the working state — do NOT re-introduce it. The APC Mini MK2 streams pad/fader events on power-up without any prior SysEx; the default NoteOn / CC / Pad state path is sufficient.
+- 
