@@ -1735,17 +1735,23 @@ void WLED::setup() {
   };
 
   // Try to acquire both channels
+  #ifndef WLEDMM_DISPLAY_MODE
+  // WLEDMM: skip chan_id=3 acquire when HDMI is enabled — hdmi_setup() takes
+  // ownership of chan_id=3 at 2.5V for the MIPI DSI PHY, and the IDF blocks
+  // re-acquiring an adjustable channel that's already held.
   if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
     DEBUG_PRINTLN("LDO index 2 acquired");
   } else {
     USER_PRINTLN("Failed to acquire LDO index 2");
   }
 
+
   if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
     DEBUG_PRINTLN("LDO index 3 acquired");
   } else {
     USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
   }
+  #endif // WLEDMM_DISPLAY_MODE
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };

@@ -143,10 +143,16 @@ uint16_t wledmm_display_w = 0;
 uint16_t wledmm_display_h = 0;
 
 // Dedicated IDF v5 I2C master bus for the LT8912B HDMI bridge.
-// Created lazily inside hdmi_setup() so we don't depend on whatever the
-// rest of WLED does to populate global_i2c_bus_handle.  Stays alive for
-// the full app lifetime; torn down by hdmi_display_deinit().
+// Created once in hdmi_setup() and left alive for the app lifetime (same
+// pattern as the LDO — mode switches tear down panel/DSI/panel_io handles
+// and rebuild them against the same bus, but never re-create the bus).
 static i2c_master_bus_handle_t hdmi_i2c_bus = NULL;
+
+// MIPI DSI PHY LDO (chan_id=3 @ 2.5V) is acquired once at the top of
+// hdmi_setup() and left powered on for the app lifetime.  On HDMI builds
+// we also guard wled.cpp's chan_id=3 acquire (3.3V GPIO>36 power) so the
+// two never collide — IDF blocks re-acquiring an adjustable channel that's
+// already held.
 #define WLEDMM_DISPLAY_W   wledmm_display_w
 #define WLEDMM_DISPLAY_H   wledmm_display_h
 #define WLEDMM_DISPLAY_DEPTH 24  // RGB888 always for HDMI
@@ -404,8 +410,14 @@ static void hdmi_display_deinit() {
   // Delete DSI bus last (panel depends on it)
   if (lt8912b_dsi_bus) { esp_lcd_del_dsi_bus(lt8912b_dsi_bus);   lt8912b_dsi_bus = NULL; }
 
-  // Free our dedicated I2C master bus
-  if (hdmi_i2c_bus) { i2c_del_master_bus(hdmi_i2c_bus); hdmi_i2c_bus = NULL; }
+  // I2C master bus is left alive on purpose — it was created once at boot
+  // in hdmi_setup() and stays alive for the app lifetime.  Recreating it on
+  // every mode switch caused "bus not initialized" errors because the
+  // panel_io handles (deleted above) were bound to the previous instance.
+  // Same pattern as the LDO: acquired on boot, never released.
+
+  // LDO channel 3 is left powered on purpose — it's owned by hdmi_setup()
+  // at boot and stays on for the app lifetime.  No release needed here.
 
   wledmm_display_w = 0;
   wledmm_display_h = 0;
@@ -418,13 +430,8 @@ static void hdmi_display_deinit() {
 static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char* label) {
   busNetworkDummyMode = true;
 
-  // LDO for MIPI DSI PHY — acquired once, kept on for the lifetime of the app
-  static esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
-  if (!ldo_mipi_phy) {
-    USER_PRINTLN("MIPI DSI PHY Power on");
-    esp_ldo_channel_config_t ldo_cfg = { .chan_id = 3, .voltage_mv = 2500 };
-    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_cfg, &ldo_mipi_phy));
-  }
+  // MIPI DSI PHY LDO is managed by wled.cpp at boot (chan_id=3) and left
+  // powered on for the app lifetime.  Nothing to do here — the rail is up.
 
   esp_lcd_dsi_bus_config_t bus_config = {};
   bus_config.bus_id         = 0;
@@ -622,6 +629,23 @@ static int hdmi_edid_best_mode() {
 // Call once from WLED::setup().
 // ============================================================
 void hdmi_setup() {
+  // Power the MIPI DSI PHY first — chan_id=3 at 2.5V per ESP32-P4 datasheet.
+  // Acquired once on boot and left on for the app lifetime (the IDF blocks
+  // re-acquiring an adjustable channel that's already held, so mode switches
+  // can't take/release this).  wled.cpp's chan_id=3 acquire (3.3V for GPIO>36)
+  // is skipped on HDMI builds via #ifndef WLEDMM_DISPLAY_MODE.
+  static bool ldo_acquired = false;
+  if (!ldo_acquired) {
+    esp_ldo_channel_config_t ldo_cfg = { .chan_id = 3, .voltage_mv = 2500 };
+    esp_ldo_channel_handle_t ldo = NULL;
+    if (esp_ldo_acquire_channel(&ldo_cfg, &ldo) == ESP_OK && ldo) {
+      ldo_acquired = true;
+      USER_PRINTLN("HDMI: MIPI DSI PHY powered (LDO chan 3 @ 2.5V)");
+    } else {
+      USER_PRINTLN("HDMI: failed to acquire MIPI DSI PHY LDO (chan 3) — continuing without explicit power");
+    }
+  }
+
   // WLEDMM: ensure our dedicated I2C master bus is up before the HDMI bridge
   // needs it.  The LT8912B communicates via I2C at 0x48/0x49/0x4A (register
   // spaces) and 0x50 (DDC EDID proxy).  We create our own port-1 master bus

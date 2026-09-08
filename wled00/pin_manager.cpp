@@ -822,7 +822,7 @@ bool PinManagerClass::isPinOk(byte gpio, bool output) const
     // strapping pins: 34,35,36,37,38
     // Hide all pins not available on connector except pins we need to assign to things later, like I2S
     if (             gpio <   2) return false;     // NC unless you mod the board.
-    if (             gpio ==  9) return false;     // I2S Sound Output Pin
+    // if (             gpio ==  9) return false;     // I2S Sound Output Pin
     if (gpio > 13 && gpio <  20) return false;     // ESP-Hosted WiFi pins
     // if (gpio > 23 && gpio <  26) return false;     // USB Pins
     if (gpio > 27 && gpio <  32) return false;     // Ethernet pins
