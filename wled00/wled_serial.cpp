@@ -1,4 +1,7 @@
 #include "wled.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+#include "wled_hdmi.h"
+#endif
 #ifdef ARDUINO_ARCH_ESP32
 #include "esp_ota_ops.h"
 #endif
@@ -135,8 +138,31 @@ void handleSerial() {
 
   PinOwner srxo = pinManager.getPinOwner(hardwareRX);
   if (srxo != PinOwner::DebugOut && srxo != PinOwner::None) return;
-  
+
   // if (Serial.available() > 1) { serial_drain(); return; } // I dunno, something was really giving me serial garbage.
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+  // HDMI mode switch: type 'm' to open interactive menu, then enter a number + Enter.
+  if (Serial.available() >= 1 && Serial.peek() == 'm') {
+    Serial.read();  // consume 'm'
+    // drain any trailing newline that arrived alongside the 'm'
+    while (Serial.available() && (Serial.peek() == '\r' || Serial.peek() == '\n')) Serial.read();
+    // print the mode menu
+    hdmi_print_mode_menu();
+    // wait up to 10 s for the user to type a number + Enter (3 s timeout after first digit)
+    char buf[4] = {}; uint8_t len = 0;
+    uint32_t deadline = millis() + 10000;
+    while (millis() < deadline) {
+      if (!Serial.available()) { delay(5); continue; }
+      char c = Serial.read();
+      if (c == '\n' || c == '\r') { if (len > 0) break; }
+      else if (c >= '0' && c <= '9' && len < 3) { buf[len++] = c; deadline = millis() + 3000; }
+    }
+    if (len > 0) hdmi_switch_mode(atoi(buf));
+    else Serial.println("HDMI: no mode selected.");
+    return;
+  }
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
 
   unsigned long startTime = millis();
   while ((Serial.available() > 0) && (millis() - startTime < SERIAL_MAXTIME_MILLIS)) {

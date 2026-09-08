@@ -34,6 +34,7 @@ static const char *TAG = "WLED";
   #include "hal/usb_dwc_ll.h"
   #include "esp_private/usb_phy.h"
   #include "ImageCacheManager.h"
+  #include "wled_hdmi.h"
 
   #ifdef USERMOD_MIDI_USB
     #include "../usermods/usermod_v3_midi/midi_usb_host.h"
@@ -885,6 +886,10 @@ void WLED::loop() { // loopTask
       newArtNetData = false;
     }
   }
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
+  hdmi_blit();
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE && CONFIG_SOC_PPA_SUPPORTED
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
   if (millis() - debugTime > 29999) {
@@ -1993,6 +1998,10 @@ void WLED::setup() {
     #endif
 
     strip.createLedmapBinaryCache();
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+    hdmi_setup();
+#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
 
     xSemaphoreGive(busMutex);
 

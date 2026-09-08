@@ -642,6 +642,7 @@ bool BusNetwork::ensureCapacity(uint32_t requiredPixels) {
 void IRAM_ATTR BusNetwork::show() {
   if (!WLED_CONNECTED) return;
   if (!_valid || !canShow()) return;
+  if (busNetworkDummyMode) return;   // skip network transmit; keep pixel buffer for HDMI blit
 
   uint32_t mapSize = uint32_t(Segment::maxWidth) * Segment::maxHeight;
 
