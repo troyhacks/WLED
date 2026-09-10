@@ -532,7 +532,10 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   }
 
   {
-    const uint32_t timeout_ms = 5000, poll_ms = 200;
+    // First attempt: 15 s.  Cold-boot monitors (especially behind KVM switches
+    // or with slow EDID) can take >5 s before HPD asserts.  Watchdog isn't
+    // armed during setup(), so a long wait is safe here.
+    const uint32_t timeout_ms = 15000, poll_ms = 200;
     uint32_t elapsed = 0;
     bool ready = false;
     USER_PRINT("Waiting for HDMI link");
@@ -542,6 +545,28 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
       USER_PRINT(".");
       vTaskDelay(pdMS_TO_TICKS(poll_ms));
       elapsed += poll_ms;
+    }
+    if (!ready) {
+      // First attempt timed out — reset the LT8912B and retry.  When the
+      // initial 5 s window expires before the monitor is ready, the chip's
+      // internal HPD-detection state machine can latch into a "no link"
+      // state that no longer recovers on its own.  A chip-level reset
+      // restarts that state machine, which is why hot-plug after boot
+      // has always worked.  Reset once, retry with a fresh 15 s budget.
+      USER_PRINTLN(" TIMEOUT — resetting LT8912B to recover from cold-boot race");
+      esp_lcd_panel_reset(panel_handle);
+      vTaskDelay(pdMS_TO_TICKS(500));
+      esp_lcd_panel_init(panel_handle);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      USER_PRINT("Re-checking HDMI link");
+      elapsed = 0;
+      while (elapsed < timeout_ms) {
+        ready = esp_lcd_panel_lt8912b_is_ready((esp_lcd_panel_t*)panel_handle);
+        if (ready) break;
+        USER_PRINT(".");
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        elapsed += poll_ms;
+      }
     }
     USER_PRINTF(ready ? " OK (%ums)\n" : " TIMEOUT — no monitor detected, continuing anyway\n", elapsed);
   }
