@@ -9676,25 +9676,25 @@ uint16_t mode_2DPaintbrush() {
 
   for (size_t i = 0; i < numLines; i++) {
     byte bin = map(i,0,numLines,0,15);
-    
-    byte x1 = beatsin8_t(max(16,int(SEGMENT.speed))/16*1 + fftResult[0]/16, 0, (cols-1), fftResult[bin], SEGENV.aux1);
-    byte x2 = beatsin8_t(max(16,int(SEGMENT.speed))/16*2 + fftResult[0]/16, 0, (cols-1), fftResult[bin], SEGENV.aux1);
-    byte y1 = beatsin8_t(max(16,int(SEGMENT.speed))/16*3 + fftResult[0]/16, 0, (rows-1), fftResult[bin], SEGENV.aux1);
-    byte y2 = beatsin8_t(max(16,int(SEGMENT.speed))/16*4 + fftResult[0]/16, 0, (rows-1), fftResult[bin], SEGENV.aux1);
 
-    int length = sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1));
+    uint16_t x1 = beatsin16_t(max(16, int(SEGMENT.speed)) / 16 * 1 + fftResult[0] / 16, 0, (cols - 1), fftResult[bin], SEGENV.aux1);
+    uint16_t x2 = beatsin16_t(max(16, int(SEGMENT.speed)) / 16 * 2 + fftResult[0] / 16, 0, (cols - 1), fftResult[bin], SEGENV.aux1);
+    uint16_t y1 = beatsin16_t(max(16, int(SEGMENT.speed)) / 16 * 3 + fftResult[0] / 16, 0, (rows - 1), fftResult[bin], SEGENV.aux1);
+    uint16_t y2 = beatsin16_t(max(16, int(SEGMENT.speed)) / 16 * 4 + fftResult[0] / 16, 0, (rows - 1), fftResult[bin], SEGENV.aux1);
+
+    uint16_t length = sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
 
     if (length > max(1,int(SEGMENT.custom3))) {
-      length = map8(fftResult[bin],0,length);
+      length = map(fftResult[bin], 0, 255, 0, length);
       if (color_chaos) {
-        color = ColorFromPalette(SEGPALETTE, i * 255 / numLines + (SEGENV.aux0&0xFF), 255, LINEARBLEND);
-      } else {
-        uint16_t colorIndex = map(i,0,numLines,0,255);
+        color = ColorFromPalette(SEGPALETTE, i * 255 / numLines + (SEGENV.aux0 & 0xFF), 255, LINEARBLEND);
+        } else {
+        uint16_t colorIndex = map(i, 0, numLines, 0, 255);
         color = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
+        }
+      SEGMENT.drawLine(x1, y1, x2, y2, color, soft, length);
       }
-      SEGMENT.drawLine(x1,y1,x2,y2,color,soft,length);
     }
-  }
   return FRAMETIME;
 } // mode_2DPaintbrush()
 static const char _data_FX_MODE_2DPAINTBRUSH[] PROGMEM = "Paintbrush ☾@Oscillator Offset,# of lines,Fade Rate,,Min Length,Color Chaos,Anti-aliasing,Phase Chaos;!,,Peaks;!;2f;sx=160,ix=255,c1=80,c2=255,c3=0,pal=72,o1=0,o2=1,o3=0";
