@@ -797,7 +797,7 @@ void serializeState(JsonObject root, bool forPreset, bool includeBri, bool segme
     if (errorFlag) {
       root[F("error")] = errorFlag; 
       if (    (millis() > 60000) && (millis() - lastErrorTime > ERROR_HOLD_MILLIS)
-           && (errorFlag < ERR_PERSISTENT)) errorFlag = ERR_NONE; // prevent error message to stay on screen forever - hold them for 60 seconds after startup, persist "please reboot"
+           && (errorFlag < ERR_PERSISTENT_THRESHOLD)) errorFlag = ERR_NONE; // prevent error message to stay on screen forever - hold them for 60 seconds after startup, persist "please reboot"
     }
     lastErrorFlag = errorFlag;
 

@@ -122,8 +122,16 @@ void handleUpload(AsyncWebServerRequest *request, const String& filename, size_t
     } else {
       if (filename.equals("/presets.json") || filename.equals("presets.json")) {  // WLEDMM
         request->send(200, "text/plain", F("Presets File Uploaded!"));
-      } else
-        request->send(200, "text/plain", F("File Uploaded!"));
+      } else {
+        String lowerFilename = filename;  // WLEDMM: use case-insensitive matching
+        lowerFilename.toLowerCase();
+        if (lowerFilename.indexOf(F("palette")) >= 0 && lowerFilename.endsWith(F(".json"))) {
+          DEBUG_PRINTLN(F("Re-loading custom palettes."));
+          strip.loadCustomPalettes();
+          request->send(200, "text/plain", F("Custom Palette File Uploaded!"));
+        } else 
+          request->send(200, "text/plain", F("File Uploaded!"));
+      }
     }
     cacheInvalidate++;
     updateFSInfo(); // refresh memory usage info

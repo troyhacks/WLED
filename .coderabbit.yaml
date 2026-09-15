@@ -31,6 +31,13 @@ reviews:
     enabled: true
     ignore_title_keywords:
       - WIP
+  tools:
+    fbinfer:
+      enabled: false   # Arduino.h not available on Linux analysis host
+    cppcheck:
+      enabled: true    # cppcheck works fine without Arduino headers
+    clang:
+      enabled: true    # clang tidy likewise works
 
   path_instructions:
     - path: "**/*.{cpp,h,hpp,ino}"
@@ -123,8 +130,13 @@ reviews:
         #ifdef). Usermods do not use library.json. Follow the same C++ conventions
         as the core firmware (docs/cpp.instructions.md).
 
-        If the usermod implements `appendConfigData()`, check that the buffer usage (`oappend`) 
-        leaves some margin w.r.t. SETTINGS_STACK_BUF_SIZE on esp32.
+        If the usermod implements `appendConfigData()`, check that the buffer usage (`oappend()`) 
+        leaves some margin w.r.t. `SETTINGS_STACK_BUF_SIZE` on esp32.
+
+        If I2C is needed, verify that `pinManager.joinWire()` is used instead of `Wire.begin()`. I2C is shared between all usermods in WLED-MM.
+
+        Prefer the WLED-MM style 2-parameter constructor (`usermods.add(new Usermod_myUsermodName("UsermodName", false))`
+        in wled00/usermods_list.cpp. See AGENTS.md#usermod-pattern for a pattern that allows to keep compatibility with upstream WLED.
 
     # ── Security hardening — usermods (trust-boundary-aware, narrow scope) ───
     - path: "usermods/**/*.{cpp,h,hpp}"

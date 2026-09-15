@@ -28,6 +28,11 @@ int fileReadCallback(void) {
 }
 
 int fileReadBlockCallback(void * buffer, int numberOfBytes) {
+  // wait for strip to finish updating, to prevent glitches during file access
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FILEWAIT)  // only wait if we don't have the flicker-free RMTHI driver
+  unsigned wait_start = millis();
+  while (strip.isUpdating() && (millis() - wait_start < 25)) delay(1); // wait max 25ms
+  #endif
   return file.read((uint8_t*)buffer, numberOfBytes);
 }
 

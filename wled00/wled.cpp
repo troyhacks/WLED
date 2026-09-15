@@ -611,13 +611,13 @@ void WLED::setup()
   USER_PRINT((int)resetReason);
   USER_PRINT(F("). "));
   int core0code = getCoreResetReason(0);
-  int core1code = getCoreResetReason(1);
+  int core1code = getCoreResetReason(1); // will return 0 (NO_MEAN = no error) on single-core
   USER_PRINTF("Core#0 %s (%d)", resetCode2Info(core0code).c_str(), core0code);
   if (core1code > 0) {USER_PRINTF("; Core#1 %s (%d)", resetCode2Info(core1code).c_str(), core1code);}
   USER_PRINTLN(F("."));
   if ((core0code > 1) && (core0code <= 20) && (core0code != 3) && (core0code != 12) && (core0code != 14)) errorFlag = ERR_SYS_REBOOT; // abnormal reboot
   if ((resetReason >= 4) && (resetReason < 10)) errorFlag = ERR_SYS_REBOOT; // abnormal reboot (crash, brownout, watchdog, etc)
-  if ((resetReason == ESP_RST_BROWNOUT) || (core0code == 15)) errorFlag = ERR_SYS_BROWNOUT; // brownout detected
+  if ((resetReason == ESP_RST_BROWNOUT) || (core0code == 15)|| (core1code == 15)) errorFlag = ERR_SYS_BROWNOUT; // brownout detected
   // WLEDMM end
 
   USER_PRINT(F("FLASH: ")); USER_PRINT((ESP.getFlashChipSize()/1024)/1024);
@@ -893,6 +893,12 @@ void WLED::setup()
 
   DEBUG_PRINTLN(F("Initializing strip"));
   beginStrip();
+  // wait for strip to finish updating, to prevent glitches
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLEDMM_FILEWAIT)  // only wait if we don't have the flicker-free RMTHI driver
+  unsigned wait_start = millis();
+  while (strip.isUpdating() && (millis() - wait_start < 150)) delay(1); // wait max 150ms
+  #endif
+
   DEBUG_PRINT(F("heap ")); DEBUG_PRINTLN(getFreeHeapSize());
 
   USER_PRINTLN(F("\nUsermods setup ..."));
