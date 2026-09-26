@@ -119,6 +119,11 @@ class MPU6050Driver : public Usermod {
     float euler[3] = {0.0f};// [psi, theta, phi]    Euler angle container
     float ypr[3]  = {0.0f}; // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 
+    // Direct I2C read — bypasses DMP FIFO, always returns fresh accel data
+    void getAccelDirect(int16_t* ax, int16_t* ay, int16_t* az) {
+      if (enabled) mpu.getAcceleration(ax, ay, az);
+    }
+
     #if !defined(ARDUINO_ARCH_ESP32) || !defined(MPU6050_INT_GPIO)
     static const int INTERRUPT_PIN = -1; // WLEDMM: not use pin 15 (on ESP8266) as can and will cause conflict with other pins
     #else

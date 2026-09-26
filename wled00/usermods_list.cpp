@@ -203,6 +203,9 @@
 #ifdef USERMOD_ANIMARTRIX
 #include "../usermods/usermod_v2_animartrix/usermod_v2_animartrix.h"
 #endif
+#ifdef USERMOD_FLOWTOYS
+#include "../usermods/usermod_v2_flowtoys/usermod_v2_flowtoys.h"
+#endif
 #ifdef USERMOD_AUTO_PLAYLIST
 #include "../usermods/usermod_v2_auto_playlist/usermod_v2_auto_playlist.h"
 #endif
@@ -403,6 +406,9 @@ void registerUsermods()
 #endif
 #ifdef USERMOD_ANIMARTRIX
   usermods.add(new AnimartrixUsermod("Animartrix", false));
+#endif
+#ifdef USERMOD_FLOWTOYS
+  usermods.add(new FlowtoysUsermod());
 #endif
 
 #ifdef USERMOD_AUTO_PLAYLIST

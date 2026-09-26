@@ -200,9 +200,9 @@ uint16_t mode_IMUTest(void) {
     SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->aaWorld.y+INT16_MAX)/(2*INT16_MAX), y+=1, BLUE);
     SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->aaWorld.z+INT16_MAX)/(2*INT16_MAX), y+=1, BLUE);
     
-    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[0]* 180/M_PI+180)/(2*180), y+=1, RED);
-    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[1]* 180/M_PI+180)/(2*180), y+=1, RED);
-    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[2]* 180/M_PI+180)/(2*180), y+=1, RED);
+    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[0]* 180/M_PI+180)/(2*180), float(y+=1), RED);
+    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[1]* 180/M_PI+180)/(2*180), float(y+=1), RED);
+    SEGMENT.setPixelColorXY(SEGMENT.virtualWidth() * (IMU->ypr[2]* 180/M_PI+180)/(2*180), float(y+=1), RED);
   }
 
   return FRAMETIME;

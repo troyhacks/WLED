@@ -159,6 +159,7 @@
 #define USERMOD_ID_GAMES                 92     //Usermod "usermod_v2_games.h"
 #define USERMOD_ID_ANIMARTRIX               93     //Usermod "usermod_v2_animartrix.h"
 #define USERMOD_ID_AUTOPLAYLIST          94     // Usermod usermod_v2_auto_playlist.h
+#define USERMOD_ID_FLOWTOYS              95     // Usermod "usermod_v2_flowtoys.h"
 
 //Access point behavior
 #define AP_BEHAVIOR_BOOT_NO_CONN          0     //Open AP when no connection after boot
