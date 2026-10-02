@@ -27,7 +27,7 @@
   #define FFTTASK_PRIORITY 6   // above async_tcp and USB Mass Storage
 #endif
 // #define FFT_MAJORPEAK_HUMAN_EAR // removed guards for this, so always on
-#define SR_HIRES_TYPE double  // ESP32 and ESP32-S3 (with FPU) are fast enough to use "double"
+#define SR_HIRES_TYPE double  // double precision is affordable on any target with an FPU; the direct-DFT sub-bin path leans on it
 // Comment/Uncomment to toggle usb serial debugging
 // #define MIC_LOGGER                   // MIC sampling & sound input debugging (serial plotter)
 // #define FFT_SAMPLING_LOG             // FFT result debugging
@@ -210,7 +210,7 @@ static uint8_t useInputFilter = 0;                        // enables low-cut fil
 //WLEDMM add experimental settings
 static uint8_t micLevelMethod = 0;                        // 0=old "floating" miclev, 1=new  "freeze" mode, 2=fast freeze mode (mode 2 may not work for you)
 #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
-static constexpr uint8_t averageByRMS = false;                      // false: use mean value, true: use RMS (root mean squared). use simpler method on slower MCUs.
+static constexpr uint8_t averageByRMS = false;                      // false: use mean value, true: use RMS (root mean squared).
 #else
 static constexpr uint8_t averageByRMS = true;                       // false: use mean value, true: use RMS (root mean squared). use better method on fast MCUs.
 #endif
@@ -311,6 +311,23 @@ static float fftTaskCycle = 0;      // avg cycle time for FFT task
 static float fftTime = 0;           // avg time for single FFT
 static float sampleTime = 0;        // avg (blocked) time for reading I2S samples
 static float filterTime = 0;        // avg time for filtering I2S samples
+// fftTime, sampleTime, filterTime, fftTaskCycle and the per-stage timers below
+// are all stored in units of 10 us: esp_timer_get_time() counts microseconds and the
+// capture divides by 10 before smoothing. So 2490 means 24.90 ms, not 2.49 ms.
+// This is not cosmetic - the info page used to hand these raw values to a
+// formatter that assumed microseconds, under-reporting every figure 10x and
+// hiding a 25 ms frame behind a reassuring "2.49 ms". TIMING_UNIT_US exists so
+// the conversion happens in exactly one place; do not reintroduce raw values.
+constexpr float TIMING_UNIT_US = 10.0f;
+
+// Breakdown of fftTime. fftTime was a single ~25 ms number with no way to tell
+// which of the five things inside it was responsible, and that answer is what
+// decides whether samplesFFT can stay at 2048. Same units as fftTime.
+static float tWindow  = 0;          // memcpy + max-sample + zero-crossing + windowing
+static float tBandDft = 0;          // biquad LPF write-back + captureSubBinBands()
+static float tFft     = 0;          // dsps_fft4r_fc32 - the hardware transform itself
+static float tPost    = 0;          // bitrev + cplx2real + magnitude fold + peak scan + pink
+static float tFinal   = 0;          // band mapping + postProcessFFTResults()
 #endif
 
 // FFT Task variables (filtering and post-processing)
@@ -325,8 +342,15 @@ constexpr SRate_t SAMPLE_RATE = 22050;        // Base sample rate in Hz - 22Khz 
 #ifndef WLEDMM_FASTPATH
 #define FFT_MIN_CYCLE 21                      // minimum time before FFT task is repeated. Use with 22Khz sampling
 #else
-    #define FFT_MIN_CYCLE 8                      // we only have 12ms to take 1/2 batch of samples
+    #define FFT_MIN_CYCLE 8                      // update period, ms - see note below
 #endif
+// FFT_MIN_CYCLE is the UPDATE RATE, not a CPU budget: it is how often the task
+// wakes and publishes a result. The comment this replaced ("we only have 12ms to
+// take 1/2 batch of samples") was an estimate of FFT cost made when the transform
+// was software and the rate was 16 kHz. On ESP32-P4 the hardware FFT makes the
+// whole task a small fraction of this, so the real ceiling is set by something
+// else entirely - see I2S_RING_MS below, which is ~17x larger.
+
 //#define FFT_MIN_CYCLE 30                      // Use with 16Khz sampling
 //#define FFT_MIN_CYCLE 23                      // minimum time before FFT task is repeated. Use with 20Khz sampling
 //#define FFT_MIN_CYCLE 46                      // minimum time before FFT task is repeated. Use with 10Khz sampling
@@ -341,9 +365,103 @@ constexpr SRate_t SAMPLE_RATE = 18000;          // 18Khz; Physical sample time -
 //#define FFT_MIN_CYCLE 30                      // minimum time before FFT task is repeated.
 #endif
 
+// How much audio the I2S driver has buffered, in ms. This - not FFT_MIN_CYCLE -
+// is the real deadline: if the FFT task runs longer than this, the DMA ring
+// refills underneath it and samples are dropped. At 22.05 kHz with 24x128
+// descriptors it works out at about 139 ms, so the task has roughly an order of
+// magnitude of headroom rather than the 8 ms the old constant implied. Exceeding
+// FFT_MIN_CYCLE is not dangerous, it just makes the update rate slip.
+//
+// Outside the SAMPLE_RATE branch above on purpose: fftBudgetVerdict() uses it,
+// and that function is common to every target, so leaving it inside would break
+// the -C3 build on an undefined name.
+constexpr float I2S_RING_MS = (AR_I2S_DMA_DESCS * BLOCK_SIZE * 1000.0f) / (float)SAMPLE_RATE;
+
 // FFT Constants
-constexpr uint16_t samplesFFT = 512;            // Samples in an FFT batch - This value MUST ALWAYS be a power of 2
-constexpr uint16_t samplesFFT_2 = 256;          // meaningful part of FFT results - only the "lower half" contains useful information.
+// The length used to be pinned at 512, because the sub-bin and binned band paths
+// were reconciled by a constant fitted at 512 rather than derived - see the note
+// above BAND_F_LOW. That bridge is gone: both paths are now band powers in the
+// same units, so the length is a free parameter again. It is 2048 because that is
+// what it takes to separate the bottom bands. A tone at band 0's centre leaks
+// only -1.2 dB into band 1 with a 23.2 ms window (512) and -31 dB with a 92.9 ms
+// one (2048), so at 512 bands 0-2 are not really three measurements. 2048 also
+// puts the window past band 0's 59 ms natural width, which is the point past
+// which extra length buys resolution nothing - there is no reason to go higher.
+// hopSamples is decoupled below, so the update rate is a separate decision.
+//
+// COST, as measured on ESP32-P4. These are not comparable to the old
+// software-FFT numbers that used to sit in this file - that hardware transform
+// does not exist here. The whole FFT task (fftTime, everything from windowing
+// through postProcessFFTResults) measures 7.8 ms at N=512 and 24.73 ms at
+// N=2048: 3.19x for 4x the length, not the 4.89x that N*log N predicts, so the
+// P4 transform carries enough fixed overhead that longer transforms are cheaper
+// than the textbook figure suggests.
+//
+// The 24.73 ms had almost nothing to do with the transform, which is worth
+// stating because it is the opposite of what the total suggested. Broken down
+// by stage: sub-bin DFT 23.10 ms, bands+post 0.72, bitrev+magnitude 0.43,
+// ESP-DSP FFT 0.26, windowing 0.21. dsps_fft4r_fc32 dispatches to the on-chip
+// hardware transform on this target and a 2048-point one costs 260 us. The cost
+// was the direct-DFT integration beside it, 93% of the frame, running
+// emulated double-precision arithmetic - now replaced by a precomputed twiddle
+// table (see dftTwiddle). That is what pinned core 1 at 95%; 24.73 ms against
+// an 11.6 ms frame period means the task never sleeps and the update rate
+// collapses to roughly 35 Hz.
+//
+// Re-measure from the AudioReactive info page if any of this changes; the
+// per-stage rows there break the same number down by stage, and the sub-bin DFT
+// row is the one to watch.
+constexpr uint16_t samplesFFT = 2048;           // Samples in an FFT batch - This value MUST ALWAYS be a power of 2
+
+// Hop: NEW samples consumed per FFT frame, and the retained overlap is whatever
+// is left over (retainSamples), so consecutive windows share retainSamples.
+//
+// The old samplesFFT_2 conflated this with samplesFFT/2, which made the two
+// inseparable: raising the transform length to buy frequency resolution silently
+// halved the update rate, and there was no way to express the trade. They answer
+// different questions - length sets what the analyser can resolve, hop sets how
+// often it looks - so they are separate constants now.
+//
+// 256 is 11.6 ms at 22.05 kHz, so the DISPLAY is designed to update at 86 Hz
+// whatever the transform length is. At N=2048 that is 87.5% overlap, which is a
+// lot of redundant work but is the point: the window has to be long to resolve
+// the bottom band, and consecutive windows are genuinely near-identical, so the
+// display changes by the newest 11.6 ms each frame rather than jumping.
+//
+// 86 Hz is the design rate, not the achieved one: the task also has to fit its
+// own work inside 11.6 ms, and at N=2048 the frame currently takes ~25 ms, so
+// vTaskDelayUntil never sleeps and the real rate is ~35 Hz. That is what
+// FRAME_PERIOD_MS below is for.
+//
+// The cost of a long window is attack time, not update rate. A 92.9 ms window
+// cannot report a kick drum onset faster than it averages it away - the band
+// value ramps over ~8 consecutive frames. That is the correct measurement of a
+// 47 Hz band, not a bug, but it does mean the lows will read as a sustained
+// envelope. If that turns out to be too soft, the fix is a second, short-window
+// path for the bottom bands, not a shorter hop.
+constexpr uint16_t hopSamples = 256;
+constexpr uint16_t retainSamples = samplesFFT - hopSamples;
+
+// Wall-clock time one frame's worth of audio takes to arrive. This - not
+// FFT_MIN_CYCLE, and not I2S_RING_MS - is the CPU budget the FFT task has to
+// meet. Exceed it and the task cannot consume the samples it is handed as fast
+// as I2S delivers them, so vTaskDelayUntil falls behind, the update rate slips
+// below the design rate, and the DMA ring drifts steadily fuller. It does not
+// cost audio on its own (there is ~12x of ring left to absorb the drift), which
+// is why the orange tier is a warning and not a failure.
+//
+// At hopSamples=256 and 22.05 kHz this is 11.6 ms. It is deliberately derived
+// rather than a tunable: it is a property of the hop and the sample rate, and
+// the whole point of splitting hopSamples out of samplesFFT was that these two
+// numbers answer different questions and must not be conflated again.
+constexpr float FRAME_PERIOD_MS = (hopSamples * 1000.0f) / (float)SAMPLE_RATE;
+
+// The FFT task keeps its Blackman-Harris window in a local array, so the task
+// stack has to cover it: at samplesFFT=2048 that array alone is 8 KB. Sized off
+// samplesFFT so raising the transform
+// length can never silently eat the stack. The task prints its own high-water
+// mark at startup, so a genuine overflow is visible.
+constexpr uint32_t FFT_TASK_STACK = (samplesFFT * sizeof(float)) * 4;
 // the following are observed values, supported by a bit of "educated guessing"
 //#define FFT_DOWNSCALE 0.65f                             // 20kHz - downscaling factor for FFT results - "Flat-Top" window @20Khz, old freq channels 
 //#define FFT_DOWNSCALE 0.46f                             // downscaling factor for FFT results - for "Flat-Top" window @22Khz, new freq channels
@@ -351,10 +469,11 @@ constexpr uint16_t samplesFFT_2 = 256;          // meaningful part of FFT result
 #define LOG_256  5.54517744f                            // log(256)
 
 // Global magnitude scale applied to the spectrum before the bands are computed,
-// so the result lands near 4096 at full scale. The sub-bin bands are measured by
-// direct DFT on the time-domain signal, which happens BEFORE the FFT overwrites
-// that buffer - so they have to carry the same factor by hand or the two halves
-// of the display end up 24 dB apart. Keep these in step.
+// so the result lands near 4096 at full scale. The sub-bin bands are measured on
+// the time-domain signal, which happens BEFORE the FFT overwrites that buffer,
+// so they carry the same factor by hand. It is a display scale only - it used to
+// double as the bridge between the two band paths, which pinned the whole
+// pipeline to one transform length. See the note above BAND_F_LOW.
 constexpr float FFT_BIN_SCALE = 1.0f / 16.0f;
 
 // dB display mapping (FFTScalingMode 3). Both ends of the mapping are runtime
@@ -381,6 +500,13 @@ static float* pinkFactors = nullptr;                        // "pink noise" corr
 constexpr float pinkcenter = 23.66;                         // sqrt(560) - center freq for scaling is 560 hz.
 constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range of each FFT result bin
 
+// Guard on the trapezoid sample count used to integrate the DFT across a
+// sub-bin band. Only bands narrower than 2 bins take this path, and the count
+// is 2 points per bin, so it never exceeds 8 in practice - see
+// initBandLayout(). This is here rather than beside dftPowerAt() because
+// initBandLayout(), which runs earlier in the file, is what uses it.
+#define FFT_DFT_MAX_PTS 8
+
 // ---------------------------------------------------------------------------
 // Constant-Q band layout
 // ---------------------------------------------------------------------------
@@ -392,8 +518,39 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 //
 // A band narrower than one FFT bin cannot be read off the FFT at all: at
 // 43.07 Hz/bin a 40 Hz tone and an 80 Hz tone both land in bin 1. Bands 0-4 are
-// in that situation. Those are evaluated by running the DFT directly at the
-// band centre frequency instead - see dftMagnitudeAt() and captureSubBinBands().
+// in that situation at samplesFFT = 512. Those are evaluated by integrating the
+// squared magnitude of the DFT across the band instead - see dftPowerAt() and
+// captureSubBinBands().
+//
+// The two paths have to report the SAME quantity, or the display shows a step
+// at whichever band happens to sit on the boundary. Both are unnormalised DFTs
+// over the same window, so the relationship is exact rather than a matter of
+// taste:
+//
+//   bin path    sqrt( sum over the band's bins of |X_k|^2 )
+//   dft path    sqrt( integral over the band of |D(f)|^2 df )
+//
+// The DFT grid has spacing 2*pi/N in omega, so summing magnitudes squared over
+// the whole spectrum approximates the integral of |X|^2 by the Riemann rule
+// with step 2*pi/N; restricting to one band does the same, giving
+//
+//   sum_k |X_k|^2  =  (samplesFFT / SAMPLE_RATE) * integral over band
+//
+// and therefore, in amplitude, the dft path is scaled by
+// sqrt(samplesFFT / SAMPLE_RATE). Measured against the binned path on
+// white noise, across 14 bands and three transform lengths, the derived
+// constant matched to 0.04 dB (N=512 -16.34 vs -16.38, N=1024 -13.33 vs
+// -13.28, N=2048 -10.31 vs -10.31). It is computed in initBandLayout(), so
+// it follows SAMPLE_RATE and samplesFFT automatically.
+//
+// This is what used to be a fitted constant. FFT_BIN_SCALE = 1/16 carried the
+// band-width conversion implicitly, which made it correct at exactly one
+// samplesFFT and silently wrong at any other - doubling N moved bands between
+// the two paths (the sub-bin test is "narrower than 2 bins", which is
+// N-relative) and the fitted constant stopped applying, putting bands 0-2
+// ~20 dB below bands 3+. Nothing about the measurement depended on N; only the
+// bridge did. FFT_BIN_SCALE is now purely the global display scale and bridges
+// nothing.
 //
 // BAND_F_LOW is the lowest band EDGE, not the lowest centre - band 0 spans
 // BAND_F_LOW to BAND_F_LOW * r, so it has a finite lower edge instead of running
@@ -402,11 +559,42 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 // 10 dB (measured -10.1 dB with a DC-anchored bottom band, -2.3 dB here).
 static constexpr float BAND_F_LOW = 40.0f;                  // lowest band edge, Hz
 static float bandCentre[NUM_GEQ_CHANNELS];                  // band centre, Hz
+static float bandEdgeLo[NUM_GEQ_CHANNELS];                  // band lower edge, Hz
+static float bandEdgeHi[NUM_GEQ_CHANNELS];                  // band upper edge, Hz
 static int   bandLo[NUM_GEQ_CHANNELS];                      // first bin, inclusive
 static int   bandHi[NUM_GEQ_CHANNELS];                      // last bin, inclusive
 static bool  bandSubBin[NUM_GEQ_CHANNELS];                  // true if narrower than one bin
+static int   bandNpts[NUM_GEQ_CHANNELS];                    // DFT sample points across the band
 static float subBinMag[NUM_GEQ_CHANNELS];                   // direct-DFT result, filled before the FFT
+static float bandPowerScale = 1.0f;                          // set by initBandLayout()
 static bool  bandLayoutReady = false;
+
+// Precomputed DFT twiddles, one row of exp(j*2*pi*f*n/fs) for every integration
+// point of every sub-bin band, interleaved (re, im) and sampled at n = 0..N-1.
+//
+// This table exists because dftPowerAt() used to generate the same twiddles at
+// run time, carrying a rotation recurrence in double. On the ESP32-P4 that
+// measured 23.10 ms of a 24.73 ms frame - 93% of the whole FFT task - because
+// the P4 has a single-precision FPU and every one of those double operations is
+// emulated in software. The hardware FFT it was competing with does the same
+// work in 260 us.
+//
+// Recomputing a fixed number of constants 8192 times per frame is not a
+// trade-off worth defending: the frequencies are settled the moment
+// initBandLayout() returns and never change again, so the whole recurrence is
+// loop-invariant. Table it once, at init, and the transform degenerates into
+// the float multiply-accumulate the FPU was built for - the same numbers, with
+// no precision argument left to make because nothing is being approximated.
+//
+// At samplesFFT=2048 only band 0 is still sub-bin (16.8 Hz wide against 21.5 Hz
+// for two bins), at 4 points, so this is 4 * 2048 * 2 * sizeof(float) = 64 KB.
+// Larger N shrinks it: at 512 the sub-bin bands and their point counts all rise,
+// but there are more of them, not fewer - the table only grows if the layout
+// gains sub-bin bands, and it cannot, because raising samplesFFT is exactly what
+// removes them.
+static int   dftOffset[NUM_GEQ_CHANNELS];                   // first twiddle row for this band
+static int   dftRows = 0;                                   // total twiddle rows allocated
+static float* dftTwiddle = nullptr;                         // [dftRows][samplesFFT] interleaved (re, im)
 
 // ---------------------------------------------------------------------------
 // Input chain, and the "Auto" pink profile that inverts it
@@ -415,9 +603,48 @@ static bool  bandLayoutReady = false;
 // scope, not inside the FFT task, so initDerivedProfile() below can evaluate
 // their response from the same numbers the filters use - otherwise the profile
 // and the filter could drift apart silently.
-constexpr float DC_BLOCKER_R = 0.990f;                     // ~35 Hz -3 dB
-constexpr float INPUT_LPF_HZ = 9963.0f;                     // noise filter corner
+//
+// Both are specified by the -3 dB corner they place in the signal path, not as
+// bare coefficients. A coefficient like 0.990 only means "35 Hz" at one particular
+// SAMPLE_RATE: change the rate and the DC blocker silently slides up into band 1,
+// taking the bass with it. dcBlockerRFor() below solves the coefficient from the
+// corner every time, so a corner in Hz is the thing you set.
+//
+// The DC blocker's corner is NOT tied to BAND_F_LOW, which it used to be. It sat
+// at 0.873 * BAND_F_LOW = 34.92 Hz, "just below the bottom band", and the intent
+// was to leave band 0 alone - but a one-pole highpass is only 3 dB down AT its
+// corner, so 5 Hz below the band edge is not "just below", it is most of the way
+// to it. That put the blocker inside band 0, attenuating it by 2.45 dB at 40 Hz
+// and 1.85 dB at the 47.7 Hz centre, with 1.08 dB of tilt across the band. It
+// also made the "Auto" profile invert a 2 dB dip, which amplifies the noise
+// floor to get there.
+//
+// At 20 Hz the corner is a clear octave below anything measured, so band 0 comes
+// out essentially flat: 0.95 dB at its lower edge, 0.69 at centre, 0.47 dB of
+// tilt. A true DC blocker has zero gain at 0 Hz for any R < 1, so DC removal is
+// unaffected by where the corner sits - this only changes how much of the
+// 20-40 Hz rumble passes through, and no band lives up there. The only cost is
+// settling, 40 ms to 1% against 23 ms, which is irrelevant on a filter that runs
+// continuously from startup. Lower it further (15 or 10 Hz) if band 0 still
+// looks tilted; the settling cost stays harmless and nothing else moves.
+//
+// The LPF sits just above the geometric centre of the top band, which is what
+// keeps ultrasonic content out of band 15 without gutting band 15 itself. That
+// one IS tied to the layout, because it exists to protect the top band.
+constexpr float DC_BLOCKER_HZ = 20.0f;                       // -3 dB corner, Hz
+constexpr float INPUT_LPF_TOP_FRAC = 1.077138f;            // x centre of the top band -> 9963 Hz
 constexpr float INPUT_FILTER_Q = 0.734f;
+
+// Coefficient for the one-pole DC blocker y[n] = (x[n]-x[n-1]) + R*y[n-1], solved
+// from its -3 dB corner. |H|^2 = 0.5 reduces to cos(w) = (3-R^2)/(4-2R); solving
+// that quadratic and keeping the root below 1 gives the expression below.
+static inline float dcBlockerRFor(float fHz) {
+  const float c = cosf(2.0f * (float)M_PI * fHz / (float)SAMPLE_RATE);
+  return c - sqrtf((c - 1.0f) * (c - 3.0f));
+}
+static const float DC_BLOCKER_R = dcBlockerRFor(DC_BLOCKER_HZ);
+
+static float inputLpfHz = 0.0f;                             // set by initBandLayout()
 static float coeffs_lpf[5];                                 // generated in initDerivedProfile()
 
 static_assert(MAX_PINK == PINK_AUTO, "PINK_AUTO must be the last row of fftResultPink[]");
@@ -507,12 +734,28 @@ static void initBandLayout() {
   for (int k = 0; k <= NUM_GEQ_CHANNELS; k++) edge[k] = BAND_F_LOW * powf(r, (float)k);
   // edge[NUM_GEQ_CHANNELS] lands on fHigh exactly, since r^16 == fHigh / BAND_F_LOW.
 
-  // A band narrower than two bins is measured by running the DFT at its centre
+  // Band power from a direct-DFT integral, expressed in fftBandEnergy()'s units.
+  // Derived, not fitted - see the note above BAND_F_LOW for the derivation and
+  // the measured agreement.
+  bandPowerScale = sqrtf((float)samplesFFT / (float)SAMPLE_RATE);
+
+  // A band narrower than two bins is measured by integrating the DFT across it
   // rather than by adding up bins, because at 43 Hz/bin a bin sum cannot place
   // a tone at the right frequency (and a 1-bin band whose centre is 15 Hz from
   // the bin centre scallops ~1.4 dB, which is audible as a dip in the response).
+  //
+  // bandNpts sets how finely that integral is sampled: two points per bin
+  // across the band, floored at 3. Since only sub-bin bands use it and those
+  // are by definition under 2 bins wide, this never exceeds 8 - the cap is a
+  // guard, not a working limit.
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-    bandSubBin[k] = (edge[k + 1] - edge[k]) < (2.0f * binWidth);
+    bandEdgeLo[k] = edge[k];
+    bandEdgeHi[k] = edge[k + 1];
+    const float width = edge[k + 1] - edge[k];
+    bandSubBin[k] = width < (2.0f * binWidth);
+    bandNpts[k] = (int)ceilf(2.0f * width / binWidth);
+    if (bandNpts[k] < 3) bandNpts[k] = 3;
+    if (bandNpts[k] > FFT_DFT_MAX_PTS) bandNpts[k] = FFT_DFT_MAX_PTS;
     bandLo[k] = halfBins;
     bandHi[k] = -1;
   }
@@ -540,39 +783,142 @@ static void initBandLayout() {
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
     if (bandHi[k] < bandLo[k]) bandSubBin[k] = true;
 
+  // The input LPF rides the top of the layout. bandCentre[] holds geometric
+  // midpoints, so the last entry is the centre of the top band; sitting a little
+  // above it attenuates band 15 without gutting it, and puts the corner below
+  // Nyquist so nothing aliases back down into the bands. Deriving it here means
+  // it follows SAMPLE_RATE and the band count instead of drifting from them.
+  inputLpfHz = INPUT_LPF_TOP_FRAC * bandCentre[NUM_GEQ_CHANNELS - 1];
+
+  // Bake the DFT twiddles now that bandSubBin[] and bandNpts[] are final - both
+  // of the loops above can still change them, so this has to come after them and
+  // not beside the first one. Every frequency the sub-bin path will ever ask for
+  // is fixed from here on.
+  //
+  // This is the last thing initBandLayout() does, deliberately. Everything
+  // above sets up state that has to stand whether or not the allocation
+  // succeeds, and bandLayoutReady below must be set either way - leaving it
+  // false to signal the failure would make every caller retry, and initBandLayout()
+  // is called from the FFT task.
+  dftRows = 0;
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    dftOffset[k] = dftRows;
+    if (bandSubBin[k]) dftRows += bandNpts[k];
+  }
+  free(dftTwiddle);                                          // no-op on the first call
+  dftTwiddle = nullptr;
+  if (dftRows > 0) {
+    // SPIRAM-preferred like the other FFT buffers, and it matters more here: this
+    // table is written once at init and read-only thereafter, so there is no
+    // reason for 64 KB of it to sit in internal RAM next to a 32 KB task stack.
+    // On this board that is 64 KB out of 32 MB, and the traffic is one full pass
+    // per frame: at the ~5 ms frames this change should produce, that is about
+    // 1.3 MB/s, a few percent of even the slow end of a 16-bit PSRAM bus. It is
+    // also read every frame, so it stays hot in the data cache.
+    // MALLOC_CAP_INTERNAL stays as the fallback - a table that landed there
+    // would be faster still, and either way beats a null one.
+    const size_t n = (size_t)dftRows * samplesFFT * 2;
+    #ifdef ESP32
+      dftTwiddle = (float*)heap_caps_calloc_prefer(n, sizeof(float), 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_INTERNAL);
+    #else
+      dftTwiddle = (float*)calloc(n, sizeof(float));
+    #endif
+  }
+  // Out of memory leaves dftTwiddle null; captureSubBinBands() checks for that
+  // and reports the affected bands as zero rather than faulting. A visibly wrong
+  // display is the right outcome for a failed allocation - silently measuring
+  // something else is not.
+  if (dftTwiddle != nullptr) {
+    for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+      if (!bandSubBin[k]) continue;
+      const float span = bandEdgeHi[k] - bandEdgeLo[k];
+      for (int j = 0; j < bandNpts[k]; j++) {
+        // Same grid the trapezoid walk in captureSubBinBands() steps over, and
+        // the same endpoints it gives half weight to.
+        const float fHz = bandEdgeLo[k] + span * (float)j / (float)(bandNpts[k] - 1);
+        const double step = 2.0 * M_PI * (double)fHz / (double)SAMPLE_RATE;
+        float *tw = dftTwiddle + (size_t)(dftOffset[k] + j) * samplesFFT * 2;
+        // Computed in double, stored as float. The storage error is ~6e-8 per
+        // sample and the transform sums 2048 of them, so it lands near 4e-6
+        // relative - against a band estimate whose own single-frame variance is
+        // tens of percent. Precision is not the question in this loop.
+        for (int n = 0; n < samplesFFT; n++) {
+          tw[2*n]     = (float)(cos(step * n));
+          tw[2*n + 1] = (float)(sin(step * n));
+        }
+      }
+    }
+  }
+
   bandLayoutReady = true;
 }
 
-// Magnitude of the windowed DFT evaluated at an arbitrary frequency.
+// SQUARED magnitude of the windowed DFT, evaluated against one precomputed row
+// of twiddles from dftTwiddle[].
 //
 // For a band narrower than one FFT bin this is the only honest way to measure
 // it. Reading the nearest bin instead puts a 20 Hz tone and a 40 Hz tone in the
-// same place and reports them as one band. Evaluating the transform at the
-// band's own centre frequency separates them exactly, for a stationary tone,
-// and costs one 512-tap dot product per sub-bin band - negligible next to the
-// FFT itself.
-static float dftMagnitudeAt(const float *x, float freqHz) {
-  const double step = 2.0 * M_PI * (double)freqHz / (double)SAMPLE_RATE;
-  const double cs = cos(step), sn = sin(step);
-  double re = 0.0, im = 0.0, pr = 1.0, pi = 0.0;
+// same place and reports them as one band. Returned squared so the band
+// integral below can be accumulated in the power domain, which is the domain
+// the binned path works in.
+//
+// This is the whole of what dftPowerAt() was, minus the arithmetic. The
+// frequency is no longer a parameter - it is baked into the table by
+// initBandLayout() - and with it goes the double-precision rotation recurrence
+// that cost 23.10 ms of a 24.73 ms frame. What is left is a float
+// multiply-accumulate, which is a native FPU instruction, and there is no drift
+// to guard against because no state is carried between samples.
+//
+// Sign convention is unchanged: the twiddles advance with +step, not -step. The
+// magnitude |re + i*im| is identical either way, and keeping the same sign means
+// the table reproduces the old function's output rather than its conjugate.
+static float dftPowerAt(const float *x, const float *tw) {
+  float re = 0.0f, im = 0.0f;
   for (int n = 0; n < samplesFFT; n++) {
-    re += (double)x[n] * pr;
-    im += (double)x[n] * pi;
-    const double tr = pr * cs - pi * sn;                      // rotate one step
-    pi = pr * sn + pi * cs;
-    pr = tr;
+    const float v = x[n];
+    re += v * tw[2*n];
+    im += v * tw[2*n + 1];
   }
-  return sqrtf((float)(re * re + im * im));
+  return re * re + im * im;
 }
 
+// Band energy for the bands too narrow to read off the FFT, by integrating the
+// squared DFT magnitude across the band.
+//
+// The integrand is sampled at bandNpts points and integrated by the trapezoid
+// rule. A single sample at the band centre - which is what this used to do -
+// measures a spectral DENSITY, not a band power, so it reads high for exactly
+// the bands that are narrow relative to a bin: at samplesFFT=512 band 0 is
+// 16.8 Hz wide against a 43.07 Hz bin, and a density over-reads a true band
+// power by sqrt(binWidth/width) = 1.6x. Worse, that error moves with
+// samplesFFT, which is what broke the pipeline when the length changed.
+// Integrating across the band makes the answer independent of the bin grid.
+//
+// The sample frequencies are not recomputed here - initBandLayout() already laid
+// the same points out in the same order when it filled dftTwiddle[], so j
+// indexes straight into the table and the two cannot drift apart.
+//
 // Must run while vReal still holds the filtered, windowed time-domain signal -
 // i.e. just before the FFT overwrites it with the spectrum.
 static void captureSubBinBands() {
-  for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
-    // FFT_BIN_SCALE: the spectrum gets divided down before the binned bands are
-    // summed, and this runs on the raw time-domain signal, so it has to carry
-    // the same factor or bands 0-6 read 24 dB hot against bands 7-15.
-    subBinMag[k] = bandSubBin[k] ? FFT_BIN_SCALE * dftMagnitudeAt(vReal, bandCentre[k]) : 0.0f;
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    if (!bandSubBin[k]) { subBinMag[k] = 0.0f; continue; }
+    if (dftTwiddle == nullptr) { subBinMag[k] = 0.0f; continue; }  // see initBandLayout()
+    const int np = bandNpts[k];
+    const float span = bandEdgeHi[k] - bandEdgeLo[k];
+    const double inv = (double)(np - 1);
+    double integral = 0.0;
+    for (int j = 0; j < np; j++) {
+      // trapezoid: half weight on the two endpoints
+      const double w = (j == 0 || j == np - 1) ? 0.5 : 1.0;
+      const float *tw = dftTwiddle + (size_t)(dftOffset[k] + j) * samplesFFT * 2;
+      integral += w * dftPowerAt(vReal, tw);
+    }
+    integral *= span / inv;                                    // Hz per sample step
+    // bandPowerScale puts this in the same units as fftBandEnergy(); both then
+    // carry FFT_BIN_SCALE as the shared display scale.
+    subBinMag[k] = FFT_BIN_SCALE * bandPowerScale * (float)sqrt(integral);
+  }
 }
 
 // |H| of a biquad at an arbitrary frequency. coeffs are ESP-DSP order
@@ -612,8 +958,9 @@ static float dcBlockerMagAt(float freqHz, float R) {
 // spectrum several dB out. Bands measured by direct DFT are narrower than a bin
 // and |H| is effectively constant across them, so the centre value is exact.
 static void initDerivedProfile() {
-  dsps_biquad_gen_lpf_f32(coeffs_lpf, INPUT_LPF_HZ / SAMPLE_RATE, INPUT_FILTER_Q);
+  // Layout first: the LPF corner is derived from it.
   if (!bandLayoutReady) initBandLayout();
+  dsps_biquad_gen_lpf_f32(coeffs_lpf, inputLpfHz / SAMPLE_RATE, INPUT_FILTER_Q);
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
     float h;
     if (bandSubBin[k]) {
@@ -685,7 +1032,7 @@ static bool alocateFFTBuffers(void) {
 // High-Pass "DC blocker" filter
 // see https://www.dsprelated.com/freebooks/filters/DC_Blocker.html
 static void runDCBlocker(uint_fast16_t numSamples, float *sampleBuffer) {
-  constexpr float filterR = DC_BLOCKER_R;  // around 40hz
+  const float filterR = DC_BLOCKER_R;  // -3 dB at DC_BLOCKER_HZ, an octave below the bottom band
   static float xm1 = 0.0f;
   static SR_HIRES_TYPE ym1 = 0.0f;
 
@@ -720,7 +1067,7 @@ void FFTcode(void * parameter)
   static float* oldSamples = nullptr; // previous 50% of samples
   static bool haveOldSamples = false; // for sliding window FFT
   bool usingOldSamples = false;
-  if (!oldSamples) oldSamples = (float*) calloc(sizeof(float), samplesFFT_2); // allocate on first run
+  if (!oldSamples) oldSamples = (float*) calloc(sizeof(float), retainSamples); // allocate on first run
   if (!oldSamples) { disableSoundProcessing = true; return; }                 // no memory -> die
 
   bool success = true;
@@ -761,12 +1108,12 @@ void FFTcode(void * parameter)
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
   // These two are generated rather than hand-pasted so they track SAMPLE_RATE.
-  // Generated rather than hand-pasted so this tracks SAMPLE_RATE. At 22050 Hz /
-  // Q 0.734 it reproduces the old earlevel.com block equations exactly, so the
-  // tuning is unchanged. This is a noise filter, not a correction - the "Auto"
-  // pink profile inverts its response exactly, so no accuracy is lost.
+  // At 22050 Hz / Q 0.734 it reproduces the old earlevel.com block equations
+  // exactly, so the tuning is unchanged. This is a noise filter, not a
+  // correction - the "Auto" pink profile inverts its response exactly, so no
+  // accuracy is lost.
 
-  // lowpass, INPUT_LPF_HZ, INPUT_FILTER_Q - file scope so the derived pink
+  // lowpass, inputLpfHz, INPUT_FILTER_Q - file scope so the derived pink
   // profile can evaluate the very same filter (see initDerivedProfile)
   initDerivedProfile();
   float w_lpf[5] = {0, 0};
@@ -810,18 +1157,18 @@ void FFTcode(void * parameter)
 
     uint16_t readOffset;
     if (haveOldSamples && (doSlidingFFT > 0)) {
-      memcpy(vReal, oldSamples, sizeof(float) * samplesFFT_2);                     // copy first 50% from buffer
+      memcpy(vReal, oldSamples, sizeof(float) * retainSamples);                    // carry the overlap forward
       usingOldSamples = true;
-      readOffset = samplesFFT_2;
+      readOffset = retainSamples;
     } else {
       usingOldSamples = false;
       readOffset = 0;
     }
-    // read fresh samples, in chunks of 50%
+    // read fresh samples until the frame is full
     do {
       // this looks a bit cumbersome, but it onlyworks this way - any second instance of the getSamples() call delivers junk data.
-      if (audioSource) audioSource->getSamples(vReal+readOffset, samplesFFT_2);
-      readOffset += samplesFFT_2;
+      if (audioSource) audioSource->getSamples(vReal+readOffset, hopSamples);
+      readOffset += hopSamples;
     } while (readOffset < samplesFFT);
 
     // debug info in case that stack usage changes
@@ -832,6 +1179,14 @@ void FFTcode(void * parameter)
       DEBUGSR_PRINTF("|| %-9s min free stack %d\n", pcTaskGetTaskName(NULL), minStackFree); //WLEDMM
     }
     // timing
+    //
+    // This measures the sample READ, and on a correctly paced board the read is
+    // mostly the task sitting Blocked on the DMA waiting for the next 256
+    // samples (11.6 ms of audio) to be delivered. It is wait time, not compute,
+    // and the task burns no CPU in it. It reads as work only when the task has
+    // fallen behind: then the ring is full, the read never blocks, and this
+    // number DROPS - which is exactly backwards if you take it for a cost.
+    // It is excluded from the CPU budget for that reason; see fftBudgetVerdict().
     if (start < esp_timer_get_time()) { // filter out overflows
       uint64_t sampleTimeInMillis = (esp_timer_get_time() - start +5ULL) / 10ULL; // "+5" to ensure proper rounding
       sampleTime = (sampleTimeInMillis*3 + sampleTime*7)/10.0; // smooth
@@ -864,9 +1219,9 @@ void FFTcode(void * parameter)
     float *samplesStart = vReal;
     uint16_t sampleCount = samplesFFT;
     if (usingOldSamples) {
-      // sliding window mode: only latest 50% need filtering
-      samplesStart = vReal + samplesFFT_2;
-      sampleCount = samplesFFT_2;
+      // sliding window mode: only the newest hopSamples need filtering
+      samplesStart = vReal + (samplesFFT - hopSamples);
+      sampleCount = hopSamples;
     }
     // band pass filter - can reduce noise floor by a factor of 50
     // downside: frequencies below 100Hz will be ignored
@@ -884,10 +1239,38 @@ void FFTcode(void * parameter)
     }
     start = esp_timer_get_time(); // start measuring FFT time
 
+    // Sub-timers for the fftTime region. fftTime alone is a single number
+    // covering five unrelated things, and the per-stage breakdown exists
+    // because that number was not enough to act on: at the time these were
+    // added it read 24.73 ms, and the only question that mattered was WHICH of
+    // the five was responsible. It turned out to be captureSubBinBands() -
+    // 23.10 ms of the 24.73, all of it the double-precision rotation recurrence
+    // in dftPowerAt() running emulated on a single-precision FPU. That is now
+    // fixed (see dftTwiddle), and the probes stay because the next question
+    // will be the same shape: filtering time was 2.18 ms and, once the DFT
+    // stopped dominating the frame, becomes the largest thing left in it.
+    //
+    // The five tile the whole region - the profile below summed to 24.727 ms
+    // against a reported fftTime of 24.73 ms, so nothing is unaccounted for and
+    // nothing is double-counted. Keep it that way if a probe moves.
+    //
+    // Each probe records the gap since the previous one and moves the mark, so
+    // the stages tile the region without any of them knowing what comes next.
+    // Values are in TIMING_UNIT_US, matching fftTime.
+    uint64_t tMark = start;
+    float dWindow = 0.0f, dBandDft = 0.0f, dFft = 0.0f, dPost = 0.0f, dFinal = 0.0f;
+    auto probe = [&tMark](float &out) {
+      const uint64_t now = esp_timer_get_time();
+      out = (float)((now - tMark + 5ULL) / 10ULL); // "+5" to ensure proper rounding
+      tMark = now;
+    };
+
     // set imaginary parts to 0
     memset(vImag, 0, sizeof(float) * samplesFFT);
 
-    memcpy(oldSamples, vReal+samplesFFT_2, sizeof(float) * samplesFFT_2);  // copy last 50% to buffer (for sliding window FFT)
+    // Keep the newest retainSamples for the next frame - i.e. the tail of this
+    // frame's new data, which begins hopSamples in.
+    memcpy(oldSamples, vReal+(samplesFFT - retainSamples), sizeof(float) * retainSamples);
     haveOldSamples = true;
 
     // find highest sample in the batch, and count zero crossings
@@ -897,7 +1280,7 @@ void FFTcode(void * parameter)
 	    // pick our  our current mic sample - we take the max value from all samples that go into FFT
 	    if ((vReal[i] <= (INT16_MAX - 1024)) && (vReal[i] >= (INT16_MIN + 1024))) { //skip extreme values - normally these are artefacts
         if (usingOldSamples) {
-          if ((i >= samplesFFT_2) && (fabsf(vReal[i]) > maxSample)) maxSample = fabsf(vReal[i]);  // only look at newest 50%
+          if ((i >= (samplesFFT - hopSamples)) && (fabsf(vReal[i]) > maxSample)) maxSample = fabsf(vReal[i]);  // only look at newest hopSamples
         } else if (fabsf((float)vReal[i]) > maxSample) maxSample = fabsf((float)vReal[i]);
       }
       // WLED-MM/TroyHacks: Calculate zero crossings
@@ -910,6 +1293,7 @@ void FFTcode(void * parameter)
     }
     newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typically stays below 256
     zeroCrossingCount = newZeroCrossingCount; // update only once, to avoid that effects pick up an intermediate value
+    probe(dWindow);
 
     // release highest sample to volume reactive effects early - not strictly necessary here - could also be done at the end of the function
     // early release allows the filters (getSample() and agcAvg()) to work with fresh values - we will have matching gain and noise gate values when we want to process the FFT results.
@@ -935,10 +1319,14 @@ void FFTcode(void * parameter)
 
     float wc = 1.0; // FFT window correction factor, relative to Blackman_Harris
 
-    // run FFT (takes 3-5ms on ESP32)
     if (fabsf(volumeSmth) > 0.25f) { // noise gate open
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
-        // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
+        // The old "3-5ms on ESP32 / ~30ms on -C3" timings that used to sit here
+        // measured a SOFTWARE FFT and no longer describe this call. On ESP32-P4
+        // dsps_fft4r_fc32 dispatches to the on-chip hardware FFT, and a
+        // 2048-point one now measures 260 us - against a 24.73 ms frame that was
+        // 23.10 ms of emulated double arithmetic in the sub-bin DFT beside it.
+        // Read the live figure from the AudioReactive info page, not from here.
         wc = 1.0f; // use Blackman_Harris value from ESP-DSP code
         // NB: the DC bin is clamped after the FFT, once magnitudes are real.
 
@@ -954,8 +1342,10 @@ void FFTcode(void * parameter)
           // spectrum - measure them here, while vReal still holds the filtered
           // time-domain signal. Must run before the FFT overwrites it.
           captureSubBinBands();
+          probe(dBandDft);
 
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
+          probe(dFft);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
 
@@ -1008,6 +1398,7 @@ void FFTcode(void * parameter)
           unsigned peakBin = constrain((int)((FFT_MajorPeak + binWidth/2.0f) / binWidth), 0, samplesFFT -1);
           FFT_Magnitude *= fmaxf(1.0f/pinkFactors[peakBin], 1.0f);
         }
+        probe(dPost);
 
         FFT_MajorPeak = constrain(FFT_MajorPeak, 1.0f, 11025.0f);   // restrict value to range expected by effects
         FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42 * (FFT_MajorPeak - FFT_MajPeakSmth);   // I like this "swooping peak" look
@@ -1237,6 +1628,7 @@ void FFTcode(void * parameter)
     if (pinkIndex > MAX_PINK) pinkIndex = MAX_PINK;
 
     postProcessFFTResults((fabsf(volumeSmth) > 0.25f)? true : false, NUM_GEQ_CHANNELS, usingOldSamples);    // this function modifies fftCalc, fftAvg and fftResult
+    probe(dFinal);
 
     // timing
     static uint64_t lastLastFFT = 0;
@@ -1244,6 +1636,15 @@ void FFTcode(void * parameter)
       uint64_t fftTimeInMillis = ((esp_timer_get_time() - start) +5ULL) / 10ULL; // "+5" to ensure proper rounding
       fftTime  = (((fftTimeInMillis + lastLastFFT)/2) *3 + fftTime*7)/10.0; // smart smooth
       lastLastFFT = fftTimeInMillis;
+      // Stage split, same smoothing as fftTime. A frame that skipped the FFT
+      // (noise gate closed, or skipSecondFFT) leaves the un-probed stages at
+      // zero, which is honest - that work genuinely did not happen - and the
+      // smoothing keeps a few skipped frames from dominating the average.
+      tWindow = (dWindow *3 + tWindow *7)/10.0;
+      tBandDft= (dBandDft*3 + tBandDft*7)/10.0;
+      tFft    = (dFft    *3 + tFft    *7)/10.0;
+      tPost   = (dPost   *3 + tPost   *7)/10.0;
+      tFinal  = (dFinal  *3 + tFinal  *7)/10.0;
     }
 
     // run peak detection
@@ -1477,6 +1878,61 @@ static void autoResetPeak(void) {
 ////////////////////
 
 //class name. Use something descriptive and leave the ": public Usermod" part :)
+// Budget verdict for the FFT task, shared by every info-page timing row so they
+// cannot disagree. Three limits live here, and conflating them is what made
+// FFT_MIN_CYCLE useless as a warning for years:
+//   - I2S_RING_MS is the only one that costs audio. Overrun it and the DMA ring
+//     refills underneath the task, dropping samples.
+//   - FRAME_PERIOD_MS is the CPU budget: the wall-clock time one frame's audio
+//     takes to arrive. Overrun it and the task falls behind the samples it is
+//     handed, so the update rate slips. The ring absorbs the drift, so this is a
+//     real problem but not a destructive one.
+//   - half of that, as an early warning. The failure mode here is a slow slide
+//     toward saturation rather than a step, and this tier is what makes the
+//     slide visible before it costs anything.
+//
+// stageMs is the individual stage being reported; totalMs is the total CPU WORK
+// the task owes, which is fftTime + filterTime. It deliberately excludes
+// sampleTime. That number looks like a stage but is mostly the task sitting
+// Blocked on the DMA waiting for the next 256 samples to arrive - wait time,
+// not compute, and time in which it burns no CPU at all.
+//
+// Getting this wrong is not academic. With sampleTime counted, a correctly
+// paced task reads 6.75 ms of an 11.61 ms frame and trips the half-budget
+// warning, while the task list shows it at 34% CPU, not 58%. The two disagreed
+// because one of them was counting sleep. A warning that fires on a healthy
+// system is how you learn to ignore warnings.
+//
+// Both arguments arrive in TIMING_UNIT_US, matching fftTime/filterTime/
+// sampleTime, so the *100.0 factors below convert to milliseconds.
+static const char* fftBudgetVerdict(double stageMs, double totalMs) {
+  if (stageMs >= (double)I2S_RING_MS * 100.0 || totalMs >= (double)I2S_RING_MS * 100.0)
+    return "<b style=\"color:red;\">! over DMA ring - audio will drop</b>";
+  if (totalMs >= (double)FRAME_PERIOD_MS * 100.0)
+    return "<b style=\"color:orange;\">~ update rate slipping</b>";
+  if (totalMs >= (double)FRAME_PERIOD_MS * 50.0)
+    return "<i>~ half the frame budget</i>";
+  return " OK";
+}
+
+// Verdict for the two rows that measure PACING rather than work: the I2S cycle
+// and the sample read. A correctly paced task's cycle does not come in under
+// FRAME_PERIOD_MS - it sits AT it, because the task spends the remainder of the
+// frame asleep and only wakes when the next audio is there. Testing it with
+// `>= FRAME_PERIOD_MS` would report perfect pacing as overdue.
+//
+// So the only question for these rows is whether the cycle has run well PAST
+// one frame, which means frames are being missed and audio is being consumed
+// faster than the DMA delivers it. 1.5x leaves room for jitter without being
+// reachable by a healthy task.
+static const char* pacingVerdict(double cycleMs) {
+  if (cycleMs >= (double)I2S_RING_MS * 100.0)
+    return "<b style=\"color:red;\">! over DMA ring - audio will drop</b>";
+  if (cycleMs >= (double)FRAME_PERIOD_MS * 150.0)
+    return "<b style=\"color:orange;\">~ frames being missed</b>";
+  return " OK";
+}
+
 class AudioReactive : public Usermod {
 
   private:
@@ -3056,7 +3512,7 @@ class AudioReactive : public Usermod {
           if (audioSource)
             xTaskCreateUniversal(
               #if defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
-              FFTcode, "FFT", 8192, NULL, FFTTASK_PRIORITY, &FFT_Task, 1
+              FFTcode, "FFT", FFT_TASK_STACK, NULL, FFTTASK_PRIORITY, &FFT_Task, 1
               #else 
               FFTcode, "FFT", 8192, NULL, FFTTASK_PRIORITY, & FFT_Task, -1
               #endif
@@ -3276,51 +3732,93 @@ class AudioReactive : public Usermod {
         #ifdef ARDUINO_ARCH_ESP32
         // Auto-scale timing values to µs / ms / s based on magnitude. Most
         // values land in the ms range; very small ones (filter, idle) use µs
-        // and very large ones (under budget) use s.
+        // and very large ones (over budget) use s.
+        //
+        // This takes a RAW stored value in TIMING_UNIT_US, NOT microseconds,
+        // and does the conversion itself. That is deliberate: the previous
+        // version took microseconds, so every row was handed a 10 µs-unit
+        // number and divided it by 1000 - reporting a 24.9 ms frame as
+        // "2.49 ms" and making a saturated core look comfortable. Taking the
+        // stored value makes that class of bug impossible to reintroduce at a
+        // call site.
         char timeBuf[16];
-        auto fmtTimeUS = [](char *buf, size_t buflen, float us) {
-          if (us < 1000.0f)       snprintf(buf, buflen, "%.1f µs", us);
-          else if (us < 1000000.0f) snprintf(buf, buflen, "%.2f ms", us / 1000.0f);
-          else                    snprintf(buf, buflen, "%.2f s",  us / 1000000.0f);
+        auto fmtTime = [](char *buf, size_t buflen, float stored) {
+          const float us = stored * TIMING_UNIT_US;
+          if (us < 1000.0f)         snprintf(buf, buflen, "%.1f µs", us);
+          else if (us < 1000000.0f)  snprintf(buf, buflen, "%.2f ms", us / 1000.0f);
+          else                      snprintf(buf, buflen, "%.2f s",  us / 1000000.0f);
         };
 
         infoArr = user.createNestedArray(F("I2S cycle time"));
-        fmtTimeUS(timeBuf, sizeof(timeBuf), fftTaskCycle);
+        fmtTime(timeBuf, sizeof(timeBuf), fftTaskCycle);
         infoArr.add(timeBuf);
+        infoArr.add(pacingVerdict(fftTaskCycle));
 
+        // Mostly the task waiting on the DMA, not working. See pacingVerdict().
         infoArr = user.createNestedArray(F("Sampling time"));
-        fmtTimeUS(timeBuf, sizeof(timeBuf), sampleTime);
+        fmtTime(timeBuf, sizeof(timeBuf), sampleTime);
         infoArr.add(timeBuf);
+        infoArr.add(pacingVerdict(sampleTime));
 
         infoArr = user.createNestedArray(F("FFT time (ESP-DSP)"));
 
-        fmtTimeUS(timeBuf, sizeof(timeBuf), fftTime);
+        fmtTime(timeBuf, sizeof(timeBuf), fftTime);
         infoArr.add(timeBuf);
-        if ((fftTime/100) >= FFT_MIN_CYCLE) // FFT time over budget -> I2S buffer will overflow
-          infoArr.add("<b style=\"color:red;\">! over budget</b>");
-        else if ((fftTime/80 + sampleTime/80) >= FFT_MIN_CYCLE) // FFT time >75% of budget -> risk of instability
-          infoArr.add("<b style=\"color:orange;\"> near limit</b>");
-        else
-          infoArr.add(" OK");
+        infoArr.add(fftBudgetVerdict(fftTime, fftTime + filterTime));
+
+        // Breakdown of the row above. "FFT time (ESP-DSP)" is a misleading name
+        // for what it measures - it is the whole frame from windowing through
+        // postProcessFFTResults, and the transform is only one of five stages in
+        // it. Until that is understood, treat the split as the real diagnosis
+        // and the total as the sum of it.
+        infoArr = user.createNestedArray(F("  windowing"));
+        fmtTime(timeBuf, sizeof(timeBuf), tWindow);
+        infoArr.add(timeBuf);
+        infoArr.add(fftBudgetVerdict(tWindow, fftTime + filterTime));
+
+        infoArr = user.createNestedArray(F("  sub-bin DFT"));
+        fmtTime(timeBuf, sizeof(timeBuf), tBandDft);
+        infoArr.add(timeBuf);
+        infoArr.add(fftBudgetVerdict(tBandDft, fftTime + filterTime));
+
+        infoArr = user.createNestedArray(F("  ESP-DSP FFT"));
+        fmtTime(timeBuf, sizeof(timeBuf), tFft);
+        infoArr.add(timeBuf);
+        infoArr.add(fftBudgetVerdict(tFft, fftTime + filterTime));
+
+        infoArr = user.createNestedArray(F("  bitrev + mag"));
+        fmtTime(timeBuf, sizeof(timeBuf), tPost);
+        infoArr.add(timeBuf);
+        infoArr.add(fftBudgetVerdict(tPost, fftTime + filterTime));
+
+        infoArr = user.createNestedArray(F("  bands + post"));
+        fmtTime(timeBuf, sizeof(timeBuf), tFinal);
+        infoArr.add(timeBuf);
+        infoArr.add(fftBudgetVerdict(tFinal, fftTime + filterTime));
 
         infoArr = user.createNestedArray(F("Filtering time"));
-        fmtTimeUS(timeBuf, sizeof(timeBuf), filterTime);
+        fmtTime(timeBuf, sizeof(timeBuf), filterTime);
         infoArr.add(timeBuf);
 
-        // Aggregate budget indicator (uses sample + filter + fft)
-        unsigned timeBudget = doSlidingFFT ? (FFT_MIN_CYCLE) : fftTaskCycle / 115;
+        // Total CPU work: filtering + FFT. This is the number that has to fit
+        // inside the frame period - the sampling wait is not a term in it,
+        // because waiting for audio is not something the task can hurry up.
+        infoArr.add(fftBudgetVerdict(filterTime, fftTime + filterTime));
 
-        if ((fftTime/100) >= timeBudget) // FFT time over budget -> I2S buffer will overflow
-          infoArr.add("<b style=\"color:red;\">! over budget</b>");
-        else if ((fftTime/85 + filterTime/85 + sampleTime/85) >= timeBudget) // FFT time >75% of budget -> risk of instability
-          infoArr.add("<b style=\"color:orange;\"> near limit</b>");
-        else
-          infoArr.add(" OK");
-
+        // These print in ms directly from the same 10 µs stored units, so they
+        // now AGREE with the info page above by construction. They always did -
+        // the info page was the side that was wrong - but the agreement is now a
+        // useful check: if the two ever disagree, someone has reintroduced a raw
+        // value into one of the formatters.
         DEBUGSR_PRINTF("AR I2S cycle time: %5.2f ms\n", roundf(fftTaskCycle)/100.0f);
         DEBUGSR_PRINTF("AR Sampling time : %5.2f ms\n", roundf(sampleTime)/100.0f);
         DEBUGSR_PRINTF("AR filter time   : %5.2f ms\n", roundf(filterTime)/100.0f);
         DEBUGSR_PRINTF("AR FFT time      : %5.2f ms\n", roundf(fftTime)/100.0f);
+        DEBUGSR_PRINTF("AR   windowing   : %5.2f ms\n", roundf(tWindow)/100.0f);
+        DEBUGSR_PRINTF("AR   sub-bin DFT : %5.2f ms\n", roundf(tBandDft)/100.0f);
+        DEBUGSR_PRINTF("AR   ESP-DSP FFT : %5.2f ms\n", roundf(tFft)/100.0f);
+        DEBUGSR_PRINTF("AR   bitrev +mag : %5.2f ms\n", roundf(tPost)/100.0f);
+        DEBUGSR_PRINTF("AR   bands +post : %5.2f ms\n", roundf(tFinal)/100.0f);
         #endif
         #endif
       }

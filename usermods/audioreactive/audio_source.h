@@ -46,6 +46,18 @@
 constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change!  I2S_NUM_1 possible but this has
                                                     // strong limitations -> no MCLK routing, no PDM support on some targets
 
+// Number of descriptors in the I2S DMA ring. The ring holds this many blocks of
+// BLOCK_SIZE samples, and that depth is the ONLY hard deadline in the audio path:
+// if the FFT task overruns it, the driver has nowhere to put the incoming samples
+// and the audio drops. Nothing else in the chain has a limit this loose, which is
+// worth knowing before treating a stale "time budget" comment as the constraint.
+// AudioReactive derives its overrun threshold from this, so keep them in step.
+#ifdef WLED_ENABLE_HUB75MATRIX
+  #define AR_I2S_DMA_DESCS 18
+#else
+  #define AR_I2S_DMA_DESCS 24
+#endif
+
 // see https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/chip-series-comparison.html#related-documents
 // and https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/i2s.html#overview-of-all-modes
 #if !defined(CONFIG_SOC_CPU_HAS_FPU) || defined(ESP8266) || defined(ESP8265)
@@ -514,13 +526,10 @@ class I2SSource : public AudioSource {
       i2s_chan_config_t chan_cfg = {
         .id            = AR_I2S_PORT,
         .role          = _i2sMaster ? I2S_ROLE_MASTER : I2S_ROLE_SLAVE,
-        .dma_desc_num  = 24,
+        .dma_desc_num  = AR_I2S_DMA_DESCS,
         .dma_frame_num = (uint32_t)_blockSize,
         .auto_clear    = false,
       };
-      #if defined(WLED_ENABLE_HUB75MATRIX)
-      chan_cfg.dma_desc_num = 18;
-      #endif
       esp_err_t err = i2s_new_channel(&chan_cfg, nullptr, &_rx_handle);
       if (err != ESP_OK) {
         ERRORSR_PRINTF("AR: Failed to create new I2S RX channel: %d\n", err);
@@ -1493,7 +1502,7 @@ class CodecDevSource : public AudioSource {
       i2s_chan_config_t chan_cfg = {
         .id            = AR_I2S_PORT,
         .role          = i2sMaster ? I2S_ROLE_MASTER : I2S_ROLE_SLAVE,
-        .dma_desc_num  = 24,
+        .dma_desc_num  = AR_I2S_DMA_DESCS,
         .dma_frame_num = (uint32_t)_blockSize,
         .auto_clear    = false,
       };
