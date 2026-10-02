@@ -14,6 +14,7 @@
 #include <AsyncUDP.h>
 // #include "esp_dsp.h"
 #include "dsps_biquad.h"
+#include "dsps_biquad_gen.h"
 #include "dsps_fft4r.h"
 #include "dsps_wind_blackman_harris.h"
 #include <driver/i2s.h>
@@ -161,9 +162,20 @@ static uint8_t inputLevel = 128;              // UI slider value
 #endif
 
 // user settable options for FFTResult scaling
-static uint8_t FFTScalingMode = 3;            // 0 none; 1 optimized logarithmic; 2 optimized linear; 3 optimized square root
+static uint8_t FFTScalingMode = 3;            // 0 none; 1 optimized logarithmic; 2 optimized linear; 3 optimized dB
+
+// Index of the "Auto" row in fftResultPink[] - the profile derived at runtime
+// from the actual filter chain. Declared here because the default below needs
+// it; MAX_PINK (which it equals) is defined further down with the table itself.
+#define PINK_AUTO 12
+
 #ifndef SR_FREQ_PROF
-  static uint8_t pinkIndex = 0;               // 0: default; 1: line-in; 2: IMNP441
+  // Default to the derived (Auto) profile. The hand tables in fftResultPink[]
+  // were captured against the old mean-over-bins estimator and the old filter
+  // chain; with total-power bands they over-boost the top by ~20 dB. Auto is
+  // computed at runtime from the same constants the filters use, so it stays
+  // correct if SAMPLE_RATE or the FFT length change.
+  static uint8_t pinkIndex = PINK_AUTO;       // 12 = Auto (derived); 0/1/2..9 = hand tables
 #else
   static uint8_t pinkIndex = SR_FREQ_PROF;    // 0: default; 1: line-in; 2: IMNP441
 #endif
@@ -240,7 +252,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
 static TaskHandle_t FFT_Task = nullptr;
 
 // Table of multiplication factors so that we can even out the frequency response.
-#define MAX_PINK 11  // 0 = standard, 1= line-in (pink noise only), 2..4 = IMNP441, 5..6 = ICS-43434, ,7=SPM1423, 8..9 = userdef, 10= flat (no pink noise adjustment)
+#define MAX_PINK 12  // 0 = standard, 1= line-in (pink noise only), 2..4 = IMNP441, 5..6 = ICS-43434, ,7=SPM1423, 8..9 = userdef, 10= flat (no pink noise adjustment), 12= Auto (derived at runtime - see derivedPink)
 static const float fftResultPink[MAX_PINK+1][NUM_GEQ_CHANNELS] = { 
           { 1.70f, 1.71f, 1.73f, 1.78f, 1.68f, 1.56f, 1.55f, 1.63f, 1.79f, 1.62f, 1.80f, 2.06f, 2.47f, 3.35f, 6.83f, 9.55f },  //  0 default from SR WLED
       //  { 1.30f, 1.32f, 1.40f, 1.46f, 1.52f, 1.57f, 1.68f, 1.80f, 1.89f, 2.00f, 2.11f, 2.21f, 2.30f, 2.39f, 3.09f, 4.34f },  //  - Line-In Generic -> pink noise adjustment only
@@ -259,7 +271,8 @@ static const float fftResultPink[MAX_PINK+1][NUM_GEQ_CHANNELS] = {
           { 4.75f, 3.60f, 2.40f, 2.46f, 3.52f, 1.60f, 1.68f, 3.20f, 2.20f, 2.00f, 2.30f, 2.41f, 2.30f, 1.25f, 4.55f, 6.50f },  //  9 userdef #2 for softhack (mic hidden inside mini-shield)
 
           { 2.38f, 2.18f, 2.07f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.95f, 1.70f, 2.13f, 2.47f },   // 10 almost FLAT (IMNP441 but no PINK noise adjustments)
-          { 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f }    // DEAD FLAT
+          { 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f },   // 11 DEAD FLAT (placeholder; the row is skipped)
+          { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f }    // 12 AUTO - placeholder, real values live in derivedPink[]
 };
 
   /* how to make your own profile:
@@ -337,20 +350,85 @@ constexpr uint16_t samplesFFT_2 = 256;          // meaningful part of FFT result
 #define FFT_DOWNSCALE 0.40f                             // downscaling factor for FFT results, RMS averaging
 #define LOG_256  5.54517744f                            // log(256)
 
+// Global magnitude scale applied to the spectrum before the bands are computed,
+// so the result lands near 4096 at full scale. The sub-bin bands are measured by
+// direct DFT on the time-domain signal, which happens BEFORE the FFT overwrites
+// that buffer - so they have to carry the same factor by hand or the two halves
+// of the display end up 24 dB apart. Keep these in step.
+constexpr float FFT_BIN_SCALE = 1.0f / 16.0f;
+
+// dB display mapping (FFTScalingMode 3). Both ends of the mapping are runtime
+// values in wled.h - TROYHACKS_DBREF ('d') sets where 0 dB lands and
+// TROYHACKS_DBSPAN ('s') sets how many dB the bar covers below it. Neither can be
+// a constant: the reference depends on the input level and gain settings, and the
+// span depends on how much dynamic range the material actually has. Both are
+// dialled in live over serial rather than rebuilt per guess.
+//
+// The span is the "variance" control and it matters more than it looks. A
+// constant-Q band reports power over a width proportional to its centre
+// frequency, so for a spectrum of slope 1/f^a the displayed level falls as
+// f^(1-a): pink (a=1) reads dead flat, and typical pop/rock (a~1.2) spans only
+// about 10 dB across all 16 bands. Laid out over 66 dB that is 16% of the bar
+// and reads as a dead line; over 40 dB it is 40% and reads like an RTA.
+constexpr float FFT_DB_FLOOR = 1e-7f;
+
 // These are the input and output vectors.  Input vectors receive computed results from FFT.
 static float* vReal = nullptr;       // FFT sample inputs / freq output -  these are our raw result bins
 static float* vImag = nullptr;       // imaginary parts
 
-// making it easier to use biquad filter calculator from https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-float a0 = 0.0f;
-float a1 = 0.0f;
-float a2 = 0.0f;
-float b1 = 0.0f;
-float b2 = 0.0f;
 
 static float* pinkFactors = nullptr;                        // "pink noise" correction factors
-constexpr float pinkcenter = 23.66;                         // sqrt(560) - center freq for scaling is 560 hz. 
+constexpr float pinkcenter = 23.66;                         // sqrt(560) - center freq for scaling is 560 hz.
 constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range of each FFT result bin
+
+// ---------------------------------------------------------------------------
+// Constant-Q band layout
+// ---------------------------------------------------------------------------
+// 16 bands, log-spaced from 20 Hz to Nyquist. At 22050/512 that works out to
+// 0.569 octave per band - between 1/2 and 1/3 octave, which is as fine as 16
+// bands can be over that span. Band edges are the geometric midpoints between
+// adjacent centres, so every FFT bin belongs to exactly one band (no gaps, no
+// double counting) and every band ends up with the same Q.
+//
+// A band narrower than one FFT bin cannot be read off the FFT at all: at
+// 43.07 Hz/bin a 40 Hz tone and an 80 Hz tone both land in bin 1. Bands 0-4 are
+// in that situation. Those are evaluated by running the DFT directly at the
+// band centre frequency instead - see dftMagnitudeAt() and captureSubBinBands().
+//
+// BAND_F_LOW is the lowest band EDGE, not the lowest centre - band 0 spans
+// BAND_F_LOW to BAND_F_LOW * r, so it has a finite lower edge instead of running
+// down to DC. 40 Hz is the bottom of the range: it drops sub-bass that an LED
+// display cannot usefully show, and in exchange band 0 stops under-reading by
+// 10 dB (measured -10.1 dB with a DC-anchored bottom band, -2.3 dB here).
+static constexpr float BAND_F_LOW = 40.0f;                  // lowest band edge, Hz
+static float bandCentre[NUM_GEQ_CHANNELS];                  // band centre, Hz
+static int   bandLo[NUM_GEQ_CHANNELS];                      // first bin, inclusive
+static int   bandHi[NUM_GEQ_CHANNELS];                      // last bin, inclusive
+static bool  bandSubBin[NUM_GEQ_CHANNELS];                  // true if narrower than one bin
+static float subBinMag[NUM_GEQ_CHANNELS];                   // direct-DFT result, filled before the FFT
+static bool  bandLayoutReady = false;
+
+// ---------------------------------------------------------------------------
+// Input chain, and the "Auto" pink profile that inverts it
+// ---------------------------------------------------------------------------
+// These two define the signal path that runs before the FFT. They live at file
+// scope, not inside the FFT task, so initDerivedProfile() below can evaluate
+// their response from the same numbers the filters use - otherwise the profile
+// and the filter could drift apart silently.
+constexpr float DC_BLOCKER_R = 0.990f;                     // ~35 Hz -3 dB
+constexpr float INPUT_LPF_HZ = 9963.0f;                     // noise filter corner
+constexpr float INPUT_FILTER_Q = 0.734f;
+static float coeffs_lpf[5];                                 // generated in initDerivedProfile()
+
+static_assert(MAX_PINK == PINK_AUTO, "PINK_AUTO must be the last row of fftResultPink[]");
+
+// "Auto" is the only profile that is not in fftResultPink[][]: it is computed at
+// runtime as 1/|H_chain| at each band centre, so it is exact for whatever
+// SAMPLE_RATE and filter settings this build uses, and re-derives itself if they
+// change. Use it for line-in, where the input chain is fully known in software.
+// It cannot help a microphone, whose response is not knowable here - that is
+// what the hand-measured tables above are for.
+static float derivedPink[NUM_GEQ_CHANNELS];
 
 // Create FFT object
 
@@ -373,6 +451,21 @@ static float fftAddAvgLin(int from, int to) {
   }
   return result / float(to - from + 1);
 }
+// Energy in a band: the SUM of bin powers, not their mean.
+//
+// This is the one that matches a real analyser. A fractional-octave filter
+// (IEC 61260) reports the energy that passed through it, so a tone of a given
+// amplitude reads the same in a 1-bin band and a 114-bin band. Averaging
+// divides by the bin count and makes every wide band read 1/sqrt(N) low - a
+// pure measurement artifact, worth 7.8x between band 1 and band 14 here.
+static float fftBandEnergy(int from, int to) {
+  double result = 0.0;
+  for (int i = from; i <= to; i++) {
+    result += (double)vReal[i] * (double)vReal[i];
+  }
+  return sqrtf(result);
+}
+
 // RMS average
 static float fftAddAvgRMS(int from, int to) {
   double result = 0.0;
@@ -388,50 +481,171 @@ static float fftAddAvg(int from, int to) {
   else return fftAddAvgLin(from, to);              // use linear average
 }
 
-// Psychoacoustic logarithmic band combining. The 16 GEQ channels
-// have progressively wider bandwidths (powers of 2) so each one is
-// distinguishable: 1 bin, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 8, 8,
-// 16, 16 — totalling 76 bins over the audible range. Bandwidth
-// doubles every 4 channels, mimicking the 1/1-octave / 1/2 / 1/4 / 1/8
-// progression that audio analyzers use. Adapts automatically to any
-// SAMPLE_RATE / samplesFFT combination.
-// Psychoacoustic band combining. The 16 GEQ channels have progressively
-// wider bandwidths (powers of 2 + extra widening for the top 2 bands
-// to span the legacy 7106-9259 Hz range at 22050/512 ≈ 165-215 bins).
-// Total bins used ≈ 1+1+2+2+3+3+6+7+11+12+14+18+19+18+61+51 = 230 bins,
-// matching the legacy hand-coded Normal distribution. Adapts
-// automatically to any SAMPLE_RATE / samplesFFT combination.
-static void computeBandsPsychoacoustic(float* fftCalc, float wc) {
-  // Per-channel bin count, hand-tuned to match the legacy Normal mapping
-  // for 22050 Hz / 512-bin FFT (43 Hz/bin). Lowest 4 are 1-2 bins; the
-  // remaining 12 grow 2x per 4 bands with extra widening for k=14,15.
-  // 1,1,2,2,3,3,6,7,11,12,14,18,19,18,61,51
-  static const uint8_t widths[NUM_GEQ_CHANNELS] = {
-    1, 1, 2, 2, 3, 3, 6, 7, 11, 12, 14, 18, 19, 18, 61, 51
-  };
-  // Sub-bass (k=0,1) and top bin (k=15) get slight damping so the lowest
-  // and highest bands don't dominate.
-  float damping[NUM_GEQ_CHANNELS];
-  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) damping[k] = 1.0f;
-  damping[0] = 1.00;        // sub-bass roll-off
-  damping[1] = 0.92f;        // bass roll-off
-  damping[NUM_GEQ_CHANNELS - 1] = 0.70f;  // top bin roll-off (matches legacy 0.70f)
-  if (NUM_GEQ_CHANNELS >= 2)
-    damping[NUM_GEQ_CHANNELS - 2] = 0.88f; // 2nd from top roll-off (matches legacy 0.88f)
-  // For PDM mics (useInputFilter == 1) skip sub-bass: start at bin 3
-  // (legacy starts at bin 3 for 100 Hz = ~129 Hz, matches bin 3 = 129 Hz).
-  int startBin = (useInputFilter == 1) ? 3 : 1;
-  int bin = startBin;
+// Build the 16 constant-Q band layout. Derived, not hand-typed, so it follows
+// SAMPLE_RATE and samplesFFT automatically. Call once after buffers exist.
+//
+// The bottom band gets a FINITE lower edge at BAND_F_LOW, exactly like an IEC
+// 61260 fractional-octave analyser (whose lowest 1/3-octave band is 20-25 Hz,
+// never running down to DC). Anchoring the layout at 0 Hz instead looks
+// harmless but is not: a log layout always puts the bottom band's lower edge at
+// DC, and no analysis window can measure content near 0 Hz - at 512 points a
+// 23 ms window sees essentially nothing below a few Hz. That band then
+// under-reads by 10 dB, and no amount of extra transform length fixes it
+// (measured: still -6.9 dB at 4096 points, because the limit is the band
+// running into DC, not the resolution).
+//
+// With edges at BAND_F_LOW * r^k and centres at the geometric midpoints, every
+// band has the same Q and band 0 is a real band you can actually measure.
+static void initBandLayout() {
+  const float fHigh = SAMPLE_RATE * 0.5f;
+  const float r = powf(fHigh / BAND_F_LOW, 1.0f / (float)NUM_GEQ_CHANNELS);
+  const int   halfBins = samplesFFT >> 1;
+
+  float edge[NUM_GEQ_CHANNELS + 1];
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
+    bandCentre[k] = BAND_F_LOW * powf(r, (float)k + 0.5f);   // geometric midpoint of edge[k], edge[k+1]
+  for (int k = 0; k <= NUM_GEQ_CHANNELS; k++) edge[k] = BAND_F_LOW * powf(r, (float)k);
+  // edge[NUM_GEQ_CHANNELS] lands on fHigh exactly, since r^16 == fHigh / BAND_F_LOW.
+
+  // A band narrower than two bins is measured by running the DFT at its centre
+  // rather than by adding up bins, because at 43 Hz/bin a bin sum cannot place
+  // a tone at the right frequency (and a 1-bin band whose centre is 15 Hz from
+  // the bin centre scallops ~1.4 dB, which is audible as a dip in the response).
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-    int binLo = bin;
-    int binHi = bin + widths[k] - 1;
-    if (binHi >= samplesFFT) binHi = samplesFFT - 1;
-    if (binHi >= binLo) {
-      fftCalc[k] = wc * damping[k] * fftAddAvg(binLo, binHi);
-    } else {                                     
-      fftCalc[k] = 0.0f;
+    bandSubBin[k] = (edge[k + 1] - edge[k]) < (2.0f * binWidth);
+    bandLo[k] = halfBins;
+    bandHi[k] = -1;
+  }
+
+  // Give every bin to the band whose centre it is logarithmically nearest -
+  // geometric midpoints, which keeps all 16 bands at the same Q. Every bin
+  // lands in exactly one band, so nothing is dropped or counted twice, and
+  // under-resolved bands are free to take no bins at all: they do not steal
+  // bins from their neighbours, which is what a forced-contiguity walk did.
+  for (int i = 0; i < halfBins; i++) {
+    const float bf = (float)i * binWidth;
+    int k = 0;
+    if (bf > 0.0f) {
+      const float lb = logf(bf);
+      float best = fabsf(lb - logf(bandCentre[0]));
+      for (int j = 1; j < NUM_GEQ_CHANNELS; j++) {
+        const float d = fabsf(lb - logf(bandCentre[j]));
+        if (d < best) { best = d; k = j; }
+      }
     }
-    bin = binHi + 1;
+    if (i < bandLo[k]) bandLo[k] = i;
+    if (i > bandHi[k]) bandHi[k] = i;
+  }
+  // Any band left without bins is measured directly, whatever its width.
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
+    if (bandHi[k] < bandLo[k]) bandSubBin[k] = true;
+
+  bandLayoutReady = true;
+}
+
+// Magnitude of the windowed DFT evaluated at an arbitrary frequency.
+//
+// For a band narrower than one FFT bin this is the only honest way to measure
+// it. Reading the nearest bin instead puts a 20 Hz tone and a 40 Hz tone in the
+// same place and reports them as one band. Evaluating the transform at the
+// band's own centre frequency separates them exactly, for a stationary tone,
+// and costs one 512-tap dot product per sub-bin band - negligible next to the
+// FFT itself.
+static float dftMagnitudeAt(const float *x, float freqHz) {
+  const double step = 2.0 * M_PI * (double)freqHz / (double)SAMPLE_RATE;
+  const double cs = cos(step), sn = sin(step);
+  double re = 0.0, im = 0.0, pr = 1.0, pi = 0.0;
+  for (int n = 0; n < samplesFFT; n++) {
+    re += (double)x[n] * pr;
+    im += (double)x[n] * pi;
+    const double tr = pr * cs - pi * sn;                      // rotate one step
+    pi = pr * sn + pi * cs;
+    pr = tr;
+  }
+  return sqrtf((float)(re * re + im * im));
+}
+
+// Must run while vReal still holds the filtered, windowed time-domain signal -
+// i.e. just before the FFT overwrites it with the spectrum.
+static void captureSubBinBands() {
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
+    // FFT_BIN_SCALE: the spectrum gets divided down before the binned bands are
+    // summed, and this runs on the raw time-domain signal, so it has to carry
+    // the same factor or bands 0-6 read 24 dB hot against bands 7-15.
+    subBinMag[k] = bandSubBin[k] ? FFT_BIN_SCALE * dftMagnitudeAt(vReal, bandCentre[k]) : 0.0f;
+}
+
+// |H| of a biquad at an arbitrary frequency. coeffs are ESP-DSP order
+// {b0,b1,b2,a1,a2} with a0 folded in (all five already divided by a0).
+static float biquadMagAt(const float *c, float freqHz) {
+  const double w = 2.0 * M_PI * (double)freqHz / (double)SAMPLE_RATE;
+  const double cw = cos(w), sw = sin(w);
+  const double nr = (c[0] + c[2]) * cw + c[1];
+  const double ni = (c[0] - c[2]) * sw;
+  const double dr = (1.0 + c[4]) * cw + c[3];
+  const double di = (1.0 - c[4]) * sw;
+  const double den = dr * dr + di * di;
+  if (den < 1e-20) return 0.0f;
+  return (float)sqrt((nr * nr + ni * ni) / den);
+}
+
+// |H| of the single-pole DC blocker: y[n] = x[n] - x[n-1] + R y[n-1]
+// H(z) = (1 - z^-1) / (1 - R z^-1); both numerator and denominator are scaled by
+// e^jw first so they become real/imaginary pairs rather than complex powers.
+static float dcBlockerMagAt(float freqHz, float R) {
+  const double w = 2.0 * M_PI * (double)freqHz / (double)SAMPLE_RATE;
+  const double cw = cos(w), sw = sin(w);
+  const double nr = 1.0 - cw, ni = sw;          // (cw-1) + j sw, sign of Re is irrelevant
+  const double dr = cw - R,    di = sw;          // (cw-R) + j sw
+  const double den = dr * dr + di * di;
+  if (den < 1e-20) return 0.0f;
+  return (float)sqrt((nr * nr + ni * ni) / den);
+}
+
+// Fill the "Auto" profile: 1/|H_chain| for the cascade this build runs ahead of
+// the FFT. Flat input in, flat bars out - which is the whole point of a
+// calibration profile.
+//
+// For bands read off the FFT the correction is averaged over the band's own
+// bins rather than sampled at its centre, because |H| varies across a wide band
+// (band 15 is 114 bins / 4.9 kHz) and a centre sample leaves the top of the
+// spectrum several dB out. Bands measured by direct DFT are narrower than a bin
+// and |H| is effectively constant across them, so the centre value is exact.
+static void initDerivedProfile() {
+  dsps_biquad_gen_lpf_f32(coeffs_lpf, INPUT_LPF_HZ / SAMPLE_RATE, INPUT_FILTER_Q);
+  if (!bandLayoutReady) initBandLayout();
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    float h;
+    if (bandSubBin[k]) {
+      h = 1.0f;
+      if ((useInputFilter > 0) && (useInputFilter < 99)) h *= dcBlockerMagAt(bandCentre[k], DC_BLOCKER_R);
+      if (TROYHACKS_LPF) h *= biquadMagAt(coeffs_lpf, bandCentre[k]);
+    } else {
+      double sum = 0.0;
+      const int n = bandHi[k] - bandLo[k] + 1;
+      for (int i = bandLo[k]; i <= bandHi[k]; i++) {
+        float hi = 1.0f;
+        if ((useInputFilter > 0) && (useInputFilter < 99)) hi *= dcBlockerMagAt((float)i * binWidth, DC_BLOCKER_R);
+        if (TROYHACKS_LPF) hi *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
+        sum += (double)hi * (double)hi;
+      }
+      h = sqrtf((float)(sum / n));
+    }
+    // Clamp: bands below the DC blocker's corner sit where 1/H blows up, and
+    // amplifying that far would just lift the noise floor instead of correcting.
+    derivedPink[k] = (h > 0.02f) ? (1.0f / h) : 50.0f;
+  }
+}
+
+// Psychoacoustic band combining: 16 constant-Q bands, log-spaced from 20 Hz to
+// Nyquist, reporting the energy in each. See initBandLayout() for the layout and
+// fftBandEnergy() for why it is a sum and not a mean.
+static void computeBandsPsychoacoustic(float* fftCalc, float wc) {
+  if (!bandLayoutReady) initBandLayout();
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    fftCalc[k] = bandSubBin[k]
+      ? wc * subBinMag[k]                    // narrower than a bin - measured directly
+      : wc * fftBandEnergy(bandLo[k], bandHi[k]);
   }
 }
 
@@ -471,7 +685,7 @@ static bool alocateFFTBuffers(void) {
 // High-Pass "DC blocker" filter
 // see https://www.dsprelated.com/freebooks/filters/DC_Blocker.html
 static void runDCBlocker(uint_fast16_t numSamples, float *sampleBuffer) {
-  constexpr float filterR = 0.990f;      // around 40hz
+  constexpr float filterR = DC_BLOCKER_R;  // around 40hz
   static float xm1 = 0.0f;
   static SR_HIRES_TYPE ym1 = 0.0f;
 
@@ -479,9 +693,9 @@ static void runDCBlocker(uint_fast16_t numSamples, float *sampleBuffer) {
     float value = sampleBuffer[i];
     SR_HIRES_TYPE filtered = (SR_HIRES_TYPE)(value-xm1) + filterR*ym1;
     xm1 = value;
-    ym1 = filtered;    
+    ym1 = filtered;
     sampleBuffer[i] = filtered;
-  }  
+  }
 }
 
 //
@@ -534,7 +748,9 @@ void FFTcode(void * parameter)
       binFreq = (SAMPLE_RATE * 0.42f) - 0.25 * (binFreq - (SAMPLE_RATE * 0.42f)); // suppress noise and aliasing 
     pinkFactors[binInd] = sqrtf(binFreq) / pinkcenter;
   }
-  pinkFactors[0] *= 0.5;  // suppress 0-42hz bin
+  // NB: no blanket suppression of bin 0 - band 0 now spans bins 0+1, so
+  // real 0-43 Hz content is wanted there. Residual DC is handled in the FFT
+  // task by clamping bin 0 to the level of bin 1.
 
   esp_err_t myerr = dsps_fft4r_init_fc32(NULL, samplesFFT >> 1);
   if (myerr  != ESP_OK) {
@@ -544,63 +760,25 @@ void FFTcode(void * parameter)
   __attribute__((aligned(16))) float window[samplesFFT];
   dsps_wind_blackman_harris_f32(window, samplesFFT);
 
-  // lowpass, 22050 Hz, 9963 Hz, 0.734 Q, gain ignored - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  a0 = 0.8123610015069542;
-  a1 = 1.6247220030139085;
-  a2 = 0.8123610015069542;
-  b1 = 1.5869495720054403;
-  b2 = 0.6624944340223766;
+  // These two are generated rather than hand-pasted so they track SAMPLE_RATE.
+  // Generated rather than hand-pasted so this tracks SAMPLE_RATE. At 22050 Hz /
+  // Q 0.734 it reproduces the old earlevel.com block equations exactly, so the
+  // tuning is unchanged. This is a noise filter, not a correction - the "Auto"
+  // pink profile inverts its response exactly, so no accuracy is lost.
 
-  float coeffs_lpf[5] = { a0, a1, a2, b1, b2 };
+  // lowpass, INPUT_LPF_HZ, INPUT_FILTER_Q - file scope so the derived pink
+  // profile can evaluate the very same filter (see initDerivedProfile)
+  initDerivedProfile();
   float w_lpf[5] = {0, 0};
 
-  // highpass, 22050 Hz, 35 Hz, 0.734 Q, gain ignored - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  a0 = 0.9932274488431106;
-  a1 = -1.9864548976862213;
-  a2 = 0.9932274488431106;
-  b1 = -1.9864055002334067;
-  b2 = 0.9865042951390358;
-
-  float coeffs_hpf[5] = { a0, a1, a2, b1, b2 }; 
-  float w_hpf[5] = {0, 0};
-
-  // // peak, 22050 Hz, 4659 Hz, 0.646 Q, 6 Gain - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  // a0 = 1.4269358395668883;
-  // a1 = -0.27502696828149037;
-  // a2 = -0.2848721507196676;
-  // b1 = -0.27502696828149037;
-  // b2 = 0.14206368884722057;
-
-  // // peak, 22050 Hz, 4659 Hz, 0.646 Q, 12 Gain - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  // a0 = 2.2787848311643;
-  // a1 = -0.27502696828149037;
-  // a2 = -1.136721142317079;
-  // b1 = -0.27502696828149037;
-  // b2 = 0.14206368884722057;
-
-  // // peak, 22050 Hz, 4659 Hz, 0.646 Q, 18 Gain - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  // a0 = 3.9784470221428574;
-  // a1 = -0.27502696828149037;
-  // a2 = -2.836383333295637;
-  // b1 = -0.27502696828149037;
-  // b2 = 0.14206368884722057;
-  
-  // // peak, 22050 Hz, 4659 Hz, 0.646 Q, 30 Gain - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  // a0 = 14.136195997452123;
-  // a1 = -0.27502696828149037;
-  // a2 = -12.994132308604902;
-  // b1 = -0.27502696828149037;
-  // b2 = 0.14206368884722057;
-
-  // peak, 22050 Hz, 4659 Hz, 0.646 Q, 24 Gain - https://www.earlevel.com/main/2013/10/13/biquad-calculator-v2/
-  a0 = 7.369718939979809;
-  a1 = -0.27502696828149037;
-  a2 = -6.227655251132589;
-  b1 = -0.27502696828149037;
-  b2 = 0.14206368884722057;
-
-  float coeffs_notch[5] = { a0, a1, a2, b1, b2 }; 
-  float w_notch[5] = {0, 0};
+  // A +24 dB peaking EQ used to sit here at 4659 Hz, on by default. It was a
+  // display curve living in the signal path: it dominated everything above
+  // ~300 Hz (15.85x, +24.0 dB at its centre) and is the reason the hand-tuned
+  // pink profiles no longer match the input chain - they ascend where the
+  // chain requires a 24 dB fall. Dropped, because a "Auto" profile that
+  // inverts the chain cannot also preserve an arbitrary tilt. Any wanted
+  // overall curve belongs in the display layer, where it is visible and
+  // tunable, not baked in here where it silently fights the profile.
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
   for(;;) {
@@ -692,13 +870,12 @@ void FFTcode(void * parameter)
     }
     // band pass filter - can reduce noise floor by a factor of 50
     // downside: frequencies below 100Hz will be ignored
-   bool doDCRemoval = false; // DCRemove is only necessary if we don't use any kind of low-cut filtering
    if ((useInputFilter > 0) && (useInputFilter < 99)) {
       switch(useInputFilter) {
         case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
-        default: doDCRemoval = true; break;
+        case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz) - default for line-in
       }
-    } else doDCRemoval = true;
+    }
 
     // timing measurement
     if (start < esp_timer_get_time()) { // filter out overflows
@@ -763,7 +940,7 @@ void FFTcode(void * parameter)
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // run FFT (takes 2-3ms on ESP32, ~12ms on ESP32-S2, ~30ms on -C3)
         wc = 1.0f; // use Blackman_Harris value from ESP-DSP code
-        vReal[0] = 0;   // The remaining DC offset on the signal produces a strong spike on position 0 that should be eliminated to avoid issues.
+        // NB: the DC bin is clamped after the FFT, once magnitudes are real.
 
         float last_majorpeak = FFT_MajorPeak;
         float last_magnitude = FFT_Magnitude;
@@ -771,43 +948,48 @@ void FFTcode(void * parameter)
           if (TROYHACKS_LPF) {
             dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
             memcpy(vReal, vImag, samplesFFT); // dump it back
-          }          
-          if (TROYHACKS_HPF) {
-            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_hpf, w_hpf); // you can't dump this back into itself, needs a destination
-            memcpy(vReal, vImag, samplesFFT); // dump it back
           }
-          if (TROYHACKS_NOTCH) {
-            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_notch, w_notch); // you can't dump this back into itself, needs a destination
-            memcpy(vReal, vImag, samplesFFT); // dump it back
-          }
+
+          // Bands narrower than one FFT bin cannot be recovered from the
+          // spectrum - measure them here, while vReal still holds the filtered
+          // time-domain signal. Must run before the FFT overwrites it.
+          captureSubBinBands();
 
           dsps_fft4r_fc32(vReal,samplesFFT >> 1);
           dsps_bit_rev4r_fc32(vReal,samplesFFT >> 1);
           dsps_cplx2real_fc32(vReal,samplesFFT >> 1);
-          
+
+          // dsps_cplx2real_fc32() does NOT return magnitudes. It leaves the
+          // spectrum as INTERLEAVED real/imaginary pairs:
+          //   vReal[2k]   = Re(bin k)
+          //   vReal[2k+1] = Im(bin k)
+          // so vReal[1] is Im(DC) - mathematically 0 - and reading the array
+          // as if it held magnitudes makes band 0 dead. Fold each pair into a
+          // true magnitude in place (forward is safe: we write index i while
+          // reading 2i and 2i+1, both >= i).
+          const int halfN = samplesFFT >> 1;
+          for (int i = 0; i < halfN; i++) {
+            float re = vReal[2*i];
+            float im = vReal[2*i+1];
+            vReal[i] = sqrtf(re*re + im*im);
+          }
+          memset(vReal + halfN, 0, sizeof(float) * (samplesFFT - halfN));
+          // Band 0 now reads bin 0, which carries both 0-43 Hz content and any
+          // residual DC offset. Zeroing it would throw away the sub-bass, so
+          // clamp it to bin 1's level instead: real LF survives, a DC spike
+          // can't dominate the band. (runDCBlocker already removes most DC at
+          // the source for the default useInputFilter == 2 path.)
+          if (vReal[0] > vReal[1]) vReal[0] = vReal[1];
+
           FFT_MajorPeak = 0;
           FFT_Magnitude = 0;
 
-          // After dsps_cplx2real_fc32:
-          // - vReal[0..N/2-1] are real parts
-          // - vReal[N/2..N-1] are imag parts
-          const int halfN = samplesFFT >> 1;
           for (int i = 0; i < halfN; i++) {
             if (vReal[i] > FFT_Magnitude) {
               FFT_Magnitude = vReal[i];
               FFT_MajorPeak = i * (SAMPLE_RATE / samplesFFT);
             }
           }
-          
-          // int x=0;
-          // for (int i=0; i<samplesFFT;i+=2) { // I'm pretty sure this FFT function has interleaved results... because otherwise vReal[1] is "empty"
-          //   vReal[x] = vReal[i];
-          //   if (vReal[x] > FFT_Magnitude) {
-          //     FFT_Magnitude = vReal[x];
-          //     FFT_MajorPeak = x*(SAMPLE_RATE/samplesFFT);
-          //   }
-          //   x++;
-          // }
 
         // scale FFT results
         for(uint_fast16_t binInd = 0; binInd < samplesFFT; binInd++)
@@ -831,7 +1013,10 @@ void FFTcode(void * parameter)
         FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42 * (FFT_MajorPeak - FFT_MajPeakSmth);   // I like this "swooping peak" look
 
       } else { // skip second run --> clear fft results, keep peaks
-        memset(vReal, 0, sizeof(float) * samplesFFT); 
+        memset(vReal, 0, sizeof(float) * samplesFFT);
+        // The sub-bin bands were captured before the FFT, so they need clearing
+        // too or they would report a stale frame the spectrum has just zeroed.
+        memset(subBinMag, 0, sizeof(subBinMag));
       }
 
       haveDoneFFT = true;
@@ -845,7 +1030,7 @@ void FFTcode(void * parameter)
     if ((skipSecondFFT == false) || (isFirstRun == true)) {
       for (int i = 0; i < samplesFFT; i++) {
         float t = fabsf(vReal[i]);                      // just to be sure - values in fft bins should be positive any way
-        vReal[i] = t / 16.0f;                           // Reduce magnitude. Want end result to be scaled linear and ~4096 max.
+        vReal[i] = t * FFT_BIN_SCALE;                   // Reduce magnitude. Want end result to be scaled linear and ~4096 max.
       } // for()
 
       // mapping of FFT result bins to frequency channels
@@ -1134,7 +1319,8 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
         if (fftBinAverage[0] != 0 && !TROYHACKS_PINKY) {
           fftCalc[i] *= fftBinAverage[i];
         } else {
-          fftCalc[i] *= fftResultPink[pinkIndex][i]; // if we aren't calibrat[ing/ed], use the menu choice.
+          // if we aren't calibrat[ing/ed], use the menu choice
+          fftCalc[i] *= (pinkIndex == PINK_AUTO) ? derivedPink[i] : fftResultPink[pinkIndex][i];
         }
         // End auto calibration
 
@@ -1198,15 +1384,35 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
             currentResult *= 0.85f + (float(i)/1.8f);   // extra up-scaling for high frequencies
         break;
         case 3:
-            // square root scaling
-            currentResult *= 0.38f;
-            //currentResult *= 0.34f;                   //experiment
-            currentResult -= 6.0f;
-            if (currentResult > 1.0) currentResult = sqrtf(currentResult);
-            else currentResult = 0.0;                   // special handling, because sqrt(0) = undefined
-            currentResult *= 0.85f + (float(i)/4.5f);   // extra up-scaling for high frequencies
-            //currentResult *= 0.80f + (float(i)/5.6f); //experiment
-            currentResult = mapf(currentResult, 0.0, 16.0, 0.0, 255.0); // map [sqrt(1) ... sqrt(256)] to [0 ... 255]
+            // Loudness (dB) scaling - the fractional-octave analyser convention.
+            //
+            // A linear magnitude is a poor display quantity. The usable range
+            // here is roughly 6..690, a factor of 115, and the old square-root
+            // curve squeezed that into 16:1 - only 24 dB across the entire bar,
+            // with a per-band ramp (0.85 + i/4.5) quietly restoring some of it.
+            // Mapping 20*log10() over a 66 dB window is what an RTA does and
+            // what the ear responds to.
+            //
+            // TROYHACKS_DBREF sets where 0 dB lands, i.e. how much headroom is
+            // left above normal material. Too high and every band sits tall with
+            // all its movement crushed into the top few pixels; too low and the
+            // display never fills. Press 'd' on serial to walk it in 1 dB steps.
+            //
+            // There is deliberately no per-band tilt: the ramp was compensating
+            // for the mean-over-bins estimator that has been replaced, so leaving
+            // it in would now be correcting an artifact that no longer exists.
+            // If you later want a "smiley" curve, this is the right place for it
+            // - the display layer, where it is visible and tunable, rather than
+            // baked into the signal path where it silently fights the
+            // calibration profile.
+            currentResult *= TROYHACKS_DBREF;
+            if (currentResult > FFT_DB_FLOOR) {
+              currentResult = 20.0f * log10f(currentResult);
+              currentResult = mapf(currentResult, -TROYHACKS_DBSPAN, 0.0f, 0.0f, 255.0f);
+            } else {
+              currentResult = 0.0f;
+            }
+            if (currentResult < 0.0f) currentResult = 0.0f;
         break;
 
         case 0:
@@ -3244,6 +3450,11 @@ class AudioReactive : public Usermod {
       JsonObject freqScale = top.createNestedObject("frequency");
       freqScale[F("scale")] = FFTScalingMode;
       freqScale[F("profile")] = pinkIndex; //WLEDMM
+      // Both ends of the dB display mapping (FFTScalingMode 3). Kept here rather than
+      // as fixed constants because they describe the input level and how much range the
+      // bar should cover, not the filter chain - so they are per-install.
+      freqScale[F("dBref")]  = TROYHACKS_DBREF;
+      freqScale[F("dBspan")] = TROYHACKS_DBSPAN;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       dynLim[F("limiter")] = limiterOn;
@@ -3349,6 +3560,14 @@ class AudioReactive : public Usermod {
 
       configComplete &= getJsonValue(top["frequency"][F("scale")], FFTScalingMode);
       configComplete &= getJsonValue(top["frequency"][F("profile")], pinkIndex);  //WLEDMM
+      // dB display mapping. Clamp on read: these are also walked by the 'd'/'D' and
+      // 's'/'S' serial commands, and a value typed into the settings page should not be
+      // able to produce a mapping that makes every band read full or empty.
+      float dbRefRead = TROYHACKS_DBREF, dbSpanRead = TROYHACKS_DBSPAN;
+      configComplete &= getJsonValue(top["frequency"][F("dBref")],  dbRefRead);
+      configComplete &= getJsonValue(top["frequency"][F("dBspan")], dbSpanRead);
+      if (dbRefRead  > 1e-7f && dbRefRead  < 1.0f)   TROYHACKS_DBREF  = dbRefRead;
+      if (dbSpanRead >= 12.0f  && dbSpanRead <= 96.0f) TROYHACKS_DBSPAN = dbSpanRead;
 #endif
       configComplete &= getJsonValue(top["dynamics"][F("limiter")], limiterOn);
       configComplete &= getJsonValue(top["dynamics"][F("rise")],  attackTime);
@@ -3630,6 +3849,11 @@ class AudioReactive : public Usermod {
       #else
         oappend(SET_F("addOption(dd,'Generic Line-In',1);"));
       #endif
+      #if SR_FREQ_PROF==PINK_AUTO
+        oappend(SET_F("addOption(dd,'Auto - derived (⎌)',12);"));
+      #else
+        oappend(SET_F("addOption(dd,'Auto - derived',12);"));
+      #endif
       #if SR_FREQ_PROF==5
         oappend(SET_F("addOption(dd,'ICS-43434 (⎌)',5);"));
       #else
@@ -3676,6 +3900,8 @@ class AudioReactive : public Usermod {
         oappend(SET_F("addOption(dd,'userdefined #2',9);"));
       #endif
       oappend(SET_F("addInfo(ux+':frequency:profile',1,'☾');"));
+      oappend(SET_F("addInfo(ux+':frequency:dBref',1,'<i>bar reads full at this band level; lower it if the top bands are pinned</i>');"));
+      oappend(SET_F("addInfo(ux+':frequency:dBspan',1,'<i>how many dB the bar covers - smaller = more movement (☾)</i>');"));
 #endif
       oappend(SET_F("dd=addDropdown(ux,'sync:mode');"));
       oappend(SET_F("addOption(dd,'Off',0);"));               // AUDIOSYNC_NONE

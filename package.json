@@ -27,5 +27,8 @@
     "inliner": "^1.13.1",
     "nodemon": "^2.0.20",
     "zlib": "^1.0.5"
+  },
+  "allowScripts": {
+    "zlib@1.0.5": true
   }
 }

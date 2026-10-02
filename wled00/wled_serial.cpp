@@ -246,21 +246,39 @@ void handleSerial() {
         USER_PRINTF("%4d", fftResult[i]);
       }
       USER_PRINTLN();
+    } else if (next == 'd' || next == 'D') {
+      // Walk the 0 dB reference for the dB display mapping in 1 dB steps.
+      // 'd' lowers it (bars shrink, more headroom), 'D' raises it (bars grow).
+      // This sets how much headroom sits above normal material, so it depends on
+      // the input level and gain settings - far quicker to dial in live than to
+      // rebuild for each guess.
+      TROYHACKS_DBREF *= (next == 'D') ? powf(10.0f, 1.0f / 20.0f) : powf(10.0f, -1.0f / 20.0f);
+      if (TROYHACKS_DBREF < 1e-7f) TROYHACKS_DBREF = 1e-6f;
+      if (TROYHACKS_DBREF > 1.0f)    TROYHACKS_DBREF = 1.0f;
+      USER_PRINTF("dB display reference now %.6f  (0 dB at magnitude %.1f)\n",
+                  TROYHACKS_DBREF, 1.0f / TROYHACKS_DBREF);
+    } else if (next == 's' || next == 'S') {
+      // Walk the display span in 1 dB steps. 's' narrows it (more variance,
+      // bars move more), 'S' widens it. This is the "variance" control:
+      // constant-Q band power flattens most music, so a wide span squeezes the
+      // whole spectrum into a few rows and it reads as a dead line. Real
+      // analysers auto-range over roughly 30-50 dB.
+      TROYHACKS_DBSPAN += (next == 'S') ? 1.0f : -1.0f;
+      if (TROYHACKS_DBSPAN < 12.0f) TROYHACKS_DBSPAN = 12.0f;
+      if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
+      USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
     } else if (next == 'l') {
       TROYHACKS_LPF = !TROYHACKS_LPF;
       USER_PRINTF("LP (highs) filter is now %s\n", TROYHACKS_LPF ? "On" : "Off");
-      USER_PRINTF("HP (bass)  filter is now %s\n", TROYHACKS_HPF ? "On" : "Off");
-      USER_PRINTF("Notch      filter is now %s\n", TROYHACKS_NOTCH ? "On" : "Off");
     } else if (next == 'h') {
-      TROYHACKS_HPF = !TROYHACKS_HPF;
-      USER_PRINTF("LP (highs) filter is now %s\n", TROYHACKS_LPF ? "On" : "Off");
-      USER_PRINTF("HP (bass)  filter is now %s\n", TROYHACKS_HPF ? "On" : "Off");
-      USER_PRINTF("Notch      filter is now %s\n", TROYHACKS_NOTCH ? "On" : "Off");
+      // The 35 Hz HPF biquad used to be here. It was redundant with the DC
+      // blocker in the audio task, which already reaches -3 dB at the same
+      // 35 Hz - the pair threw away bands 0-2 twice over for no gain.
     } else if (next == 'n') {
-      TROYHACKS_NOTCH = !TROYHACKS_NOTCH;
-      USER_PRINTF("LP (highs) filter is now %s\n", TROYHACKS_LPF ? "On" : "Off");
-      USER_PRINTF("HP (bass)  filter is now %s\n", TROYHACKS_HPF ? "On" : "Off");
-      USER_PRINTF("Notch      filter is now %s\n", TROYHACKS_NOTCH ? "On" : "Off");
+      // The +24 dB peaking EQ at 4659 Hz used to be here. It was a display
+      // curve living in the signal path, and it is why the hand-tuned pink
+      // profiles no longer match the input chain. Display shaping belongs in
+      // the display layer - see the FFTScalingMode 3 comment in audio_reactive.h
     } else if (next == 'p') {
       USER_PRINTLN("White Noise Calibration Cleared!");
       float max = 0;
