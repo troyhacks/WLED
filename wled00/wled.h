@@ -504,10 +504,21 @@ WLED_GLOBAL uint16_t transitionDelay _INIT(750);    // default crossfade duratio
 
 WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
-WLED_GLOBAL bool TROYHACKS_HPF   _INIT(true); // WLED-MM/TroyHacks: Turn HPF from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_LPF   _INIT(true); // WLED-MM/TroyHacks: Turn LPF from ESP-DSP on/off
-WLED_GLOBAL bool TROYHACKS_NOTCH _INIT(true); // WLED-MM/TroyHacks: Turn other filter from ESP-DSP on/off
 WLED_GLOBAL bool TROYHACKS_PINKY _INIT(false); // WLED-MM/TroyHacks: Internally calibrate audio against white noise
+// WLED-MM/TroyHacks: 0 dB reference for the dB display mapping (FFTScalingMode 3).
+// Live-adjustable over serial with 'd'; saved and restored by the AudioReactive
+// usermod (Frequency > dB reference). It sets where the top of the bar sits, so it
+// depends on the input level and gain settings and cannot be a fixed constant.
+WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.001978f);
+// WLED-MM/TroyHacks: how many dB the bar covers below that reference ('s' to adjust,
+// also on the AudioReactive settings page). This is the "variance" control. Constant-Q
+// band power reports f^(1-a) for a spectrum of slope 1/f^a, so typical music only
+// spans ~10 dB across all 16 bands - spread over a 66 dB window that is 16% of the
+// bar and reads as a flat line. Real analysers auto-range over 30-50 dB, which is what
+// gives an RTA its shape. 26 dB is where this landed by ear against a reference RTA;
+// anything further below the loudest band reads as an empty bar, which is the trade.
+WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
 WLED_GLOBAL float fftBinAverage[16] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
 
 // User Interface CONFIG
