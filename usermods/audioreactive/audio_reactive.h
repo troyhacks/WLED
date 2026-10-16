@@ -1329,8 +1329,8 @@ void FFTcode(void * parameter)
         float last_magnitude = FFT_Magnitude;
 
           if (TROYHACKS_LPF) {
-            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // you can't dump this back into itself, needs a destination
-            memcpy(vReal, vImag, samplesFFT); // dump it back
+            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // in-place not supported, use vImag as scratch
+            memcpy(vReal, vImag, sizeof(float) * samplesFFT); // dump it back (was: memcpy(vReal, vImag, samplesFFT) - missing the sizeof(float) meant only the first 25% of the filtered output made it back to vReal)
           }
 
           // Bands narrower than one FFT bin cannot be recovered from the
