@@ -267,12 +267,6 @@ void handleSerial() {
       if (TROYHACKS_DBSPAN < 12.0f) TROYHACKS_DBSPAN = 12.0f;
       if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
       USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
-    } else if (next == 'l') {
-      // The LPF (low-pass biquad) used to be toggleable here. It is now always
-      // on: it is what protects the top band from aliasing and makes the
-      // 'Auto' profile flat. Pressing 'l' now reports the (fixed) state so
-      // scripts that probe it still get an answer, instead of a silent no-op.
-      USER_PRINTLN("LP (highs) filter is always On");
     } else if (next == 'h') {
       // The 35 Hz HPF biquad used to be here. It was redundant with the DC
       // blocker in the audio task, which already reaches -3 dB at the same
