@@ -116,6 +116,14 @@ static bool udpSamplePeak = false;   // Boolean flag for peak. Set at the same t
 static unsigned long timeOfPeak = 0; // time of last sample peak detection.
 volatile bool haveNewFFTResult = false; // flag to directly inform UDP sound sender when new FFT results are available (to reduce latency). Flag is reset at next UDP send
 
+// fftResult[] is written byte-by-byte from the FFT task (core 1) and read by
+// the LED effects (core 0). A torn read is possible - a consumer may catch
+// a mix of new and old values, but never 16 equal values from a single
+// point of corruption, so this does not explain the rare one-frame uniform
+// flash. The proper fix is a double-buffer with a sequence counter (writer
+// flips a generation before and after the publish; reader retries if it
+// changed mid-read). Deferring because the torn-read window is small and
+// the visual effect is a single-frame glitch.
 static uint8_t fftResult[NUM_GEQ_CHANNELS]= {0};   // Our calculated freq. channel result table to be used by effects
 static float   fftCalc[NUM_GEQ_CHANNELS] = {0.0f}; // Try and normalize fftBin values to a max of 4096, so that 4096/16 = 256. (also used by dynamics limiter)
 static float   fftAvg[NUM_GEQ_CHANNELS] = {0.0f};  // Calculated frequency channel results, with smoothing (used if dynamics limiter is ON)
@@ -270,7 +278,7 @@ static const float fftResultPink[MAX_PINK+1][NUM_GEQ_CHANNELS] = {
           { 4.75f, 3.60f, 2.40f, 2.46f, 3.52f, 1.60f, 1.68f, 3.20f, 2.20f, 2.00f, 2.30f, 2.41f, 2.30f, 1.25f, 4.55f, 6.50f },  //  9 userdef #2 for softhack (mic hidden inside mini-shield)
 
           { 2.38f, 2.18f, 2.07f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.95f, 1.70f, 2.13f, 2.47f },   // 10 almost FLAT (IMNP441 but no PINK noise adjustments)
-          { 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f },   // 11 DEAD FLAT (placeholder; the row is skipped)
+          { 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f, 1.70f },   // 11 flat with 1.7x overall lift - usable profile; not actually skipped
           { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f }    // 12 AUTO - placeholder, real values live in derivedPink[]
 };
 
