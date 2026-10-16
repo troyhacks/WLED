@@ -81,8 +81,6 @@ constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not c
 //
 //   I2S_USE_RIGHT_CHANNEL - select RIGHT slot on digital mics (compile-time)
 //   I2S_USE_16BIT_SAMPLES - request 16-bit samples (compile-time)
-//   I2S_GRAB_ADC1_COMPLETELY - obsolete (I2SAdcSource was removed when
-//                               migrating to the IDF v5 new I2S driver)
 //
 //#define I2S_USE_RIGHT_CHANNEL    // (experimental) define this to use right channel (digital mics only)
 //#define I2S_USE_16BIT_SAMPLES    // (experimental) define this to request 16bit - more efficient but possibly less compatible
@@ -177,7 +175,9 @@ class AudioSource {
     /* check if the audio source driver was initialized successfully */
     virtual bool isInitialized(void) {return(_initialized);}
 
-    /* identify Audiosource type - I2S-ADC or I2S-digital */
+    /* identify Audiosource type - I2S-ADC or I2S-digital.
+     * Type_I2SAdc=1 was removed with the I2SAdcSource class (IDF v5 migration);
+     * values preserved for ABI compatibility with persisted configs. */
     typedef enum{Type_unknown=0, Type_I2SAdc=1, Type_I2SDigital=2} AudioSourceType;
     virtual AudioSourceType getType(void) {return(Type_I2SDigital);}               // default is "I2S digital source" - ADC type overrides this method
  

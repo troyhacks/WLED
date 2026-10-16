@@ -1620,10 +1620,8 @@ void FFTcode(void * parameter)
     detectSamplePeak();
 
     haveNewFFTResult = true;
-    
-    #if !defined(I2S_GRAB_ADC1_COMPLETELY)    
-    if ((audioSource == nullptr) || (audioSource->getType() != AudioSource::Type_I2SAdc))  // the "delay trick" does not help for analog ADC
-    #endif
+
+    if (audioSource != nullptr)  // yield to the DMA ring so it can fill
     {
       if (!usingOldSamples) {
         vTaskDelayUntil( &xLastWakeTime, xFrequencyDouble); // we need a double wait when no old data was used
@@ -3140,15 +3138,15 @@ class AudioReactive : public Usermod {
           break;
 
         #if  !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ARCH_RISCV)
-        // ADC over I2S is only possible on "classic" ESP32
-        case 0:
-        default:
-          DEBUGSR_PRINTLN(F("AR: Analog Microphone (left channel only)."));
-          useInputFilter = 1;  // PDM bandpass filter seems to work well for analog, too
-          audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE);
-          delay(100);
-          if (audioSource) audioSource->initialize(audioPin);
-          break;
+        // ADC over I2S is only possible on "classic" ESP32. The I2SAdcSource
+        // class was removed in the IDF v5 migration; the analog-ADC code path
+        // is no longer reachable. The case/default arm is kept as a comment
+        // so a future author knows the gap exists.
+        //
+        // case 0: default:
+        //   useInputFilter = 1;
+        //   audioSource = new I2SAdcSource(SAMPLE_RATE, BLOCK_SIZE);  // <-- no such class anymore
+        //   ...
         #endif
       }
       delay(250); // give microphone enough time to initialise
@@ -3590,17 +3588,13 @@ class AudioReactive : public Usermod {
         }
 #else  // ESP32 only
         } else {
-          // Analog or I2S digital input
+          // I2S digital input (analog-ADC path removed with I2SAdcSource)
           if (audioSource && (audioSource->isInitialized())) {
             // audio source successfully configured
-            if (audioSource->getType() == AudioSource::Type_I2SAdc) {
-              infoArr.add(F("ADC analog"));
-            } else {
-              if (dmType != 51)
-                infoArr.add(F("I2S digital"));
-              else
-                infoArr.add(F("legacy I2S PDM"));
-            }
+            if (dmType != 51)
+              infoArr.add(F("I2S digital"));
+            else
+              infoArr.add(F("legacy I2S PDM"));
             // input level or "silence"
             if (maxSample5sec > 1.0) {
               float my_usage = 100.0f * (maxSample5sec / 255.0f);
