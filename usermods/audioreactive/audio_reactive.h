@@ -3927,7 +3927,12 @@ class AudioReactive : public Usermod {
       // Both ends of the dB display mapping (FFTScalingMode 3). Kept here rather than
       // as fixed constants because they describe the input level and how much range the
       // bar should cover, not the filter chain - so they are per-install.
-      freqScale[F("dBref")]  = TROYHACKS_DBREF;
+      // dBref in JSON is the dB offset, matching the 'd'/'D' serial print.
+      // Internally it is stored as a linear coefficient (1/0 dB magnitude).
+      // Stored configs from before this change held the linear coefficient
+      // directly (a number < 1.0); we detect that case by the value being
+      // smaller than 1 and treat it as the legacy linear form.
+      freqScale[F("dBref")]  = -20.0f * log10f(TROYHACKS_DBREF);
       freqScale[F("dBspan")] = TROYHACKS_DBSPAN;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
@@ -4034,13 +4039,25 @@ class AudioReactive : public Usermod {
 
       configComplete &= getJsonValue(top["frequency"][F("scale")], FFTScalingMode);
       configComplete &= getJsonValue(top["frequency"][F("profile")], pinkIndex);  //WLEDMM
-      // dB display mapping. Clamp on read: these are also walked by the 'd'/'D' and
-      // 's'/'S' serial commands, and a value typed into the settings page should not be
-      // able to produce a mapping that makes every band read full or empty.
+      // dB display mapping. dBref in JSON is the dB offset (matches the
+      // 'd'/'D' serial print and the field name in the web UI). Internally
+      // it is stored as a linear coefficient. Backward compat: a value
+      // < 1.0 is treated as a legacy linear coefficient (configs written
+      // before this change stored the coefficient directly); a value
+      // >= 1.0 is treated as a dB offset.
       float dbRefRead = TROYHACKS_DBREF, dbSpanRead = TROYHACKS_DBSPAN;
       configComplete &= getJsonValue(top["frequency"][F("dBref")],  dbRefRead);
       configComplete &= getJsonValue(top["frequency"][F("dBspan")], dbSpanRead);
-      if (dbRefRead  > 1e-7f && dbRefRead  < 1.0f)   TROYHACKS_DBREF  = dbRefRead;
+      if (dbRefRead < 1.0f && dbRefRead > 1e-7f) {
+        // Legacy linear coefficient (saved by older firmware).
+        TROYHACKS_DBREF = dbRefRead;
+      } else if (dbRefRead >= 0.0f && dbRefRead <= 120.0f) {
+        // dB offset -> linear coefficient. (0 dB = 1.0, 60 dB = 1e-3, etc.)
+        TROYHACKS_DBREF = powf(10.0f, -dbRefRead / 20.0f);
+      }
+      // Clamp the resulting linear coefficient to a sane range.
+      if (TROYHACKS_DBREF < 1e-7f) TROYHACKS_DBREF = 1e-6f;
+      if (TROYHACKS_DBREF > 1.0f)   TROYHACKS_DBREF = 1.0f;
       if (dbSpanRead >= 12.0f  && dbSpanRead <= 96.0f) TROYHACKS_DBSPAN = dbSpanRead;
 #endif
       configComplete &= getJsonValue(top["dynamics"][F("limiter")], limiterOn);
@@ -4371,7 +4388,7 @@ class AudioReactive : public Usermod {
         oappend(SET_F("addOption(dd,'userdefined #2',9);"));
       #endif
       oappend(SET_F("addInfo(ux+':frequency:profile',1,'☾');"));
-      oappend(SET_F("addInfo(ux+':frequency:dBref',1,'<i>bar reads full at this band level; lower it if the top bands are pinned</i>');"));
+      oappend(SET_F("addInfo(ux+':frequency:dBref',1,'<i>0 dB headroom in dB - higher = more headroom, smaller bars. 'd'/'D' on serial walks in 1 dB steps</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:dBspan',1,'<i>how many dB the bar covers - smaller = more movement (☾)</i>');"));
 #endif
       oappend(SET_F("dd=addDropdown(ux,'sync:mode');"));
