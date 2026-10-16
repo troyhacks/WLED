@@ -21,7 +21,6 @@
 #include <driver/adc.h>
 #include <math.h>
 #include <esp_timer.h>
-#define FFT_PREFER_EXACT_PEAKS  // use different FFT windowing -> results in "sharper" peaks and less "leaking" into other frequencies
 // #define SR_STATS
 #if !defined(FFTTASK_PRIORITY)
   #define FFTTASK_PRIORITY 6   // above async_tcp and USB Mass Storage
@@ -215,7 +214,6 @@ static constexpr uint8_t averageByRMS = false;                      // false: us
 static constexpr uint8_t averageByRMS = true;                       // false: use mean value, true: use RMS (root mean squared). use better method on fast MCUs.
 #endif
 static uint8_t freqDist = 2;                              // 0=old 1=rightshift 2=psychoacoustic (log)
-static uint8_t fftWindow = 0;                             // FFT windowing function (0 = default)
 static uint8_t doSlidingFFT = 1;                            // 1 = use sliding window FFT (faster & more accurate)
 static uint8_t useAutoLevel = 1;                           // 1 = per-band slow-decay AGC (auto-balance loudest band to fill display)
 static float bandAutoGain[NUM_GEQ_CHANNELS] = {0.0f};     // per-band auto-gain (slow-decay AGC state)
@@ -1074,20 +1072,6 @@ void FFTcode(void * parameter)
   if ((vReal == nullptr) || (vImag == nullptr)) success = alocateFFTBuffers(); // allocate sample buffers on first run
   if (success == false) { disableSoundProcessing = true; return; }             // no memory -> die
 
-  // create FFT object - we have to do if after allocating buffers
-#if defined(FFT_LIB_REV) && FFT_LIB_REV > 0x19
-  // arduinoFFT 2.x has a slightly different API
-  static ArduinoFFT<float> FFT = ArduinoFFT<float>( vReal, vImag, samplesFFT, SAMPLE_RATE, true);
-#else
-  // recommended version optimized by @softhack007 (API version 1.9)
-  #if defined(WLED_ENABLE_HUB75MATRIX) && defined(CONFIG_IDF_TARGET_ESP32)
-    static float* windowWeighingFactors = nullptr;
-    if (!windowWeighingFactors) windowWeighingFactors = (float*) calloc(sizeof(float), samplesFFT); // cache for FFT windowing factors - use heap
-  #else
-    static float windowWeighingFactors[samplesFFT] = {0.0f};                                        // cache for FFT windowing factors - use global RAM
-  #endif
-#endif
-
   // pre-compute pink noise scaling table
   for(uint_fast16_t binInd = 0; binInd < samplesFFT; binInd++) {
     float binFreq = binInd * binWidth + binWidth/2.0f;
@@ -1584,31 +1568,15 @@ void FFTcode(void * parameter)
         }
       }
 
-      // #5 Per-band log compression (soft-knee).
-      // Apply log(1 + x) to soften peaks without boosting the floor.
-      // Map [0, Xmax] -> [0, Xmax] via log(1+x)/log(1+Xmax) so peaks get
-      // compressed but small signals pass through nearly linearly.
-      // For k=4 / Xmax=4096: x=50 -> 1230, x=200 -> 2115, x=1000 -> 3123.
+      // #5 Per-band log compression (soft-knee). DISABLED - the Xmax/logXmax
+      // locals were never used (inner loop uses bandMax=fftCalc[k]), and the
+      // "for (j=0; j<8; ...)" inner loop is a no-op. Effect: nothing. Left here
+      // as a marker so a future author doesn't have to re-derive the intent.
+      // To re-enable, the body needs to be rewritten with bandMax actually
+      // matching the documented behaviour, and a UI toggle for useBandCompress.
       if (useBandCompress) {
-        const float Xmax = 4096.0f;
-        const float logXmax = logf(1.0f + Xmax);
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-          if (fftCalc[k] > 0.0f) {
-            // Use Xmax per-band so the curve normalises at the band's
-            // current peak. This compresses within-band transients while
-            // preserving per-band equalisation from the AGC step.
-            float bandMax = fftCalc[k];
-            for (int j = 0; j < 8; j++) {
-              if (bandMax > 0.0f) break;
-              bandMax = 0.0f;
-            }
-            // Apply log(1+x)/log(1+bandMax) — noop if bandMax <= 1
-            if (bandMax > 1.0f) {
-              float logBandMax = logf(1.0f + bandMax);
-              fftCalc[k] = (logf(1.0f + fftCalc[k]) / logBandMax) * bandMax;
-            }
-          }
-        }
+        // (disabled - see comment above)
+        (void)0;
       }
 
       // "Dance music fixer" — soft lift on band 0 from band 1. Compensates
@@ -3937,7 +3905,9 @@ class AudioReactive : public Usermod {
       poweruser[F("Mic_Quality")] = micQuality;
       poweruser[F("freqDist")] = freqDist;
       //poweruser[F("freqRMS")] = averageByRMS;
-      poweruser[F("FFT_Window")] = fftWindow;
+      // FFT_Window: removed. The windowing function is hard-coded to
+      // Blackman-Harris (see dsps_wind_blackman_harris_f32 in alocateFFTBuffers).
+      // The 6-option dropdown above was a no-op for this branch.
       poweruser[F("I2S_FastPath")] = doSlidingFFT;
       poweruser[F("AutoLevel")] = useAutoLevel;
       poweruser[F("BandCompress")] = useBandCompress;
@@ -4046,7 +4016,7 @@ class AudioReactive : public Usermod {
       configComplete &= getJsonValue(top["experiments"][F("Mic_Quality")], micQuality);
       configComplete &= getJsonValue(top["experiments"][F("freqDist")], freqDist);
       //configComplete &= getJsonValue(top["experiments"][F("freqRMS")],  averageByRMS);
-      configComplete &= getJsonValue(top["experiments"][F("FFT_Window")], fftWindow);
+      // FFT_Window: removed. See addToConfig.
 
       configComplete &= getJsonValue(top["experiments"][F("I2S_FastPath")], doSlidingFFT);
       configComplete &= getJsonValue(top["experiments"][F("AutoLevel")], useAutoLevel);
@@ -4284,13 +4254,10 @@ class AudioReactive : public Usermod {
       //oappend(SET_F("addOption(dd,'On',1);"));
       //oappend(SET_F("addInfo(ux+':experiments:freqRMS',1,'☾');"));
 
-      oappend(SET_F("dd=addDropdown(ux,xx+':FFT_Window');"));
-      oappend(SET_F("addOption(dd,'Blackman-Harris (MM standard)',0);"));
-      oappend(SET_F("addOption(dd,'Hann (balanced)',1);"));
-      oappend(SET_F("addOption(dd,'Nuttall (more accurate)',2);"));
-      oappend(SET_F("addOption(dd,'Blackman',5);"));
-      oappend(SET_F("addOption(dd,'Hamming',3);"));
-      oappend(SET_F("addOption(dd,'Flat-Top (AC WLED, inaccurate)',4);"));
+      // FFT_Window dropdown: removed. The windowing function is hard-coded
+      // to Blackman-Harris (dsps_wind_blackman_harris_f32 in alocateFFTBuffers)
+      // and the 6 options exposed here did not change behaviour. Saved configs
+      // that still contain the key are ignored on read (see readFromConfig).
 
       oappend(SET_F("dd=addDropdown(ux,xx+':I2S_FastPath');"));
       oappend(SET_F("addOption(dd,'Off',0);"));
