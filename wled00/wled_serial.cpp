@@ -268,8 +268,11 @@ void handleSerial() {
       if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
       USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
     } else if (next == 'l') {
-      TROYHACKS_LPF = !TROYHACKS_LPF;
-      USER_PRINTF("LP (highs) filter is now %s\n", TROYHACKS_LPF ? "On" : "Off");
+      // The LPF (low-pass biquad) used to be toggleable here. It is now always
+      // on: it is what protects the top band from aliasing and makes the
+      // 'Auto' profile flat. Pressing 'l' now reports the (fixed) state so
+      // scripts that probe it still get an answer, instead of a silent no-op.
+      USER_PRINTLN("LP (highs) filter is always On");
     } else if (next == 'h') {
       // The 35 Hz HPF biquad used to be here. It was redundant with the DC
       // blocker in the audio task, which already reaches -3 dB at the same
@@ -279,54 +282,13 @@ void handleSerial() {
       // curve living in the signal path, and it is why the hand-tuned pink
       // profiles no longer match the input chain. Display shaping belongs in
       // the display layer - see the FFTScalingMode 3 comment in audio_reactive.h
-    } else if (next == 'p') {
-      USER_PRINTLN("White Noise Calibration Cleared!");
-      float max = 0;
-      for (int i = 0; i < 16; i++) {
-        fftBinAverage[i] = 0.0f;
-      }
-    } else if (next == 'P') {
-      TROYHACKS_PINKY = !TROYHACKS_PINKY;
-      USER_PRINTF("White Noise Calibration %s\n", TROYHACKS_PINKY ? "Started" : "Finished");
-      if (TROYHACKS_PINKY) {
-        float max = 0;
-        for (int i = 0; i < 16; i++) {
-          fftBinAverage[i] = 1.0f;
-        }
-      }
-      if (!TROYHACKS_PINKY) {
-        float max = 0;
-        float min = 100000000;
-        for (int i = 0; i < 16; i++) {
-          if (fftBinAverage[i] > max) {
-            max = fftBinAverage[i];
-          }
-          if (fftBinAverage[i] < min) {
-            min = fftBinAverage[i];
-          }
-        }
-        //  5.53, 8.10 = 1.70, 1.83, 1.82, 1.85, 1.78, 1.82, 1.76, 1.79, 1.79, 1.79, 1.79, 1.79, 1.79, 1.79, 1.89, 2.17
-        // 10.05,95.22 = 7.78, 6.95, 5.15, 3.73, 1.70, 2.20, 4.86, 3.95, 5.92, 7.45, 7.64, 7.52, 6.84, 7.14, 6.90, 6.06,
-        // 2.11, 16.77 = 9.67, 8.97, 6.87, 4.89, 3.36, 1.70, 4.69, 2.71, 6.73, 8.85, 9.01, 8.53, 7.10, 7.86, 5.23, 4.26,
-        //  2.62,19.27 = 7.34, 6.64, 4.99, 3.76, 1.39, 1.00, 3.20, 1.23, 5.07, 6.63, 6.75, 6.37, 5.26, 5.72, 2.73, 2.74, 
-        USER_PRINT(min);
-        USER_PRINT(",");
-        USER_PRINT(max);
-        USER_PRINT(" = ");
-        for (int i = 0; i < 16; i++) {
-          USER_PRINTF("%5.2f, ", fftBinAverage[i]);
-        }
-        USER_PRINTLN();
-        USER_PRINT(min);
-        USER_PRINT(",");
-        USER_PRINT(max);
-        USER_PRINT(" = ");
-        for (int i = 0; i < 16; i++) {
-          fftBinAverage[i] = mapf(fftBinAverage[i], min, max, (max / min), 0); //  + 1.70f;
-          USER_PRINTF("%5.2f, ", fftBinAverage[i]);
-        }
-        USER_PRINTLN();
-      }
+    } else if (next == 'p' || next == 'P') {
+      // White-noise calibration (PINKY) used to live here. The pink
+      // profiles are now derived at runtime (PINK_AUTO), so a
+      // hand-measured profile is not needed. Pressing 'p'/'P' now prints
+      // a notice so a session that has the muscle memory still gets a
+      // response.
+      USER_PRINTLN("White Noise Calibration removed - use PINK_AUTO profile");
     } else if (next == 0xB0) {
       updateBaudRate(115200);
     } else if (next == 0xB1) {

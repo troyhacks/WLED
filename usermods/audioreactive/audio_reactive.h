@@ -223,7 +223,7 @@ static constexpr uint8_t averageByRMS = true;                       // false: us
 #endif
 static uint8_t freqDist = 2;                              // 0=old 1=rightshift 2=psychoacoustic (log)
 static uint8_t doSlidingFFT = 1;                            // 1 = use sliding window FFT (faster & more accurate)
-static uint8_t useAutoLevel = 1;                           // 1 = per-band slow-decay AGC (auto-balance loudest band to fill display)
+static uint8_t useAutoLevel = 0;                           // 1 = per-band slow-decay AGC (auto-balance loudest band to fill display). OFF by default; the new band-power path produces a flat-ish spectrum on its own, and the AGC was the most likely cause of the rare "all bars at the same height" flash. Re-enable from the UI if a particular source needs it.
 static float bandAutoGain[NUM_GEQ_CHANNELS] = {0.0f};     // per-band auto-gain (slow-decay AGC state)
 static bool  bandAutoGainInited = false;                   // first-call init flag (seed at 1.0 once)
 static uint8_t useBandCompress = 0;                        // 1 = per-band log compression: log(1+k*x) / log(1+k*Xmax) — compresses within-band dynamic range
@@ -988,14 +988,14 @@ static void initDerivedProfile() {
     if (bandSubBin[k]) {
       h = 1.0f;
       if ((useInputFilter > 0) && (useInputFilter < 99)) h *= dcBlockerMagAt(bandCentre[k], DC_BLOCKER_R);
-      if (TROYHACKS_LPF) h *= biquadMagAt(coeffs_lpf, bandCentre[k]);
+      h *= biquadMagAt(coeffs_lpf, bandCentre[k]);
     } else {
       double sum = 0.0;
       const int n = bandHi[k] - bandLo[k] + 1;
       for (int i = bandLo[k]; i <= bandHi[k]; i++) {
         float hi = 1.0f;
         if ((useInputFilter > 0) && (useInputFilter < 99)) hi *= dcBlockerMagAt((float)i * binWidth, DC_BLOCKER_R);
-        if (TROYHACKS_LPF) hi *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
+        hi *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
         sum += (double)hi * (double)hi;
       }
       h = sqrtf((float)(sum / n));
@@ -1349,10 +1349,11 @@ void FFTcode(void * parameter)
         float last_majorpeak = FFT_MajorPeak;
         float last_magnitude = FFT_Magnitude;
 
-          if (TROYHACKS_LPF) {
-            dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf); // in-place not supported, use vImag as scratch
-            memcpy(vReal, vImag, sizeof(float) * samplesFFT); // dump it back (was: memcpy(vReal, vImag, samplesFFT) - missing the sizeof(float) meant only the first 25% of the filtered output made it back to vReal)
-          }
+          // LPF always on - the biquad is what protects the top band from
+          // aliasing and is what makes the 'Auto' profile flat. vImag is
+          // used as scratch because the biquad has no in-place mode.
+          dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf);
+          memcpy(vReal, vImag, sizeof(float) * samplesFFT);
 
           // Bands narrower than one FFT bin cannot be recovered from the
           // spectrum - measure them here, while vReal still holds the filtered
@@ -1696,21 +1697,11 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
     for (int i=0; i < numberOfChannels; i++) {
 
       if (noiseGateOpen) { // noise gate open
-        
-        // Some attempt to auto-calibrate mics
-        if (TROYHACKS_PINKY) {
-          float calced = fftCalc[i] * FFT_DOWNSCALE * (soundAgc ? multAgc : manualGainFactor());
-          fftBinAverage[i] = fftBinAverage[i] * 0.99 + (0.01 * calced);
-          // if (calced > fftBinAverage[i]) fftBinAverage[i] = calced;
-        }
-        // Adjustment for frequency curves.
-        if (fftBinAverage[0] != 0 && !TROYHACKS_PINKY) {
-          fftCalc[i] *= fftBinAverage[i];
-        } else {
-          // if we aren't calibrat[ing/ed], use the menu choice
-          fftCalc[i] *= (pinkIndex == PINK_AUTO) ? derivedPink[i] : fftResultPink[pinkIndex][i];
-        }
-        // End auto calibration
+
+        // Frequency-curve correction: invert the input chain's |H| at each
+        // band, so a flat-in source reads flat-out. The Auto profile is
+        // derived at runtime (initDerivedProfile); the rest are hand tables.
+        fftCalc[i] *= (pinkIndex == PINK_AUTO) ? derivedPink[i] : fftResultPink[pinkIndex][i];
 
         if (FFTScalingMode > 0) fftCalc[i] *= FFT_DOWNSCALE;  // adjustment related to FFT windowing function
         // Manual linear adjustment of gain using sampleGain adjustment for different input types.
