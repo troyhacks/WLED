@@ -1430,64 +1430,53 @@ void FFTcode(void * parameter)
           // 100 Hz instead of 30 Hz to avoid bin 0 (DC) and low-freq
           // noise. Built-in damping handles the rest.
           computeBandsPsychoacoustic(fftCalc, wc);
-        } else if (freqDist == 0) {
-          /* new mapping, optimized for 22050 Hz by softhack007 --- update: removed overlap */
-                                                         // bins frequency  range
-          if (useInputFilter==1) {
-            // skip frequencies below 100hz
-            fftCalc[ 0] = wc * 0.8f * fftAddAvg(3,3);
-            fftCalc[ 1] = wc * 0.9f * fftAddAvg(4,4);
-            fftCalc[ 2] = wc * fftAddAvg(5,5);
-            fftCalc[ 3] = wc * fftAddAvg(6,6);
-            // don't use the last bins from 206 to 255.
-            fftCalc[15] = wc * fftAddAvg(165,205) * 0.75f;   // 40 7106 - 8828 high             -- with some damping
-          } else {
-            fftCalc[ 0] = wc * fftAddAvg(1,1);               // 1    43 - 86   sub-bass
-            fftCalc[ 1] = wc * fftAddAvg(2,2);               // 1    86 - 129  bass
-            fftCalc[ 2] = wc * fftAddAvg(3,4);               // 2   129 - 216  bass
-            fftCalc[ 3] = wc * fftAddAvg(5,6);               // 2   216 - 301  bass + midrange
-            // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise)
-            fftCalc[15] = wc * fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
+        } else {
+          // freqDist 0/1: hand-tuned bin ranges from softhack007 (Normal)
+          // and WLEDMM (Rightshift). The two distributions differ only in
+          // which bins each of the 16 bands sums, and each has a PDM-input
+          // variant that shifts the bottom 4 bands up past 100 Hz. Tables
+          // are the shape that makes the four cases stay aligned.
+          //
+          // Each row is (loBin, hiBin, damping). damping==1.0 means no
+          // scaling; the two end-of-spectrum values (bands 0-3 and 15) are
+          // hand-tapered to keep the display from saturating at the bass
+          // and the highs. Band 14 is damped 0.88 in both distributions.
+          struct BandMap { uint8_t lo, hi; float damp; };
+          static const BandMap bandsNormalLine[NUM_GEQ_CHANNELS] = {
+            /* 0..3 sub-bass/bass */  {  1,   1, 1.00f}, {  2,   2, 1.00f}, {  3,   4, 1.00f}, {  5,   6, 1.00f},
+            /* 4..13 midrange..high  */ {  7,   9, 1.00f}, { 10,  12, 1.00f}, { 13,  18, 1.00f}, { 19,  25, 1.00f},
+                                       { 26,  32, 1.00f}, { 33,  43, 1.00f}, { 44,  55, 1.00f}, { 56,  69, 1.00f},
+                                       { 70,  85, 1.00f}, { 86, 103, 1.00f}, {104, 164, 0.88f},
+            /* 15 high (don't use 216-255, contaminated) */
+                                       {165, 215, 0.70f},
+          };
+          static const BandMap bandsNormalPdm[NUM_GEQ_CHANNELS] = {
+            /* shift bottom 4 past 100 Hz, taper band 15 */           {  3,   3, 0.80f}, {  4,   4, 0.90f}, {  5,   5, 1.00f}, {  6,   6, 1.00f},
+            {  7,   9, 1.00f}, { 10,  12, 1.00f}, { 13,  18, 1.00f}, { 19,  25, 1.00f},
+            { 26,  32, 1.00f}, { 33,  43, 1.00f}, { 44,  55, 1.00f}, { 56,  69, 1.00f},
+            { 70,  85, 1.00f}, { 86, 103, 1.00f}, {104, 164, 0.88f},
+            {165, 205, 0.75f},
+          };
+          static const BandMap bandsShiftLine[NUM_GEQ_CHANNELS] = {
+            /* WLEDMM Rightshift: same shape, shifted by one bin each */ {  1,   1, 1.00f}, {  2,   2, 1.00f}, {  3,   3, 1.00f}, {  4,   4, 1.00f},
+            {  5,   6, 1.00f}, {  7,   8, 1.00f}, {  9,  10, 1.00f}, { 11,  13, 1.00f},
+            { 14,  18, 1.00f}, { 19,  25, 1.00f}, { 26,  36, 1.00f}, { 37,  45, 1.00f},
+            { 46,  66, 1.00f}, { 67,  97, 1.00f}, { 98, 164, 0.88f},
+            {165, 215, 0.70f},
+          };
+          static const BandMap bandsShiftPdm[NUM_GEQ_CHANNELS] = {
+            {  1,   1, 0.80f}, {  2,   2, 0.90f}, {  3,   3, 1.00f}, {  4,   4, 1.00f},
+            {  5,   6, 1.00f}, {  7,   8, 1.00f}, {  9,  10, 1.00f}, { 11,  13, 1.00f},
+            { 14,  18, 1.00f}, { 19,  25, 1.00f}, { 26,  36, 1.00f}, { 37,  45, 1.00f},
+            { 46,  66, 1.00f}, { 67,  97, 1.00f}, { 98, 164, 0.88f},
+            {165, 205, 0.75f},
+          };
+          const BandMap* m = (freqDist == 1)
+            ? (useInputFilter == 1 ? bandsShiftPdm    : bandsShiftLine)
+            : (useInputFilter == 1 ? bandsNormalPdm   : bandsNormalLine);
+          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+            fftCalc[k] = wc * m[k].damp * fftAddAvg(m[k].lo, m[k].hi);
           }
-          fftCalc[ 4] = wc * fftAddAvg(7,9);                 // 3   301 - 430  midrange
-          fftCalc[ 5] = wc * fftAddAvg(10,12);               // 3   430 - 560  midrange
-          fftCalc[ 6] = wc * fftAddAvg(13,18);               // 5   560 - 818  midrange
-          fftCalc[ 7] = wc * fftAddAvg(19,25);               // 7   818 - 1120 midrange -- 1Khz should always be the center !
-          fftCalc[ 8] = wc * fftAddAvg(26,32);               // 7  1120 - 1421 midrange
-          fftCalc[ 9] = wc * fftAddAvg(33,43);               // 9  1421 - 1895 midrange
-          fftCalc[10] = wc * fftAddAvg(44,55);               // 12 1895 - 2412 midrange + high mid
-          fftCalc[11] = wc * fftAddAvg(56,69);               // 14 2412 - 3015 high mid
-          fftCalc[12] = wc * fftAddAvg(70,85);               // 16 3015 - 3704 high mid
-          fftCalc[13] = wc * fftAddAvg(86,103);              // 18 3704 - 4479 high mid
-          fftCalc[14] = wc * fftAddAvg(104,164) * 0.88f;     // 61 4479 - 7106 high mid + high  -- with slight damping
-        } else { // freqDist == 1: WLEDMM Rightshift
-          if (useInputFilter==1) {
-            // skip frequencies below 100hz
-            fftCalc[ 0] = wc * 0.8f * fftAddAvg(1,1);
-            fftCalc[ 1] = wc * 0.9f * fftAddAvg(2,2);
-            fftCalc[ 2] = wc * fftAddAvg(3,3);
-            fftCalc[ 3] = wc * fftAddAvg(4,4);
-            // don't use the last bins from 206 to 255.
-            fftCalc[15] = wc * fftAddAvg(165,205) * 0.75f;   // 40 7106 - 8828 high             -- with some damping
-          } else {
-            fftCalc[ 0] = wc * fftAddAvg(1,1);               // 1    43 - 86   sub-bass
-            fftCalc[ 1] = wc * fftAddAvg(2,2);               // 1    86 - 129  bass
-            fftCalc[ 2] = wc * fftAddAvg(3,3);               // 2   129 - 216  bass
-            fftCalc[ 3] = wc * fftAddAvg(4,4);               // 2   216 - 301  bass + midrange
-            // don't use the last bins from 216 to 255. They are usually contaminated by aliasing (aka noise)
-            fftCalc[15] = wc * fftAddAvg(165,215) * 0.70f;   // 50 7106 - 9259 high             -- with some damping
-          }
-          fftCalc[ 4] = wc * fftAddAvg(5,6);                 // 3   301 - 430  midrange
-          fftCalc[ 5] = wc * fftAddAvg(7,8);                 // 3   430 - 560  midrange
-          fftCalc[ 6] = wc * fftAddAvg(9,10);                // 5   560 - 818  midrange
-          fftCalc[ 7] = wc * fftAddAvg(11,13);               // 7   818 - 1120 midrange -- 1Khz should always be the center !
-          fftCalc[ 8] = wc * fftAddAvg(14,18);               // 7  1120 - 1421 midrange
-          fftCalc[ 9] = wc * fftAddAvg(19,25);               // 9  1421 - 1895 midrange
-          fftCalc[10] = wc * fftAddAvg(26,36);               // 12 1895 - 2412 midrange + high mid
-          fftCalc[11] = wc * fftAddAvg(37,45);               // 14 2412 - 3015 high mid
-          fftCalc[12] = wc * fftAddAvg(46,66);               // 16 3015 - 3704 high mid
-          fftCalc[13] = wc * fftAddAvg(67,97);               // 18 3704 - 4479 high mid
-          fftCalc[14] = wc * fftAddAvg(98,164) * 0.88f;      // 61 4479 - 7106 high mid + high  -- with slight damping
         }
     } else {  // noise gate closed - just decay old values
       isFirstRun = false;
