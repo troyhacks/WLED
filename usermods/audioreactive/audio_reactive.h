@@ -4387,7 +4387,7 @@ class AudioReactive : public Usermod {
       #else
         oappend(SET_F("addOption(dd,'userdefined #2',9);"));
       #endif
-      oappend(SET_F("addInfo(ux+':frequency:profile',1,'☾');"));
+      oappend(SET_F("addInfo(ux+':frequency:profile',1,'<i>band-power correction. Hand tables are for known mics; Auto is derived from the input chain (DC blocker + biquad LPF) and is the right choice unless you have measured your specific mic</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:dBref',1,'<i>0 dB headroom in dB - higher = more headroom, smaller bars. 'd'/'D' on serial walks in 1 dB steps</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:dBspan',1,'<i>how many dB the bar covers - smaller = more movement (☾)</i>');"));
 #endif
