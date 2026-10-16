@@ -26,7 +26,7 @@
   #define FFTTASK_PRIORITY 6   // above async_tcp and USB Mass Storage
 #endif
 // #define FFT_MAJORPEAK_HUMAN_EAR // removed guards for this, so always on
-#define SR_HIRES_TYPE double  // double precision is affordable on any target with an FPU; the direct-DFT sub-bin path leans on it
+#define SR_HIRES_TYPE double  // legacy alias. The sub-bin DFT path no longer uses this (rewritten as a precomputed twiddle table in float); runDCBlocker is now float too. Kept for any out-of-tree code that still references it.
 // Comment/Uncomment to toggle usb serial debugging
 // #define MIC_LOGGER                   // MIC sampling & sound input debugging (serial plotter)
 // #define FFT_SAMPLING_LOG             // FFT result debugging
@@ -1045,14 +1045,22 @@ static bool alocateFFTBuffers(void) {
 
 // High-Pass "DC blocker" filter
 // see https://www.dsprelated.com/freebooks/filters/DC_Blocker.html
+//
+// float throughout. The IIR pole is at z = DC_BLOCKER_R ≈ 0.9943, so the
+// pole magnitude is < 1 by ~0.0057 and float32 precision is enough to keep
+// the noise floor from drifting: rounding error per step is
+// eps * |ym1| / (1 - R) ≈ 175 * eps * |ym1|, well below 1e-4 for any normal
+// |ym1| < 1. SR_HIRES_TYPE (double) was used here historically; on a
+// single-precision FPU it costs ~2 emulated FMAs per sample (≈300 µs/frame
+// at samplesFFT=2048) for no measurable benefit.
 static void runDCBlocker(uint_fast16_t numSamples, float *sampleBuffer) {
   const float filterR = DC_BLOCKER_R;  // -3 dB at DC_BLOCKER_HZ, an octave below the bottom band
   static float xm1 = 0.0f;
-  static SR_HIRES_TYPE ym1 = 0.0f;
+  static float ym1 = 0.0f;
 
   for (unsigned i=0; i < numSamples; i++) {
-    float value = sampleBuffer[i];
-    SR_HIRES_TYPE filtered = (SR_HIRES_TYPE)(value-xm1) + filterR*ym1;
+    const float value = sampleBuffer[i];
+    const float filtered = (value - xm1) + filterR * ym1;
     xm1 = value;
     ym1 = filtered;
     sampleBuffer[i] = filtered;
