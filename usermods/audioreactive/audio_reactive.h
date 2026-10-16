@@ -3779,6 +3779,20 @@ class AudioReactive : public Usermod {
         // because waiting for audio is not something the task can hurry up.
         infoArr.add(fftBudgetVerdict(filterTime, fftTime + filterTime));
 
+        // GEQ band centres. The display has 16 half-octave bands, NOT
+        // 1/3-octave like a typical RTA, so the centre frequencies are different
+        // from what an external analyser shows at the same bar. The RTA's "40 Hz"
+        // bar covers 35.5-44.7 Hz; AudioReactive band 0 covers 40-56.8 Hz
+        // (centre 47.7 Hz). When comparing against an RTA, look at the actual
+        // centre here, not the bar index.
+        char geqBuf[8];
+        infoArr = user.createNestedArray(F("GEQ band centres (Hz)"));
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+          snprintf(geqBuf, sizeof(geqBuf), "%u", (unsigned)(bandCentre[k] + 0.5f));
+          infoArr.add(geqBuf);
+        }
+        infoArr.add(F("1/2-octave, 40 Hz - 11 kHz"));
+
         // These print in ms directly from the same 10 µs stored units, so they
         // now AGREE with the info page above by construction. They always did -
         // the info page was the side that was wrong - but the agreement is now a
