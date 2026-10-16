@@ -376,6 +376,11 @@ constexpr SRate_t SAMPLE_RATE = 18000;          // 18Khz; Physical sample time -
 // the -C3 build on an undefined name.
 constexpr float I2S_RING_MS = (AR_I2S_DMA_DESCS * BLOCK_SIZE * 1000.0f) / (float)SAMPLE_RATE;
 
+// Nyquist: the upper bound on the strongest-frequency the FFT can report.
+// Used in three FFT_MajorPeak clamps - leaving it as 11025.0f was correct for
+// SAMPLE_RATE=22050 but tied the code to that one rate.
+constexpr float NYQUIST_HZ = (float)SAMPLE_RATE * 0.5f;
+
 // FFT Constants
 // The length used to be pinned at 512, because the sub-bin and binned band paths
 // were reconciled by a constant fitted at 512 rather than derived - see the note
@@ -1395,7 +1400,7 @@ void FFTcode(void * parameter)
         }
         probe(dPost);
 
-        FFT_MajorPeak = constrain(FFT_MajorPeak, 1.0f, 11025.0f);   // restrict value to range expected by effects
+        FFT_MajorPeak = constrain(FFT_MajorPeak, 1.0f, NYQUIST_HZ);   // restrict value to range expected by effects
         FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42 * (FFT_MajorPeak - FFT_MajPeakSmth);   // I like this "swooping peak" look
 
       } else { // skip second run --> clear fft results, keep peaks
@@ -2636,7 +2641,7 @@ class AudioReactive : public Usermod {
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) fftResult[i] = receivedPacket.fftResult[i];
       my_magnitude  = fmaxf(receivedPacket.FFT_Magnitude, 0.0f);
       FFT_Magnitude = my_magnitude;
-      FFT_MajorPeak = constrain(receivedPacket.FFT_MajorPeak, 1.0f, 11025.0f);  // restrict value to range expected by effects
+      FFT_MajorPeak = constrain(receivedPacket.FFT_MajorPeak, 1.0f, NYQUIST_HZ);  // restrict value to range expected by effects
 #ifdef ARDUINO_ARCH_ESP32
       FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42f * (FFT_MajorPeak - FFT_MajPeakSmth); // simulate smooth value
 #endif
@@ -2680,7 +2685,7 @@ class AudioReactive : public Usermod {
       for (int i = 0; i < NUM_GEQ_CHANNELS; i++) fftResult[i] = receivedPacket->fftResult[i];
       my_magnitude  = fmaxf(receivedPacket->FFT_Magnitude, 0.0);
       FFT_Magnitude = my_magnitude;
-      FFT_MajorPeak = constrain(receivedPacket->FFT_MajorPeak, 1.0, 11025.0);  // restrict value to range expected by effects
+      FFT_MajorPeak = constrain(receivedPacket->FFT_MajorPeak, 1.0, NYQUIST_HZ);  // restrict value to range expected by effects
       soundPressure = volumeSmth; // substitute - V1 format does not include this value
       agcSensitivity = 128.0f; // substitute - V1 format does not include this value
     }

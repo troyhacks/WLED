@@ -892,10 +892,8 @@ class ES8311Source : public I2SSource {
   private:
     // Returns the active ADC device — the ES8311 normally, or the ES7210 if one
     // is present on the bus (the ES8311 is then held in reset).
-    audioreactive_I2CDevice *_activeAdc() {
-      if (_es7210 && AR_I2C.probe(_es7210->addr())) return _es7210;
-      return _es8311;
-    }
+    // (dead - removed; not referenced anywhere)
+    // audioreactive_I2CDevice *_activeAdc() { ... }
 
     void _i2cWrite(audioreactive_I2CDevice *dev, uint8_t reg, uint8_t val) {
       if (!dev) return;
