@@ -245,7 +245,7 @@ static inline float manualGainFactor();     // non-AGC gain from sampleGain + in
 static float fftAddAvg(int from, int to);   // average of several FFT result bins
 void FFTcode(void * parameter);             // audio processing task: read samples, run FFT, fill GEQ channels from FFT results
 static void runMicFilter(uint16_t numSamples, float *sampleBuffer);          // pre-filtering of raw samples (band-pass)
-static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool i2sFastpath); // post-processing and post-amp of GEQ channels
+static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool usingOldSamples); // post-processing and post-amp of GEQ channels
 
 
 static TaskHandle_t FFT_Task = nullptr;
@@ -1670,7 +1670,7 @@ static void runMicFilter(uint16_t numSamples, float *sampleBuffer)          // p
   }
 }
 
-static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool i2sFastpath) // post-processing and post-amp of GEQ channels
+static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool usingOldSamples) // post-processing and post-amp of GEQ channels
 {
     for (int i=0; i < numberOfChannels; i++) {
 
@@ -1698,7 +1698,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
       }
 
       float speed = 1.0f;  // filter correction for sampling speed ->  1.0 in normal mode (43hz)
-      if (i2sFastpath) speed = 0.6931471805599453094f * 1.1f;  //  ->  ln(2) from math, *1.1 from my gut feeling ;-) in fast mode (86hz)
+      if (usingOldSamples) speed = 0.6931471805599453094f * 1.1f;  //  ->  ln(2) from math, *1.1 from my gut feeling ;-) in fast mode (86hz)
 
       if(limiterOn == true) {
         // Limiter ON -> smooth results
@@ -1716,7 +1716,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
         }
       } else {
         // Limiter OFF
-        if (i2sFastpath) { 
+        if (usingOldSamples) {
           // fast mode -> average last two results
           float tmp = fftCalc[i];
           fftCalc[i] = 0.7f * tmp + 0.3f * fftAvg[i];

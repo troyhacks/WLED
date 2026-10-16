@@ -1415,15 +1415,14 @@ class CodecDevSource : public AudioSource {
         return;
       }
 
-#ifdef I2S_SAMPLE_DOWNSCALE_TO_16BIT
+      // Codec output is left-justified in 32-bit words (the lower 16 bits
+      // are zero or codec-DSP noise), so dividing by 2^16 is the right
+      // normalisation for both the 16-bit and 32-bit paths. (I2SSource
+      // does the same thing; the #ifdef here was an apparent fix that
+      // produced two identical branches.)
       for (uint16_t i = 0; i < num_samples; i++) {
         buffer[i] = ((float)raw[i] / 65536.0f) * _sampleScale;
       }
-#else
-      for (uint16_t i = 0; i < num_samples; i++) {
-        buffer[i] = ((float)raw[i] / 65536.0f) * _sampleScale;  // see I2SSource
-      }
-#endif
     }
 
   protected:
