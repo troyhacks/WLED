@@ -267,13 +267,6 @@ void handleSerial() {
       if (TROYHACKS_DBSPAN < 12.0f) TROYHACKS_DBSPAN = 12.0f;
       if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
       USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
-    } else if (next == 'p' || next == 'P') {
-      // White-noise calibration (PINKY) used to live here. The pink
-      // profiles are now derived at runtime (PINK_AUTO), so a
-      // hand-measured profile is not needed. Pressing 'p'/'P' now prints
-      // a notice so a session that has the muscle memory still gets a
-      // response.
-      USER_PRINTLN("White Noise Calibration removed - use PINK_AUTO profile");
     } else if (next == 0xB0) {
       updateBaudRate(115200);
     } else if (next == 0xB1) {
