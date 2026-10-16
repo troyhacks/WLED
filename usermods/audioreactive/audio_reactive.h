@@ -241,6 +241,7 @@ static volatile float    micReal_max2 = 0.0f;             // MicIn data max afte
 
 // some prototypes, to ensure consistent interfaces
 static float mapf(float x, float in_min, float in_max, float out_min, float out_max); // map function for float
+static inline float manualGainFactor();     // non-AGC gain from sampleGain + inputLevel
 static float fftAddAvg(int from, int to);   // average of several FFT result bins
 void FFTcode(void * parameter);             // audio processing task: read samples, run FFT, fill GEQ channels from FFT results
 static void runMicFilter(uint16_t numSamples, float *sampleBuffer);          // pre-filtering of raw samples (band-pass)
@@ -665,6 +666,16 @@ static float derivedPink[NUM_GEQ_CHANNELS];
 // float version of map()
 static float mapf(float x, float in_min, float in_max, float out_min, float out_max){
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// Non-AGC manual gain: combines the sampleGain preset (0..40) with the
+// inputLevel slider (0..255). One expression, used in 4 places. Lifting it
+// out is the only thing that stops the four call sites from drifting apart.
+//   sampleGain = 0  : gain = 1/16  = 0.0625
+//   sampleGain = 40 : gain = (inputLevel/128) + 1/16, ranges 0.0625..2.0625
+// Range matches the original inlined expression exactly (bit-for-bit on -O2).
+static inline float manualGainFactor() {
+  return (float)sampleGain / 40.0f * (float)inputLevel / 128.0f + 1.0f / 16.0f;
 }
 
 // compute average of several FFT result bins
@@ -1678,7 +1689,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
         
         // Some attempt to auto-calibrate mics
         if (TROYHACKS_PINKY) {
-          float calced = fftCalc[i] * FFT_DOWNSCALE * (soundAgc ? multAgc : ((float)sampleGain/40.0f * (float)inputLevel/128.0f + 1.0f/16.0f));
+          float calced = fftCalc[i] * FFT_DOWNSCALE * (soundAgc ? multAgc : manualGainFactor());
           fftBinAverage[i] = fftBinAverage[i] * 0.99 + (0.01 * calced);
           // if (calced > fftBinAverage[i]) fftBinAverage[i] = calced;
         }
@@ -1693,7 +1704,7 @@ static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels, bool
 
         if (FFTScalingMode > 0) fftCalc[i] *= FFT_DOWNSCALE;  // adjustment related to FFT windowing function
         // Manual linear adjustment of gain using sampleGain adjustment for different input types.
-        fftCalc[i] *= soundAgc ? multAgc : ((float)sampleGain/40.0f * (float)inputLevel/128.0f + 1.0f/16.0f); //apply gain, with inputLevel adjustment
+        fftCalc[i] *= soundAgc ? multAgc : manualGainFactor(); //apply gain, with inputLevel adjustment
         if(fftCalc[i] < 0) fftCalc[i] = 0;
       }
 
@@ -2372,10 +2383,10 @@ class AudioReactive : public Usermod {
       float tmpSound = multAgc;
       // experimental: this gives you a calculated "real gain"
       // if ((sampleAvg> 1.0) && (sampleReal > 0.05)) tmpSound = (float)sampleRaw / sampleReal;    // calculate gain from sampleReal 
-      // else tmpSound = ((float)sampleGain/40.0f * (float)inputLevel/128.0f) + 1.0f/16.0f;        // silence --> use values from user settings
+      // else tmpSound = manualGainFactor();        // silence --> use values from user settings
 
       if (soundAgc == 0)
-        tmpSound = ((float)sampleGain/40.0f * (float)inputLevel/128.0f) + 1.0f/16.0f;   // AGC off -> use non-AGC gain from presets
+        tmpSound = manualGainFactor();   // AGC off -> use non-AGC gain from presets
       else
         tmpSound /= (float)sampleGain/40.0f + 1.0f/16.0f;                               // AGC ON -> scale value so 1 = middle value
 
@@ -3655,7 +3666,7 @@ class AudioReactive : public Usermod {
         // AGC or manual Gain
         if ((soundAgc == 0) && (disableSoundProcessing == false) && !(audioSyncEnabled == AUDIOSYNC_REC)) {
           infoArr = user.createNestedArray(F("Manual Gain"));
-          float myGain = ((float)sampleGain/40.0f * (float)inputLevel/128.0f) + 1.0f/16.0f;     // non-AGC gain from presets
+          float myGain = manualGainFactor();     // non-AGC gain from presets
           infoArr.add(roundf(myGain*100.0f) / 100.0f);
           infoArr.add("x");
         }
