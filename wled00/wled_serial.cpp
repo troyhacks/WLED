@@ -267,15 +267,6 @@ void handleSerial() {
       if (TROYHACKS_DBSPAN < 12.0f) TROYHACKS_DBSPAN = 12.0f;
       if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
       USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
-    } else if (next == 'h') {
-      // The 35 Hz HPF biquad used to be here. It was redundant with the DC
-      // blocker in the audio task, which already reaches -3 dB at the same
-      // 35 Hz - the pair threw away bands 0-2 twice over for no gain.
-    } else if (next == 'n') {
-      // The +24 dB peaking EQ at 4659 Hz used to be here. It was a display
-      // curve living in the signal path, and it is why the hand-tuned pink
-      // profiles no longer match the input chain. Display shaping belongs in
-      // the display layer - see the FFTScalingMode 3 comment in audio_reactive.h
     } else if (next == 'p' || next == 'P') {
       // White-noise calibration (PINKY) used to live here. The pink
       // profiles are now derived at runtime (PINK_AUTO), so a
