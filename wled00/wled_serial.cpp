@@ -252,11 +252,17 @@ void handleSerial() {
       // This sets how much headroom sits above normal material, so it depends on
       // the input level and gain settings - far quicker to dial in live than to
       // rebuild for each guess.
+      //
+      // dBref is stored as a unit coefficient; the user-facing value is the
+      // dB offset it implies (negative because higher dBref = lower bar):
+      //   bars top out when the band reaches (1 / dBref) on the linear scale.
+      // dB offset = -20*log10(dBref). The magnitude number in older prints
+      // (1/dBref) was correct but not what the user wants to read - print
+      // the dB offset instead, matching the 's'/'S' print style.
       TROYHACKS_DBREF *= (next == 'D') ? powf(10.0f, 1.0f / 20.0f) : powf(10.0f, -1.0f / 20.0f);
       if (TROYHACKS_DBREF < 1e-7f) TROYHACKS_DBREF = 1e-6f;
       if (TROYHACKS_DBREF > 1.0f)    TROYHACKS_DBREF = 1.0f;
-      USER_PRINTF("dB display reference now %.6f  (0 dB at magnitude %.1f)\n",
-                  TROYHACKS_DBREF, 1.0f / TROYHACKS_DBREF);
+      USER_PRINTF("dB display reference now %.1f dB\n", -20.0f * log10f(TROYHACKS_DBREF));
     } else if (next == 's' || next == 'S') {
       // Walk the display span in 1 dB steps. 's' narrows it (more variance,
       // bars move more), 'S' widens it. This is the "variance" control:
