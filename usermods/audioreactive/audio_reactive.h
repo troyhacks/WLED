@@ -566,10 +566,16 @@ constexpr float binWidth = SAMPLE_RATE / (float)samplesFFT; // frequency range o
 //
 // BAND_F_LOW is the lowest band EDGE, not the lowest centre - band 0 spans
 // BAND_F_LOW to BAND_F_LOW * r, so it has a finite lower edge instead of running
-// down to DC. 40 Hz is the bottom of the range: it drops sub-bass that an LED
-// display cannot usefully show, and in exchange band 0 stops under-reading by
-// 10 dB (measured -10.1 dB with a DC-anchored bottom band, -2.3 dB here).
-static constexpr float BAND_F_LOW = 40.0f;                  // lowest band edge, Hz
+// down to DC. 35 Hz lines up the bottom band with a typical 1/3-octave RTA's
+// "40 Hz" bar (35.5-44.7 Hz): most of the overlap is on AudioReactive's side
+// now, so a song with bass centred at 36-38 Hz (typical for bass-heavy mixes
+// with a sub-bass shelf) lands inside band 0 instead of being clipped at the
+// 40 Hz edge. The trade-off: the DC blocker is now further from band 0's
+// centre, so band 0 has slightly more tilt to correct (initDerivedProfile
+// handles this; the Auto profile evaluates at the actual band centre, not
+// at BAND_F_LOW). 40 Hz was the previous value; 35 Hz is what an RTA-aligned
+// layout wants.
+static constexpr float BAND_F_LOW = 35.0f;                  // lowest band edge, Hz
 static float bandCentre[NUM_GEQ_CHANNELS];                  // band centre, Hz
 static float bandEdgeLo[NUM_GEQ_CHANNELS];                  // band lower edge, Hz
 static float bandEdgeHi[NUM_GEQ_CHANNELS];                  // band upper edge, Hz
