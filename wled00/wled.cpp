@@ -48,7 +48,16 @@ static const char *TAG = "WLED";
     // All definitions are `static` so there's no ODR risk.
     #include "../usermods/usermod_v3_midi/midi_usb_host.cpp"
   #endif
-  
+
+  #ifdef USERMOD_DECK_USB
+    // Same arrangement as the MIDI client above: deck_usb_host.cpp is not a
+    // translation unit of its own, it is textually included here and every
+    // definition in it is `static`. deck_usb_init() / deck_usb_poll() are
+    // called from usb_task below, and the input reports it parses are posted
+    // to the app queue for background_loop_nonblocking to drain.
+    #include "../usermods/usermod_v3_deck/deck_usb_host.cpp"
+  #endif
+
   #define MNT_PATH "/usb"     // Base mount path prefix, devices will be mounted as /usb0, /usb1, /usb2...
   #define MAX_MSC_DEVICES  CONFIG_FATFS_VOLUME_COUNT 
 
@@ -381,6 +390,10 @@ static const char *TAG = "WLED";
       midi_usb_init();
       #endif
 
+      #ifdef USERMOD_DECK_USB
+      deck_usb_init();
+      #endif
+
       bool has_clients = true;
       while (true) {
           uint32_t event_flags;
@@ -388,6 +401,10 @@ static const char *TAG = "WLED";
 
           #ifdef USERMOD_MIDI_USB
           midi_usb_poll();
+          #endif
+
+          #ifdef USERMOD_DECK_USB
+          deck_usb_poll();
           #endif
 
           // Release devices once all clients has deregistered
@@ -820,6 +837,29 @@ void background_loop_nonblocking(void* pvParameters) {
           ev.payload.usbDevice.name[0] = '\0';
           wled::EventBus::publish(ev);
         }
+        break;
+      }
+      #endif
+
+      #ifdef USERMOD_DECK_USB
+      case app_message_t::APP_DECK_PACKET: {
+        // Phase 0 (transport bring-up): DeckUsermod does not exist yet, so the
+        // raw input is surfaced here for protocol confirmation. Phase 1 replaces
+        // this with a dispatch into DeckUsermod::handleIncomingDeck().
+        USER_PRINTF("Deck input: index=%u state=0x%02X len=%u\n",
+                    msg.data.deck.index, msg.data.deck.state, msg.data.deck.bytes);
+        break;
+      }
+
+      case app_message_t::APP_DECK_DEVICE_CONNECTED: {
+        USER_PRINTF("Deck Connected: %s (0x%04X:0x%04X)\n",
+                    msg.data.deck_device_info.name,
+                    msg.data.deck_device_info.vid, msg.data.deck_device_info.pid);
+        break;
+      }
+
+      case app_message_t::APP_DECK_DEVICE_DISCONNECTED: {
+        USER_PRINTLN("Deck Disconnected");
         break;
       }
       #endif
