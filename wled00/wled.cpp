@@ -351,22 +351,47 @@ static const char *TAG = "WLED";
         USER_PRINTF("USB: PHY init in HS mode (skip_phy_setup workaround)\n");
       }
 
-      // Bias Mode	  nptx_fifo_lines	  ptx_fifo_lines	rx_fifo_lines
-      // Balanced	    256	              128	            512 (896 - 256 - 128)
-      // IN-Biased	  64	              128	            704 (896 - 64 - 128) <--- does not work, but 896 seenms to be the correct total, confirmed by reading out the register.
-
-      // Balanced values work: (works! and seem to match the IDF built with balanced defaults)
-      // host_config.fifo_settings_custom.nptx_fifo_lines = 256;
-      // host_config.fifo_settings_custom.ptx_fifo_lines = 128;
-      // host_config.fifo_settings_custom.rx_fifo_lines = 512;
-
-      // Testing a mid point: (marginal winner!) - THIS MAY BE FLAKEY? 
-      // (tried a bunch off other ones too, this was the best - they were worse than balanced)
+      // The deck's interrupt OUT endpoint has MPS 1024, and the DWC HCD refuses
+      // to open any pipe whose MPS exceeds what the matching FIFO can hold. The
+      // stock sdkconfig here is built with
+      // CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED, which sizes the FIFOs as
       //
-      // host_config.fifo_settings_custom.nptx_fifo_lines = 128;
-      // host_config.fifo_settings_custom.ptx_fifo_lines = 128;
-      // host_config.fifo_settings_custom.rx_fifo_lines = 640;
+      //   nptx = D/4 = 256, ptx = D/8 = 128, rx = 896 - 256 - 128 = 512
+      //
+      // and an interrupt OUT pipe is bounded by the *periodic TX* FIFO:
+      //
+      //   periodic OUT limit = ptx * 4 = 512 B
+      //
+      // which the deck's 1024 B OUT endpoint cannot fit through:
+      //
+      //   E (3860) USBH: EP MPS (1024) exceeds supported limit (512)
+      //
+      // so override the FIFO split explicitly. Total is 896 lines (D = 1024 for
+      // the HS PHY), and the HCD requires rx + nptx + ptx <= 896.
+      //
+      //   nptx 256 -> 1024 B non-periodic OUT (bulk/control, what MSC uses)
+      //   ptx  320 -> 1280 B periodic OUT, over the deck's 1024 B OUT pipe
+      //   rx   320 -> 1268 B IN, over the deck's 512 B IN pipe
+      //
+      // Measured on hardware: the deck is IN=0x82/512 and OUT=0x03/1024, so it
+      // was the OUT side that was short all along — the IN pipe was never the
+      // problem. Requirements: rx >= 512/4 + 3 = 131 lines for the IN pipe, and
+      // ptx >= 1024/4 = 256 lines for the OUT pipe. 320 clears both with margin.
+      host_config.fifo_settings_custom.nptx_fifo_lines = 256;
+      host_config.fifo_settings_custom.ptx_fifo_lines  = 320;
+      host_config.fifo_settings_custom.rx_fifo_lines   = 320;
 
+      // Previously tried, kept for the record:
+      //
+      // IN-biased (64/128/704) gives huge IN headroom but drops nptx to 256 B,
+      // too small for MSC bulk, and leaves ptx at 128 — so it fails the deck's
+      // OUT pipe exactly like balanced does.
+      //   nptx = 64; ptx = 128; rx = 704;
+      //
+      // 256/256/384 also works: periodic OUT lands exactly on 1024 with no
+      // margin, which is why ptx went to 320 instead.
+      //   in_mps = 1524, periodic OUT = 1024
+      //
       // If you need to know your on-SOC FIFO numbers this is the code - just for checking the register on the P4.
       // (The answer is 896, at least on all the current P4 devices I have.)
       //
