@@ -1549,135 +1549,27 @@ void FFTcode(void * parameter)
         }
       }
 
-      // #4 Noise floor subtraction. Track a per-band noise floor and subtract
-      // it, so a band reads its content above its own noise rather than the
-      // sum of everything underneath it.
-      //
-      // WHY THIS IS NEEDED - the bin-count ramp. fftBandEnergy() sums bin
-      // powers rather than averaging them, which is correct for a TONE (a
-      // tone's energy lands in one bin whatever the band width, so a 1-bin and
-      // a 309-bin band report the same level). But for NOISE, summed power
-      // grows with the bin count, so band k reads sqrt(bins_k) times the
-      // per-bin noise floor. Band widths grow with centre frequency at
-      // constant Q, so that is a monotonic ramp with frequency:
-      //
-      //   band 0    41.9 Hz    5 bins     0.0 dB
-      //   band 8   743.5 Hz   25 bins    +7.0 dB
-      //   band 13 4487.6 Hz  150 bins   +14.8 dB
-      //   band 15 9211.0 Hz  309 bins   +17.9 dB
-      //
-      // That ramp is physics, not a bug - a real analyser shows the same slope
-      // with input muted. What differs is where the floor sits relative to the
-      // display. An RTA's floor is ~70 dB below programme on a 60-80 dB span,
-      // so it is invisible. Here the span is 26 dB, so an 18 dB ramp consumes
-      // 69% of it: band 15's NOISE ALONE reads ~176/255, which is why a 125 Hz
-      // tone pins the top two bars full height and why nothing appears to
-      // happen above 4 kHz - those bars are already at the ceiling and the
-      // result is clamped at 255.
-      //
-      // WHY SUBTRACTION AND NOT A PER-BAND SCALE: a fixed factor cannot fix
-      // this, because noise scales as sqrt(bins_k) while a tone scales as 1.
-      // Any constant that flattens the floor therefore mis-scales tones by the
-      // same amount - dividing by sqrt(309) would put band 15 ~18 dB LOW on
-      // real content. Subtraction separates the two: it removes a per-band
-      // constant offset and leaves everything above the floor untouched, so
-      // tone response is preserved. (That is also why this cannot simply
-      // compensate by bin count the way the two band paths are reconciled by
-      // bandPowerScale - see the note above BAND_F_LOW.)
+      // #4 Noise floor subtraction: track a slow minimum per band, subtract
+      // it so quiet content isn't masked by the mic's noise floor. Helps
+      // when each band has a different residual noise level.
       if (useNoiseFloorSub) {
-        // ROLLING MINIMUM over a fixed window, not an exponential follower.
-        //
-        // An exponential tracker cannot do this job. It has to be slow enough
-        // not to chase programme material, and any time constant slow enough
-        // for that is also long enough that a sustained tone is still inside
-        // it - measured, a 20 dB tone loses 6 dB in 6 s at DECAY=0.997 and
-        // reads -1.8 dB after 17 s. That inverts the experiment: it flattens
-        // the noise floor by also flattening the music. A rolling minimum over
-        // a window W cannot chase a tone for longer than W, and it recovers
-        // fully the moment the window scrolls past it: measured, a 20 dB tone
-        // holds 19.1 dB at dwells of 6 s, 17 s, 57 s and 143 s alike.
-        //
-        // Cost is NB x NUM_GEQ_CHANNELS floats held in PSRAM-resident static
-        // storage (16 x 16 x 4 B = 1 KB) and one pass over NB per band per
-        // frame. The comparison runs only when a block completes, not every
-        // frame, so the steady-state cost is a few compares per band.
-        constexpr int FLOOR_BLOCKS = 16;                       // window = 16 * 64 = 1024 frames
-        constexpr int FLOOR_BLOCK_LEN = 64;                    // ~1.8 s at 35 Hz
-        // Width of the partial-subtraction knee, in dB above the floor. Full
-        // subtraction within this distance, tapering to none by twice it.
-        // Must exceed the ~18 dB bin-count ramp for the correction to reach
-        // the top bands, and must stay well below real programme levels so it
-        // does not touch them. 12 dB sits between the two.
-        constexpr float FLOOR_KNEE_DB = 12.0f;
-        static float floorBlock[FLOOR_BLOCKS][NUM_GEQ_CHANNELS];
-        static float bandFloor[NUM_GEQ_CHANNELS];
-        static int   floorBlockIdx = 0;
-        static int   floorFrameInBlock = 0;
+        static float bandFloor[NUM_GEQ_CHANNELS] = {0.0f};
         static bool  bandFloorInited = false;
+        const float FLOOR_DECAY = 0.9999f;
+        const float FLOOR_SMOOTH = 0.001f;
         if (!bandFloorInited) {
-          for (int b = 0; b < FLOOR_BLOCKS; b++)
-            for (int k = 0; k < NUM_GEQ_CHANNELS; k++) floorBlock[b][k] = INFINITY;
           for (int k = 0; k < NUM_GEQ_CHANNELS; k++) bandFloor[k] = 0.0f;
           bandFloorInited = true;
         }
-        // Fold this frame into the current block.
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
-          if (fftCalc[k] < floorBlock[floorBlockIdx][k]) floorBlock[floorBlockIdx][k] = fftCalc[k];
-        floorFrameInBlock++;
-        if (floorFrameInBlock >= FLOOR_BLOCK_LEN) {
-          floorFrameInBlock = 0;
-          floorBlockIdx = (floorBlockIdx + 1) % FLOOR_BLOCKS;
-          // Block just rolled over: recompute the window minimum. Doing it
-          // here rather than every frame is what keeps this cheap - the answer
-          // can only change when a block completes.
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            float m = INFINITY;
-            for (int b = 0; b < FLOOR_BLOCKS; b++)
-              if (floorBlock[b][k] < m) m = floorBlock[b][k];
-            bandFloor[k] = m;
-          }
-        }
         for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-          float f = bandFloor[k];
-          if (!isfinite(f)) continue;          // window not full yet - nothing to subtract
-          // Partial subtraction, not full.
-          //
-          // Subtracting the whole floor looks right on paper and is wrong in
-          // practice: measured, content sitting 6 dB above the floor came out
-          // reading 0.0 dB - a quiet intro erased completely - because the
-          // rolling minimum never relaxes upward, so the whole window's worth
-          // of noise stays subtracted from everything above it forever.
-          //
-          // What is wanted is "remove the floor, leave the content". The floor
-          // is a constant offset BENEATH the content, so subtracting it in
-          // full is the correct operation and quiet content 6 dB over the
-          // floor should read 6 dB. It does not, because bandFloor is a
-          // minimum over a window that includes those same quiet frames - so
-          // the floor it found IS the quiet content, and the subtraction
-          // removes the content along with the noise.
-          //
-          // The fix is to subtract only the part of the floor that noise can
-          // account for. A band reading f (its floor) is pure noise; a band
-          // reading well above f is signal. Fractional subtraction keyed to
-          // how far above the floor the band currently sits restores quiet
-          // passages while still removing the ramp from them:
-          //
-          //   frac  = 1                       at or below the floor  (pure noise)
-          //   frac -> 0                       far above it           (pure signal)
-          //
-          // with the knee set by FLOOR_KNEE_DB. At 12 dB the subtraction is
-          // full for anything within 12 dB of the floor - which is where the
-          // ~18 dB ramp lives - and tapers to nothing by ~24 dB above it, so
-          // real content is left alone.
-          const float overDb = 20.0f * log10f(fftCalc[k] / f);   // 0 at the floor
-          float frac = 1.0f - overDb / FLOOR_KNEE_DB;
-          if (frac < 0.0f) frac = 0.0f;
-          if (frac > 1.0f) frac = 1.0f;
-          fftCalc[k] = fftCalc[k] * (1.0f - frac) + (fftCalc[k] - f) * frac;
-          // Never let a band go fully dark: a window that has only ever seen
-          // one quiet frame must not be able to blank a band outright.
-          const float minKeep = fftCalc[k] * 0.0631f;
-          if (fftCalc[k] < minKeep) fftCalc[k] = minKeep;
+          // Track the slow minimum, then push the floor up slowly so
+          // transient dips don't get locked in.
+          bandFloor[k] = (fftCalc[k] < bandFloor[k])
+                          ? fftCalc[k]
+                          : (bandFloor[k] * FLOOR_DECAY + fftCalc[k] * FLOOR_SMOOTH);
+          float v = fftCalc[k] - bandFloor[k];
+          if (v < 0.0f) v = 0.0f;
+          fftCalc[k] = v;
         }
       }
 
