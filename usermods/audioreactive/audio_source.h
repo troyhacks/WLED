@@ -970,10 +970,56 @@ class ES8311Source : public I2SSource {
       _i2cWrite(dev, 0x07, 0x00);                  // LRCK divider hi
       _i2cWrite(dev, 0x08, 0xFF);                  // LRCK divider lo
 
-      // configure_mic_() equivalent — enable analog MIC + max PGA gain
-      _i2cWrite(dev, 0x14, 0x1A);                  // REG14 = 0x1A (analog MIC + max PGA)
+      // ---------------------------------------------------------------------------
+// INPUT GAIN: line level vs microphone
+// ---------------------------------------------------------------------------
+// PGAGAIN was set to +30 dB here, which is correct for a microphone and badly
+// wrong for line level. Line input is roughly 30 dB hotter than a mic, so the
+// two together put the ADC into overload - and the symptom did not look like
+// overload, which is why this went unnoticed for so long:
+//
+//   * Bands 14 and 15 read far too hot whenever there was no high-frequency
+//     content, and read correctly with full-range music.
+//   * Nothing upstream of the ADC could change it. Filtering hard on the high
+//     side, inserting an external DSP, or removing the DSP entirely all made no
+//     difference whatsoever, because the excess gain is inside the analog stage
+//     and therefore applied after any line-side filtering.
+//
+// The two effects compound. fftBandEnergy() sums bin powers rather than
+// averaging them, which is right for a tone (a tone's energy lands in one bin
+// whatever the band width) but means noise scales as sqrt(bins). Band widths
+// grow with centre frequency at constant Q, so band 15 sums 309 bins against
+// band 0's 5: a 17.9 dB ramp. Against a 26 dB display span that ramp is 69% of
+// the display, so the top two bars read hot on noise alone while the low bands -
+// only 5-25 bins - looked correct. The overload set the level; the ramp decided
+// where it showed.
+//
+// The AGC had been reporting this the whole time. On the info page, "AGC Gain"
+// read 0.03x, i.e. -30.5 dB: the servo saturating as it tried to pull down a
+// signal the codec had amplified by +30 dB (REG14 = 0x1A -> PGAGAIN = 0b1010).
+// The two figures agree to within 0.5 dB. That number was a correct reading of
+// a 30 dB overload, not a mysterious gain value.
+//
+// 0x10 is the ES8311 factory default for this register (0 dB). Total input-path
+// gain is then +4.5 dB (REG17 ADC_VOLUME), and "AGC Gain" should read near 1.0x
+// instead of 0.03x - which is the check that this diagnosis is right. If that
+// number does not move, the reasoning above is wrong.
+//
+// NOTE: this is hardcoded, but it is a genuinely per-installation setting.
+// The right value depends on what is plugged into the mic/TRRS input - a
+// microphone wants ~+30 dB, a line-level source wants 0 dB, and consumer line
+// outputs vary by more than 10 dB. It wants to become a web-GUI setting
+// alongside the existing i2sBitsPerSample / audio source options, writing the
+// same register with the gain encoded in bits 3:0 (0=0dB, 1=3dB, 2=6dB ...
+// 10=30dB). Until then, changing this line is how you set it.
+//
+// configure_mic_() equivalent — enable analog MIC + PGA gain
+      //
+      // GAIN: 0 dB, not the +30 dB this used to set. See the long note below.
+      // _i2cWrite(dev, 0x14, 0x1A);              // ORIGINAL: PGAGAIN = 0b1010 = +30 dB
+      _i2cWrite(dev, 0x14, 0x10);                  // REG14 = 0x10: LINSEL=1 (Mic1p-Mic1n), PGAGAIN=0b0000 = 0 dB
       _i2cWrite(dev, 0x16, 0x00);                  // REG16 = ADC mixer/scale (0 = no scale)
-      _i2cWrite(dev, 0x17, 0xC8);                  // REG17 = 0xC8 (max gain + ALC + automute)
+      _i2cWrite(dev, 0x17, 0xC8);                  // REG17 = 0xC8 (ADC_VOLUME +4.5 dB)
 
       // Power-up sequence (matches ESPhome)
       _i2cWrite(dev, 0x0D, 0x01);                  // analog power-up
