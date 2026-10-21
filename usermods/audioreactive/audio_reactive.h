@@ -1248,9 +1248,24 @@ void FFTcode(void * parameter)
     // band pass filter - can reduce noise floor by a factor of 50
     // downside: frequencies below 100Hz will be ignored
    if ((useInputFilter > 0) && (useInputFilter < 99)) {
+      // Filter only the NEW samples. In sliding-window mode the first
+      // (samplesFFT - hopSamples) entries were already filtered on a previous
+      // frame and are carried forward verbatim; running the filter over them
+      // again applies it once per frame of retention. With hopSamples=256 that
+      // is ~7 applications, and because the DC blocker is a highpass the cost
+      // lands almost entirely on the bottom of the spectrum: measured, band 0
+      // (41.9 Hz) loses 6.13 dB cumulatively against 0.63 dB at band 3
+      // (123 Hz) - a 5.5 dB tilt that no amount of profile correction can undo.
+      //
+      // This is why band 0 read dead under the Auto-derived profile while the
+      // "Generic Line-In" hand table appeared to fix it: that table's +7.4 dB
+      // at band 0 was masking this, not compensating for a real response.
+      //
+      // The filter's state (xm1/ym1) is static, so filtering only the new tail
+      // keeps it continuous across frames rather than restarting it.
       switch(useInputFilter) {
-        case 1: runMicFilter(samplesFFT, vReal); break;                   // PDM microphone bandpass
-        case 2: runDCBlocker(samplesFFT, vReal); break;                   // generic Low-Cut + DC blocker (~40hz) - default for line-in
+        case 1: runMicFilter(sampleCount, samplesStart); break;           // PDM microphone bandpass
+        case 2: runDCBlocker(sampleCount, samplesStart); break;           // generic Low-Cut + DC blocker (~20hz) - default for line-in
       }
     }
 
