@@ -1,4 +1,13 @@
 # usermod_v3_deck — Soomfon CN003 as a WLED control surface
+> **READ THIS FIRST — session handoff, 2026-10-20.**
+> The usermod is **stuck at Phase 0**: the deck enumerates and outbound commands
+> work, but **no input has ever arrived on the interrupt IN pipe**. Everything
+> below marked UNVERIFIED is still unverified. The last action taken was
+> **removing the IN watchdog** (see "Watchdog removed") — that has NOT been tested
+> on hardware yet. Read **"Session handoff — open questions and next steps"** at
+> the end of this file before touching any code: the previous session's headline
+> conclusion turned out to rest on a contaminated experiment.
+
 
 ESP32-P4 running WLED acts as the USB **host** for a Soomfon CN003 / Mirabox
 N4-family stream deck. No PC, no OpenDeck, no emulation: the P4 enumerates the
@@ -564,3 +573,198 @@ simultaneously and each has a VID/PID filter, so they do not fight over a device
 
 Only one control surface can be plugged into the port at a time, and an SD card
 (MSC) is mutually exclusive with either host client on this IDF state.
+
+## Session handoff — open questions and next steps
+
+Written 2026-10-20, after a review pass over the whole Phase 0 investigation.
+This section records what is known, what is contaminated, and what to do first.
+
+### Watchdog removed
+
+The IN bring-up watchdog has been **deleted**, along with `IN_WATCHDOG_MS`,
+`IN_WATCHDOG_MAX` and `in_watchdog_fires`. `last_in_completed_ms` remains, as it
+is only diagnostic.
+
+This is the single most important change made in the review pass, because the
+watchdog **destroyed the evidence it was meant to gather**:
+
+```cpp
+// REMOVED — do not reintroduce
+if (deck_dev_hdl && deck_in_xfer && deck_in_completed == 0 &&
+    in_flight && !in_resubmit_needed && !in_arm_pending &&
+    in_watchdog_fires < IN_WATCHDOG_MAX &&
+    (uint32_t)(millis() - last_in_completed_ms) >= IN_WATCHDOG_MS) {
+  ...
+  deck_in_arm(true);
+}
+```
+
+The condition requires `in_flight` — a URB is armed — and then calls
+`deck_in_arm(true)`, whose first action with a URB out is
+`usb_host_endpoint_halt()`. **That cancels the in-flight URB.** The callback then
+reports `CANCELED`, which sets `in_error_recovery_needed`, and the next poll
+re-arms with `clear_first = true` — a flush plus clear, which **resets the data
+toggle**.
+
+So for the first 25 seconds the primary IN pipe was halted, flushed and
+re-armed five times. A report arriving at t=6 s was destroyed by the t=10 s
+teardown; one arriving at t=21 s was destroyed at t=25 s. The only reports that
+could ever have been counted are ones that completed inside an undisturbed 5 s
+window — and whether anything arrived during the *first* window was never
+isolated.
+
+Therefore: **"the endpoint never delivers" is not established.** It is an
+inference drawn from a window in which the pipe was being torn down five times by
+our own code.
+
+`deck_in_arm(true)` is now called from nowhere. `clear_first` is only ever true
+after a genuinely failed transfer (`in_error_recovery_needed`), which is the
+correct behaviour: recover from a real failure, never preemptively.
+
+Two related consequences worth carrying forward:
+
+- The README's earlier observation that "the aux pipe is the healthiest thing
+  here, `aux_in_flight=1` holds for the full 36 s" was itself the tell. Nothing
+  ever disturbed EP 0x81, while EP 0x82 was being sabotaged every 5 s. The
+  experiment conflated *which pipe* with *which pipe is being torn down*.
+- `IN arm failed: ESP_ERR_NOT_FINISHED` 5-for-5 is not an independent finding.
+  It is the watchdog's own halt, counted twice.
+
+### Second-order reasoning to be careful about
+
+`aux_in_flight=1` proves the pipe *holds*, not that data *flows*. EP 0x81 is an
+8-byte boot-keyboard endpoint; if the deck maps nothing to it as a keyboard, it
+will stay silent forever. Its silence says nothing about EP 0x82, and its
+steadiness does not rule out periodic-IN being broken on the host.
+
+### Closed by re-reading the reference — no hardware needed
+
+`opendeck-akp05/src/inputs.rs` answers two questions this file previously listed
+as open, for free:
+
+1. **Encoder direction is not a body byte.** `read_encoder_value` maps message
+   IDs to ±1, so the direction is encoded in the message ID itself and the device
+   emits one message per detent:
+   `0xa0/0xa1` = encoder 0, `0x50/0x51` = encoder 1, `0x90/0x91` = encoder 2,
+   `0x70/0x71` = encoder 3.
+2. **Each report carries a full button bitmap, not a delta.**
+   `read_button_states` reads `states[i+1] != 0` across a 16-byte array built as
+   `[0x01] + [0u8; KEY_COUNT + 1]`, with `button_states[pressed_index] = state`.
+   So bytes ~11–27 of the report should be that 16-entry array. Check this the
+   first time a report lands — it is the cheapest confirmation that input is
+   real.
+
+Also note each message is an **absolute state snapshot**; `mirajazz`'s
+`input_to_updates` diffs consecutive snapshots to synthesise Down/Up. Our
+Phase 1 parser should do the same rather than treating each report as an edge.
+
+### The highest-value next step: get the report descriptor
+
+The HID report descriptor was never obtained, and it was available the whole time
+**on the desktop**. The deck demonstrably enumerates on Linux via OpenDeck, and
+Linux reads that descriptor over the *same* control transfer at enumeration. It
+would have settled report size, report-ID prefix and input structure from day
+one. On the machine where OpenDeck works:
+
+```
+lsusb -v -d 1500:3002
+sudo cat /sys/kernel/hidraw/*/report_descriptor
+```
+
+Two days of host-stack archaeology went into questions the kernel already
+answered. Do this before any further host-side work.
+
+Note the implication for the one stall that survived review: Linux must succeed
+at `GET_DESCRIPTOR(Report)` for `async_hid` to enumerate this device at all, so
+if our probe still stalls at the correct `bmRequestType` (0x81) and the correct
+`wIndex`, the probe is probably *still* wrong rather than the device being
+unusual. (`wIndex` is set correctly as of this review — `deck_usb_host.cpp:670`.)
+
+### Next steps, in order
+
+1. **Flash and run with the watchdog gone.** Press keys and turn encoders from
+   t=0. This is a five-minute experiment and it is the first thing that must
+   happen. Either input flows and the blocker is gone, or it does not and the
+   conclusion is finally clean.
+2. **Dump the report descriptor on Linux** and paste it into this file. Closes
+   the remaining unknowns and probably the blocker itself.
+3. **Only then consider Phase 1.** There is no value in building a parser on an
+   unverified byte layout while the pipe is possibly closed.
+
+### Still unverified
+
+- **The 1025-byte padding of every outbound command.** The only evidence is
+  `out_done` climbing steadily, which proves transfers *completed*, not that the
+  device *parsed* them. It is harmless for now but it caps the 16 KB OUT ring at
+  16 commands, and a 15-key image push will need far more than that in Phase 3.
+  If Phase 3 hits a throughput wall, suspect this first — it may be a
+  cargo-culted reading of `mirajazz`'s `write_extended_data`, where the 1025
+  figure is the *image chunk* size rather than a universal command size.
+- **The FIFO override was not re-verified against the Akai APC Mini MK2.**
+  `rx_fifo_lines` was reduced 512 → 320 and `ptx` raised 128 → 320 in
+  `wled00/wled.cpp`. That is a **global** host setting shared with MSC and the
+  MIDI controller, in a setup that took many iterations to stabilise. The change
+  is genuinely necessary — `interface_claim` fails outright with `EP MPS (1024)
+  exceeds supported limit (512)`, because an interrupt OUT pipe is bounded by the
+  periodic TX FIFO and balanced sdkconfig provides only 128 lines = 512 B, so
+  the deck's interface cannot be claimed at all without it. But plug the APC
+  back in once and confirm it still enumerates before trusting this.
+- **`rgb_swap` / `byte_swap` combination for the JPEG path.** Not yet tried.
+- **Touch strip input.** A full-width touch surface above the encoders that this
+  transport has never considered. `akp05` carries a `touch_image_format`
+  (176×112 JPEG), so it is a real image surface, but whether its input arrives
+  on this HID interface or on one we do not claim is still open. Assume there is
+  no touch input; do not build a UI that depends on it.
+- **Whether the encoders have LED rings.** The README asserts they do not, based
+  on the observed absence of any visible response to `SETLB` / `LBLIG`. If that
+  is wrong it materially changes Phase 2, so confirm by eye on the bench.
+
+### What was done well and should not be undone
+
+- **The FIFO analysis.** Real, necessary, and correctly reasoned from the DWC
+  limits. Kept, with the APC re-check noted above.
+- **The `bmRequestType` self-correction.** `0x81` was being sent for
+  device-recipient requests, and the resulting stalls were then read as evidence
+  *about the device* across several runs. Catching that, and labelling the
+  earlier conclusion wrong in this file rather than quietly editing it, is the
+  right instinct and is why the remaining stall is credible enough to chase.
+- **The descriptor walk now logging every interface and endpoint** regardless of
+  class. An earlier version filtered before logging, so an interface of any other
+  class was invisible in the only evidence available. Permanent, not a debug flag
+  — correct call.
+- **The phase discipline.** Nothing above Phase 0 was written early, so there is
+  no half-built usermod class to unpick.
+
+### The methodological lesson
+
+Recorded because it generalises beyond this bug: **twice here, the fault was in
+the probe, not the device.** A malformed `bmRequestType` read as device
+unusualness; oversized `wLength` explained away as a symptom rather than tested.
+The third instance is the watchdog — not a wrong argument this time, but our own
+code corrupting the measurement. Before concluding a device misbehaves, rule
+out that the measurement itself is the thing at fault.
+
+### Build configuration changed in the "more work" commit
+
+Worth knowing so the next person does not misread the size numbers. That commit
+also changed `platformio_override.ini` beyond the deck itself:
+
+- `-flto` **disabled**, and `pio-scripts/enable_lto.py` removed from
+  `extra_scripts`.
+- `WLEDMM_DISPLAY_MODE=P4_1280x720_60HZ` **disabled**.
+- `ARDUINO_USB_MODE=1` and `ARDUINO_USB_CDC_ON_BOOT=1` **disabled**.
+- `REALTIME_OUTPUT_TIMER` **disabled**.
+
+Effect on the reported figures: RAM fell from ~14.7% to ~9.1% (the 1280×720
+framebuffer is gone) while flash rose from ~67.9% to ~69.6% (no LTO). A later
+build with the watchdog removed measured **RAM 9.1% (46716 B), flash 69.6%
+(2327098 B)** — build clean.
+
+The `ARDUINO_USB_*` lines differ per P4 board in use — not a gotcha, just board
+configuration.
+
+LTO is disabled purely to make builds faster, not for any reason to do with the
+deck. Re-enabling it should be safe: `deck_usb_host.cpp` is `#include`d into
+`wled.cpp`, so its `static` symbols live in a single translation unit and
+cross-TU `--gc-sections` stripping — the failure mode recorded in "Files"
+above — cannot apply to them regardless of LTO.

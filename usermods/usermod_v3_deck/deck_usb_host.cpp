@@ -145,14 +145,20 @@ static constexpr uint16_t DECK_CTRL_BUF = 8 + 512;
 // The device drops the session if CONNECT is not seen roughly every 10 s.
 static constexpr uint32_t KEEPALIVE_MS = 9000;
 
-// Bring-up watchdog. Until the first report ever arrives, an armed IN URB that
-// has produced nothing for this long gets the pipe cleared and a fresh URB
-// armed, so the bench log distinguishes "this URB is wedged" from "this endpoint
-// never delivers" — and succeeds outright if a fresh arm does produce data.
-// Disabled permanently once a report lands, and capped, so it cannot spam the
-// console during normal idle operation.
-static constexpr uint32_t IN_WATCHDOG_MS   = 5000;
-static constexpr uint32_t IN_WATCHDOG_MAX  = 5;
+// ---------------------------------------------------------------------------
+// There is deliberately NO bring-up watchdog on the IN pipe.
+//
+// An earlier version halted and flushed the armed IN URB every 5 s until the
+// first report arrived. That is self-defeating: usb_host_endpoint_halt()
+// CANCELS the in-flight URB, the re-arm path then flushes and clears the pipe,
+// and the flush resets the data toggle. The pipe was therefore torn down five
+// times in the first 25 s, so any report that arrived outside an undisturbed
+// 5 s window was destroyed before it could complete. `reports=0` observed
+// during that window is not evidence that the endpoint never delivers, and it
+// contaminated the Phase 0 conclusion. Do not reintroduce a watchdog that
+// touches an armed URB. If the pipe ever needs recovering, do it on a
+// completed transfer, never preemptively.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -261,8 +267,7 @@ static bool deck_aux_arm(void);
 // "is the interrupt pipe wired?". See deck_usb_poll() for the gate.
 static volatile bool     deck_post_init_report_query = false;
 static uint32_t           last_status_ms     = 0;
-static uint32_t           last_in_completed_ms = 0;
-static uint32_t           in_watchdog_fires  = 0;
+static uint32_t           last_in_completed_ms = 0;   // last IN callback, any status
 
 // Forward declarations
 static void deck_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
@@ -888,22 +893,6 @@ static void deck_usb_poll(void) {
   if (aux_resubmit_needed && deck_dev_hdl && deck_aux_xfer) {
     aux_resubmit_needed = false;
     if (!deck_aux_arm()) aux_resubmit_needed = true;
-  }
-
-  // Watchdog, active only until the first report ever arrives.
-  if (deck_dev_hdl && deck_in_xfer && deck_in_completed == 0 &&
-      in_flight && !in_resubmit_needed && !in_arm_pending &&
-      in_watchdog_fires < IN_WATCHDOG_MAX &&
-      (uint32_t)(millis() - last_in_completed_ms) >= IN_WATCHDOG_MS) {
-    last_in_completed_ms = millis();
-    in_watchdog_fires++;
-    DECK_LOG("IN: no report after %u ms — clearing pipe and re-arming (%u/%u)",
-             (unsigned)IN_WATCHDOG_MS, (unsigned)in_watchdog_fires,
-             (unsigned)IN_WATCHDOG_MAX);
-    // deck_in_arm() manages in_flight itself: with a URB still out it halts and
-    // waits for the callback. Forcing in_flight = false here would defeat that
-    // and re-open the race it exists to close.
-    deck_in_arm(true);
   }
 
   // Keepalive: the device times out and drops the session without it.
@@ -1546,7 +1535,6 @@ static void deck_close_device(void) {
   in_error_recovery_needed = false;
   in_halt_pending = false;
   in_flight = false;
-  in_watchdog_fires = 0;
   deck_waiting_for_init = false;
   deck_init_packets_expected = 0;
   deck_in_completed = 0;
