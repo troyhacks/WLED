@@ -745,9 +745,9 @@ void hdmi_blit() {
 
   static uint32_t last_blit_us = 0;
   uint32_t now_us = esp_timer_get_time();
-  if (1 || now_us - last_blit_us >= 33333) {  // ~30fps
-    last_blit_us = now_us;
+  if (now_us - last_blit_us >= 16667) {  // ~60fps, match the panel refresh
     if (xSemaphoreTake(busMutex, 0)) {
+      last_blit_us = now_us;  // stamp on success, so a contended attempt doesn't burn the window
       Bus* bus = busses.getBus(0);
       uint8_t* busPixelData = bus ? bus->getPixelData() : nullptr;
       if (busPixelData) {

@@ -9718,7 +9718,7 @@ uint16_t mode_GEQPPA() {
   if (SEGENV.call == 0) {
     SEGMENT.setUpLeds();
   }
-  
+
   // Get base fill config
   ppa_fill_oper_config_t fill_config = ppaGetFillConfig(ctx);
 
@@ -9869,7 +9869,7 @@ uint16_t mode_GEQPPA() {
     // We don't need to manually clear renderbuffer here because the scale-blit will overwrite it
   } else {
     // If not overlay, we draw directly to effectBuffer, so clear that
-    ppaEffectClear(ctx);
+    // ppaEffectClear(ctx);
   }
 
   // Get audio data
