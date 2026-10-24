@@ -1029,6 +1029,43 @@ class ES8311Source : public I2SSource {
       _i2cWrite(dev, 0x1C, 0x6A);                  // ADC EQ bypass + DC offset cancel
       _i2cWrite(dev, 0x37, 0x08);                  // DAC EQ bypass
       _i2cWrite(dev, 0x00, 0x80);                  // start ADC + DAC
+
+      // TEMPORARY DIAGNOSTIC: read the codec's registers back.
+      //
+      // The ALC registers (0x18-0x1B) are never written here - and ESPhome's
+      // driver does not write them either - so the chip's power-on defaults
+      // are in force. That matters because the ALC is the classic reason a
+      // line-level input behaves like a microphone: it ducks the gain when the
+      // input is hot, and a ducked gain is a gain reduction across the WHOLE
+      // spectrum - but it shows up as a level that drifts down over seconds
+      // and then creeps back up, which is what the sweep capture looked like.
+      //
+      // Read the chip rather than guess at a datasheet: the register maps
+      // disagree between sources on exactly these registers.
+      {
+        USER_PRINTLN("ES8311 regs:");
+        for (uint8_t r = 0x00; r <= 0x1F; r++) {
+          uint8_t v = 0;
+          if (!AR_I2C.readReg(dev, r, &v)) { USER_PRINTF(" %02X=??", r); }
+          else { USER_PRINTF(" %02X=%02X", r, v); }
+          if ((r & 0x07) == 0x07) USER_PRINTLN("");
+        }
+        // The ALC registers (0x18-0x1B) are the ones NO driver writes - not
+        // this one, not ESPhome's - so their values come from the chip's reset
+        // state, and the datasheet is the only source for them. The guide puts
+        // ALC_ENABLE at bit 7 of 0x1A, so decode it rather than leaving hex to
+        // be read by hand. A driver that "keeps track of its setup" cannot
+        // answer this one - it never set it.
+        //
+        // If the chip did not answer, every register above reads "??" and this
+        // line says so too; then the datasheet is all there is, and the ALC has
+        // to be disabled by writing it rather than by reading it.
+        uint8_t alcCtrl = 0;
+        if (AR_I2C.readReg(dev, 0x1A, &alcCtrl))
+          USER_PRINTF("ES8311 ALC: 1A=%02X  ALC_ENABLE(bit7)=%d\n", alcCtrl, (alcCtrl & 0x80) ? 1 : 0);
+        else
+          USER_PRINTLN("ES8311 ALC: 1A unreadable");
+      }
     }
 
     void _es8311_holdReset(audioreactive_I2CDevice *dev) {

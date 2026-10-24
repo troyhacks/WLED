@@ -517,6 +517,24 @@ WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.001978f);
 // gives an RTA its shape. 26 dB is where this landed by ear against a reference RTA;
 // anything further below the loudest band reads as an empty bar, which is the trade.
 WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
+// TEMPORARY DIAGNOSTIC: when set, the AudioReactive FFT task prints the raw
+// spectrum (peak bin + decile summary) to serial every frame. Toggled with 'P'.
+// Used to tell apart a tone that never reached the FFT from one lost in the
+// band maths. Lives here rather than in audio_reactive.h because wled_serial.cpp
+// has no visibility into that header. Remove once the high-band question is
+// settled.
+WLED_GLOBAL bool TROYHACKS_DUMPSPECTRUM _INIT(false);
+// WLED-MM/TroyHacks: A/B switches for the AudioReactive input chain (DC blocker
+// and input LPF) and a dump of that chain's analytic response. Serial 'b' (DC
+// blocker), 'w' (input LPF), 'e' (print the model). Implemented in the
+// AudioReactive usermod; declared here because wled_serial.cpp has no
+// visibility into usermods/audioreactive/audio_reactive.h. Runtime only - not
+// saved, so a reboot restores the shipping configuration.
+#ifdef USERMOD_AUDIOREACTIVE
+void audioReactiveToggleDcBlocker();
+void audioReactiveToggleInputLpf();
+void audioReactivePrintChainModel();
+#endif
 
 // User Interface CONFIG
 #ifndef SERVERNAME

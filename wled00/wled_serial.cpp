@@ -263,6 +263,27 @@ void handleSerial() {
       if (TROYHACKS_DBREF < 1e-7f) TROYHACKS_DBREF = 1e-6f;
       if (TROYHACKS_DBREF > 1.0f)    TROYHACKS_DBREF = 1.0f;
       USER_PRINTF("dB display reference now %.1f dB\n", -20.0f * log10f(TROYHACKS_DBREF));
+    } else if (next == 'P') {
+      // TEMPORARY DIAGNOSTIC: dump the raw FFT spectrum to serial. Used to trace
+      // bands that read nothing despite a tone sitting inside their range - it
+      // shows whether the signal reached the FFT at all or was lost downstream
+      // in the band maths. Remove once that question is answered.
+      TROYHACKS_DUMPSPECTRUM = !TROYHACKS_DUMPSPECTRUM;
+      USER_PRINTF("Spectrum dump %s\n", TROYHACKS_DUMPSPECTRUM ? "ON" : "OFF");
+#ifdef USERMOD_AUDIOREACTIVE
+    } else if (next == 'b') {
+      // TEMPORARY DIAGNOSTIC: A/B the input DC blocker. Switches the stage out
+      // of the chain AND rebuilds the "Auto" profile so the correction matches
+      // what is left - without that rebuild the A/B measures nothing.
+      audioReactiveToggleDcBlocker();
+    } else if (next == 'w') {
+      // TEMPORARY DIAGNOSTIC: A/B the input LPF, same deal.
+      audioReactiveToggleInputLpf();
+    } else if (next == 'e') {
+      // TEMPORARY DIAGNOSTIC: print the input chain's analytic response (dB),
+      // to compare against the raw/peak ratio the LVL dump measures.
+      audioReactivePrintChainModel();
+#endif
     } else if (next == 's' || next == 'S') {
       // Walk the display span in 1 dB steps. 's' narrows it (more variance,
       // bars move more), 'S' widens it. This is the "variance" control:

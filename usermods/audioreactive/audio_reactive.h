@@ -116,6 +116,18 @@ static bool udpSamplePeak = false;   // Boolean flag for peak. Set at the same t
 static unsigned long timeOfPeak = 0; // time of last sample peak detection.
 volatile bool haveNewFFTResult = false; // flag to directly inform UDP sound sender when new FFT results are available (to reduce latency). Flag is reset at next UDP send
 
+// TEMPORARY DIAGNOSTIC: mirrors of the level-tracker's internals. micLev, expAdjF
+// and sampleMax are AudioReactive class members and getSample() runs in the
+// userloop task, so they are not in scope in FFTcode() (which runs in the FFT
+// task). getSample() publishes them here so the FFT task can print them.
+struct LevelTrace {
+  float micLev;      // the running floor tracker
+  float micInNoDC;   // peak - micLev, captured BEFORE the squelch zeroes it
+  float expAdjF;     // smoothed micInNoDC, captured BEFORE the squelch zeroes it
+  float sampleMax;   // slow-decaying peak of sampleReal
+};
+static LevelTrace levelTrace = {0.0f, 0.0f, 0.0f, 0.0f};
+
 // fftResult[] is written byte-by-byte from the FFT task (core 1) and read by
 // the LED effects (core 0). A torn read is possible - a consumer may catch
 // a mix of new and old values, but never 16 equal values from a single
@@ -214,6 +226,33 @@ const float agcSampleSmooth[AGC_NUM_PRESETS]  = {  1/12.f,   1/6.f,  1/16.f}; //
 static AudioSource *audioSource = nullptr;
 static uint8_t useInputFilter = 0;                        // enables low-cut filtering. Applies before FFT.
 
+// Runtime A/B switches for the input chain.
+//
+// The chain is  samples -> DC blocker -> input LPF -> FFT, and the "Auto"
+// profile inverts whatever is in it (initDerivedProfile). So a stage that is
+// switched OUT has to stop being inverted as well - otherwise the correction
+// still compensates for a filter that is no longer there, the A/B measures
+// nothing, and the bars move for a reason that has nothing to do with the
+// filter being tested.
+//
+// Runtime only, not saved: these exist to answer a question while it is being
+// asked, and a reboot is the cheapest way back to the shipping configuration.
+static bool dcBlockerEnabled = true;                      // DC blocker in the chain?
+static bool inputLpfEnabled   = true;                      // input LPF in the chain?
+
+// Is the DC blocker's response part of the chain being inverted?
+static inline bool dcBlockerInChain() {
+  return (useInputFilter > 0) && (useInputFilter < 99) && dcBlockerEnabled;
+}
+
+// Is the input LPF's response part of the chain being inverted?
+// The LPF is only APPLIED inside the useInputFilter block, so with
+// useInputFilter == 0 the profile used to invert a filter that was not in the
+// signal path at all.
+static inline bool inputLpfInChain() {
+  return (useInputFilter > 0) && (useInputFilter < 99) && inputLpfEnabled;
+}
+
 //WLEDMM add experimental settings
 static uint8_t micLevelMethod = 0;                        // 0=old "floating" miclev, 1=new  "freeze" mode, 2=fast freeze mode (mode 2 may not work for you)
 #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -223,6 +262,26 @@ static constexpr uint8_t averageByRMS = true;                       // false: us
 #endif
 static uint8_t freqDist = 2;                              // 0=old 1=rightshift 2=psychoacoustic (log)
 static uint8_t doSlidingFFT = 1;                            // 1 = use sliding window FFT (faster & more accurate)
+
+// Noise gate threshold on volumeSmth.
+//
+// The note that used to sit here - "DISABLING THE GATE (0.0f) WAS TESTED AND
+// RULED OUT - a 5120 Hz tone still read nothing with the gate forced open" -
+// was not a valid test, and it is worth recording why. The gate test is
+// `fabsf(volumeSmth) > NOISE_GATE_THRESHOLD`, so setting the threshold to 0.0f
+// leaves the test as `fabsf(volumeSmth) > 0.0f`, which is FALSE when
+// volumeSmth is exactly 0.0 - and exactly 0.0 is what the squelch produces
+// when it closes. Forcing the threshold to zero could not have opened the
+// gate; it could only have left it shut. The test showed nothing either way.
+//
+// What actually gated a sustained tone off was the noise-floor tracker
+// climbing onto the tone - see the comment on micLev in getSample().
+constexpr float NOISE_GATE_THRESHOLD = 0.25f;
+
+// Raw spectrum dump is TROYHACKS_DUMPSPECTRUM, declared in wled.h so the 'P'
+// handler in wled_serial.cpp can reach it - that file has no visibility into
+// this header, and a static here gave it internal linkage and an undefined
+// reference at link time.
 static uint8_t useAutoLevel = 0;                           // 1 = per-band slow-decay AGC (auto-balance loudest band to fill display). OFF by default; the new band-power path produces a flat-ish spectrum on its own, and the AGC was the most likely cause of the rare "all bars at the same height" flash. Re-enable from the UI if a particular source needs it.
 static float bandAutoGain[NUM_GEQ_CHANNELS] = {0.0f};     // per-band auto-gain (slow-decay AGC state)
 static bool  bandAutoGainInited = false;                   // first-call init flag (seed at 1.0 once)
@@ -675,6 +734,21 @@ static_assert(MAX_PINK == PINK_AUTO, "PINK_AUTO must be the last row of fftResul
 // what the hand-measured tables above are for.
 static float derivedPink[NUM_GEQ_CHANNELS];
 
+// Per-bin equalisation gain: 1/|H_chain(bin)|, evaluated once at init over the
+// real filter response (DC blocker + input LPF) and clamped so a bin the filter
+// has crushed cannot have its noise amplified without bound. One float per FFT
+// bin - 8 KB at samplesFFT=2048, which is the same order as pinkFactors[].
+//
+// Written by initDerivedProfile(), read by fftBandEnergy(). This is the
+// per-bin counterpart of derivedPink[]: where that one applies a single scalar
+// per band (correct when the filter is flat across the band, wrong when its
+// corner falls inside one), this one is exact everywhere the signal exists.
+// It matters only for the wide top bands; below band 12 the two agree closely.
+static float binEqualise[samplesFFT];
+// Below this the input chain has emptied the bin of signal; it is excluded from
+// the band sum rather than gain-limited. -12 dB of the band's own content.
+constexpr float EQ_SIGNAL_FLOOR = 0.25f;
+
 // Create FFT object
 
 #define sqrt(x) sqrtf(x)             // little hack that reduces FFT time by 10-50% on ESP32 (as alternative to FFT_SQRT_APPROXIMATION)
@@ -713,10 +787,39 @@ static float fftAddAvgLin(int from, int to) {
 // amplitude reads the same in a 1-bin band and a 114-bin band. Averaging
 // divides by the bin count and makes every wide band read 1/sqrt(N) low - a
 // pure measurement artifact, worth 7.8x between band 1 and band 14 here.
+//
+// Each bin is equalised by binEqualise[] before squaring. That is the
+// per-bin form of the "Auto" profile's job: undo the input chain's |H| so a
+// flat-in source reads flat-out. It has to be per-bin because band 15 spans
+// 7698-11014 Hz and the input LPF's corner (9922 Hz) sits INSIDE it, so its
+// response across the band runs from -0.64 dB to -82 dB. One scalar per band
+// cannot correct that - measured, a swept tone read +3.15 dB at 7700 Hz and
+// -12.14 dB at 10500 Hz, purely from where it sat within the band. Music
+// averages over all of it and hides the error; a sweep exposes it.
+//
+// The old code avoided this by amputating the top 1.7 kHz (the original WLED
+// hand tables stopped at 84% of Nyquist with a "do not use 216-255,
+// contaminated" comment). That threw away real audio content to dodge a
+// weighting problem, which is not a trade worth making.
+//
+// The gains are not merely clamped - bins the filter has already emptied are
+// DROPPED (gain 0). Inverting |H| near the LPF corner is actively harmful: the
+// top of band 15 sits 20-82 dB down, where there is no signal left to recover,
+// only noise. Amplifying that and summing it added +47 dB of noise to the band
+// and pinned band 15 full with no sound playing - while band 14, whose bins all
+// sit above the corner and so need at most 1.1x, read correctly. A clamp alone
+// is not enough; it only bounds the damage.
+//
+// Dropping those bins is what the original WLED hand tables did by stopping the
+// top band at 84% of Nyquist with a "do not use 216-255, contaminated" comment.
+// The difference is that the threshold here is DERIVED from the actual filter
+// response at init, so it follows SAMPLE_RATE, the band count and the LPF
+// corner automatically instead of being a hardcoded bin index.
 static float fftBandEnergy(int from, int to) {
   double result = 0.0;
   for (int i = from; i <= to; i++) {
-    result += (double)vReal[i] * (double)vReal[i];
+    const double v = (double)vReal[i] * (double)binEqualise[i];
+    result += v * v;
   }
   return sqrtf(result);
 }
@@ -980,11 +1083,15 @@ static float dcBlockerMagAt(float freqHz, float R) {
 // the FFT. Flat input in, flat bars out - which is the whole point of a
 // calibration profile.
 //
-// For bands read off the FFT the correction is averaged over the band's own
-// bins rather than sampled at its centre, because |H| varies across a wide band
-// (band 15 is 114 bins / 4.9 kHz) and a centre sample leaves the top of the
-// spectrum several dB out. Bands measured by direct DFT are narrower than a bin
-// and |H| is effectively constant across them, so the centre value is exact.
+// For bands read off the FFT the correction is applied PER BIN (binEqualise[],
+// built below) rather than as one scalar per band, because |H| varies across a
+// wide band and band 15 spans 7698-11014 Hz while the LPF's corner sits at
+// 9922 Hz - inside it. Averaging |H| over the band, or sampling it at the
+// centre, both leave a swept tone reading up to ~12 dB wrong purely from where
+// it sits; per-bin equalisation is exact wherever signal exists. derivedPink[]
+// is still built and still used - by the direct-DFT bands, which are narrower
+// than a bin and therefore flat across - and it remains the value reported for
+// a band as a whole.
 static void initDerivedProfile() {
   // Layout first: the LPF corner is derived from it.
   if (!bandLayoutReady) initBandLayout();
@@ -993,23 +1100,111 @@ static void initDerivedProfile() {
     float h;
     if (bandSubBin[k]) {
       h = 1.0f;
-      if ((useInputFilter > 0) && (useInputFilter < 99)) h *= dcBlockerMagAt(bandCentre[k], DC_BLOCKER_R);
-      h *= biquadMagAt(coeffs_lpf, bandCentre[k]);
+      if (dcBlockerInChain()) h *= dcBlockerMagAt(bandCentre[k], DC_BLOCKER_R);
+      if (inputLpfInChain())   h *= biquadMagAt(coeffs_lpf, bandCentre[k]);
     } else {
       double sum = 0.0;
       const int n = bandHi[k] - bandLo[k] + 1;
       for (int i = bandLo[k]; i <= bandHi[k]; i++) {
         float hi = 1.0f;
-        if ((useInputFilter > 0) && (useInputFilter < 99)) hi *= dcBlockerMagAt((float)i * binWidth, DC_BLOCKER_R);
-        hi *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
+        if (dcBlockerInChain()) hi *= dcBlockerMagAt((float)i * binWidth, DC_BLOCKER_R);
+        if (inputLpfInChain())   hi *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
         sum += (double)hi * (double)hi;
       }
       h = sqrtf((float)(sum / n));
     }
     // Clamp: bands below the DC blocker's corner sit where 1/H blows up, and
     // amplifying that far would just lift the noise floor instead of correcting.
-    derivedPink[k] = (h > 0.02f) ? (1.0f / h) : 50.0f;
+    // Same -12 dB floor as EQ_SIGNAL_FLOOR below, so a per-band and a per-bin
+    // view of the same response agree at the boundary.
+    derivedPink[k] = (h > EQ_SIGNAL_FLOOR) ? (1.0f / h) : (1.0f / EQ_SIGNAL_FLOOR);
   }
+
+  // Per-bin equalisation, same response and same floor, evaluated per bin rather
+  // than per band. fftBandEnergy() applies these as it sums, which is what makes
+  // the wide top bands read correctly across their whole width instead of
+  // inheriting the average of their own filter's rolloff.
+  for (int i = 0; i < samplesFFT; i++) {
+    float g = 1.0f;
+    if (dcBlockerInChain()) g *= dcBlockerMagAt((float)i * binWidth, DC_BLOCKER_R);
+    if (inputLpfInChain())   g *= biquadMagAt(coeffs_lpf, (float)i * binWidth);
+    // Below EQ_SIGNAL_FLOOR the input chain has removed this bin's content, so
+    // there is nothing to equalise - only noise to amplify. Drop it from the sum
+    // entirely rather than capping its gain, which still added +47 dB of noise
+    // to band 15. EQ_SIGNAL_FLOOR is -12 dB: below that a bin carries less than
+    // a quarter of the band's own content, so excluding it costs no measurable
+    // signal while removing the entire amplified-residue term.
+    if (g >= EQ_SIGNAL_FLOOR) binEqualise[i] = 1.0f / g;
+    else                      binEqualise[i] = 0.0f;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Input-chain A/B and the chain model.
+//
+// Two questions, one instrument.
+//
+// 1. "What is the DC blocker actually doing?" - The analytic answer is
+//    dcBlockerMagAt(): |H| of (1 - z^-1)/(1 - R z^-1) at any frequency. The
+//    empirical answer is the LVL dump's raw/peak ratio: raw is the peak of the
+//    fresh samples BEFORE the filters, peak (maxSample) is the peak of the
+//    SAME region after them, so the ratio is the chain's |H| as the code
+//    actually runs it. Print the model, feed a tone, read the LVL line, and
+//    the two should agree. Where they do not, the code's model of the chain
+//    and the chain itself are different things - which is the bug.
+//
+// 2. "Is the DC blocker (or the LPF) costing us signal?" - Switch the stage
+//    out, rebuild the profile so the correction matches what is left, and
+//    watch the bars. The profile rebuild is the part that is easy to forget:
+//    leaving the inversion in place while the filter is switched out makes
+//    the A/B meaningless.
+//
+// The switches are runtime-only and reset on reboot.
+// ---------------------------------------------------------------------------
+
+// Print the chain's analytic response, in dB, over the frequencies that matter:
+// the DC blocker's corner, the octave sweep used for the response measurement,
+// and the top of the spectrum.
+static void printInputChainModel() {
+  static const float probeHz[] = {20, 22, 43, 75, 161, 323, 635, 1281, 2562,
+                                   3198, 3704, 5000, 7000, 9211, 11025};
+  USER_PRINTF("Input chain: DC blocker %s (%.0f Hz corner), input LPF %s (%.0f Hz, Q %.3f)\n",
+              dcBlockerEnabled ? "ON " : "OFF", (double)DC_BLOCKER_HZ,
+              inputLpfEnabled ? "ON " : "OFF", (double)inputLpfHz, (double)INPUT_FILTER_Q);
+  USER_PRINTF("LPF coeffs: b0=%.6f b1=%.6f b2=%.6f a1=%.6f a2=%.6f\n",
+              (double)coeffs_lpf[0], (double)coeffs_lpf[1], (double)coeffs_lpf[2],
+              (double)coeffs_lpf[3], (double)coeffs_lpf[4]);
+  USER_PRINTF("%6s  %8s  %8s  %8s\n", "Hz", "DCblk dB", "LPF dB", "chain dB");
+  for (float f : probeHz) {
+    const float d = dcBlockerInChain() ? dcBlockerMagAt(f, DC_BLOCKER_R) : 1.0f;
+    const float l = inputLpfInChain()   ? biquadMagAt(coeffs_lpf, f)  : 1.0f;
+    USER_PRINTF("%6.0f  %+8.2f  %+8.2f  %+8.2f\n", (double)f,
+                (double)(20.0f * log10f(d)), (double)(20.0f * log10f(l)),
+                (double)(20.0f * log10f(d * l)));
+  }
+  USER_PRINTF("(measure the same thing with the LVL dump: ratio of peak/raw at the tone)\n");
+}
+
+// Toggle the DC blocker in the input chain and rebuild the profile to match.
+void audioReactiveToggleDcBlocker() {
+  dcBlockerEnabled = !dcBlockerEnabled;
+  initDerivedProfile();  // the correction must match the chain that is left
+  USER_PRINTF("\nInput DC blocker %s\n", dcBlockerEnabled ? "ON" : "OFF");
+  printInputChainModel();
+}
+
+// Toggle the input LPF in the input chain and rebuild the profile to match.
+void audioReactiveToggleInputLpf() {
+  inputLpfEnabled = !inputLpfEnabled;
+  initDerivedProfile();
+  USER_PRINTF("\nInput LPF %s\n", inputLpfEnabled ? "ON" : "OFF");
+  printInputChainModel();
+}
+
+// Print the chain model without changing anything.
+void audioReactivePrintChainModel() {
+  USER_PRINTF("\n");
+  printInputChainModel();
 }
 
 // Psychoacoustic band combining: 16 constant-Q bands, log-spaced from 20 Hz to
@@ -1020,7 +1215,7 @@ static void computeBandsPsychoacoustic(float* fftCalc, float wc) {
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
     fftCalc[k] = bandSubBin[k]
       ? wc * subBinMag[k]                    // narrower than a bin - measured directly
-      : wc * fftBandEnergy(bandLo[k], bandHi[k]);
+      : wc * fftBandEnergy(bandLo[k], bandHi[k]);  // per-bin equalised inside
   }
 }
 
@@ -1193,6 +1388,22 @@ void FFTcode(void * parameter)
       readOffset += hopSamples;
     } while (readOffset < samplesFFT);
 
+    // TEMPORARY DIAGNOSTIC: peak of the fresh samples BEFORE the input filters
+    // run. maxSample (below) is measured after them, so the pair separates
+    // "the signal never arrived at the codec" from "our own filter removed it".
+    // The region and the artefact rejection are identical to maxSample's, so
+    // rawPeak and peak differ by exactly the filters and nothing else.
+    float rawPeak = 0.0f;
+    {
+      const int from = usingOldSamples ? (samplesFFT - hopSamples) : 0;
+      for (int i = from; i < samplesFFT; i++) {
+        if ((vReal[i] <= (INT16_MAX - 1024)) && (vReal[i] >= (INT16_MIN + 1024))) {
+          const float a = fabsf(vReal[i]);
+          if (a > rawPeak) rawPeak = a;
+        }
+      }
+    }
+
     // debug info in case that stack usage changes
     static unsigned int minStackFree = UINT32_MAX;
     unsigned int stackFree = uxTaskGetStackHighWaterMark(NULL);
@@ -1265,7 +1476,30 @@ void FFTcode(void * parameter)
       // keeps it continuous across frames rather than restarting it.
       switch(useInputFilter) {
         case 1: runMicFilter(sampleCount, samplesStart); break;           // PDM microphone bandpass
-        case 2: runDCBlocker(sampleCount, samplesStart); break;           // generic Low-Cut + DC blocker (~20hz) - default for line-in
+        case 2: if (dcBlockerEnabled) runDCBlocker(sampleCount, samplesStart); break;  // generic Low-Cut + DC blocker (~20hz) - default for line-in
+      }
+
+      // Input LPF, on the NEW samples only, and BEFORE the oldSamples capture
+      // below. Both details are load-bearing:
+      //
+      //   - New samples only. The retained head was filtered on a previous frame
+      //     and is carried forward; filtering it again stacks one pass per frame
+      //     of retention (~7-8 at hopSamples=256), and band 15's centre came out
+      //     -24 dB down instead of -3 dB.
+      //   - Before the capture. oldSamples is saved below from vReal, so anything
+      //     filtered after that point is discarded and the unfiltered data is
+      //     what gets carried into the next frame. Filtering here, alongside the
+      //     DC blocker and ahead of the save, is what makes the carried data
+      //     filtered at all.
+      //
+      // vImag is scratch because the biquad has no in-place mode. Its delay line
+      // (w_lpf) is static, so filtering only the tail keeps the filter continuous
+      // across frames.
+      if (inputLpfEnabled) {
+        const int lpfStart = usingOldSamples ? (samplesFFT - hopSamples) : 0;
+        const int lpfCount = usingOldSamples ? hopSamples : samplesFFT;
+        dsps_biquad_f32(vReal + lpfStart, vImag, lpfCount, coeffs_lpf, w_lpf);
+        memcpy(vReal + lpfStart, vImag, sizeof(float) * lpfCount);
       }
     }
 
@@ -1335,6 +1569,29 @@ void FFTcode(void * parameter)
     // release highest sample to volume reactive effects early - not strictly necessary here - could also be done at the end of the function
     // early release allows the filters (getSample() and agcAvg()) to work with fresh values - we will have matching gain and noise gate values when we want to process the FFT results.
     micDataReal = maxSample;
+
+    // TEMPORARY DIAGNOSTIC: level telemetry, printed whether or not the noise
+    // gate is open. The spectrum dump below lives inside the gate-open branch,
+    // so when the gate shuts the entire pipeline goes silent and there is
+    // nothing left to look at - which is exactly the failure being chased.
+    // The printed chain is  raw peak -> micLev floor -> micInNoDC -> expAdjF
+    // -> sampleAvg -> volumeSmth -> gate.
+    // floor/above/exp/sMax come from levelTrace, which getSample() publishes
+    // (the level-tracker internals are class members, out of scope in this task).
+    //
+    // raw = the frame peak BEFORE the input filters, peak = after them. If raw
+    // is large and peak is small, our own filters removed the signal; if both
+    // are small, the codec or the analog path never delivered it.
+    static uint8_t lvlDumpTick = 0;
+    if (TROYHACKS_DUMPSPECTRUM && (++lvlDumpTick >= 16)) {
+      lvlDumpTick = 0;
+      USER_PRINTF("LVL gate=%s vol=%.2f avg=%.2f agc=%.2f mult=%.2f sq=%d | raw=%.1f peak=%.1f floor=%.1f above=%.1f exp=%.1f sMax=%.1f\n",
+                  (fabsf(volumeSmth) > NOISE_GATE_THRESHOLD) ? "OPEN" : "SHUT",
+                  (double)volumeSmth, (double)sampleAvg, (double)sampleAgc, (double)multAgc,
+                  (int)soundSquelch,
+                  (double)rawPeak, (double)micDataReal, (double)levelTrace.micLev, (double)levelTrace.micInNoDC,
+                  (double)levelTrace.expAdjF, (double)levelTrace.sampleMax);
+    }
 #ifdef MIC_LOGGER
     micReal_min = datMin;
     micReal_max = datMax;
@@ -1356,7 +1613,7 @@ void FFTcode(void * parameter)
 
     float wc = 1.0; // FFT window correction factor, relative to Blackman_Harris
 
-    if (fabsf(volumeSmth) > 0.25f) { // noise gate open
+    if (fabsf(volumeSmth) > NOISE_GATE_THRESHOLD) { // noise gate open
       if ((skipSecondFFT == false) || (isFirstRun == true)) {
         // The old "3-5ms on ESP32 / ~30ms on -C3" timings that used to sit here
         // measured a SOFTWARE FFT and no longer describe this call. On ESP32-P4
@@ -1370,11 +1627,9 @@ void FFTcode(void * parameter)
         float last_majorpeak = FFT_MajorPeak;
         float last_magnitude = FFT_Magnitude;
 
-          // LPF always on - the biquad is what protects the top band from
-          // aliasing and is what makes the 'Auto' profile flat. vImag is
-          // used as scratch because the biquad has no in-place mode.
-          dsps_biquad_f32(vReal, vImag, samplesFFT, coeffs_lpf, w_lpf);
-          memcpy(vReal, vImag, sizeof(float) * samplesFFT);
+          // The input LPF runs earlier, with the DC blocker and ahead of the
+          // oldSamples capture - see the comment on that block. It has to be
+          // before the capture or the carried-forward data is unfiltered.
 
           // Bands narrower than one FFT bin cannot be recovered from the
           // spectrum - measure them here, while vReal still holds the filtered
@@ -1415,7 +1670,10 @@ void FFTcode(void * parameter)
           for (int i = 0; i < halfN; i++) {
             if (vReal[i] > FFT_Magnitude) {
               FFT_Magnitude = vReal[i];
-              FFT_MajorPeak = i * (SAMPLE_RATE / samplesFFT);
+              // binWidth, not SAMPLE_RATE / samplesFFT: SRate_t is uint32_t, so
+              // the latter is integer division (22050/2048 = 10) and reported
+              // every peak 7.5% low - binWidth is 10.767 Hz.
+              FFT_MajorPeak = i * binWidth;
             }
           }
 
@@ -1425,7 +1683,7 @@ void FFTcode(void * parameter)
 
         FFT_Magnitude *= wc;  // apply correction factor
 
-        if (FFT_MajorPeak < (SAMPLE_RATE /  samplesFFT)) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                  // too low - use zero
+        if (FFT_MajorPeak < binWidth) {FFT_MajorPeak = 1.0f; FFT_Magnitude = 0;}                                  // too low - use zero
         if (FFT_MajorPeak > (0.42f * SAMPLE_RATE)) {FFT_MajorPeak = last_majorpeak; FFT_Magnitude = last_magnitude;} // too high - keep last peak
 
         // undo scaling - we want unmodified values for FFTResult[] computations
@@ -1450,6 +1708,73 @@ void FFTcode(void * parameter)
 
       haveDoneFFT = true;
 
+      // TEMPORARY DIAGNOSTIC - see the comment on NOISE_GATE_THRESHOLD.
+      //
+      // A tone generator sweep reads correctly to ~3.7 kHz but nothing responds
+      // above it, even though those frequencies fall INSIDE bands 13-15's own
+      // ranges. This dumps the RAW spectrum so the answer can be read off the
+      // bins instead of inferred from the bar display.
+      //
+      // Two causes that had been written off here were not actually ruled out:
+      // the noise gate (forcing its threshold to 0.0f cannot open it - see
+      // NOISE_GATE_THRESHOLD) and the PGA gain (that +30 dB is the
+      // esp_codec_dev path; the legacy path this build uses runs 0 dB). Both
+      // are closed out on other grounds now, but the note was wrong.
+      //
+      // What to look for, while holding a single tone:
+      //   - the tone's bin is large      -> the signal IS in the FFT, and the
+      //                                       loss is downstream in the bands
+      //   - the tone's bin is near zero   -> it never reached the FFT, so the
+      //                                       problem is in getSamples or the
+      //                                       input filters
+      // Printing every bin is unusable, so this prints the peak bin.
+      // 'P' toggles it.
+      // Throttled: at ~90 fps the dump overran 115200 baud, which dropped
+      // characters mid-line and concatenated whole lines together - the
+      // capture was unreadable. Every 16th frame, with the decile column
+      // removed, fits the budget.
+      static uint8_t specDumpTick = 0;
+      if (TROYHACKS_DUMPSPECTRUM) {
+        // Band geometry, once per enable. It never changes, and without it there
+        // is no way to map a spectrum bin back to the band that claims it - which
+        // is the whole question when a tone sits in a band that reads nothing.
+        static bool specGeomPrinted = false;
+        if (!specGeomPrinted && bandLayoutReady) {
+          specGeomPrinted = true;
+          USER_PRINTLN("GEOM k centreHz loBin hiBin");
+          for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
+            USER_PRINTF("GEOM %d %.0f %d %d\n", k, (double)bandCentre[k], bandLo[k], bandHi[k]);
+        }
+      }
+      if (TROYHACKS_DUMPSPECTRUM && (++specDumpTick >= 16)) {
+        specDumpTick = 0;
+        int pk = 1;
+        for (int i = 2; i < (samplesFFT >> 1); i++) if (vReal[i] > vReal[pk]) pk = i;
+        // binWidth is the float constant. Writing SAMPLE_RATE / samplesFFT here
+        // instead is integer division (22050/2048 = 10) and hands an int to a
+        // %f - the frequency columns then print garbage.
+        //
+        // The decile summary was dropped: it cost ~55 bytes a line and the
+        // 115200-baud budget was being overrun, which concatenated whole lines
+        // together and made the capture unreadable. The peak bin plus the two
+        // band rows say the same thing in a third of the space.
+        USER_PRINTF("SPEC pk bin %d = %.0f Hz  mag %.0f  major %.0f Hz  %s\n",
+                    pk, (double)(pk * binWidth), (double)vReal[pk], (double)FFT_MajorPeak,
+                    (fabsf(volumeSmth) > NOISE_GATE_THRESHOLD) ? "OPEN" : "SHUT");
+        // What the bands themselves made of that spectrum. "raw" is the band
+        // value straight out of the band maths, before the profile, gain and
+        // dB mapping; "disp" is the byte that reaches the bar display. Both are
+        // one frame old (this runs before the band maths for this frame), which
+        // is irrelevant at this rate, and they come from the same frame, so
+        // they can be compared against each other directly.
+        USER_PRINT("BAND raw ");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) USER_PRINTF("%.0f ", (double)lastFftCalc[k]);
+        USER_PRINTLN("");
+        USER_PRINT("BAND disp ");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) USER_PRINTF("%d ", fftResult[k]);
+        USER_PRINTLN("");
+      }
+
     } else { // noise gate closed - only clear results as FFT was skipped. MIC samples are still valid when we do this.
       memset(vReal, 0, sizeof(float) * samplesFFT);
       FFT_MajorPeak = 1;
@@ -1464,7 +1789,7 @@ void FFTcode(void * parameter)
 
       // mapping of FFT result bins to frequency channels
       //if (fabsf(sampleAvg) > 0.25f) { // noise gate open
-      if (fabsf(volumeSmth) > 0.25f) { // noise gate open
+      if (fabsf(volumeSmth) > NOISE_GATE_THRESHOLD) { // noise gate open
         //WLEDMM: different distributions
         if (freqDist == 2) {
           // Psychoacoustic logarithmic band combining (1/1 octave per
@@ -2310,7 +2635,27 @@ class AudioReactive : public Usermod {
       static unsigned long startuptime = 0;   // "fast freeze" mode: do not interfere during first 12 seconds (filter startup time) 
 
       if (startuptime == 0) startuptime = millis();   // fast freeze mode - remember filter startup time
-      if ((micLevelMethod < 1) || !isFrozen) {        // following the input level, UNLESS mic Level was frozen
+      // micLev is the input's NOISE FLOOR - and it may only rise while the input
+      // is at floor level.
+      //
+      // micInNoDC (below) is peak - micLev: a level-VARIATION measure, not a
+      // level measure. A floor that climbs onto a sustained tone drives that
+      // variation to zero, and the squelch then reads the zero as silence - so
+      // the tone is gated off and the AGC winds up chasing a level that keeps
+      // falling. Measured on a steady tone: micLev's 24.6 s time constant
+      // against a threshold of 1.0 meant the gate closed after ~155 s, which is
+      // the "a single tone is filtered as noise, after some time has passed"
+      // report.
+      //
+      // So the floor still follows the input DOWN at full speed (the snap-down
+      // below), but it only follows it UP while the previous frame was no more
+      // than a squelch's worth above the floor. A frame already well above the
+      // floor is signal, not noise, and must not pull the floor up.
+      //
+      // expAdjF is the right thing to test: the squelch zeroes it in silence, so
+      // "expAdjF <= soundSquelch" is exactly "the input is at floor level", and
+      // it is already smoothed, so a single loud frame cannot trip it.
+      if (((micLevelMethod < 1) || !isFrozen) && (expAdjF <= soundSquelch)) {
         micLev += (micDataReal-micLev) / 12288.0f;
       }
 
@@ -2328,6 +2673,11 @@ class AudioReactive : public Usermod {
         expAdjF = (weighting * micInNoDC + (1.0f-weighting) * expAdjF);    // fall faster
 
       expAdjF = fabsf(expAdjF);                         // Now (!) take the absolute value
+
+      // TEMPORARY DIAGNOSTIC: capture the values the squelch is about to compare
+      // against, before it has a chance to zero them.
+      const float traceInNoDC = micInNoDC;
+      const float traceExpAdjF = expAdjF;
 
       if ((micLevelMethod == 2) && !haveSilence && (expAdjF >= (1.5f * float(soundSquelch)))) 
         isFrozen = true;    // fast freeze mode: freeze micLevel once the volume rises 50% above squelch
@@ -2395,6 +2745,12 @@ class AudioReactive : public Usermod {
 #endif
       }
       sampleAvg = fabsf(sampleAvg);                            // make sure we have a positive value
+
+      // TEMPORARY DIAGNOSTIC: publish the level-tracker internals for the FFT task.
+      levelTrace.micLev    = micLev;
+      levelTrace.micInNoDC = traceInNoDC;
+      levelTrace.expAdjF   = traceExpAdjF;
+      levelTrace.sampleMax = sampleMax;
     } // getSample()
 
 
