@@ -10555,9 +10555,15 @@ uint16_t mode_PPA_IMAGEPLAYER() {
 } // mode_PPA_IMAGEPLAYER)
 static const char _data_FX_MODE_PPA_IMAGEPLAYER[] PROGMEM = "Image Player ☾🐺@Folder Picker,Fill (0==Bass),FPS Limit,Fade Colour,Transforms,Bass Scaler,Bass Flip,Enable Fill;!,,Peaks;;2f;sx=0,ix=0,c1=30,c2=0,c3=0,o1=0,o2=0,o3=0";
 
+// Must stay in sync with the Pioneer usermod's WaveformPoint (it is a
+// different translation unit, so the linker will not catch a mismatch):
+// the effect reads the waveform array with this struct's stride.
 struct WaveformPoint {
   uint8_t height;  // 0-127 amplitude
   uint8_t color;   // Pioneer color index 0-7
+  uint8_t r;       // High frequency (0-127)
+  uint8_t g;       // Mid frequency (0-127)
+  uint8_t b;       // Low frequency (0-127)
 };
 
 // -------------------------------------------------------- -
@@ -10626,6 +10632,15 @@ void drawSmartSection(LGFX_Sprite& fb, String text, int32_t x, int32_t& cursor_y
     cursor_y += line_h;
   }
 }
+
+// ---------------------------------------------------------
+// 3. Helper: how many lines a string occupies when drawn
+//    with drawSmartSection() (splits at the first '(')
+// ---------------------------------------------------------
+uint32_t proLinkTextLines(const String& text) {
+  if (text.length() == 0) return 0;
+  return (text.indexOf('(') > 0) ? 2 : 1;
+}
 #endif
 
 uint16_t mode_PRO_LINK() {
@@ -10681,6 +10696,9 @@ uint16_t mode_PRO_LINK() {
     return 1;
   }
 
+  // This effect renders straight into the bus buffer - it has to hold the canvas.
+  if ((uint64_t)width * height * 3 > (uint64_t)busPixelSize) return FRAMETIME;
+
   // --- 2. FAST BACKGROUND FILL (PPA) ---
   // Fill the whole screen with background color (or black) using PPA 
   ppa_fill_oper_config_t fill_config = {};
@@ -10705,7 +10723,9 @@ uint16_t mode_PRO_LINK() {
   }
   ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &fill_config));
 
-  if (width < 128 || height < 128) return FRAMETIME; // this isn't for little matrix sizes so just do beat flash.
+  // Below this the DJ layout (artwork + text + waveform) is not worth rendering —
+  // the fill above already happened, so the effect degenerates to a beat flash.
+  if (width < 64 || height < 64) return FRAMETIME;
 
   // --- STATIC CACHE (Persists between frames) ---
   // We use static to avoid allocating these on the stack every 16ms
@@ -10759,9 +10779,49 @@ uint16_t mode_PRO_LINK() {
     has_valid_cache = false; // Invalidate if prolink says no artwork
   }
 
+  // --- 2. LAYOUT (everything scales with the canvas) ---
+  const uint32_t margin  = 5;
+  const uint32_t min_dim = min(width, height);
+  // Album art: a square in the top-right corner, sized to the canvas.
+  const uint32_t art_size = constrain(min_dim / 4, (uint32_t)16, (uint32_t)256);
+  // Text: Font0 is 8px tall - scale it 1x/2x/4x with the canvas.
+  const uint32_t text_scale = constrain(min_dim / 256, (uint32_t)1, (uint32_t)4);
+
+  // Text sprite (persists between frames)
+  static LGFX_Sprite myFramebuffer;
+  static bool sprite_init = false;
+  static bool sprite_valid = false;
+
+  myFramebuffer.setFont(&fonts::Font0);
+  myFramebuffer.setTextSize(text_scale, text_scale);
+  const int32_t line_h = myFramebuffer.fontHeight() + 2;
+
+  // How many text lines will be drawn (title/artist can wrap onto 2 lines each).
+  uint32_t text_lines = 0;
+  if (prolink_metadata_valid) {
+    text_lines += proLinkTextLines(prolink_track_title);
+    text_lines += proLinkTextLines(prolink_track_artist);
+    if (prolink_track_title.length() > 0) text_lines += 2; // phrase + BPM/pitch
+  }
+
+  // Text block: top-left, next to the artwork. Sized to its content, but never
+  // taller than the panel can spare - the waveform needs room too.
+  const uint32_t fb_w = (has_valid_cache && cached_bitmap)
+                          ? (width - art_size - 2 * margin)
+                          : (width - 2 * margin);
+  uint32_t fb_h = (text_lines > 0) ? (text_lines * line_h + margin) : 0;
+  const uint32_t max_text_h = (height * 2) / 3;
+  if (fb_h > max_text_h) fb_h = max_text_h;
+
+  // The waveform takes the rest of the panel, below the text block.
+  const uint32_t wave_top = fb_h + 2 * margin;
+  const uint32_t wave_h   = (height > wave_top) ? (height - wave_top) : 0;
+  // 32-bit: panels can be taller than 255px, an 8-bit value would wrap.
+  const uint32_t max_bar_height = wave_h / 2;
+  const uint32_t zone_top = wave_top + (wave_h - max_bar_height) / 2;
+
   // --- 3. ARTWORK BLIT (PPA) ---
   // Only blit if we have a valid cached bitmap
-  uint8_t art_size = 64;
   if (has_valid_cache && cached_bitmap) {
     ppa_srm_oper_config_t srm_config = {};
     srm_config.in.buffer = cached_bitmap;
@@ -10777,39 +10837,37 @@ uint16_t mode_PRO_LINK() {
     srm_config.out.pic_h = height;
     srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
 
-    // Calculate scaling
-    srm_config.scale_x = (float)art_size / (float)cached_img_w;
-    srm_config.scale_y = (float)art_size / (float)cached_img_h;
+    // Calculate scaling (the PPA fractional scaler bottoms out at 1/16)
+    srm_config.scale_x = max((float)art_size / (float)cached_img_w, 1.0f / 16.0f);
+    srm_config.scale_y = max((float)art_size / (float)cached_img_h, 1.0f / 16.0f);
 
     // Position top right
-    srm_config.out.block_offset_x = width - art_size;
-    srm_config.out.block_offset_y = 5;
+    srm_config.out.block_offset_x = width - art_size - margin;
+    srm_config.out.block_offset_y = margin;
 
     srm_config.mode = PPA_TRANS_MODE_BLOCKING;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
   }
 
   // --- 4. TEXT OVERLAY (LGFX + PPA) ---
-  // Optimized to reuse sprite
-  static LGFX_Sprite myFramebuffer;
-  static bool sprite_init = false;
-  uint32_t fb_w = (has_valid_cache) ? width - art_size - 10 : width - 10;
-  uint32_t fb_h = height / 2;
-  // Only recreate sprite if dimensions change (rare)
-  if (!sprite_init || myFramebuffer.width() != fb_w) {
-    myFramebuffer.setPsram(true);
-    myFramebuffer.setColorDepth(32); // ARGB8888 for blending
-    myFramebuffer.createSprite(fb_w, fb_h);
-    myFramebuffer.setFont(&fonts::Font0);
-    myFramebuffer.setTextColor(TFT_WHITE);
-    sprite_init = true;
+  if (text_lines > 0) {
+    // Only recreate sprite if its dimensions change (rare) - height matters as
+    // much as width, the blend below reads block_h rows out of the buffer.
+    if (!sprite_init || myFramebuffer.width() != (int32_t)fb_w || myFramebuffer.height() != (int32_t)fb_h) {
+      myFramebuffer.setPsram(true);
+      myFramebuffer.setColorDepth(32); // ARGB8888 for blending
+      sprite_valid = myFramebuffer.createSprite(fb_w, fb_h) != nullptr;
+      myFramebuffer.setFont(&fonts::Font0);
+      myFramebuffer.setTextSize(text_scale, text_scale);
+      myFramebuffer.setTextColor(TFT_WHITE);
+      sprite_init = true;
+    }
   }
 
-  if (prolink_metadata_valid) {
+  if (sprite_valid && prolink_metadata_valid) {
     myFramebuffer.fillScreen(TFT_TRANSPARENT);
 
     int32_t cur_y = 0;
-    int32_t line_h = 10;
 
     // 1. Title: Pass 'myFramebuffer' as first arg
     drawSmartSection(myFramebuffer, prolink_track_title, 0, cur_y, fb_w, line_h);
@@ -10841,8 +10899,8 @@ uint16_t mode_PRO_LINK() {
     blend_config.in_bg.pic_h = height;
     blend_config.in_bg.block_w = fb_w;
     blend_config.in_bg.block_h = fb_h;
-    blend_config.in_bg.block_offset_x = 5;
-    blend_config.in_bg.block_offset_y = 5;
+    blend_config.in_bg.block_offset_x = margin;
+    blend_config.in_bg.block_offset_y = margin;
     blend_config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888; // Destination is RGB
 
     blend_config.in_fg.buffer = (uint8_t*)myFramebuffer.getBuffer();
@@ -10856,8 +10914,8 @@ uint16_t mode_PRO_LINK() {
     blend_config.out.buffer_size = busPixelSize;
     blend_config.out.pic_w = width;
     blend_config.out.pic_h = height;
-    blend_config.out.block_offset_x = 5;
-    blend_config.out.block_offset_y = 5;
+    blend_config.out.block_offset_x = margin;
+    blend_config.out.block_offset_y = margin;
     blend_config.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
 
     blend_config.mode = PPA_TRANS_MODE_BLOCKING;
@@ -10872,10 +10930,12 @@ uint16_t mode_PRO_LINK() {
   static double visual_waveform_index = 0.0;
   static double last_valid_target = 0.0;
 
-  uint8_t max_bar_height = (height - 20) / 2;
   int playhead_screen_x = width / 3;
 
-  if (prolink_waveform_valid && prolink_waveform_length > 0) {
+  // The waveform is drawn straight into the bus buffer - make sure it fits.
+  const bool waveform_fits = ((uint64_t)width * height * 3 <= (uint64_t)busPixelSize);
+
+  if (waveform_fits && prolink_waveform_valid && prolink_waveform_length > 0) {
 
     float effectiveBpm = prolink_bpm_public;
     bool is_playing = (effectiveBpm > 0);
@@ -10916,9 +10976,10 @@ uint16_t mode_PRO_LINK() {
     }
 
     // CPU DRAWING LOOP
-    int wave_y_base = (height - 2);
-
-    for (int x = 0; x < width; x++) {
+    // The waveform scrolls: 1 canvas pixel == 1 waveform point, the playhead
+    // stays put and the track slides past it. Whatever is off the edge of the
+    // canvas is simply not drawn.
+    for (int x = 0; x < (int)width; x++) {
       int offset = x - playhead_screen_x;
       int target_draw_index = (int)(visual_waveform_index + offset);
 
@@ -10929,7 +10990,7 @@ uint16_t mode_PRO_LINK() {
         color = 0xFFFFFF;
         bar_h = max_bar_height;
       } else if (target_draw_index >= 0 && target_draw_index < prolink_waveform_length) {
-        bar_h = map(prolink_waveform_data[target_draw_index].height, 0, 127, 0, max_bar_height);
+        bar_h = map(prolink_waveform_data[target_draw_index].height, 0, 127, 0, (long)max_bar_height);
         color = getWaveformRawRGB(target_draw_index);
       } else {
         continue;
@@ -10940,11 +11001,12 @@ uint16_t mode_PRO_LINK() {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        int start_y = wave_y_base - bar_h - ((max_bar_height - bar_h) / 2);
+        // Bars are centred within the waveform zone (below the text block).
+        int start_y = (int)zone_top + ((int)max_bar_height - bar_h);
         int end_y = start_y + bar_h;
 
         if (start_y < 0) start_y = 0;
-        if (end_y > height) end_y = height;
+        if (end_y > (int)height) end_y = height;
 
         for (int y = start_y; y < end_y; y++) {
           uint32_t idx = (y * width + x) * 3;
