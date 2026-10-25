@@ -43,8 +43,134 @@
 // Sample-rate type (the legacy i2s_config_t.sample_rate was "int" until IDF 4.4.x).
 #define SRate_t uint32_t
 
+// Read-back of the ES8311's configuration registers.
+//
+// Why this exists: the codec's clock manager (0x01-0x08) and ALC (0x18) are the
+// two parts of the audio chain that no driver - not this one, not ESPhome's, not
+// Espressif's own - ever verifies against the datasheet. They are also the two
+// that decide, respectively, WHICH FREQUENCY the analysis is looking at and
+// whether the gain is steady. On this build the app's console is UART0, so the
+// serial dump of these registers cannot be read; keeping them here lets the
+// info page show them, which is the difference between "we think it is right"
+// and "we read it off the chip".
+//
+// The register meanings are taken from the Linux ALSA driver
+// (sound/soc/codecs/es8311.c) and Espressif's own es8311 component, which
+// agree on the bit layout:
+//
+//   0x01 bit7   MCLK_SEL (0 = use the MCLK pin)
+//   0x02 bits7:5 DIV_PRE-1 (MCLK pre-divider), bits4:3 MULT_PRE (1/2/4/8x)
+//   0x03 bits7:6 fs_mode, bits4:0 adc_osr
+//   0x04 bits4:0 dac_osr
+//   0x05 bits7:4 adc_div-1, bits3:0 dac_div-1
+//   0x06 bit5   BCLK invert, bits4:0 BCLK divider-1
+//   0x07 bits3:0 LRCK divider high
+//   0x08        LRCK divider low
+//   0x14 bits3:0 PGAGAIN (0 = 0 dB, 10 = +30 dB), bit4 LINSEL
+//   0x18 bit7   ALC enable, bit6 automute enable, bits3:0 ALC winsize
+//   0x19 bits7:4 ALC max level, bits3:0 ALC min level
+struct AR_CodecRegs {
+  bool     valid = false;   // true if the chip answered
+  uint8_t  v[32] = {0};     // register value, 0x00..0x1F
+};
+
+// Single instance shared by the codec setup code and the info page.
+inline AR_CodecRegs& arCodecRegs() {
+  static AR_CodecRegs regs;
+  return regs;
+}
+
 constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change!  I2S_NUM_1 possible but this has
                                                     // strong limitations -> no MCLK routing, no PDM support on some targets
+
+// Read the ESP32-P4's I2S clock back out of the clock registers.
+//
+// The P4's I2S has a fractional divider:
+//     MCLK = SRC / (N + num/den)
+// programmed in peri_clk_ctrl12 (N, x, y) and peri_clk_ctrl13 (z, yn1). The HAL
+// writes those four fields from a (integer, numerator, denominator) triple:
+//
+//     yn1 = (num * 2 > den)
+//     z   = yn1 ? (den - num) : num
+//     x   = den / z - 1
+//     y   = den % z
+//
+// so the triple can be recovered from the registers exactly:
+//
+//     den = (x + 1) * z + y
+//     num = yn1 ? (den - z) : z
+//
+// This is the check that matters at boot. The codec never reports its own
+// clock, and the I2S driver never reports the clock it programmed - so if the
+// IDF's clock tree cannot produce exactly 256 x the requested rate, the
+// divider lands somewhere else, the codec follows it, and the whole spectrum
+// ends up on the wrong frequency axis. Nothing else in the chain would show
+// it: the level, the noise floor and the band values would all look
+// perfectly normal, just at the wrong frequencies.
+//
+// Only the XTAL source is decoded. APLL and an external clock are not fixed
+// frequencies, so their MCLK cannot be computed from registers alone.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #include "soc/hp_sys_clkrst_struct.h"
+  #include <math.h>
+
+  // The P4's crystal. CONFIRMED at boot by esptool ("Crystal frequency: 40MHz")
+  // and by the IDF's own I2S_LL_XTAL_CLK_FREQ.
+  #define AR_P4_XTAL_HZ 40000000u
+
+static bool arReadP4I2SClock(uint32_t &mclkHz, uint32_t &fsHz) {
+  mclkHz = 0;
+  fsHz = 0;
+
+  uint32_t n = 0, x = 0, y = 0, z = 0, yn1 = 0, srcSel = 0;
+  switch (AR_I2S_PORT) {
+    case I2S_NUM_0:
+      n      = HP_SYS_CLKRST.peri_clk_ctrl12.reg_i2s0_rx_div_n;
+      x      = HP_SYS_CLKRST.peri_clk_ctrl12.reg_i2s0_rx_div_x;
+      y      = HP_SYS_CLKRST.peri_clk_ctrl12.reg_i2s0_rx_div_y;
+      z      = HP_SYS_CLKRST.peri_clk_ctrl13.reg_i2s0_rx_div_z;
+      yn1    = HP_SYS_CLKRST.peri_clk_ctrl13.reg_i2s0_rx_div_yn1;
+      srcSel = HP_SYS_CLKRST.peri_clk_ctrl11.reg_i2s0_rx_clk_src_sel;
+      break;
+    #if SOC_I2S_NUM > 1
+    case I2S_NUM_1:
+      n      = HP_SYS_CLKRST.peri_clk_ctrl14.reg_i2s1_rx_div_n;
+      x      = HP_SYS_CLKRST.peri_clk_ctrl15.reg_i2s1_rx_div_x;
+      y      = HP_SYS_CLKRST.peri_clk_ctrl15.reg_i2s1_rx_div_y;
+      z      = HP_SYS_CLKRST.peri_clk_ctrl15.reg_i2s1_rx_div_z;
+      yn1    = HP_SYS_CLKRST.peri_clk_ctrl15.reg_i2s1_rx_div_yn1;
+      srcSel = HP_SYS_CLKRST.peri_clk_ctrl14.reg_i2s1_rx_clk_src_sel;
+      break;
+    #endif
+    #if SOC_I2S_NUM > 2
+    case I2S_NUM_2:
+      n      = HP_SYS_CLKRST.peri_clk_ctrl17.reg_i2s2_rx_div_n;
+      x      = HP_SYS_CLKRST.peri_clk_ctrl17.reg_i2s2_rx_div_x;
+      y      = HP_SYS_CLKRST.peri_clk_ctrl18.reg_i2s2_rx_div_y;
+      z      = HP_SYS_CLKRST.peri_clk_ctrl18.reg_i2s2_rx_div_z;
+      yn1    = HP_SYS_CLKRST.peri_clk_ctrl18.reg_i2s2_rx_div_yn1;
+      srcSel = HP_SYS_CLKRST.peri_clk_ctrl17.reg_i2s2_rx_clk_src_sel;
+      break;
+    #endif
+    default:
+      return false;
+  }
+
+  if (srcSel != 0) return false;        // not the XTAL: not a fixed frequency
+
+  const uint32_t den = (x + 1) * z + y;
+  if (den == 0) return false;
+  const uint32_t num = yn1 ? (den - z) : z;
+
+  const double divisor = (double)n + (double)num / (double)den;
+  if (divisor <= 0.0) return false;
+
+  const double mclk = (double)AR_P4_XTAL_HZ / divisor;
+  mclkHz = (uint32_t)llround(mclk);
+  fsHz   = (uint32_t)llround(mclk / 256.0);
+  return true;
+}
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
 // Number of descriptors in the I2S DMA ring. The ring holds this many blocks of
 // BLOCK_SIZE samples, and that depth is the ONLY hard deadline in the audio path:
@@ -180,7 +306,29 @@ class AudioSource {
      * values preserved for ABI compatibility with persisted configs. */
     typedef enum{Type_unknown=0, Type_I2SAdc=1, Type_I2SDigital=2} AudioSourceType;
     virtual AudioSourceType getType(void) {return(Type_I2SDigital);}               // default is "I2S digital source" - ADC type overrides this method
- 
+
+    /* Codec clock manager, for codecs that have one (the ES8311).
+       The pre-divider is the codec's MCLK divider; the vendor coefficient tables
+       all use 1 for MCLK = 256 x rate. It is settable at runtime so the
+       pre-divider can be A/B'd without reflashing. Sources without a clock
+       manager ignore it and report 0. */
+    virtual void setCodecClockDiv(uint8_t) {}          // default: no clock manager
+    virtual uint8_t getCodecClockDiv(void) {return(0);}
+
+    /* The clock the codec is actually being fed.
+       getMclkHz() is the MCLK the I2S peripheral is generating, in Hz;
+       getClockSampleRateHz() is the sample rate that implies (MCLK / 256).
+       Zero means "this source cannot tell" - most cannot, because the clock is
+       generated inside the I2S peripheral and the driver never reads it back.
+
+       On the ESP32-P4 the fractional divider behind the I2S clock IS readable,
+       so there this is a measurement and not an assumption. It is worth having:
+       a codec never reports its own clock, so a wrong MCLK puts the whole
+       spectrum on the wrong frequency axis while every other reading - level,
+       noise floor, band values - still looks perfectly plausible. */
+    virtual uint32_t getMclkHz(void) {return(0);}
+    virtual uint32_t getClockSampleRateHz(void) {return(0);}
+
   protected:
     /* Post-process audio sample - currently on needed for I2SAdcSource*/
     virtual I2S_datatype postProcessSample(I2S_datatype sample_in) {return(sample_in);}   // default method can be overriden by instances (ADC) that need sample postprocessing
@@ -645,10 +793,15 @@ class I2SSource : public AudioSource {
     }
 
     virtual void getSamples(float *buffer, uint16_t num_samples) {
+      // The destination is defined before anything else happens, so a caller
+      // that does not clear its own buffer gets zeros rather than stale
+      // samples. The FFT task relies on that: it fills the frame completely
+      // from getSamples() and the carry-over memcpy, and does not clear the
+      // frame itself (see FFTcode()).
+      memset(buffer, 0, sizeof(float) * num_samples);
       if (_initialized && _rx_handle) {
         size_t bytes_read = 0;
 
-        memset(buffer, 0, sizeof(float) * num_samples);
         I2S_datatype *newSamples = newSampleBuffer;
         if (num_samples > I2S_SAMPLES_MAX) num_samples = I2S_SAMPLES_MAX;
 
@@ -944,6 +1097,48 @@ class ES8311Source : public I2SSource {
       _i2cWrite(dev, 0x00, 0x41);
     }
 
+    // Write the ES8311 clock manager (0x01-0x08).
+    //
+    // The bit layout below is not guesswork: three independent vendor drivers
+    // agree on it - Espressif's own "espressif/es8311" component, ESPhome's
+    // es8311.cpp and the Linux ALSA sound/soc/codecs/es8311.c driver - and all
+    // three key their coefficient table on (MCLK, rate). For MCLK = 256 x rate
+    // they all produce the same register values:
+    //
+    //   01 = 0x3F  all clocks on, MCLK taken from the MCLK pin
+    //   02 = 0x00  DIV_PRE = 1 (bits 7:5 hold DIV_PRE-1), MULT_PRE = 1x
+    //   03 = 0x10  single speed, ADC OSR 128
+    //   04 = 0x10  DAC OSR 128
+    //   05 = 0x00  ADC/DAC clock divider = 1
+    //   06 = 0x03  BCLK divider 4, no invert
+    //   07 = 0x00  LRCK divider high byte
+    //   08 = 0xFF  LRCK divider low byte  -> 256
+    //
+    // The values are the same for 22050 Hz and 48000 Hz; only the MCLK
+    // frequency differs (5.6448 MHz vs 12.288 MHz), because MCLK = 256 x rate
+    // is what the I2S side of this rig drives.
+    //
+    // divPre is the MCLK pre-divider (1..8). It is a parameter rather than a
+    // constant so it can be A/B'd at runtime - see setCodecClockDiv().
+    void _es8311WriteClock(audioreactive_I2CDevice *dev, uint8_t divPre) {
+      if (!dev) return;
+      if (divPre < 1) divPre = 1;
+      if (divPre > 8) divPre = 8;
+      _i2cWrite(dev, 0x01, 0x3F);                  // all clocks on, MCLK from the MCLK pin
+      uint8_t r02 = 0;
+      if (!AR_I2C.readReg(dev, 0x02, &r02)) r02 = 0;
+      r02 &= 0x07;                                // bits 2:0 are not ours to change
+      r02 |= (uint8_t)((divPre - 1) << 5);        // bits 7:5 = DIV_PRE - 1
+      r02 |= (uint8_t)(0 << 3);                   // bits 4:3 = MULT_PRE (0 = 1x)
+      _i2cWrite(dev, 0x02, r02);
+      _i2cWrite(dev, 0x03, 0x10);                 // single speed, ADC oversampling bits
+      _i2cWrite(dev, 0x04, 0x10);                 // DAC oversampling bits
+      _i2cWrite(dev, 0x05, 0x00);                 // ADC/DAC clock divider = 1
+      _i2cWrite(dev, 0x06, 0x03);                 // BCLK divider 4, no invert
+      _i2cWrite(dev, 0x07, 0x00);                 // LRCK divider high byte
+      _i2cWrite(dev, 0x08, 0xFF);                 // LRCK divider low byte -> 256
+    }
+
     void _es8311InitAdc(audioreactive_I2CDevice *dev) {
       //
       // Values synced to ESPhome's es8311.cpp (the well-tested upstream
@@ -955,14 +1150,10 @@ class ES8311Source : public I2SSource {
       _i2cWrite(dev, 0x00, 0x00);                  // Clear reset
 
       // configure_clock_() equivalent — ESPhome uses a coefficient table
-      // driven by sample rate + MCLK multiple. We hard-code the values
-      // for 22050 Hz / MCLK=256 (matching the legacy path).
-      _i2cWrite(dev, 0x01, 0x3F);                  // Clock Manager: enable all clocks
-      _i2cWrite(dev, 0x02, 0x40);                  // pre_div=0, pre_mult=0
-      _i2cWrite(dev, 0x03, 0x10);                  // ADC OSR=128
-      _i2cWrite(dev, 0x04, 0x00);                  // DAC OSR=128
-      _i2cWrite(dev, 0x05, 0x00);                  // ADC/DAC div=1
-      _i2cWrite(dev, 0x06, 0x03);                  // BCLK divider, no invert
+      // driven by sample rate + MCLK multiple. The table row for MCLK = 256 x
+      // rate is the same at every rate we use, so the only variable is the
+      // MCLK pre-divider, which is a member so it can be changed at runtime.
+      _es8311WriteClock(dev, _codecClkDiv);
 
       // configure_format_() equivalent — set SDP in/out resolution
       _i2cWrite(dev, 0x09, 0x10);                  // SDP IN  = 32-bit (4<<2)
@@ -1021,6 +1212,25 @@ class ES8311Source : public I2SSource {
       _i2cWrite(dev, 0x16, 0x00);                  // REG16 = ADC mixer/scale (0 = no scale)
       _i2cWrite(dev, 0x17, 0xC8);                  // REG17 = 0xC8 (ADC_VOLUME +4.5 dB)
 
+      // ALC and automute: OFF, explicitly.
+      //
+      // REG18 bit7 = ALC_ENABLE, bit6 = AUTOMUTE_ENABLE (Linux driver's
+      // ES8311_ADC4_ALC_EN_SHIFT / ES8311_ADC4_AUTOMUTE_EN_SHIFT; Espressif's
+      // own es8311 component names 0x18 "alc enable and winsize" the same way).
+      //
+      // Nothing here ever wrote these registers - not this driver, not
+      // ESPhome's, not Espressif's - so the chip's power-on defaults were in
+      // force. That is not a safe default to rely on: an active ALC ducks the
+      // gain when the input is hot, and a ducked gain is a gain reduction
+      // across the WHOLE spectrum, which looks exactly like "the level drifts
+      // down over seconds and then creeps back up".
+      //
+      // NOTE: the earlier diagnostic in this file decoded ALC_ENABLE out of
+      // REG1A bit7. That is the AUTOMUTE register, not the ALC enable - the
+      // two are in different registers, and reading the wrong one makes a
+      // disabled ALC look enabled and vice versa. REG18 is the one.
+      _i2cWrite(dev, 0x18, 0x00);                  // REG18 = 0x00: ALC off, automute off
+
       // Power-up sequence (matches ESPhome)
       _i2cWrite(dev, 0x0D, 0x01);                  // analog power-up
       _i2cWrite(dev, 0x0E, 0x02);                  // enable analog PGA + ADC modulator
@@ -1044,27 +1254,42 @@ class ES8311Source : public I2SSource {
       // disagree between sources on exactly these registers.
       {
         USER_PRINTLN("ES8311 regs:");
-        for (uint8_t r = 0x00; r <= 0x1F; r++) {
-          uint8_t v = 0;
-          if (!AR_I2C.readReg(dev, r, &v)) { USER_PRINTF(" %02X=??", r); }
-          else { USER_PRINTF(" %02X=%02X", r, v); }
-          if ((r & 0x07) == 0x07) USER_PRINTLN("");
-        }
+        _es8311ReadRegs(dev);
         // The ALC registers (0x18-0x1B) are the ones NO driver writes - not
-        // this one, not ESPhome's - so their values come from the chip's reset
-        // state, and the datasheet is the only source for them. The guide puts
-        // ALC_ENABLE at bit 7 of 0x1A, so decode it rather than leaving hex to
-        // be read by hand. A driver that "keeps track of its setup" cannot
-        // answer this one - it never set it.
+        // this one, not ESPhome's, not Espressif's - so their values come from
+        // the chip's reset state. They are now written explicitly above (ALC
+        // off), and this reads them back to prove the write landed.
         //
-        // If the chip did not answer, every register above reads "??" and this
-        // line says so too; then the datasheet is all there is, and the ALC has
-        // to be disabled by writing it rather than by reading it.
+        // The ALC enable bit is bit 7 of REG18, NOT bit 7 of REG1A: REG18 is
+        // "alc enable and winsize", REG1A is "automute winsize / noise gate".
+        // The earlier version of this diagnostic read the wrong register, so
+        // its "ALC is off" conclusion was not about the ALC at all.
         uint8_t alcCtrl = 0;
-        if (AR_I2C.readReg(dev, 0x1A, &alcCtrl))
-          USER_PRINTF("ES8311 ALC: 1A=%02X  ALC_ENABLE(bit7)=%d\n", alcCtrl, (alcCtrl & 0x80) ? 1 : 0);
-        else
-          USER_PRINTLN("ES8311 ALC: 1A unreadable");
+        // NOTE: USER_PRINTF expands to a braced block, so the semicolon after
+        // the call is a stray null statement - which is a syntax error between
+        // an if and its else. The braces below are load-bearing.
+        if (AR_I2C.readReg(dev, 0x18, &alcCtrl)) {
+          USER_PRINTF("ES8311 ALC: 18=%02X  ALC_ENABLE(bit7)=%d  AUTOMUTE(bit6)=%d\n",
+                      alcCtrl, (alcCtrl & 0x80) ? 1 : 0, (alcCtrl & 0x40) ? 1 : 0);
+        } else {
+          USER_PRINTLN("ES8311 ALC: 18 unreadable");
+        }
+      }
+    }
+
+    // Read the codec's configuration registers back into arCodecRegs(), so the
+    // info page shows what the chip actually holds rather than what this code
+    // believes it wrote. Called at init and again whenever the clock manager
+    // is rewritten at runtime.
+    void _es8311ReadRegs(audioreactive_I2CDevice *dev) {
+      if (!dev) return;
+      AR_CodecRegs& regs = arCodecRegs();
+      regs.valid = true;
+      for (uint8_t r = 0x00; r <= 0x1F; r++) {
+        uint8_t v = 0;
+        if (!AR_I2C.readReg(dev, r, &v)) { USER_PRINTF(" %02X=??", r); regs.v[r] = 0; regs.valid = false; }
+        else { USER_PRINTF(" %02X=%02X", r, v); regs.v[r] = v; }
+        if ((r & 0x07) == 0x07) USER_PRINTLN("");
       }
     }
 
@@ -1078,6 +1303,11 @@ class ES8311Source : public I2SSource {
 
     audioreactive_I2CDevice *_es8311 = nullptr;
     audioreactive_I2CDevice *_es7210 = nullptr;
+
+    // The codec's MCLK pre-divider (1..8). The vendor coefficient tables all
+    // use 1 for MCLK = 256 x rate. Kept as a member so it can be changed at
+    // runtime (POST /json/state {"codecDiv": n}) and A/B'd without a reflash.
+    uint8_t _codecClkDiv = 1;
 
 public:
   ES8311Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster = true) :
@@ -1120,6 +1350,40 @@ public:
     I2SSource::deinitialize();
     _es8311 = nullptr;
     _es7210 = nullptr;
+  }
+
+  // Change the codec's MCLK pre-divider live. This rewrites the clock manager
+  // registers (0x01-0x08) without touching anything else, so the effect on
+  // the analysis can be observed immediately.
+  void setCodecClockDiv(uint8_t div) override {
+    if (div < 1) div = 1;
+    if (div > 8) div = 8;
+    _codecClkDiv = div;
+    if (_es8311) {
+      _es8311WriteClock(_es8311, div);
+      _es8311ReadRegs(_es8311);   // so the info page shows the new values
+    }
+  }
+
+  uint8_t getCodecClockDiv(void) override { return _codecClkDiv; }
+
+  // The MCLK the ESP is actually generating, read out of the I2S clock
+  // registers. On the ESP32-P4 this is a measurement; elsewhere it is 0
+  // ("cannot tell"), because the driver does not expose the clock it set.
+  uint32_t getMclkHz(void) override {
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+      uint32_t mclk = 0, fs = 0;
+      if (arReadP4I2SClock(mclk, fs)) return mclk;
+    #endif
+    return 0;
+  }
+
+  uint32_t getClockSampleRateHz(void) override {
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+      uint32_t mclk = 0, fs = 0;
+      if (arReadP4I2SClock(mclk, fs)) return fs;
+    #endif
+    return 0;
   }
 
 private:
@@ -1473,9 +1737,11 @@ class CodecDevSource : public AudioSource {
     void deinitialize() override { _deinitialize(); }
 
     void getSamples(float *buffer, uint16_t num_samples) override {
+      // The destination is defined before anything else happens - see the
+      // comment on the other getSamples().
+      memset(buffer, 0, sizeof(float) * num_samples);
       if (!_initialized || !_rx_handle) return;
 
-      memset(buffer, 0, sizeof(float) * num_samples);
       if (num_samples > I2S_SAMPLES_MAX) num_samples = I2S_SAMPLES_MAX;
 
       // Read directly via i2s_channel_read (same as the legacy I2SSource
@@ -1739,25 +2005,51 @@ class ES8311IDFSource : public CodecDevSource {
       // The previous values were hand-tuned and may have had suboptimal
       // bits set. See:
       // https://github.com/esphome/esphome/blob/.../esphome/components/es8311/es8311.cpp
-      uint8_t v00 = 0x00, v01 = 0x01, v02 = 0x02, v10 = 0x10,
-              v1A = 0x1A, v3F = 0x3F, v6A = 0x6A, v80 = 0x80,
-              vC8 = 0xC8;
+      uint8_t v00 = 0x00, v01 = 0x01, v02 = 0x02, v03 = 0x03, v10 = 0x10,
+              v14 = 0x10, v3F = 0x3F, v6A = 0x6A, v80 = 0x80,
+              vC8 = 0xC8, vFF = 0xFF;
       // Reset
       _ctrlIf->write_reg(_ctrlIf, 0x00, 1, &v00, 1);
-      // configure_clock_() — values for 22050 Hz / MCLK=256
+      // configure_clock_() — the vendor row for MCLK = 256 x rate. Espressif's
+      // own espressif/es8311 component, ESPhome's es8311.cpp and the Linux ALSA
+      // driver all produce these same values for every rate we use (the row is
+      // rate-independent; only the MCLK frequency changes):
+      //   01 = 0x3F  all clocks on, MCLK from the MCLK pin
+      //   02 = 0x00  DIV_PRE = 1, MULT_PRE = 1x
+      //   03 = 0x10  single speed, ADC OSR 128
+      //   04 = 0x10  DAC OSR 128
+      //   05 = 0x00  ADC/DAC clock divider = 1
+      //   06 = 0x03  BCLK divider 4, no invert
+      //   07 = 0x00 / 08 = 0xFF  LRCK divider 256
+      // This path already wrote 02 = 0x00, but 04 and 06 were 0x00 where the
+      // vendors write 0x10 and 0x03, and the LRCK divider was never written
+      // at all. Now both codec paths in this file agree.
       _ctrlIf->write_reg(_ctrlIf, 0x01, 1, &v3F, 1);    // enable all clocks
-      _ctrlIf->write_reg(_ctrlIf, 0x02, 1, &v00, 1);    // pre_div=0, pre_mult=0
+      _ctrlIf->write_reg(_ctrlIf, 0x02, 1, &v00, 1);    // DIV_PRE=1, MULT_PRE=1x
       _ctrlIf->write_reg(_ctrlIf, 0x03, 1, &v10, 1);    // ADC OSR=128
-      _ctrlIf->write_reg(_ctrlIf, 0x04, 1, &v00, 1);    // DAC OSR=128
+      _ctrlIf->write_reg(_ctrlIf, 0x04, 1, &v10, 1);    // DAC OSR=128
       _ctrlIf->write_reg(_ctrlIf, 0x05, 1, &v00, 1);    // div=1
-      _ctrlIf->write_reg(_ctrlIf, 0x06, 1, &v00, 1);    // BCLK divider
+      _ctrlIf->write_reg(_ctrlIf, 0x06, 1, &v03, 1);    // BCLK divider 4, no invert
+      _ctrlIf->write_reg(_ctrlIf, 0x07, 1, &v00, 1);    // LRCK divider high
+      _ctrlIf->write_reg(_ctrlIf, 0x08, 1, &vFF, 1);    // LRCK divider low -> 256
       // configure_format_() — I²S 32-bit
       _ctrlIf->write_reg(_ctrlIf, 0x09, 1, &v10, 1);    // SDP IN
       _ctrlIf->write_reg(_ctrlIf, 0x0A, 1, &v10, 1);    // SDP OUT
-      // configure_mic_() — analog MIC + max PGA
-      _ctrlIf->write_reg(_ctrlIf, 0x14, 1, &v1A, 1);
+      // configure_mic_() — analog MIC + PGA gain
+      //
+      // PGA gain 0 dB, not the +30 dB that both ESPhome's and Espressif's
+      // drivers use. They use it because they drive a MICROPHONE; this rig
+      // takes a line-level input, and +30 dB of extra gain puts the ADC into
+      // overload - the symptom of which (bands 14/15 hot with no HF content,
+      // AGC gain pinned at 0.03x) looks nothing like overload and cost a long
+      // time to diagnose. The non-IDF path in this same file already used
+      // 0 dB; now both paths agree.
+      _ctrlIf->write_reg(_ctrlIf, 0x14, 1, &v14, 1);
       _ctrlIf->write_reg(_ctrlIf, 0x16, 1, &v00, 1);
       _ctrlIf->write_reg(_ctrlIf, 0x17, 1, &vC8, 1);
+      // ALC and automute off (REG18 bit7 / bit6) - see the note in
+      // _es8311InitAdc(); the chip's power-on default is not a safe default.
+      _ctrlIf->write_reg(_ctrlIf, 0x18, 1, &v00, 1);
       // Power-up
       _ctrlIf->write_reg(_ctrlIf, 0x0D, 1, &v01, 1);    // analog
       _ctrlIf->write_reg(_ctrlIf, 0x0E, 1, &v02, 1);    // PGA + ADC mod

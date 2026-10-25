@@ -247,42 +247,30 @@ void handleSerial() {
       }
       USER_PRINTLN();
     } else if (next == 'd' || next == 'D') {
-      // Walk the 0 dB reference for the dB display mapping in 1 dB steps.
-      // 'd' lowers it (bars shrink, more headroom), 'D' raises it (bars grow).
-      // This sets how much headroom sits above normal material, so it depends on
-      // the input level and gain settings - far quicker to dial in live than to
-      // rebuild for each guess.
+      // Walk the dB display trim in 1 dB steps. 'd' lowers it (bars shrink),
+      // 'D' raises it (bars grow).
       //
-      // dBref is stored as a unit coefficient; the user-facing value is the
-      // dB offset it implies (negative because higher dBref = lower bar):
-      //   bars top out when the band reaches (1 / dBref) on the linear scale.
-      // dB offset = -20*log10(dBref). The magnitude number in older prints
-      // (1/dBref) was correct but not what the user wants to read - print
-      // the dB offset instead, matching the 's'/'S' print style.
-      TROYHACKS_DBREF *= (next == 'D') ? powf(10.0f, 1.0f / 20.0f) : powf(10.0f, -1.0f / 20.0f);
-      if (TROYHACKS_DBREF < 1e-7f) TROYHACKS_DBREF = 1e-6f;
-      if (TROYHACKS_DBREF > 1.0f)    TROYHACKS_DBREF = 1.0f;
-      USER_PRINTF("dB display reference now %.1f dB\n", -20.0f * log10f(TROYHACKS_DBREF));
-    } else if (next == 'P') {
-      // TEMPORARY DIAGNOSTIC: dump the raw FFT spectrum to serial. Used to trace
-      // bands that read nothing despite a tone sitting inside their range - it
-      // shows whether the signal reached the FFT at all or was lost downstream
-      // in the band maths. Remove once that question is answered.
-      TROYHACKS_DUMPSPECTRUM = !TROYHACKS_DUMPSPECTRUM;
-      USER_PRINTF("Spectrum dump %s\n", TROYHACKS_DUMPSPECTRUM ? "ON" : "OFF");
+      // The trim is applied to the band levels AFTER the display AGC has
+      // normalised them, so it is a pure display adjustment: it does not
+      // change what was measured, only where the bars sit. It used to be a
+      // linear gain coefficient, which could only be turned one way before it
+      // clipped and read as a negative number.
+      TROYHACKS_DBREF += (next == 'D') ? 1.0f : -1.0f;
+      if (TROYHACKS_DBREF < -24.0f) TROYHACKS_DBREF = -24.0f;
+      if (TROYHACKS_DBREF >  24.0f) TROYHACKS_DBREF =  24.0f;
+      USER_PRINTF("dB display trim now %+.1f dB\n", TROYHACKS_DBREF);
 #ifdef USERMOD_AUDIOREACTIVE
-    } else if (next == 'b') {
-      // TEMPORARY DIAGNOSTIC: A/B the input DC blocker. Switches the stage out
-      // of the chain AND rebuilds the "Auto" profile so the correction matches
-      // what is left - without that rebuild the A/B measures nothing.
-      audioReactiveToggleDcBlocker();
-    } else if (next == 'w') {
-      // TEMPORARY DIAGNOSTIC: A/B the input LPF, same deal.
-      audioReactiveToggleInputLpf();
-    } else if (next == 'e') {
-      // TEMPORARY DIAGNOSTIC: print the input chain's analytic response (dB),
-      // to compare against the raw/peak ratio the LVL dump measures.
-      audioReactivePrintChainModel();
+    } else if (next == 't') {
+      // Run the input chain's self-test: it measures the chain as implemented
+      // (impulse response and sine response) and compares both with the
+      // analytic model. Uses synthetic signals only - the live path is not
+      // disturbed.
+      audioReactiveSelfTest();
+    } else if (next == 'g') {
+      // Plot the 31-band RTA view (1/3-octave ISO 266, integrated power).
+      // This is the scale a hardware analyser uses, so the two can be
+      // compared bar for bar. Pre-AGC, deliberately.
+      audioReactiveRtaPlot();
 #endif
     } else if (next == 's' || next == 'S') {
       // Walk the display span in 1 dB steps. 's' narrows it (more variance,

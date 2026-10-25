@@ -504,11 +504,17 @@ WLED_GLOBAL uint16_t transitionDelay _INIT(750);    // default crossfade duratio
 
 WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
-// WLED-MM/TroyHacks: 0 dB reference for the dB display mapping (FFTScalingMode 3).
-// Live-adjustable over serial with 'd'; saved and restored by the AudioReactive
-// usermod (Frequency > dB reference). It sets where the top of the bar sits, so it
-// depends on the input level and gain settings and cannot be a fixed constant.
-WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.001978f);
+// WLED-MM/TroyHacks: the dB display trim for the AudioReactive bars.
+// Live-adjustable over serial with 'd' (down, bars shrink) and 'D' (up, bars
+// grow); saved and restored by the AudioReactive usermod (Frequency > dB trim).
+//
+// It is a TRIM, in dB, applied to the band levels after the display AGC has
+// normalised them: 0 means "as the AGC left it". It used to be a linear gain
+// coefficient (1/0 dB magnitude), which could only ever be turned in one
+// useful direction and read as a negative number; a dB offset is the same
+// adjustment in the units the display is actually built in, and both ends of
+// its travel are usable.
+WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.0f);
 // WLED-MM/TroyHacks: how many dB the bar covers below that reference ('s' to adjust,
 // also on the AudioReactive settings page). This is the "variance" control. Constant-Q
 // band power reports f^(1-a) for a spectrum of slope 1/f^a, so typical music only
@@ -517,23 +523,20 @@ WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.001978f);
 // gives an RTA its shape. 26 dB is where this landed by ear against a reference RTA;
 // anything further below the loudest band reads as an empty bar, which is the trade.
 WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
-// TEMPORARY DIAGNOSTIC: when set, the AudioReactive FFT task prints the raw
-// spectrum (peak bin + decile summary) to serial every frame. Toggled with 'P'.
-// Used to tell apart a tone that never reached the FFT from one lost in the
-// band maths. Lives here rather than in audio_reactive.h because wled_serial.cpp
-// has no visibility into that header. Remove once the high-band question is
-// settled.
-WLED_GLOBAL bool TROYHACKS_DUMPSPECTRUM _INIT(false);
-// WLED-MM/TroyHacks: A/B switches for the AudioReactive input chain (DC blocker
-// and input LPF) and a dump of that chain's analytic response. Serial 'b' (DC
-// blocker), 'w' (input LPF), 'e' (print the model). Implemented in the
-// AudioReactive usermod; declared here because wled_serial.cpp has no
-// visibility into usermods/audioreactive/audio_reactive.h. Runtime only - not
-// saved, so a reboot restores the shipping configuration.
+// WLED-MM/TroyHacks: the AudioReactive usermod's serial entry points.
+// Implemented in the AudioReactive usermod; declared here because
+// wled_serial.cpp has no visibility into usermods/audioreactive/.
+//
+//   't' - run the input chain's self-test (synthetic signals only)
+//   'g' - plot the 31-band RTA view
+//
+// The chain A/B switches that used to live here ('b' DC blocker, 'w' input
+// LPF, 'e' print the chain model) are gone: the chain is fixed and
+// calibrated, and a runtime switch would leave the calibration describing a
+// filter that is no longer in the signal path.
 #ifdef USERMOD_AUDIOREACTIVE
-void audioReactiveToggleDcBlocker();
-void audioReactiveToggleInputLpf();
-void audioReactivePrintChainModel();
+void audioReactiveSelfTest();
+void audioReactiveRtaPlot();
 #endif
 
 // User Interface CONFIG
