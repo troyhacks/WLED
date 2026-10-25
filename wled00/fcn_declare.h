@@ -489,6 +489,20 @@ uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest = 0, uint16_t 
 uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest = 0, uint16_t highest = 65535, uint32_t timebase = 0, uint16_t phase_offset = 0);
 uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest = 255, uint32_t timebase = 0, uint8_t phase_offset = 0);
 
+// number of audioreactive frequency channels published in um_data->u_data[2]
+#ifndef NUM_GEQ_CHANNELS
+#define NUM_GEQ_CHANNELS 16
+#endif
+
+// number of audioreactive RTA channels published in um_data->u_data[12].
+// The ISO 266 third-octave set, 19.95 Hz - 19.95 kHz: 31 bands. These are
+// the INTEGRATED power over each band - the unit a hardware analyser's bar
+// shows - and they are a different measurement from the 16 above, which are
+// point PSDs.
+#ifndef NUM_RTA_CHANNELS
+#define NUM_RTA_CHANNELS 31
+#endif
+
 um_data_t* simulateSound(uint8_t simulationId);
 // WLEDMM enumerateLedmaps(); moved to FX.h
 uint8_t get_random_wheel_index(uint8_t pos);
