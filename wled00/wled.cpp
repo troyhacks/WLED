@@ -3,6 +3,9 @@ static const char *TAG = "WLED";
 #include "wled.h"
 #include "wled_ethernet.h"
 #include <Arduino.h>
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0 && defined(SOC_USB_SERIAL_JTAG_SUPPORTED)
+  #include "driver/usb_serial_jtag.h" // to hand the peripheral over to HWCDC - see WLED::setup()
+#endif
 #if !defined(CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT)
   #define CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT 0
 #endif
@@ -1306,6 +1309,24 @@ void WLED::setup() {
   delay(WLED_BOOTUPDELAY); // delay to let voltage stabilize, helps with boot issues on some setups
   #endif
   #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0
+  // Hand the USB-Serial-JTAG peripheral over from the IDF to the Arduino core.
+  //
+  // The IDF installs its own USB-Serial-JTAG *driver* for the secondary
+  // console (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG) before the app
+  // runs. The Arduino core's HWCDC then installs a *second* interrupt handler
+  // on the same peripheral when Serial.begin() runs. Two owners of one
+  // peripheral means the two handlers fight over the same FIFOs: the console
+  // turns into a stream of "invalid header: 0x..." and, on the P4, the
+  // interrupt watchdog eventually fires and resets the chip in a loop.
+  //
+  // So the IDF driver goes first and HWCDC gets the only interrupt handler.
+  // The price is that the IDF's own log (ESP_LOG) stops reaching the USB
+  // port - it still goes to UART0, which is the primary console.
+  #if defined(SOC_USB_SERIAL_JTAG_SUPPORTED)
+  if (usb_serial_jtag_is_driver_installed()) {
+    usb_serial_jtag_driver_uninstall();
+  }
+  #endif
   Serial.begin(115200);
   #else
   Serial.begin(115200, SERIAL_8N1, SOC_RX0, SOC_TX0, false, 20000UL, 120U);
