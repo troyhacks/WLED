@@ -747,6 +747,9 @@ um_data_t* simulateSound(uint8_t simulationId)
 
   //arrays
   uint8_t *fftResult;
+  // The RTA bands, for the effects that draw an analyser. The AudioReactive
+  // usermod publishes the same 31 bytes in u_data[12].
+  static uint8_t rtaResult[NUM_RTA_CHANNELS];
 
   static um_data_t* um_data = nullptr;
 
@@ -758,7 +761,7 @@ um_data_t* simulateSound(uint8_t simulationId)
     // NOTE!!!
     // This may change as AudioReactive usermod may change
     um_data = new um_data_t;
-    um_data->u_size = 12;
+    um_data->u_size = 13;
     um_data->u_type = new um_types_t[um_data->u_size];
     um_data->u_data = new void*[um_data->u_size];
     um_data->u_data[0] = &volumeSmth;
@@ -773,6 +776,8 @@ um_data_t* simulateSound(uint8_t simulationId)
     um_data->u_data[9]  = &volumeSmth;    // dummy (soundPressure)
     um_data->u_data[10] = &volumeSmth;    // dummy (agcSensitivity)
     um_data->u_data[11] = &zeroCrossingCount;
+    um_data->u_data[12] = rtaResult;
+    um_data->u_type[12] = UMT_BYTE_ARR;
   } else {
     // get arrays from um_data
     fftResult =  (uint8_t*)um_data->u_data[2];
@@ -830,6 +835,12 @@ um_data_t* simulateSound(uint8_t simulationId)
         fftResult[i] = inoise8(beatsin8_t(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
       volumeSmth = fftResult[8];
       break;
+  }
+
+  // The simulated RTA bands: the simulated spectrum, stretched across the 31
+  // third-octave bands. It is a simulation, so it only has to be plausible.
+  for (int i = 0; i < NUM_RTA_CHANNELS; i++) {
+    rtaResult[i] = fftResult[(i * 16) / NUM_RTA_CHANNELS];
   }
 
   samplePeak    = random8() > 250;

@@ -202,7 +202,8 @@ class AutoPlaylistUsermod : public Usermod {
 
     void change(um_data_t *um_data) {
 
-      uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+      uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+      if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
       energy = 0;
 

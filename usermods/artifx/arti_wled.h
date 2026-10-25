@@ -160,7 +160,8 @@ float ARTI::arti_external_function(uint8_t function, float par1, float par2, flo
           // add support for no audio
           um_data = simulateSound(SEGMENT.soundSim);
         }
-        uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+        uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+        if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
         return fftResult[(uint8_t)par1%16];
       }

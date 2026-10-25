@@ -7590,7 +7590,7 @@ static const char _data_FX_MODE_2DDRIFTROSE[] PROGMEM = "Drift Rose@Fade,Blur,,,
     volumeSmth    = *(float*)   um_data->u_data[0];
     volumeRaw     = *(int16_t*) um_data->u_data[1];
     fftResult     =  (uint8_t*) um_data->u_data[2];
-or
+  or
     uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
     if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM to buffer curent values
 
@@ -7611,7 +7611,9 @@ or
 
 // a few constants needed for AudioReactive effects
 
-#define NUM_GEQ_CHANNELS 16                                           // number of audioreactive frequency channels.
+#ifndef NUM_GEQ_CHANNELS                                               // number of audioreactive frequency channels (see fcn_declare.h)
+#define NUM_GEQ_CHANNELS 16
+#endif
 
 // for 22Khz sampling
 #define MIN_FREQUENCY   80             // 80 HZ - due to lower resolution
@@ -8346,7 +8348,8 @@ uint16_t mode_blurz(void) {                    // Blurz. By Andrew Tuline.
   // even with 1D effect we have to take logic for 2D segments for allocation as fill_solid() fills whole segment
 
   um_data_t *um_data = getAudioData();
-  uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
   if (SEGENV.call == 0) {
     SEGENV.setUpLeds();   // WLEDMM use lossless getPixelColor()
@@ -8376,7 +8379,8 @@ uint16_t mode_blurz(void) {                    // Blurz. By Andrew Tuline.
                                                // Hint: Looks best with segment brightness set to max (use global brightness to reduce brightness)
   // even with 1D effect we have to take logic for 2D segments for allocation as fill_solid() fills whole segment
   um_data_t *um_data = getAudioData();
-  uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
   float volumeSmth   = *(float*)um_data->u_data[0];
   float FFT_MajorPeak = *(float*)um_data->u_data[4];
   if (FFT_MajorPeak < 1) FFT_MajorPeak = 1;
@@ -8445,7 +8449,9 @@ uint16_t mode_DJLight(void) {                   // Written by Stefan Petrick, Ad
   const uint32_t mid = SEGLEN / 2;
 
   um_data_t* um_data = getAudioData();
-  const uint8_t* __restrict__ fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftBuf[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftBuf, um_data->u_data[2], sizeof(fftBuf));  // WLEDMM snapshot: publisher may recycle the buffer
+  const uint8_t* __restrict__ fftResult = fftBuf;
   const float volumeSmth = *(float*)um_data->u_data[0];
 
   if (SEGENV.call == 0) {
@@ -9519,7 +9525,8 @@ uint16_t mode_GEQLASER(void) {
   uint8_t depth       = SEGMENT.custom2;  // depth of perspective. 255 = infinite ("laser")
 
   um_data_t *um_data = getAudioData();
-  uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
   uint8_t heights[NUM_GEQ_CHANNELS] = { 0 };
   const uint8_t maxHeight = roundf(float(rows) * ((rows<18) ? 0.75f : 0.85f));           // slightly reduce bar height on small panels 
@@ -9670,8 +9677,9 @@ uint16_t mode_2DPaintbrush() {
   SEGMENT.fadeToBlackBy(map8(SEGENV.custom1,10,128));
 
   um_data_t *um_data = getAudioData();
-  uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
-  
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
+
   SEGENV.aux1 = phase_chaos?random8():0;
 
   for (size_t i = 0; i < numLines; i++) {
@@ -9754,17 +9762,37 @@ uint16_t mode_GEQPPA() {
 
   // Get audio data
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
+
+  // The RTA view: the 31 third-octave bands, published by the AudioReactive
+  // usermod in u_data[12].
+  //
+  // They are a different measurement from the 16 GEQ bands above - the
+  // integrated power over each band, in the unit a hardware analyser's bar
+  // shows, rather than the point PSD at the band centre - and they carry
+  // their own auto-range, so they arrive on their own scale and are drawn
+  // with their own bar count.
+  //
+  // If the usermod is not there (or is too old to publish them), the effect
+  // stays on the GEQ view rather than drawing nothing.
+  uint8_t rtaResult[NUM_RTA_CHANNELS] = {0};
+  const bool rtaMode = SEGMENT.check2 && (um_data->u_data != nullptr)
+                       && (um_data->u_size > 12) && (um_data->u_data[12] != nullptr);
+  if (rtaMode) memcpy(rtaResult, um_data->u_data[12], NUM_RTA_CHANNELS);  // WLEDMM snapshot: publisher may recycle the buffer
+
+  const int bars = rtaMode ? NUM_RTA_CHANNELS : NUM_GEQ_CHANNELS;
+  const uint8_t* values = rtaMode ? rtaResult : fftResult;
 
   uint8_t scaler = 1;
 
   // Draw bars
-  for (int i = 0; i < 16; i++) {
-    int x_start = (i * ctx.width) / (16 * scaler);
-    int x_end = ((i + 1) * ctx.width) / (16 * scaler);
+  for (int i = 0; i < bars; i++) {
+    int x_start = (i * ctx.width) / (bars * scaler);
+    int x_end = ((i + 1) * ctx.width) / (bars * scaler);
     int bar_width = x_end - x_start;
 
-    uint32_t unscaled_bar_height = (uint32_t)fftResult[i] * ctx.height / 255;
+    uint32_t unscaled_bar_height = (uint32_t)values[i] * ctx.height / 255;
     uint32_t scaled_bar_height = unscaled_bar_height / scaler;
 
     if (bar_width == 0 || scaled_bar_height == 0) continue;
@@ -9774,9 +9802,13 @@ uint16_t mode_GEQPPA() {
     fill_config.out.block_offset_y = (ctx.height / scaler) - scaled_bar_height;
     fill_config.fill_block_h = scaled_bar_height;
 
-    fill_config.fill_argb_color.r = beatsin8(60, 0, 255, i * 32, 0);
-    fill_config.fill_argb_color.g = beatsin8(60, 0, 255, i * 32, 85);
-    fill_config.fill_argb_color.b = beatsin8(60, 0, 255, i * 32, 170);
+    // The colour sweeps across the bars. The timebase is scaled to the bar
+    // count, so the spectrum keeps the same colour gradient at 16 and at 31
+    // bars: 32 ms per bar is what the 16-bar view has always used.
+    const uint32_t tb = (uint32_t)(i * (512 / bars));
+    fill_config.fill_argb_color.r = beatsin8(60, 0, 255, tb, 0);
+    fill_config.fill_argb_color.g = beatsin8(60, 0, 255, tb, 85);
+    fill_config.fill_argb_color.b = beatsin8(60, 0, 255, tb, 170);
     fill_config.fill_argb_color.a = SEGMENT.intensity;
 
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &fill_config));
@@ -9827,7 +9859,7 @@ uint16_t mode_GEQPPA() {
   #endif
   return FRAMETIME;
 }
-static const char _data_FX_MODE_GEQPPA[] PROGMEM = "GEQ PPA ☾🐺@SEGMENT.speed,Overlay Transparency,SEGMENT.custom1,SEGMENT.custom2,SEGMENT.custom3_0-31,Overlay,Check 2,Check 3;!,,Peaks;!;2f;sx=0,ix=0,c1=0,c2=0,c3=0,pal=72,o1=0,o2=0,o3=0";
+static const char _data_FX_MODE_GEQPPA[] PROGMEM = "GEQ PPA ☾🐺@SEGMENT.speed,Overlay Transparency,SEGMENT.custom1,SEGMENT.custom2,SEGMENT.custom3_0-31,Overlay,RTA Mode,Check 3;!,,Peaks;!;2f;sx=0,ix=0,c1=0,c2=0,c3=0,pal=72,o1=0,o2=0,o3=0";
 #else
 uint16_t mode_GEQPPA() {
   #ifdef SOC_PPA_SUPPORTED
@@ -9874,9 +9906,10 @@ uint16_t mode_GEQPPA() {
 
   // Get audio data
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2];
-  
-  if (!SEGMENT.check1) fftResult[0] = 255;
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
+
+  if (!SEGMENT.check1) fftResult[0] = 255;  // WLEDMM local copy only - never write into the published buffer
 
   // Pre-computed interpolated grid - static so it persists
   static uint16_t interpolated_distances[16][16];
@@ -11095,7 +11128,9 @@ uint16_t mode_DJLight_Circles(void) {
   if (!data->radiusLUT) return FRAMETIME;
 
   um_data_t* um_data = getAudioData();
-  const uint8_t* __restrict__ fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftBuf[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftBuf, um_data->u_data[2], sizeof(fftBuf));  // WLEDMM snapshot: publisher may recycle the buffer
+  const uint8_t* __restrict__ fftResult = fftBuf;
   const float volumeSmth = *(float*)um_data->u_data[0];
 
   const uint8_t boost = SEGMENT.intensity;
@@ -11334,7 +11369,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   um_data_t* um_data = getAudioData();
   uint8_t fftBase = 0;
   if (um_data && um_data->u_data) {
-    uint8_t* fftResult = (uint8_t*)um_data->u_data[2];
+    uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+    memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
     fftBase = fftResult[0];
   }
   const bool isDancing = (SEGMENT.intensity > 128 && fftBase > 128);
@@ -11459,7 +11495,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   // --- Optional: GEQ overlay on hands (if check1 is enabled) ---
   // Render 16 bands into a tiny 16x17 buffer, then PPA scale to hand positions
   if (SEGMENT.check1 && um_data && um_data->u_data) {
-    uint8_t* fftResult = (uint8_t*)um_data->u_data[2];
+    uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+    memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
     // GEQ buffer: 16x16 (one pixel per band, square for easy scaling)
     constexpr uint16_t GEQ_W = 16;
@@ -12577,7 +12614,9 @@ uint16_t mode_particleGEQ(void) {
   // PartSys->setParticleSize(1);
 
   um_data_t* um_data = getAudioData();
-  const uint8_t* fftResult = (const uint8_t*)um_data->u_data[2];
+  uint8_t fftBuf[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftBuf, um_data->u_data[2], sizeof(fftBuf));  // WLEDMM snapshot: publisher may recycle the buffer
+  const uint8_t* fftResult = fftBuf;
 
   const uint32_t binwidth = (PartSys->maxX + 1) >> 4;
   const uint32_t threshold = 300 - SEGMENT.intensity;
@@ -12667,7 +12706,8 @@ uint16_t mode_particlecenterGEQ(void) {
   numSprays = min(PartSys->numSources, (uint32_t)NUMBEROFSOURCES);
 
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2]; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0}; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
   uint32_t threshold = 300 - SEGMENT.intensity;
 
   if (SEGMENT.check2)
@@ -13820,7 +13860,8 @@ uint16_t mode_particle1DGEQ(void) {
   }
 
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2]; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0}; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
   //map the bands into 16 positions on x axis, emit some particles according to frequency loudness
   i = 0;
@@ -13943,7 +13984,8 @@ uint16_t mode_particle1DsonicStream(void) {
 
   // FFT processing
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2]; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0}; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
   uint32_t loudness;
   uint32_t baseBin = SEGMENT.custom3 >> 1; // 0 - 15 map(SEGMENT.custom3, 0, 31, 0, 14);
 
@@ -14039,7 +14081,8 @@ uint16_t mode_particle1DsonicBoom(void) {
 
   // FFT processing
   um_data_t* um_data = getAudioData();
-  uint8_t* fftResult = (uint8_t*)um_data->u_data[2]; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0}; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
   uint32_t loudness;
   uint32_t baseBin = SEGMENT.custom3 >> 1; // 0 - 15 map(SEGMENT.custom3, 0, 31, 0, 14);
   loudness = fftResult[baseBin];// + fftResult[baseBin + 1];
@@ -14196,7 +14239,8 @@ uint16_t mode_particleSpringy(void) {
   // Modes
   if (SEGMENT.check3) { // use AR, custom 3 becomes frequency band to use, applies velocity to center particle according to loudness
     um_data_t* um_data = getAudioData();
-    uint8_t* fftResult = (uint8_t*)um_data->u_data[2]; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+    uint8_t fftResult[NUM_GEQ_CHANNELS] = {0}; // 16 bins with FFT data, log mapped already, each band contains frequency amplitude 0-255
+    if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
     uint32_t baseBin = map(SEGMENT.custom3, 0, 31, 0, 14);
     uint32_t loudness = fftResult[baseBin] + fftResult[baseBin + 1];
     uint32_t threshold = 80; //150 - (SEGMENT.intensity >> 1);

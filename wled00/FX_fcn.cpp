@@ -1750,7 +1750,8 @@ uint8_t * Segment::getAudioPalette(int pal) const {
   if (!usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)) {
     um_data = simulateSound(SEGMENT.soundSim);
   }
-  uint8_t *fftResult = (uint8_t*)um_data->u_data[2];
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
   static uint8_t xyz[16];  // Needs to be 4 times however many colors are being used.
                            // 3 colors = 12, 4 colors = 16, etc.
