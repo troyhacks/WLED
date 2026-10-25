@@ -427,7 +427,8 @@ static void hdmi_display_deinit() {
 // Low-level init: takes a pre-built timing struct + display label.
 // Called by hdmi_display_init().
 // ============================================================
-static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char* label) {
+static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char* label,
+                                     bool allow_link_recovery = true) {
   busNetworkDummyMode = true;
 
   // MIPI DSI PHY LDO is managed by wled.cpp at boot (chan_id=3) and left
@@ -546,27 +547,30 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
       vTaskDelay(pdMS_TO_TICKS(poll_ms));
       elapsed += poll_ms;
     }
-    if (!ready) {
-      // First attempt timed out — reset the LT8912B and retry.  When the
-      // initial 5 s window expires before the monitor is ready, the chip's
-      // internal HPD-detection state machine can latch into a "no link"
-      // state that no longer recovers on its own.  A chip-level reset
-      // restarts that state machine, which is why hot-plug after boot
-      // has always worked.  Reset once, retry with a fresh 15 s budget.
-      USER_PRINTLN(" TIMEOUT — resetting LT8912B to recover from cold-boot race");
-      esp_lcd_panel_reset(panel_handle);
-      vTaskDelay(pdMS_TO_TICKS(500));
-      esp_lcd_panel_init(panel_handle);
+    if (!ready && allow_link_recovery) {
+      // First attempt timed out.  When the window expires before the monitor
+      // is ready, the chip's internal HPD-detection state machine can latch
+      // into a "no link" state that no longer recovers on its own, so the
+      // whole display stack gets rebuilt: the LT8912B is reset and its
+      // configuration is sent again from scratch.
+      //
+      // It has to be a REBUILD, not a second esp_lcd_panel_init() on the
+      // same panel.  The driver's init does two separate jobs - it configures
+      // the LT8912B over I2C and it initialises the DPI/GDMA side of the
+      // panel - and the second job is not re-entrant: the GDMA channel is
+      // already owned by the running DPI peripheral, so the second init
+      // writes into a channel it does not own and the board dies with
+      //   "Guru Meditation Error: Core 0 panic'ed (Store access fault)"
+      // in dw_gdma_channel_use_link_list.
+      //
+      // A missing or slow monitor must never be able to kill the board, so
+      // the rebuild happens once, and if the link still is not up the boot
+      // continues without a display.
+      USER_PRINTLN(" TIMEOUT — rebuilding the display stack to recover from cold-boot race");
+      hdmi_display_deinit();
       vTaskDelay(pdMS_TO_TICKS(100));
-      USER_PRINT("Re-checking HDMI link");
-      elapsed = 0;
-      while (elapsed < timeout_ms) {
-        ready = esp_lcd_panel_lt8912b_is_ready((esp_lcd_panel_t*)panel_handle);
-        if (ready) break;
-        USER_PRINT(".");
-        vTaskDelay(pdMS_TO_TICKS(poll_ms));
-        elapsed += poll_ms;
-      }
+      hdmi_display_init_timing(timing, label, false);
+      return;
     }
     USER_PRINTF(ready ? " OK (%ums)\n" : " TIMEOUT — no monitor detected, continuing anyway\n", elapsed);
   }
