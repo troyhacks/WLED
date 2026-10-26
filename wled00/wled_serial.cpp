@@ -271,6 +271,38 @@ void handleSerial() {
       // This is the scale a hardware analyser uses, so the two can be
       // compared bar for bar. Pre-AGC, deliberately.
       audioReactiveRtaPlot();
+    } else if (next == 'A') {
+      // Back to auto-range mode: the auto-range in sole control.
+      //
+      // The auto-ranges are peak holds - the loudest band sets the top of the
+      // range and it stays there until something exceeds it - so the top ends
+      // up stuck wherever the last peak left it. On top of that, the 'd'/'D'
+      // trim and the 's'/'S' span are manual adjustments that the auto-range
+      // knows nothing about: a trim of +10 dB pushes the loudest band past
+      // the top of the window, and resetting the auto-range alone cannot undo
+      // that.
+      //
+      // So this clears the auto-ranges AND puts the trim and the span back to
+      // the values the board booted with, which is the state the display was
+      // in before anything was touched. It also puts the RTA view back into
+      // auto-range mode, because the fixed window is a MODE and not an offset.
+      //
+      // The calibration - the reference offset and the per-band trim - is NOT
+      // reset: those correct the measurement, and the measurement is not what
+      // this command is about.
+      TROYHACKS_DBREF  = TROYHACKS_DBREF_BOOT;
+      TROYHACKS_DBSPAN = TROYHACKS_DBSPAN_BOOT;
+      audioReactiveResetAutoRange();
+      USER_PRINTF("Display back to auto-range: trim %+.1f dB, span %.0f dB\n",
+                  (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
+    } else if (next == 'b' || next == 'B' || next == 'u' || next == 'U' ||
+               next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
+               next == 'y' || next == 'Y' || next == 'k' || next == 'K') {
+      // The RTA view's window and its calibration: the floor and the top in
+      // absolute dB, the reference offset that ties our dB to the analyser's,
+      // the per-band trim that makes the shapes match, and the filter bank's
+      // detector time constant - how fast the bottom 8 bars follow.
+      audioReactiveRtaCommand(next);
 #endif
     } else if (next == 's' || next == 'S') {
       // Walk the display span in 1 dB steps. 's' narrows it (more variance,

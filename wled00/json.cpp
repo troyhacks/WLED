@@ -1808,6 +1808,37 @@ void serveJson(AsyncWebServerRequest* request)
     }
     return;
   }
+  // WLEDMM: /json/ar - the AudioReactive statistics, as numbers.
+  //
+  // The info page is for a person reading a handful of numbers at a glance;
+  // this is the machine-readable twin of it - every number the analysis knows,
+  // as a number, with the unit in the key's name. It is a separate path and
+  // not another key under /json/info, so that a script can fetch it without
+  // downloading (or parsing) the whole info page.
+  else if (url.indexOf("/ar") > 0) {
+    if (requestJSONBufferLock(19)) {
+      // LockedJsonResponse, not a plain AsyncJsonResponse: the response is
+      // filled in LATER, by the web server, and it serializes the SHARED
+      // document. Releasing the lock here would let another request clear
+      // the document out from under it.
+      LockedJsonResponse* response = new LockedJsonResponse(&doc, false);
+      JsonObject root = response->getRoot();
+      usermods.addToJsonAr(root);
+      if (doc.overflowed()) {
+        // The document is shared with the other JSON paths, so a future
+        // usermod could push it over. Say so rather than return a truncated
+        // document that looks complete.
+        delete response;   // the destructor releases the lock
+        request->send(500, "application/json", F("{\"error\":\"the /json/ar document overflowed\"}"));
+        return;
+      }
+      response->setLength();
+      request->send(response);   // the lock is released when the buffer is filled
+    } else {
+      request->send(503, "application/json", F("{\"error\":3}"));
+    }
+    return;
+  }
   else if (url.length() > 6) { //not just /json
     request->send(501, "application/json", F("{\"error\":\"Not implemented\"}"));
     return;

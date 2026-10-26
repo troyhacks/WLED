@@ -279,6 +279,22 @@ static inline bool inputLpfInChain() {
   return (useInputFilter > 0) && (useInputFilter < 99) && inputLpfEnabled;
 }
 
+// Which filters the LIVE chain runs.
+//
+// Three places have to agree on them: the FFT task, which sets them on the
+// live chain every frame; the filter bank's calibration, which divides the
+// chain's response out of what the bank measures; and the bank's self-test,
+// which runs the chain. If they ever disagree, the measurement describes a
+// filter that is not the one running.
+//
+// They differ from dcBlockerInChain() in one case: the PDM path
+// (useInputFilter == 1) applies the input LPF but not the DC blocker, while
+// dcBlockerInChain() assumes the DC blocker is in for any non-zero setting.
+// The bank's own numbers use THESE, because they have to describe the chain
+// that actually runs.
+static inline bool liveChainDcOn()  { return (useInputFilter == 2) && dcBlockerEnabled; }
+static inline bool liveChainLpfOn() { return inputLpfEnabled; }
+
 //WLEDMM add experimental settings
 //
 // micLevelMethod is DEPRECATED. It chose between a floating level, a frozen
@@ -390,7 +406,7 @@ static float fftTaskMaxCycle = 0;
 // audio: the read blocks until the hop arrives, which is one frame period
 // after the frame started, and the work then takes a couple of milliseconds
 // more - so the frame ends just after the deadline roughly half the time.
-// What matters is the DMA surplus (see surplusVerdict), because that is the
+// What matters is the DMA surplus (see arHealth), because that is the
 // quantity that decides whether samples are dropped.
 static uint32_t arFramesTotal = 0;
 static uint32_t arFramesOverran = 0;
@@ -511,7 +527,7 @@ constexpr uint32_t ES8311_MCLK_HZ = (uint32_t)SAMPLE_RATE * 256u;
 // the headroom rather than the 8 ms the old constant implied. Exceeding the
 // wake period is not dangerous, it just makes the update rate slip.
 //
-// Outside the SAMPLE_RATE branch above on purpose: fftBudgetVerdict() uses it,
+// Outside the SAMPLE_RATE branch above on purpose: arHealth() uses it,
 // and that function is common to every target, so leaving it inside would break
 // the -C3 build on an undefined name.
 constexpr float I2S_RING_MS = (AR_I2S_DMA_DESCS * BLOCK_SIZE * 1000.0f) / (float)SAMPLE_RATE;
@@ -993,7 +1009,7 @@ static float estPoint[AR_EST_SLOTS];                       // point PSD at the c
 static float estPeak[NUM_GEQ_CHANNELS];                    // peak PSD over the band
 static float estComp[NUM_GEQ_CHANNELS];                    // crest compensation, dB
 static float estRta[AR_MAX_BANDS];                         // integrated band power
-static float arRtaPub[AR_MAX_BANDS];                       // the published copy of estRta[]
+static float arRtaDbPub[AR_MAX_BANDS];                     // the published copy of estRtaDb[]
 static float estBandInt[NUM_GEQ_CHANNELS];                 // integrated power over a display band
 static int   estLo[NUM_GEQ_CHANNELS];                      // first bin of the band
 static int   estHi[NUM_GEQ_CHANNELS];                      // last bin of the band
@@ -1035,6 +1051,396 @@ static bool  calTargetPink = false;                         // T(f): flat (defau
 // impulse response and writes the calibration's arrays, and the FFT task is
 // the only thread that may do either.
 static volatile bool arCalDirty = false;
+
+// ---------------------------------------------------------------------------
+// The RTA filter bank: the bottom eight bands.
+//
+// The FFT cannot separate the RTA's bottom bands. Its measurement kernel is
+// 23.49 Hz wide and the narrowest band in the ISO 266 set is 4.62 Hz wide, so
+// the bottom bars all read the same smeared measurement - five bars, one
+// number. A filter bank can separate them, because each band gets its own
+// filter with its own bandwidth.
+//
+// The narrow path tried this with a second, longer FFT and failed on the
+// UPDATE RATE: the transform only ran once 4096 DECIMATED samples had
+// accumulated, which is once every 682.7 ms. The bars were not slow, they
+// were FROZEN for two-thirds of a second at a time - 1.47 updates a second.
+// The R in RTA stands for realtime.
+//
+// The bank has no such gate. Its filters run continuously, every frame adds
+// its new samples to them, and every band is recomputed EVERY FRAME. The
+// filter's shape sets the resolution and the detector's time constant sets
+// the variance; neither of them sets the update rate.
+//
+// This is what a hardware analyser is: one bandpass per band, running, with
+// the bar showing the running power of its output.
+//
+// The measurement is the SHAPED power - the bandpass's output power, not the
+// power inside the band's nominal edges. That is what an analyser shows, and
+// it is the only form in which these bands can be compared with one bar for
+// bar. It also gives the cleanest possible self-test contract: a tone at the
+// band's own centre reads exactly its own power.
+//
+// The price is variance. A 125 ms detector at 20 Hz holds less than one cycle
+// of the signal, so the bar carries a few dB of chi-square noise - exactly
+// what a real analyser shows, and exactly what the detector's time constant
+// is the knob for.
+//
+// The eight bands are the bottom of the ISO 266 set: 19.95 Hz to 100 Hz.
+// ---------------------------------------------------------------------------
+
+// The chain's measurement, forward-declared: the bank calibrates itself from
+// the chain's MEASURED response at its own band centres, with the flags the
+// LIVE chain runs.
+static int  selfTestIrLength();
+static void measureChainDb(float *outDb, const float *freqs, int nf, int irLen,
+                           bool dcOn, bool lpfOn);
+
+static constexpr int   AR_BANK_BANDS   = 8;      // the bottom 8 ISO 266 bands
+static constexpr int   AR_BANK_DEC     = 16;     // 48 kHz -> 3 kHz
+static constexpr float AR_BANK_FS      = (float)SAMPLE_RATE / (float)AR_BANK_DEC;
+static constexpr float AR_BANK_AA_HZ   = 400.0f; // the anti-alias corner
+static constexpr int   AR_BANK_AA_SECS = 2;      // a 4th-order Butterworth = 2 biquads
+
+// The detector's time constant.
+//
+// It is a runtime setting because it is a TRADE and not a constant: a short
+// one follows the music and a long one reads it more steadily. The numbers
+// below are measured, with white noise at the bank rate, on this filter bank:
+//
+//   tau      the reading's fluctuation     the 63% step, band 0 -> band 7
+//   125 ms   1.2 - 2.3 dB (1 sigma)         317 -> 163 ms
+//    60 ms   1.6 - 2.9 dB                  253 -> 108 ms
+//    40 ms   1.8 - 3.1 dB                  217 ->  79 ms
+//    25 ms   2.0 - 3.4 dB                  192 ->  64 ms
+//    10 ms   2.3 - 3.5 dB                  165 ->  48 ms
+//     5 ms   2.6 - 3.7 dB                  140 ->  39 ms
+//
+// The trade is lopsided in the direction that matters here. Going from 125 ms
+// to 5 ms costs about 1.3 dB of extra fluctuation and buys 180 ms of lag at
+// the bottom band and 124 ms at the top of the eight. Going from 40 ms to
+// 5 ms costs 0.8 dB of fluctuation and buys 77 ms at the bottom and 40 ms at
+// the top.
+//
+// The default is 5 ms, because the whole point of this path is that it should
+// move at the speed of the FFT-driven bands above it, and the lag is what made
+// the bottom eight look dead next to them. The reading is noisier by less than
+// a dB and half a decibel is worth far less than a tenth of a second. The
+// serial 'k'/'K' keys walk it if that call is ever wrong.
+//
+// The floor is the FILTER, not the detector: the bottom band's envelope
+// cannot rise faster than its own bandwidth allows, which is about 100 ms at
+// 19.95 Hz however short the detector is. That is the physics of a narrow
+// band at a low frequency, and no setting of this constant changes it.
+static constexpr float AR_BANK_TAU_DEFAULT_MS = 5.0f;
+static constexpr float AR_BANK_TAU_MIN_MS = 5.0f;
+static constexpr float AR_BANK_TAU_MAX_MS = 500.0f;
+
+// The bank's state: the anti-alias filter's delay lines, the band filters'
+// delay lines, the detectors, and the decimation's phase.
+//
+// The delay lines are two floats per section because the sections are
+// transposed direct form II, which needs no output buffer at all - the bank
+// READS the sample stream and never writes to it. That matters: the stream it
+// reads is the FFT's input, and a filter that needed an output buffer would
+// have to be given one that does not overlap it.
+struct BankPath {
+  float   aaW[AR_BANK_AA_SECS][2];   // the anti-alias filter's delay lines
+  float   secW[AR_BANK_BANDS][2][2]; // the band filters' delay lines
+  float   det[AR_BANK_BANDS];        // the detectors' states
+  uint8_t phase;                     // the decimation's phase
+};
+
+// The bank the FFT task runs.
+static BankPath liveBank;
+
+// The coefficients, baked once at init: b0, b1, b2, a1, a2 per section.
+static float bankAaCoeffs[AR_BANK_AA_SECS][5];
+static float bankSecCoeffs[AR_BANK_BANDS][2][5];
+
+// What the init measured about the bank.
+static float bankAaDb[AR_BANK_BANDS];   // the anti-alias filter's response at the band centres, dB
+static float bankCalDb[AR_BANK_BANDS];  // the bank's calibration, dB
+static float bankEnbw[AR_BANK_BANDS];   // the band filter's ENBW, Hz
+static float bankDetAlpha = 0.0f;       // the detector's one-pole coefficient
+static float bankTauMs = AR_BANK_TAU_DEFAULT_MS;  // the detector's time constant
+static bool  bankReady = false;
+
+// Set the detector's time constant and the coefficient that goes with it.
+//
+// The coefficient is the one-pole's step size at the bank's 3 kHz rate:
+// alpha = 1 - exp(-1/(tau * fs)). It is a function of the constant alone, so
+// the two can never disagree - which is what would happen if the constant
+// were changed without recomputing it.
+static void bankSetTau(float ms) {
+  if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
+  if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
+  bankTauMs = ms;
+  bankDetAlpha = 1.0f - expf(-1.0f / (bankTauMs * 0.001f * AR_BANK_FS));
+}
+
+// The bank's own cost, in TIMING_UNIT_US, like the other timers.
+static float bankTime = 0.0f;
+
+// ---------------------------------------------------------------------------
+// The bank's filters.
+//
+// They are hand-written rather than taken from ESP-DSP, for two reasons.
+//
+// The first is the output buffer: ESP-DSP's biquad has no in-place mode, so
+// each section needs somewhere else to write, and the buffer the bank could
+// use (the FFT's imaginary half) is the FFT's own. A transposed DF-II section
+// keeps its state in two floats and produces its output in a register.
+//
+// The second is the cost. The bank runs 2 sections at 48 kHz over 512 samples
+// and 16 sections at 3 kHz over 32 samples - 1536 evaluations a frame. At
+// the hand-written recursion's measured ~130 ns per evaluation that is ~200 us
+// a frame, against a 10.67 ms frame period.
+//
+// The sections are the same convention the file already uses everywhere:
+// a0 = 1, and
+//   y = b0*x + s1 ;  s1 = b1*x - a1*y + s2 ;  s2 = b2*x - a2*y
+// ---------------------------------------------------------------------------
+
+// An analog Butterworth prototype (cut-off 1 rad/s) through the bilinear
+// transform.
+//
+// The prototype's poles are at exp(j*pi*(2k+N+1)/(2N)). Each conjugate pair
+// becomes one second-order section; an odd order also has a real pole, which
+// becomes a first-order section written in the biquad's form with b2 and a2
+// zero. The cascade's gain at DC is 1.
+//
+// The pole loop skips the lower half plane, so each pair is placed once.
+static int bankButterLowpass(float fc, float fs, int order, float out[][5], int maxSecs) {
+  const float K  = tanf((float)M_PI * fc / fs);
+  const float K2 = K * K;
+  int n = 0;
+  for (int k = 0; k < order && n < maxSecs; k++) {
+    const float theta = (float)M_PI * ((float)order + 2.0f * (float)k + 1.0f)
+                              / (2.0f * (float)order);
+    const float px = cosf(theta);
+    const float py = sinf(theta);
+    if (py < -1e-6f) continue;          // the conjugate of a pole already placed
+    const float sigma = -px;            // the pole is at -sigma +- j*|py|
+    if (fabsf(py) < 1e-6f) {            // a real pole: a first-order section
+      const float A = 1.0f + sigma * K;
+      out[n][0] = K / A;
+      out[n][1] = K / A;
+      out[n][2] = 0.0f;
+      out[n][3] = (1.0f - sigma * K) / A;
+      out[n][4] = 0.0f;
+    } else {
+      const float A = 1.0f / K2 + 2.0f * sigma / K + 1.0f;
+      out[n][0] = 1.0f / A;
+      out[n][1] = 2.0f / A;
+      out[n][2] = 1.0f / A;
+      out[n][3] = (2.0f - 2.0f / K2) / A;
+      out[n][4] = (1.0f / K2 - 2.0f * sigma / K + 1.0f) / A;
+    }
+    n++;
+  }
+  return n;
+}
+
+// A bandpass with its peak gain at 1.0, at f0.
+static void bankRbjBpf(float f0, float fs, float Q, float *c) {
+  const float w0    = 2.0f * (float)M_PI * f0 / fs;
+  const float alpha = sinf(w0) / (2.0f * Q);
+  const float a0    = 1.0f + alpha;
+  c[0] = alpha / a0;
+  c[1] = 0.0f;
+  c[2] = -alpha / a0;
+  c[3] = -2.0f * cosf(w0) / a0;
+  c[4] = (1.0f - alpha) / a0;
+}
+
+// The squared magnitude of one section at f.
+static float bankSecMag2(const float *c, float f, float fs) {
+  const float w  = 2.0f * (float)M_PI * f / fs;
+  const float cw = cosf(w), sw = sinf(w);
+  const float c2 = cw * cw - sw * sw, s2 = 2.0f * cw * sw;
+  // z = e^(-jw), so z^2 = c2 - j*s2
+  const float nr = c[0] + c[1] * cw + c[2] * c2;
+  const float ni = c[1] * (-sw) + c[2] * (-s2);
+  const float dr = 1.0f + c[3] * cw + c[4] * c2;
+  const float di = c[3] * (-sw) + c[4] * (-s2);
+  return (nr * nr + ni * ni) / (dr * dr + di * di);
+}
+
+// The band's filters, baked.
+//
+// A 4th-order Butterworth bandpass is two RBJ bandpass sections, and its
+// section Qs are
+//   Q_k = (f0/W) * 1/(2 sin(pi(2k-1)/(4N)))
+// with W the nominal width and N the order.
+//
+// The ISO 266 third-octave width is W = 0.23156333 * f0 in EVERY band, so
+// f0/W = 4.3188 for all of them and both Qs are the same in all eight:
+//   Q1 = 4.3188 / (2 sin(pi/8))  = 5.642
+//   Q2 = 4.3188 / (2 sin(3pi/8)) = 2.337
+// The width is taken from the layout's own edges rather than assumed, because
+// the ISO set's centres step by 10^(1/10) and not by 2^(1/3).
+static void bankInitCoefficients() {
+  bankButterLowpass(AR_BANK_AA_HZ, (float)SAMPLE_RATE,
+                     2 * AR_BANK_AA_SECS, bankAaCoeffs, AR_BANK_AA_SECS);
+  for (int k = 0; k < AR_BANK_BANDS; k++) {
+    const float fc    = lay31.centre[k];
+    const float width = lay31.edgeHi[k] - lay31.edgeLo[k];
+    const float ratio = fc / width;
+    const float q1 = ratio / (2.0f * sinf((float)M_PI / 8.0f));
+    const float q2 = ratio / (2.0f * sinf(3.0f * (float)M_PI / 8.0f));
+    bankRbjBpf(fc, AR_BANK_FS, q1, bankSecCoeffs[k][0]);
+    bankRbjBpf(fc, AR_BANK_FS, q2, bankSecCoeffs[k][1]);
+  }
+}
+
+// The anti-alias filter's own response at the band centres.
+//
+// It is the anti-alias filter's response that has to be divided out, because
+// it sits between the input and the measurement. Its passband is flat to
+// 0.00 dB across all eight band centres (it is a 400 Hz corner), so what it
+// mostly contributes is the guarantee that nothing from the 2.9-3.1 kHz
+// region - the only place the decimation can alias into these bands - gets
+// through: there it is 69-72 dB down.
+//
+// The response is computed from the coefficients the filter runs with, not
+// from an impulse measurement, and that is a deliberate difference from the
+// chain's calibration. The chain's LPF is ESP-DSP's biquad - a third-party
+// implementation whose convention had to be checked against its model - so
+// it is measured. This filter is the file's own transposed DF-II recursion,
+// whose transfer function IS the coefficient set, and the bank's self-test
+// checks the whole chain end to end against the contract, which is a stronger
+// check on the model than an impulse would be.
+static void bankMeasureAaDb() {
+  for (int k = 0; k < AR_BANK_BANDS; k++) {
+    float mag2 = 1.0f;
+    for (int s = 0; s < AR_BANK_AA_SECS; s++) {
+      mag2 *= bankSecMag2(bankAaCoeffs[s], lay31.centre[k], (float)SAMPLE_RATE);
+    }
+    bankAaDb[k] = (mag2 > 1e-12f) ? (float)(10.0f * log10f(mag2)) : -120.0f;
+  }
+}
+
+// The bank's calibration: the chain's response and the anti-alias filter's
+// response, both divided out, plus the target curve.
+//
+// The chain's response is MEASURED here, at the bank's own band centres, with
+// the flags the LIVE chain runs - the same measurement the main path's
+// calibration is built from, run again for these eight frequencies because
+// the bank has to describe the chain that is really there.
+//
+// The band filter itself is NOT corrected for. It is the measurement, and its
+// peak gain of 1.0 at the band centre is exactly what makes a centred tone
+// read its own power.
+static void bankInitCalibration() {
+  float freqs[AR_BANK_BANDS];
+  float chainDb[AR_BANK_BANDS];
+  for (int k = 0; k < AR_BANK_BANDS; k++) freqs[k] = lay31.centre[k];
+  measureChainDb(chainDb, freqs, AR_BANK_BANDS, selfTestIrLength(),
+                 liveChainDcOn(), liveChainLpfOn());
+  for (int k = 0; k < AR_BANK_BANDS; k++) {
+    float c = -chainDb[k] - bankAaDb[k];
+    if (calTargetPink) c += 10.0f * log10f(lay31.centre[k] / CAL_PINK_REF_HZ);
+    if (c > CAL_CLAMP_DB) c = CAL_CLAMP_DB;
+    else if (c < -CAL_CLAMP_DB) c = -CAL_CLAMP_DB;
+    bankCalDb[k] = c;
+  }
+}
+
+// The band filter's equivalent noise bandwidth: the integral of |H|^2 over
+// all frequencies, in Hz.
+//
+// It is the width of the filter a flat input actually sees, and it is
+// published so that a shaped measurement can be compared with a brick-wall
+// one: the two differ by this ratio, which is 0.85 for every band (a flat
+// input reads 0.71 dB low against a brick-wall band of the nominal width).
+static void bankMeasureEnbw() {
+  constexpr int n = 600;
+  const float f0 = 0.01f, f1 = AR_BANK_FS * 0.5f;
+  for (int k = 0; k < AR_BANK_BANDS; k++) {
+    float tot = 0.0f;
+    float fprev = f0;
+    float prev = bankSecMag2(bankSecCoeffs[k][0], f0, AR_BANK_FS)
+               * bankSecMag2(bankSecCoeffs[k][1], f0, AR_BANK_FS);
+    for (int i = 1; i <= n; i++) {
+      const float f = f0 * powf(f1 / f0, (float)i / (float)n);
+      const float cur = bankSecMag2(bankSecCoeffs[k][0], f, AR_BANK_FS)
+                      * bankSecMag2(bankSecCoeffs[k][1], f, AR_BANK_FS);
+      tot += 0.5f * (prev + cur) * (f - fprev);
+      prev = cur; fprev = f;
+    }
+    bankEnbw[k] = tot;
+  }
+}
+
+// Clear the bank's state: the filters start from silence and the detectors
+// from zero.
+//
+// It is called whenever the chain is rebuilt. The chain's response is part of
+// the bank's calibration, so a chain change is a change of what the bank is
+// measuring, and a filter that has just been handed a different signal should
+// not carry the old one's history into the new one.
+static void bankReset() {
+  memset(&liveBank, 0, sizeof(liveBank));
+}
+
+// Build the bank: the coefficients, the anti-alias filter's measured
+// response, the calibration, the ENBW.
+//
+// It runs after estInitCalibration(), because the bank's calibration is built
+// from the chain's MEASURED response - the same number the main path's
+// calibration uses.
+static void bankInit() {
+  if (!bandLayoutReady) initBandLayout();
+  bankInitCoefficients();
+  bankMeasureAaDb();
+  bankInitCalibration();
+  bankMeasureEnbw();
+  // The current value, not the default: the constant may have been set from
+  // the configuration before the bank was built.
+  bankSetTau(bankTauMs);
+  bankReset();
+  bankReady = true;
+}
+
+// Run the bank over n fresh samples and update the eight detectors.
+//
+// The samples are read, never written. The filters are transposed direct form
+// II, so each section's state is two floats and the output is a local
+// variable - the bank needs no buffer of its own, and it cannot disturb the
+// FFT's input.
+static void bankProcess(BankPath *b, const float *in, int n) {
+  const float alpha = bankDetAlpha;
+  for (int i = 0; i < n; i++) {
+    float x = in[i];
+    // The anti-alias filter, at the full rate.
+    for (int s = 0; s < AR_BANK_AA_SECS; s++) {
+      const float *c = bankAaCoeffs[s];
+      float *w = b->aaW[s];
+      const float y = c[0] * x + w[0];
+      w[0] = c[1] * x - c[3] * y + w[1];
+      w[1] = c[2] * x - c[4] * y;
+      x = y;
+    }
+    // One sample in AR_BANK_DEC is kept.
+    if (++b->phase < AR_BANK_DEC) continue;
+    b->phase = 0;
+    // The eight band filters, and a detector on each one's output.
+    for (int k = 0; k < AR_BANK_BANDS; k++) {
+      float y = x;
+      for (int s = 0; s < 2; s++) {
+        const float *c = bankSecCoeffs[k][s];
+        float *w = b->secW[k][s];
+        const float o = c[0] * y + w[0];
+        w[0] = c[1] * y - c[3] * o + w[1];
+        w[1] = c[2] * y - c[4] * o;
+        y = o;
+      }
+      const float p = y * y;
+      b->det[k] += alpha * (p - b->det[k]);
+    }
+  }
+}
 
 // Which measurement the 16 display bands read.
 //
@@ -1109,9 +1515,11 @@ static constexpr float AR_FLOOR_TAU_MS   = 10000.0f;   // the floor's creep time
 static constexpr float AR_FLOOR_2X_DB    = 3.0103f;    // 2x in amplitude = 3.01 dB
 static constexpr float AR_GATE_CLOSE_DB  = 4.0f;       // the gate's hysteresis
 static constexpr float AR_AGC_ATTACK_MS  = 20.0f;      // the AGC's attack
-static constexpr float AR_AGC_RELEASE_MS = 1500.0f;    // ... and its release
 static constexpr float AR_AGC_CLAMP_DB   = 120.0f;     // the AGC's travel (a runaway guard only)
 static constexpr float AR_AGC_TARGET_DB  = 0.0f;       // the loudest band is held here
+//
+// There is no release time constant any more, and the absence is the design:
+// see arAutoRangeStep().
 static constexpr float AR_TRIM_MAX_DB    = 24.0f;      // the display trim's travel
 
 // The RTA display's own span, in dB.
@@ -1127,6 +1535,71 @@ static constexpr float AR_TRIM_MAX_DB    = 24.0f;      // the display trim's tra
 // hold the material's own dynamic range.
 static constexpr float AR_RTA_DBSPAN     = 40.0f;      // the RTA display's dB span
 static constexpr float AR_RTA_TARGET_DB  = 0.0f;       // the loudest RTA band is held here
+
+// ---------------------------------------------------------------------------
+// The RTA view's dB WINDOW.
+//
+// The auto-range is the peak hold above, and it has no absolute scale at all:
+// its top is wherever the last peak put it, so two runs of the same material
+// can be drawn in two different places, and a reading of "-30 dB" on the bars
+// means nothing on its own.
+//
+// A hardware analyser does not have that problem, because its window IS
+// absolute: a grid in dB, and the bars sit on it. So the RTA view needs a
+// second mode - a FIXED window - where the floor and the top are two numbers
+// in dB and nothing moves.
+//
+//   auto  - the peak hold. The window is AR_RTA_DBSPAN wide and its position
+//           is decided by the signal. Good for SHAPE, useless for LEVEL.
+//   fixed - an absolute window: a floor in dB and a top in dB, on the same
+//           scale as the analyser they are being compared with. Good for
+//           LEVEL, and the window can be lined up with the analyser's own
+//           grid so the two read the same numbers.
+//
+// The fixed window is the answer to "how do we set the decibel range so it
+// matches the RTA and use accurate decibels to change the floor and the top
+// height". The display trims do NOT apply in fixed mode: they are display
+// artefacts, and an absolute read-out that carried them would not be absolute.
+// The calibration knobs that DO apply - the reference offset and the per-band
+// trim below - are applied to the MEASUREMENT, before the window, which is
+// what makes the fixed window an absolute one.
+// ---------------------------------------------------------------------------
+static bool  rtaAutoRange = true;        // false = the fixed window is in use
+static float rtaFloorDb   = -60.0f;       // the fixed window's floor, dB
+static float rtaTopDb     = 0.0f;         // the fixed window's top, dB
+static constexpr float AR_RTA_FLOOR_MIN = -120.0f;  // the floor's travel
+static constexpr float AR_RTA_FLOOR_MAX =  40.0f;
+static constexpr float AR_RTA_SPAN_MIN  =   6.0f;   // the window's minimum width
+static constexpr float AR_RTA_SPAN_MAX  = 120.0f;
+static constexpr float AR_RTA_REF_MAX   =  60.0f;   // the reference offset's travel
+
+// The reference offset: the difference between our dB and the analyser's.
+//
+// One number, and it can be measured without knowing anything about the
+// microphone: feed the SAME signal to the analyser's input and to the board's
+// input, and the microphone's unknown sensitivity cancels out. What is left is
+// the analyser's own reference - which is a CHOICE, not a measurement, and
+// which is exactly what this number records.
+//
+// It is applied to the band levels themselves and not to the display, so the
+// published "RTA band level (dB)" row is already on the analyser's scale and
+// can be compared with it directly.
+static float rtaRefDb = 0.0f;
+
+// The per-band trim, in dB.
+//
+// The reference offset fixes the SCALE; this fixes the SHAPE. An analyser's
+// third-octave filters are not exactly the ISO 266 ones - a different Q, a
+// different bandwidth - so our bands and its bands do not have the same shape
+// even with the scale right. These 31 numbers are the residual, one per band,
+// and they are found by comparing the two on a signal that excites every band
+// (pink noise, or a slow sweep).
+//
+// It is applied in the same place as the reference offset - to the measured
+// level, before the auto-range - so the auto-range sees the corrected shape
+// and the published value is the corrected one.
+static float rtaTrimDb[AR_MAX_BANDS] = {0.0f};
+static int   rtaTrimBand = 0;            // the band the serial trim works on
 
 static float arLevelDb   = AR_LEVEL_MIN_DB;   // the fresh hop's level, dB re full scale
 static float arFloorDb   = AR_LEVEL_MIN_DB;   // the noise floor, dB
@@ -1213,6 +1686,201 @@ static void arTrackLevel(float levelDb) {
   else            { if (levelDb >= openDb) arGateOpen = true; }
 }
 
+// The auto-range's step: a PEAK HOLD, in one direction only.
+//
+// The loudest band sets the top of the display's range - the offset is
+// whatever brings it to AR_AGC_TARGET_DB - and the offset then STAYS there
+// until a band exceeds it.
+//
+// The release this replaces is what made the display pump. A bar went max,
+// the offset cut down to it, the release then walked the offset back up over
+// the next second and a half, every bar crept up with it, and the next
+// strong bar knocked it down again: max, creep, knock down, forever.
+// Holding instead of releasing makes the display a peak meter, which is what
+// an analyser is.
+//
+// The consequence is that the offset can only ever CUT. It never raises the
+// gain, so a quiet passage reads low instead of being pushed up to the top,
+// and the display starts low - the offset starts at 0 - until the signal
+// earns a higher top.
+static inline float arAutoRangeStep(float current, float target, float dtMs) {
+  if (target >= current) return current;             // hold: never creep back up
+  if (dtMs > 0.0f) {
+    const float k = 1.0f - expf(-dtMs / AR_AGC_ATTACK_MS);
+    return current + k * (target - current);
+  }
+  return target;
+}
+
+// The codec's name, spelled the way the settings page spells it.
+//
+// The info page and the /json/ar endpoint both want it, and they have to
+// agree - a codec called "ES8311" in one and "ES8311 (esp_codec_dev)" in the
+// other is a bug waiting to happen. So it is computed here, once.
+static const char* arCodecName(uint8_t type) {
+  switch (type) {
+    case 0:   return PSTR("Generic Analog");
+    case 1:   return PSTR("Generic I2S");
+    case 2:   return PSTR("ES7243");
+    case 3:   return PSTR("SPH0654");
+    case 4:   return PSTR("Generic I2S with MCLK");
+    case 5:   return PSTR("Generic I2S PDM");
+    case 51:  return PSTR("Legacy I2S PDM");
+    case 6:   return PSTR("ES8388");
+    case 7:   return PSTR("WM8978");
+    case 8:   return PSTR("AC101");
+    case 9:   return PSTR("ES8311");
+    case 10:  return PSTR("ES8311 (esp_codec_dev)");
+    case 11:  return PSTR("ES8388 (esp_codec_dev)");
+    case 12:  return PSTR("ES8374 (esp_codec_dev)");
+    case 13:  return PSTR("ZL38063 (esp_codec_dev)");
+    case 14:  return PSTR("ES8389 (esp_codec_dev)");
+    case 15:  return PSTR("ES7210 (esp_codec_dev)");
+    case 16:  return PSTR("ES7243 (esp_codec_dev)");
+    case 17:  return PSTR("ES7243E (esp_codec_dev)");
+    case 18:  return PSTR("CJC8910 (esp_codec_dev)");
+    case 254: return PSTR("None - network receive only");
+    default:  return PSTR("Unknown");
+  }
+}
+
+// Put n numbers into a JSON array.
+//
+// The endpoint's whole point is that the values are NUMBERS: a script can
+// subtract them, sort them and average them without parsing a string first.
+static void arJsonFloats(JsonArray arr, const float *v, int n) {
+  for (int i = 0; i < n; i++) arr.add((double)v[i]);
+}
+
+static void arJsonBytes(JsonArray arr, const uint8_t *v, int n) {
+  for (int i = 0; i < n; i++) arr.add((int)v[i]);
+}
+
+// Reset the display's auto-ranges to the state they are in on boot.
+//
+// Both offsets are peak holds, so they only ever travel one way: once a loud
+// passage has set the top of the range, it stays there until something
+// exceeds it. That is what an analyser does, but it also means the range is
+// stuck at whatever the loudest thing to happen was - a different input, a
+// different gain setting, or simply the start of the session all leave the
+// top where the last peak put it.
+//
+// This puts both offsets back to zero, which is where they start on boot: the
+// display starts low, and the next loud band earns the top again.
+//
+// The band VALUES are untouched. The offsets are display artefacts, and the
+// published measurements never had them in the first place.
+//
+// The serial 'A' command resets the display's manual trim and span as well -
+// they live in wled.h, next to the commands that change them, so that half of
+// the reset stays with the commands that make it.
+void audioReactiveResetAutoRange() {
+  arAgcDb    = 0.0f;
+  arRtaAgcDb = 0.0f;
+  // And back to the auto-range as a MODE. The fixed window is a mode, not an
+  // offset, so leaving the display in it after a reset would keep showing an
+  // absolute window that the user had asked to get rid of.
+  rtaAutoRange = true;
+}
+
+// ---------------------------------------------------------------------------
+// The RTA window's controls, from the serial console.
+//
+// Single characters, because the display is tuned while it is watched: every
+// key changes one number and prints what it is now.
+//
+//   b / B   the window's floor, down / up by 1 dB
+//   u / U   the window's top, down / up by 1 dB
+//   o / O   the reference offset, down / up by 1 dB
+//   n / p   the band the trim applies to, next / previous
+//   y / Y   that band's trim, down / up by 1 dB
+//   k / K   the filter bank's detector, shorter / longer by 5 ms
+//
+// Touching the floor or the top switches the view to the FIXED window: the
+// point of setting a floor is to have a floor. 'A' goes back to the
+// auto-range.
+//
+// The reference offset and the per-band trim are CALIBRATION, not display
+// settings, so they survive 'A' - 'A' resets the display's auto-range, not
+// the measurement.
+// ---------------------------------------------------------------------------
+void audioReactiveRtaCommand(char c) {
+  if (!bandLayoutReady) initBandLayout();
+  const int n = lay31.count;
+
+  switch (c) {
+    case 'b': case 'B': {
+      rtaFloorDb += (c == 'B') ? 1.0f : -1.0f;
+      if (rtaFloorDb > rtaTopDb - AR_RTA_SPAN_MIN) rtaFloorDb = rtaTopDb - AR_RTA_SPAN_MIN;
+      if (rtaFloorDb < AR_RTA_FLOOR_MIN)          rtaFloorDb = AR_RTA_FLOOR_MIN;
+      if (rtaTopDb  > AR_RTA_FLOOR_MAX)           rtaTopDb  = AR_RTA_FLOOR_MAX;
+      rtaAutoRange = false;
+      USER_PRINTF("RTA window floor now %.1f dB (window %.1f dB to %.1f dB, fixed)\n",
+                  (double)rtaFloorDb, (double)rtaFloorDb, (double)rtaTopDb);
+      break;
+    }
+    case 'u': case 'U': {
+      rtaTopDb += (c == 'U') ? 1.0f : -1.0f;
+      if (rtaTopDb < rtaFloorDb + AR_RTA_SPAN_MIN) rtaTopDb = rtaFloorDb + AR_RTA_SPAN_MIN;
+      if (rtaTopDb > AR_RTA_FLOOR_MAX)             rtaTopDb = AR_RTA_FLOOR_MAX;
+      if (rtaFloorDb < AR_RTA_FLOOR_MIN)           rtaFloorDb = AR_RTA_FLOOR_MIN;
+      rtaAutoRange = false;
+      USER_PRINTF("RTA window top now %.1f dB (window %.1f dB to %.1f dB, fixed)\n",
+                  (double)rtaTopDb, (double)rtaFloorDb, (double)rtaTopDb);
+      break;
+    }
+    case 'o': case 'O': {
+      rtaRefDb += (c == 'O') ? 1.0f : -1.0f;
+      if (rtaRefDb >  AR_RTA_REF_MAX) rtaRefDb =  AR_RTA_REF_MAX;
+      if (rtaRefDb < -AR_RTA_REF_MAX) rtaRefDb = -AR_RTA_REF_MAX;
+      USER_PRINTF("RTA reference offset now %+.1f dB (our dB = the analyser's dB %+.1f)\n",
+                  (double)rtaRefDb, (double)rtaRefDb);
+      break;
+    }
+    case 'n': case 'p': {
+      rtaTrimBand += (c == 'n') ? 1 : -1;
+      if (rtaTrimBand < 0)       rtaTrimBand = 0;
+      if (rtaTrimBand >= n)      rtaTrimBand = n - 1;
+      USER_PRINTF("RTA trim band %d (%.1f Hz), trim %+.1f dB\n",
+                  rtaTrimBand, (double)lay31.centre[rtaTrimBand], (double)rtaTrimDb[rtaTrimBand]);
+      break;
+    }
+    case 'y': case 'Y': {
+      rtaTrimDb[rtaTrimBand] += (c == 'Y') ? 1.0f : -1.0f;
+      if (rtaTrimDb[rtaTrimBand] >  24.0f) rtaTrimDb[rtaTrimBand] =  24.0f;
+      if (rtaTrimDb[rtaTrimBand] < -24.0f) rtaTrimDb[rtaTrimBand] = -24.0f;
+      USER_PRINTF("RTA band %d (%.1f Hz) trim now %+.1f dB\n",
+                  rtaTrimBand, (double)lay31.centre[rtaTrimBand], (double)rtaTrimDb[rtaTrimBand]);
+      break;
+    }
+    case 'k': case 'K': {
+      // The bank's detector: how fast the bottom 8 bars follow the signal.
+      //
+      // 'k' makes it shorter (faster, more fluctuation), 'K' longer (slower,
+      // steadier). The trade is measured, not guessed - see
+      // AR_BANK_TAU_DEFAULT_MS for the table.
+      //
+      // The floor is 5 ms, and it is the DEFAULT: at that setting the bottom
+      // band reads a steady tone about +/-3 dB about its mean, and the bars
+      // move at the speed of the FFT bands above them. Shorter than that and
+      // the squaring ripple starts to dominate the reading; longer and the
+      // bars lag again.
+      const float before = bankTauMs;
+      bankSetTau(bankTauMs + ((c == 'K') ? 5.0f : -5.0f));
+      if (bankTauMs <= AR_BANK_TAU_MIN_MS + 0.01f && before > AR_BANK_TAU_MIN_MS + 0.01f) {
+        USER_PRINTF("RTA bank detector now %.0f ms - that is the floor, it cannot go shorter\n",
+                    (double)bankTauMs);
+      } else {
+        USER_PRINTF("RTA bank detector now %.0f ms (%.0f ms at the 3 kHz rate)\n",
+                    (double)bankTauMs, (double)bankTauMs);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 // The display AGC: one dB offset, applied last.
 //
 // It targets the loudest band at AR_AGC_TARGET_DB - the display's 0 dB, the top
@@ -1221,9 +1889,10 @@ static void arTrackLevel(float levelDb) {
 // the bands it produced.
 //
 // The offset comes DOWN fast (the signal got louder - that is the attack)
-// and goes up slowly (the signal got quieter - the release). It is FROZEN
-// while the gate is shut: an offset chasing a signal that is not there would
-// wind up to +60 dB and then slam the display when the signal came back.
+// and it does NOT come back up: arAutoRangeStep() holds it until a band
+// exceeds the one that set it. It is FROZEN while the gate is shut: an
+// offset chasing a signal that is not there would wind up to +60 dB and then
+// slam the display when the signal came back.
 //
 // The offset is large in absolute terms - the band levels are PSDs in dB, and
 // a full-scale tone reads about +74 dB - so the clamp is generous. It is a
@@ -1235,11 +1904,7 @@ static void arUpdateAgc(float dtMs) {
     if (estBandDb[k] > maxDb) maxDb = estBandDb[k];
   if (maxDb <= -119.0f) return;               // no signal in this frame
   const float target = AR_AGC_TARGET_DB - maxDb;
-  const float tau    = (target < arAgcDb) ? AR_AGC_ATTACK_MS : AR_AGC_RELEASE_MS;
-  if (dtMs > 0.0f) {
-    const float k = 1.0f - expf(-dtMs / tau);
-    arAgcDb += k * (target - arAgcDb);
-  }
+  arAgcDb = arAutoRangeStep(arAgcDb, target, dtMs);
   if (arAgcDb >  AR_AGC_CLAMP_DB) arAgcDb =  AR_AGC_CLAMP_DB;
   if (arAgcDb < -AR_AGC_CLAMP_DB) arAgcDb = -AR_AGC_CLAMP_DB;
 }
@@ -1355,24 +2020,45 @@ static void arPublishRta(float dtMs) {
     for (int k = 0; k < NUM_RTA_CHANNELS; k++)
       if (estRtaDb[k] > maxDb) maxDb = estRtaDb[k];
   }
-  if (maxDb > -119.0f) {
+  if (rtaAutoRange && maxDb > -119.0f) {
+    // The same peak hold as the 16-band display: the loudest RTA band sets
+    // the top of the range, and the offset stays there until a band exceeds
+    // it. It never comes back up, so the bars do not creep toward the top
+    // after a peak - see arAutoRangeStep().
     const float target = AR_RTA_TARGET_DB - maxDb;
-    const float tau    = (target < arRtaAgcDb) ? AR_AGC_ATTACK_MS : AR_AGC_RELEASE_MS;
-    if (dtMs > 0.0f) {
-      const float k = 1.0f - expf(-dtMs / tau);
-      arRtaAgcDb += k * (target - arRtaAgcDb);
-    } else {
-      arRtaAgcDb = target;
-    }
+    arRtaAgcDb = arAutoRangeStep(arRtaAgcDb, target, dtMs);
     if (arRtaAgcDb >  AR_AGC_CLAMP_DB) arRtaAgcDb =  AR_AGC_CLAMP_DB;
     if (arRtaAgcDb < -AR_AGC_CLAMP_DB) arRtaAgcDb = -AR_AGC_CLAMP_DB;
+  }
+
+  // The window the bars are drawn in, and the offsets that go with it.
+  //
+  // AUTO: the loudest band is held at the top, so the window is
+  // [-AR_RTA_DBSPAN, 0] and the peak-hold offset moves the whole picture.
+  // The display trims apply on top, as they always did.
+  //
+  // FIXED: the window is the user's, in absolute dB, and NOTHING moves it -
+  // not the peak hold, not the display trims. A fixed window that carried the
+  // display trims would not be absolute, and an absolute read-out that moved
+  // with the last peak would be no better than the auto-range.
+  float winLo, winHi, valueAdj;
+  if (rtaAutoRange) {
+    winLo   = -AR_RTA_DBSPAN;
+    winHi   =  0.0f;
+    valueAdj = TROYHACKS_DBREF + trimDb;
+  } else {
+    winLo   = rtaFloorDb;
+    winHi   = rtaTopDb;
+    valueAdj = 0.0f;
   }
 
   uint8_t frame[NUM_RTA_CHANNELS];
 
   for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
+    // The auto-range's offset is the peak hold's, and it only exists in auto
+    // mode - in fixed mode the levels are where they are.
     const float db = (arGateOpen && (estRtaDb[k] > -119.0f))
-                     ? (estRtaDb[k] + arRtaAgcDb) : -120.0f;
+                     ? (estRtaDb[k] + (rtaAutoRange ? arRtaAgcDb : 0.0f)) : -120.0f;
     float &sm = arRtaSmth[k];
     const float tau = (db > sm) ? attack : release;
     if (dtMs > 0.0f) {
@@ -1383,10 +2069,8 @@ static void arPublishRta(float dtMs) {
     }
     if (sm < -120.0f) sm = -120.0f;
 
-    // The same mapping the GEQ bars use, over the RTA's own span. The user's
-    // trim and the input-level trim apply here too, so one slider moves both
-    // views the same amount.
-    float v = mapf(sm + TROYHACKS_DBREF + trimDb, -AR_RTA_DBSPAN, 0.0f, 0.0f, 255.0f);
+    // The same mapping the GEQ bars use, over the RTA's own window.
+    float v = mapf(sm + valueAdj, winLo, winHi, 0.0f, 255.0f);
     if (v < 0.0f)   v = 0.0f;
     if (v > 255.0f) v = 255.0f;
     frame[k] = (uint8_t)(v + 0.5f);
@@ -1551,6 +2235,8 @@ static void estCompute(const float *spec) {
   // cannot be taken from bins at all, so it comes from the interpolated
   // spectrum at the centre times the width.
   for (int k = 0; k < lay31.count; k++) {
+    // The bottom eight bands are the bank's, not the transform's - see below.
+    if (bankReady && k < AR_BANK_BANDS) continue;
     const float fLo = lay31.edgeLo[k], fHi = lay31.edgeHi[k];
     if ((fHi - fLo) >= 3.0f * binWidth) {
       const int lo = max(1, (int)ceilf(fLo / binWidth));
@@ -1610,21 +2296,56 @@ static void estCompute(const float *spec) {
                    : -120.0f;
     }
   }
+  // The bottom eight RTA bands come from the filter bank, not from the FFT.
+  //
+  // The transform's measurement kernel is 23.49 Hz wide and the narrowest band
+  // in the set is 4.62 Hz wide, so the FFT cannot separate these bands at all:
+  // it would read the same smeared number into five or six of them. The bank
+  // gives each band its own filter with its own bandwidth, and it updates
+  // EVERY FRAME - which is the whole point, because the narrow path's bank
+  // froze for 682.7 ms at a time.
+  //
+  // The bank reports the SHAPED power - the bandpass's output power, not the
+  // power inside the band's nominal edges. That is what a hardware analyser
+  // shows, and it is the only form in which these bars can be compared with
+  // one bar for bar.
+  if (bankReady) {
+    for (int k = 0; k < AR_BANK_BANDS; k++) estRta[k] = liveBank.det[k];
+  }
+
   for (int k = 0; k < lay31.count; k++) {
+    // The bank's bands carry the bank's own calibration: the chain's response
+    // and the anti-alias filter's response are both divided out of them.
+    const float cal = (bankReady && k < AR_BANK_BANDS)
+                    ? bankCalDb[k] : calDb[NUM_GEQ_CHANNELS + k];
+    // ... and then the REFERENCE offset and the per-band trim go on, HERE,
+    // on the measurement and not on the display.
+    //
+    // This is the difference between a calibration and a trim: a calibration
+    // corrects the number, so everything that reads the number - the bars, the
+    // auto-range, the info page, the serial plot - reads the corrected one.
+    // A display trim moves a bar and nothing else, and it is already one
+    // layer further out (TROYHACKS_DBREF, the input-level trim).
     estRtaDb[k] = (estRta[k] > 0.0f)
-                  ? 10.0f * log10f(estRta[k]) + calDb[NUM_GEQ_CHANNELS + k]
+                  ? 10.0f * log10f(estRta[k]) + cal + rtaRefDb + rtaTrimDb[k]
                   : -120.0f;
   }
 
   // Publish the RTA values for the serial plot.
   //
-  // The plot runs on the main thread and the FFT task rewrites estRta[] every
-  // 10.67 ms, so a reader that just looked at estRta[] could see half of one
-  // frame and half of the next. The copy is made under the publish lock, and
-  // the reader takes the same lock, so the plot always sees ONE frame.
+  // The plot runs on the main thread and the FFT task rewrites estRtaDb[]
+  // every 10.67 ms, so a reader that just looked at estRtaDb[] could see half
+  // of one frame and half of the next. The copy is made under the publish
+  // lock, and the reader takes the same lock, so the plot always sees ONE
+  // frame.
+  //
+  // What is published is the dB, not the linear power, because the plot wants
+  // the CALIBRATED numbers - the ones the info page shows and the ones the
+  // analyser is compared against - and it must not re-derive them from the
+  // linear power, because the calibration lives in this frame and nowhere else.
   {
     ArPublishGuard guard;
-    memcpy(arRtaPub, estRta, sizeof(arRtaPub));
+    memcpy(arRtaDbPub, estRtaDb, sizeof(arRtaDbPub));
   }
 }
 
@@ -1635,7 +2356,7 @@ static void estClear() {
   for (int k = 0; k < AR_MAX_BANDS; k++) estRta[k] = 0.0f;
   {
     ArPublishGuard guard;
-    memset(arRtaPub, 0, sizeof(arRtaPub));
+    memset(arRtaDbPub, 0, sizeof(arRtaDbPub));
   }
 }
 
@@ -2207,6 +2928,11 @@ static void initChainCalibration() {
   // The calibration is measured from THIS chain - the same coefficients, the
   // same code - so it has to be rebuilt whenever the chain is rebuilt.
   estInitCalibration();
+
+  // The bank is calibrated from the same MEASURED chain response, and it is
+  // reset: a chain change is a change of what the bank is measuring, and the
+  // filters should not carry the old chain's history into the new one.
+  bankInit();
 }
 
 // ---------------------------------------------------------------------------
@@ -2240,16 +2966,20 @@ static void initChainCalibration() {
 // noise rises 3 dB/octave across the bars - and they are PRE-AGC: an AGC
 // offset is a display artefact and would destroy the comparison.
 //
-// The plot spans 48 dB below the loudest band. The reference is the loudest
-// band rather than an absolute level, because the absolute level depends on
-// the input gain and the microphone, and what is being compared here is the
-// SHAPE.
+// They are also CALIBRATED: the chain's response is divided out, and the
+// reference offset and the per-band trim are added, so the numbers printed
+// here are the numbers the info page shows - the ones to be compared with an
+// external analyser, band for band.
+//
+// The window is the display's window. In auto-range mode it spans 48 dB
+// below the loudest band, because that is a shape comparison. In fixed mode it
+// IS the window the display is using, so the plot and the bars are the same
+// picture with the same grid.
 // ---------------------------------------------------------------------------
 void audioReactiveRtaPlot() {
   if (!bandLayoutReady) initBandLayout();
   const int n = lay31.count;
   const int rows = 16;
-  const float span = 48.0f;          // dB the plot covers below the peak
 
   // The values are read ONCE, into a local snapshot.
   //
@@ -2263,20 +2993,42 @@ void audioReactiveRtaPlot() {
   // The snapshot comes from the PUBLISHED copy, and it is taken under the
   // publish lock, so it is one whole frame and not a mixture of two.
   float snap[AR_MAX_BANDS];
-  float maxP = 0.0f;
+  float maxDb = -120.0f;
   {
     ArPublishGuard guard;
-    memcpy(snap, arRtaPub, sizeof(snap));
+    memcpy(snap, arRtaDbPub, sizeof(snap));
   }
-  for (int k = 0; k < n; k++) if (snap[k] > maxP) maxP = snap[k];
+  for (int k = 0; k < n; k++) if (snap[k] > maxDb) maxDb = snap[k];
 
   USER_PRINTLN();
-  if (maxP <= 0.0f) {
+  if (maxDb <= -119.0f) {
     USER_PRINTLN("RTA: no signal (the noise gate is shut, or the input is silent)");
     return;
   }
-  const float top = 10.0f * log10f(maxP);
-  USER_PRINTF("RTA 31-band, 1/3-octave ISO 266, integrated power, peak %.1f dB\n", (double)top);
+
+  // The window: the fixed one if the display is in fixed mode, and otherwise
+  // 48 dB below the peak.
+  float winLo, winHi;
+  if (rtaAutoRange) {
+    winHi = maxDb;
+    winLo = maxDb - 48.0f;
+  } else {
+    winLo = rtaFloorDb;
+    winHi = rtaTopDb;
+  }
+  const float span = winHi - winLo;
+  if (span < 1.0f) {
+    USER_PRINTLN("RTA: the window is empty");
+    return;
+  }
+
+  if (rtaAutoRange) {
+    USER_PRINTF("RTA 31-band, 1/3-octave ISO 266, integrated power, calibrated, peak %.1f dB (auto-range, %.0f dB)\n",
+                (double)maxDb, (double)span);
+  } else {
+    USER_PRINTF("RTA 31-band, 1/3-octave ISO 266, integrated power, calibrated, peak %.1f dB (fixed window %.1f to %.1f dB)\n",
+                (double)maxDb, (double)winLo, (double)winHi);
+  }
 
   // The bar cell is THREE characters wide, because the frequency axis below it
   // is three characters per band ("%3d" / "%.0fk"). Two-wide cells put the
@@ -2285,8 +3037,8 @@ void audioReactiveRtaPlot() {
   for (int row = rows; row > 0; row--) {
     USER_PRINTF("%2d ", row);
     for (int k = 0; k < n; k++) {
-      const float db = 10.0f * log10f(snap[k]) - top;      // <= 0 dB
-      int h = (int)lroundf((float)rows * (db + span) / span);
+      const float db = snap[k];                       // absolute, calibrated
+      int h = (int)lroundf((float)rows * (db - winLo) / span);
       if (h < 0) h = 0;
       if (h > rows) h = rows;
       USER_PRINT(h >= row ? "███" : "   ");
@@ -2305,12 +3057,11 @@ void audioReactiveRtaPlot() {
   }
   USER_PRINTLN();
 
-  // The values themselves, in dB relative to the peak.
+  // The values themselves, in dB on the analyser's scale.
   for (int part = 0; part < 2; part++) {
     USER_PRINT(part ? "   " : "   ");
     for (int k = part * 16; k < n && k < (part + 1) * 16; k++) {
-      const float db = 10.0f * log10f(snap[k]) - top;
-      USER_PRINTF("%4.0f", (double)db);
+      USER_PRINTF("%4.0f", (double)snap[k]);
     }
     USER_PRINTLN();
   }
@@ -2731,6 +3482,150 @@ void audioReactiveSelfTest() {
   USER_FLUSH();
 }
 
+// ---------------------------------------------------------------------------
+// The bank's self-test: the REAL filters on a REAL tone.
+//
+// The contract the bank is built on: a tone of power P at a band's centre must
+// read P - in the shaped power the bank reports, once the chain and the
+// anti-alias filter have been divided out. And the neighbours must not see it.
+//
+// The tone goes through the CHAIN first - the same code the live path runs,
+// on its own state - because the calibration divides the chain out, and a test
+// that skipped the chain would not be testing the calibration at all.
+//
+// The reading is averaged over the last 0.4 s of the tone, because the
+// detector's own output carries a ripple at TWICE the tone's frequency (the
+// squaring), and at 20 Hz that ripple is 25 ms long: averaging is what makes
+// the reading a power rather than an instant of one.
+//
+// The neighbours are checked on the RAW readings, not the calibrated ones: the
+// leakage is the band filter's own skirt at the tone's frequency, and the
+// calibration is not part of that.
+// ---------------------------------------------------------------------------
+static bool  bankTestDone = false;
+static int   bankTestFails = 0;      // bands that did not read their own power
+static float bankTestWorst = 0.0f;    // worst |error| over the bands, dB
+static float bankTestWorstF = 0.0f;   // and the band it happened at
+static int   bankTestNbrFails = 0;    // neighbours that saw too much of the tone
+static int   bankTestNbrChecks = 0;   // neighbour checks that were decidable
+static float bankTestWorstNbr = 0.0f; // the worst neighbour's leakage, dB
+static float bankTestTimeMs = 0.0f;   // how long the test took
+
+static void bankSelfTest() {
+  if (bankTestDone) return;
+  bankTestDone = true;
+  if (!bandLayoutReady) initBandLayout();
+  if (!bankReady) {
+    USER_PRINTLN("AR: bank self-test skipped - the bank is not built");
+    return;
+  }
+
+  const uint64_t t0 = esp_timer_get_time();
+
+  // The tone's amplitude, and the power it carries: A^2/2.
+  const float amp   = 0.5f;
+  const float toneDb = 10.0f * log10f(amp * amp * 0.5f);   // -9.03 dB
+
+  constexpr int N = 512;                              // the chunk the chain runs in
+  static float buf[N];
+  static float scratch[N];
+  InputChain chain;
+  BankPath bp;
+
+  int fails = 0, nbrFails = 0, nbrChecks = 0;
+  float worst = 0.0f, worstF = 0.0f, worstNbr = 0.0f;
+
+  USER_PRINTLN("\n=== AudioReactive bank self-test =================================");
+  USER_PRINTF("  %d bands, decimate %d -> %.0f Hz, AA %.0f Hz (%d-pole), detector %.0f ms\n",
+              AR_BANK_BANDS, AR_BANK_DEC, (double)AR_BANK_FS, (double)AR_BANK_AA_HZ,
+              2 * AR_BANK_AA_SECS, (double)bankTauMs);
+
+  for (int k = 0; k < AR_BANK_BANDS; k++) {
+    const float fc = lay31.centre[k];
+    chainInit(&chain, liveChainDcOn(), liveChainLpfOn());
+    memset(&bp, 0, sizeof(bp));
+
+    float acc[AR_BANK_BANDS] = {0.0f};
+    int   accN = 0;
+    float phase = 0.0f;
+    const float dw = (float)(2.0 * M_PI * (double)fc / (double)SAMPLE_RATE);
+
+    // Time to settle the filters and the detector, then time to average.
+    //
+    // The settle has to cover the DETECTOR, not just the filters: a one-pole
+    // of time constant tau is within 1% of its final value after 4.6 tau, so
+    // a fixed settle would leave a long detector short of its answer and the
+    // test would read low. The filters themselves need about 100 ms at the
+    // bottom band, which 1.2 s covers comfortably.
+    const float settleSecs = fmaxf(1.2f, 4.6f * bankTauMs * 0.001f + 0.2f);
+    const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
+    const int avgChunks    = (int)(0.4f * (float)SAMPLE_RATE / (float)N);
+
+    for (int c = 0; c < settleChunks + avgChunks; c++) {
+      for (int i = 0; i < N; i++) {
+        buf[i] = amp * sinf(phase);
+        phase += dw;
+        if (phase > 6.2831853f) phase -= 6.2831853f;
+      }
+      chainProcess(&chain, buf, N, scratch);
+      bankProcess(&bp, buf, N);
+      if (c >= settleChunks) {
+        // One sample of every band per chunk: the counter is per CHUNK, not
+        // per band. Counting it inside the band loop divides every band's
+        // sum by AR_BANK_BANDS as well - which is a uniform factor of 8 on
+        // the power, and so it reads as a uniform -9.03 dB error on every
+        // band while the neighbours, whose ratio is scale-free, still look
+        // perfect. It hid for exactly as long as it took to read the
+        // neighbour numbers as proof that the filters were right.
+        for (int j = 0; j < AR_BANK_BANDS; j++) acc[j] += bp.det[j];
+        accN++;
+      }
+    }
+
+    float raw[AR_BANK_BANDS];
+    for (int j = 0; j < AR_BANK_BANDS; j++) raw[j] = acc[j] / (float)accN;
+
+    // The band itself: the calibrated reading must be the tone's own power.
+    const float gotDb = 10.0f * log10f(raw[k]) + bankCalDb[k];
+    const float errDb = gotDb - toneDb;
+    const bool  ok    = (errDb > -0.3f) && (errDb < 0.3f);
+    if (!ok) fails++;
+    if (fabsf(errDb) > fabsf(worst)) { worst = errDb; worstF = fc; }
+
+    // The neighbours: the tone must not light them.
+    float nbrDb = -99.0f;
+    for (int s = 0; s < 2; s++) {
+      const int j = (s == 0) ? k - 1 : k + 1;
+      if (j < 0 || j >= AR_BANK_BANDS) continue;
+      nbrChecks++;
+      const float d = 10.0f * log10f(raw[j] / raw[k]);
+      if (d > -11.0f) nbrFails++;
+      if (d > nbrDb) nbrDb = d;
+    }
+    if (nbrDb > worstNbr) worstNbr = nbrDb;
+
+    USER_PRINTF("  band %d  %8.2f Hz   %+8.3f dB %s   neighbour %+7.2f dB\n",
+                k, (double)fc, (double)errDb, ok ? "PASS" : "FAIL", (double)nbrDb);
+  }
+
+  bankTestFails     = fails;
+  bankTestWorst     = worst;
+  bankTestWorstF    = worstF;
+  bankTestNbrFails  = nbrFails;
+  bankTestNbrChecks = nbrChecks;
+  bankTestWorstNbr  = worstNbr;
+  bankTestTimeMs    = (float)((double)(esp_timer_get_time() - t0) / 1000.0);
+
+  USER_PRINTF("  %d of %d bands %s   worst %+.3f dB at %.2f Hz\n",
+              AR_BANK_BANDS - fails, AR_BANK_BANDS, fails ? "FAIL" : "PASS",
+              (double)worst, (double)worstF);
+  USER_PRINTF("  neighbours: %d of %d checks FAIL, worst leakage %+.2f dB\n",
+              nbrFails, nbrChecks, (double)worstNbr);
+  USER_PRINTF("  self-test time: %.0f ms\n", (double)bankTestTimeMs);
+  USER_PRINTLN("=== end of bank self-test ===========================================");
+  USER_FLUSH();
+}
+
 // The old psychoacoustic band combiner is GONE.
 //
 // computeBandsPsychoacoustic() used to fill the 16 band values from the FFT
@@ -2931,6 +3826,12 @@ void FFTcode(void * parameter)
   estimatorSelfTest();
   const uint64_t tEst1 = esp_timer_get_time();
 
+  // The bank's self-test: the bottom eight bands are measured by their own
+  // filters, and those filters get the same treatment as everything else -
+  // the real code, on a synthetic tone, asserted against the contract they
+  // were built on.
+  bankSelfTest();
+
   // The init's bill. The buffers' time is what is left of the init before
   // the calibration started.
   arInitBuffersMs = (float)((double)(tCal0 - tInit0) / 1000.0);
@@ -3039,6 +3940,11 @@ void FFTcode(void * parameter)
     // of audio is that long, and the audio is the clock this task runs on.
     // See the pacing at the bottom of the loop, which is where it is used.
     const uint64_t frameDeadlineUs = start + (uint64_t)(FRAME_PERIOD_MS * 1000.0f);
+    // The work's own clock. The frame's compute starts when the audio has
+    // been read, because the read's wait is not compute - it is the task
+    // waiting for the next hop to arrive. Set just below, once the read is
+    // done.
+    uint64_t workStartUs = 0;
     bool haveDoneFFT = false; // indicates if second measurement (FFT time) is valid
     static uint64_t lastCycleStart = 0;
     static uint64_t lastLastTime = 0;
@@ -3137,7 +4043,7 @@ void FFTcode(void * parameter)
     // and the task burns no CPU in it. It reads as work only when the task has
     // fallen behind: then the ring is full, the read never blocks, and this
     // number DROPS - which is exactly backwards if you take it for a cost.
-    // It is excluded from the CPU budget for that reason; see fftBudgetVerdict().
+    // It is excluded from the CPU budget for that reason; see arHealth().
     if (start < esp_timer_get_time()) { // filter out overflows
       const uint64_t rReadUs = esp_timer_get_time() - start;
       uint64_t sampleTimeInMillis = (rReadUs +5ULL) / 10ULL; // "+5" to ensure proper rounding
@@ -3145,6 +4051,7 @@ void FFTcode(void * parameter)
       partsRawUs += rReadUs;
     }
     start = esp_timer_get_time(); // start measuring filter time
+    workStartUs = start;           // the frame's COMPUTE starts here
 
     xLastWakeTime = xTaskGetTickCount();       // update "last unblocked time" for vTaskDelay
     isFirstRun = !isFirstRun; //  toggle throttle
@@ -3216,9 +4123,31 @@ void FFTcode(void * parameter)
       // vImag is scratch because the biquad has no in-place mode. The LPF's
       // delay line lives in liveChain, so filtering only the tail keeps the
       // filter continuous across frames.
-      liveChain.dcOn  = (useInputFilter == 2) && dcBlockerEnabled;
-      liveChain.lpfOn = inputLpfEnabled;
+      liveChain.dcOn  = liveChainDcOn();
+      liveChain.lpfOn = liveChainLpfOn();
       chainProcess(&liveChain, samplesStart, sampleCount, vImag);
+    }
+
+    // The RTA filter bank: the bottom eight bands.
+    //
+    // It runs on the SAME fresh samples the chain just filtered, and it READS
+    // them - the filters are transposed direct form II, so they need no
+    // output buffer and cannot disturb the FFT's input.
+    //
+    // Its filters never stop. Every frame adds the new samples to them and
+    // every band is recomputed, which is the whole difference from the narrow
+    // path: its transform only ran once every 682.7 ms, so the bottom bars
+    // were frozen for two-thirds of a second at a time.
+    //
+    // The cost is counted in the frame's own budget (it is part of the
+    // filtering region below) and reported separately, because it is the
+    // number that says whether the bank is affordable.
+    if (bankReady) {
+      const uint64_t tBank0 = esp_timer_get_time();
+      bankProcess(&liveBank, samplesStart, sampleCount);
+      const uint64_t rBankUs = esp_timer_get_time() - tBank0;
+      const float bankUnits = (float)((rBankUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
+      bankTime = (bankUnits * 3.0f + bankTime * 7.0f) / 10.0f;
     }
 
     // The broadband level of the FRESH HOP, and with it the noise floor and
@@ -3650,11 +4579,21 @@ void FFTcode(void * parameter)
       const uint32_t slackMs = (uint32_t)((frameDeadlineUs - now) / 1000ULL);
       if (slackMs > 0) vTaskDelay(pdMS_TO_TICKS(slackMs));
     } else {
-      // The frame overran its deadline: the work alone is longer than the
-      // frame period, so no wait can save it. The task is behind the audio
-      // and the right answer is to catch up - the next frame's read will
-      // return sooner because the ring is fuller, and the difference comes
-      // out of the ring's surplus.
+      // The frame is at or past its deadline.
+      //
+      // That is NOT the same as being late, and the difference matters: in
+      // the healthy case the READ has already blocked away the whole frame
+      // period - the task was waiting for the audio, which is the pacer - so
+      // every frame finishes at or past its deadline while its WORK took a
+      // quarter of it. A frame is only LATE when the work alone ran longer
+      // than the frame period, and that is what the counter counts. Counting
+      // the elapsed time instead reported every healthy frame as an overrun,
+      // which is a number that cannot be read.
+      //
+      // When the frame really is late, no wait can save it: the task is
+      // behind the audio and the right answer is to catch up - the next
+      // frame's read will return sooner because the ring is fuller, and the
+      // difference comes out of the ring's surplus.
       //
       // This used to be vTaskDelay(1), and that was a full TICK of dead
       // time - up to a millisecond during which no audio was consumed at
@@ -3663,7 +4602,10 @@ void FFTcode(void * parameter)
       // same core, and returns immediately if there is nobody. The idle
       // task does not need a tick handed to it here - the task blocks in
       // the next frame's read, which is where it spends most of its time.
-      arFramesOverran++;
+      if ((workStartUs > 0) &&
+          ((now - workStartUs) > (uint64_t)(FRAME_PERIOD_MS * 1000.0f))) {
+        arFramesOverran++;
+      }
       taskYIELD();
     }
     {
@@ -3772,9 +4714,16 @@ static void autoResetPeak(void) {
 ////////////////////
 
 //class name. Use something descriptive and leave the ": public Usermod" part :)
-// Budget verdict for the FFT task, shared by every info-page timing row so they
-// cannot disagree. Three limits live here, and conflating them is what made
-// the old hand-set task period useless as a warning for years:
+// The pipeline's health, as a handful of words.
+//
+// These judgements were once HTML verdict strings, one per timing row in the
+// info page. They are the same judgements now - only the format changed - so
+// that a script can watch them over time, and so that the thresholds live in
+// ONE place. The info page could not tell you that a red row and an orange row
+// meant different things.
+//
+// Three limits, and conflating them is what made the old hand-set task period
+// useless as a warning for years:
 //   - I2S_RING_MS is the only one that costs audio. Overrun it and the DMA ring
 //     refills underneath the task, dropping samples.
 //   - FRAME_PERIOD_MS is the CPU budget: the wall-clock time one frame's audio
@@ -3785,11 +4734,10 @@ static void autoResetPeak(void) {
 //     toward saturation rather than a step, and this tier is what makes the
 //     slide visible before it costs anything.
 //
-// stageMs is the individual stage being reported; totalMs is the total CPU WORK
-// the task owes, which is fftTime + filterTime. It deliberately excludes
-// sampleTime. That number looks like a stage but is mostly the task sitting
-// Blocked on the DMA waiting for the next 256 samples to arrive - wait time,
-// not compute, and time in which it burns no CPU at all.
+// The CPU work is fftTime + filterTime. It deliberately excludes sampleTime.
+// That number looks like a stage but is mostly the task sitting blocked on the
+// DMA waiting for the next hop to arrive - wait time, not compute, and time in
+// which it burns no CPU at all.
 //
 // Getting this wrong is not academic. With sampleTime counted, a correctly
 // paced task reads 6.75 ms of an 11.61 ms frame and trips the half-budget
@@ -3797,108 +4745,79 @@ static void autoResetPeak(void) {
 // because one of them was counting sleep. A warning that fires on a healthy
 // system is how you learn to ignore warnings.
 //
-// Both arguments arrive in TIMING_UNIT_US, matching fftTime/filterTime/
-// sampleTime, so the *100.0 factors below convert to milliseconds.
-static const char* fftBudgetVerdict(double stageMs, double totalMs) {
-  if (stageMs >= (double)I2S_RING_MS * 100.0 || totalMs >= (double)I2S_RING_MS * 100.0)
-    return "<b style=\"color:red;\">! over DMA ring - audio will drop</b>";
-  if (totalMs >= (double)FRAME_PERIOD_MS * 100.0)
-    return "<b style=\"color:orange;\">~ update rate slipping</b>";
-  if (totalMs >= (double)FRAME_PERIOD_MS * 50.0)
-    return "<i>~ half the frame budget</i>";
-  return " OK";
+// The cycle and the sample read measure PACING rather than work, so their
+// limits are different:
+//   - a correctly paced task's cycle does not come in under FRAME_PERIOD_MS - it
+//     sits AT it, because the task spends the remainder of the frame asleep and
+//     only wakes when the next audio is there. Testing it with
+//     `>= FRAME_PERIOD_MS` would report perfect pacing as overdue. So the only
+//     question is whether the cycle has run well PAST one frame, which means
+//     frames are being missed and audio is being consumed faster than the DMA
+//     delivers it. 1.5x leaves room for jitter without being reachable by a
+//     healthy task.
+//   - a read that returns at once means the DMA ring already had the samples
+//     ready - the task is BEHIND the audio, and the ring has a surplus that will
+//     only grow. A read that blocks is the healthy case: it is the pacer, and
+//     it means the task is keeping exactly up with the codec. This is the
+//     opposite sense to the cycle, which is why it is a separate judgement.
+//   - the surplus is the most direct measure of the ring's health: the read
+//     blocks until the hop has arrived, so the wait time and the surplus are
+//     two readings of the same quantity (surplus = frame period MINUS the
+//     wait). The equilibrium is a surplus worth exactly the task's own work
+//     time - the frame waits for the audio, does its work, and the next frame's
+//     wait has to cover that work - so the ring carries the task's working time
+//     as its buffer, and no more. Below that the task is consuming the audio
+//     faster than the codec delivers it and the DMA starts overwriting samples
+//     it has not handed over; above it the task is behind the audio and the ring
+//     is filling, which does not cost samples but does add latency.
+//   - the FASTEST cycle the task has run is the opposite problem again: a cycle
+//     that is too SHORT means the task went round ahead of the audio, doing
+//     work on samples it had already had. A healthy task's shortest cycle is
+//     the frame period minus about a tick (the deadline wait is truncated
+//     rather than rounded up), so it is ~9.5 ms, not 10.67 ms. Only a cycle
+//     well below that means the task really did run ahead.
+//
+// The times arrive in TIMING_UNIT_US (10 us per unit); they are converted to
+// milliseconds here, so the thresholds below are read in their own units.
+struct ArHealth {
+  const char* budget;         // the CPU work against the frame's budget
+  const char* pacing;         // the task against the audio
+  const char* fastest;        // the shortest cycle the task has run
+  const char* surplus;        // the DMA ring
+  bool        readBlocking;   // the sample read is waiting for audio (the healthy case)
+};
+
+static ArHealth arHealth() {
+  ArHealth h;
+  const double workMs    = (double)(fftTime + filterTime) * (double)TIMING_UNIT_US / 1000.0;
+  const double cycleMs   = (double)fftTaskCycle   * (double)TIMING_UNIT_US / 1000.0;
+  const double fastestMs = (double)fftTaskMinCycle * (double)TIMING_UNIT_US / 1000.0;
+  const double readMs    = (double)sampleTime     * (double)TIMING_UNIT_US / 1000.0;
+  const double surplusMs = (double)FRAME_PERIOD_MS - readMs;
+
+  if (workMs >= (double)I2S_RING_MS)                  h.budget = "over_dma_ring";
+  else if (workMs >= (double)FRAME_PERIOD_MS)         h.budget = "over_frame";
+  else if (workMs >= (double)FRAME_PERIOD_MS * 0.5)   h.budget = "half_frame";
+  else                                                 h.budget = "ok";
+
+  if (cycleMs >= (double)I2S_RING_MS)                  h.pacing = "over_dma_ring";
+  else if (cycleMs >= (double)FRAME_PERIOD_MS * 1.5)   h.pacing = "frames_missed";
+  else if (cycleMs >= (double)FRAME_PERIOD_MS * 1.05)  h.pacing = "ring_growing";
+  else                                                 h.pacing = "ok";
+
+  if (fastestMs <= 0.0)                               h.fastest = "n/a";
+  else if (fastestMs < (double)FRAME_PERIOD_MS * 0.5)  h.fastest = "ran_ahead";
+  else if (fastestMs < (double)FRAME_PERIOD_MS * 0.85) h.fastest = "within_a_tick";
+  else                                                 h.fastest = "ok";
+
+  if (surplusMs < 1.0)                                h.surplus = "ring_empty";
+  else if (surplusMs > (double)I2S_RING_MS * 0.5)      h.surplus = "ring_filling";
+  else                                                 h.surplus = "ok";
+
+  h.readBlocking = !(readMs < (double)FRAME_PERIOD_MS * 0.2);
+  return h;
 }
 
-// Verdict for the two rows that measure PACING rather than work: the I2S cycle
-// and the sample read. A correctly paced task's cycle does not come in under
-// FRAME_PERIOD_MS - it sits AT it, because the task spends the remainder of the
-// frame asleep and only wakes when the next audio is there. Testing it with
-// `>= FRAME_PERIOD_MS` would report perfect pacing as overdue.
-//
-// So the only question for these rows is whether the cycle has run well PAST
-// one frame, which means frames are being missed and audio is being consumed
-// faster than the DMA delivers it. 1.5x leaves room for jitter without being
-// reachable by a healthy task.
-static const char* pacingVerdict(double cycleMs) {
-  if (cycleMs >= (double)I2S_RING_MS * 100.0)
-    return "<b style=\"color:red;\">! over DMA ring - audio will drop</b>";
-  if (cycleMs >= (double)FRAME_PERIOD_MS * 150.0)
-    return "<b style=\"color:orange;\">~ frames being missed</b>";
-  // The cycle may not be longer than the frame period. The task takes one
-  // hop out of the DMA ring per cycle, so a cycle longer than the frame
-  // period takes samples out SLOWER than the codec puts them in: the ring
-  // grows, the DMA eventually overwrites samples it has not handed over, and
-  // every window ends up with a hole in it. This is the check that should
-  // have caught the delay(1) that used to sit at the top of the loop.
-  if (cycleMs >= (double)FRAME_PERIOD_MS * 105.0)
-    return "<b style=\"color:orange;\">~ cycle longer than the frame - the DMA ring is growing</b>";
-  return " OK";
-}
-
-// Verdict for the sample read.
-//
-// A read that returns at once means the DMA ring already had the samples
-// ready - the task is BEHIND the audio, and the ring has a surplus that will
-// only grow. A read that blocks is the healthy case: it is the pacer, and it
-// means the task is keeping exactly up with the codec.
-//
-// This is the opposite sense to pacingVerdict(), which is why it is a
-// separate function: a long sample time is good and a short one is not.
-static const char* readVerdict(double sampleMs) {
-  if (sampleMs < (double)FRAME_PERIOD_MS * 20.0)
-    return "<i>~ the read is not blocking - the ring has a surplus</i>";
-  return " OK";
-}
-
-// Verdict for the DMA surplus - how much audio is already buffered in the
-// ring when the task asks for its next hop.
-//
-// The read blocks until the hop has arrived, so the time it spends waiting
-// and the surplus are two readings of the same quantity: surplus = the frame
-// period MINUS the wait. That makes it the most direct measure of the ring's
-// health there is.
-//
-// The equilibrium is a surplus worth exactly the task's own work time. The
-// frame waits for the audio, does its work, and the next frame's wait has to
-// cover that work - so the ring carries the task's working time as its
-// buffer, and no more. On this board that is about 2.6 ms.
-//
-// Below that, the task is consuming the audio faster than the codec delivers
-// it and the ring is running dry: the DMA starts overwriting samples it has
-// not handed over, and every FFT window gets a hole in it. Above it, the
-// task is behind the audio and the ring is filling, which does not cost
-// samples but does add latency to everything downstream.
-static const char* surplusVerdict(double surplusMs) {
-  if (surplusMs < 1.0)
-    return "<b style=\"color:red;\">! ring nearly empty - samples will drop</b>";
-  if (surplusMs > (double)I2S_RING_MS * 50.0)
-    return "<b style=\"color:orange;\">~ ring filling - latency growing</b>";
-  return " OK";
-}
-
-// Verdict for the FASTEST cycle the task has run. pacingVerdict() is the
-// wrong instrument here: it complains about cycles that are too LONG, and a
-// cycle that is too short is the opposite problem - the task went round ahead
-// of the audio, doing work on samples it had already had.
-//
-// The frame period is 10.67 ms, and a frame may end up to one tick early -
-// the deadline wait is truncated rather than rounded up, so it deliberately
-// stops short and lets the blocking read, which is accurate to the
-// microsecond, hold the cycle at the frame period from below. So a healthy
-// task's shortest cycle is the frame period minus about a tick and a little
-// DMA granularity: 9.5 ms, not 10.67 ms.
-//
-// Only a cycle well below that means the task really did run ahead. A
-// runaway - the task going round as fast as it can work - shows up as a
-// cycle near the frame's own work time, about 3 ms.
-static const char* fastestCycleVerdict(double cycleMs) {
-  if (cycleMs <= 0.0f) return "n/a";
-  if (cycleMs < (double)FRAME_PERIOD_MS * 50.0)
-    return "<b style=\"color:red;\">! ran ahead of the audio</b>";
-  if (cycleMs < (double)FRAME_PERIOD_MS * 85.0)
-    return "<i>~ within a tick of the frame period</i>";
-  return " OK";
-}
 
 class AudioReactive : public Usermod {
 
@@ -5274,6 +6193,9 @@ class AudioReactive : public Usermod {
         rtaResult = rtaResultBuf[0];
         memset(arRtaSmth, 0, sizeof(arRtaSmth));
         arRtaAgcDb = 0.0f;
+        // The display's auto-range is a peak hold, so it starts at the bottom
+        // of its travel: the display starts low and the signal earns the top.
+        arAgcDb = 0.0f;
         if (arUmData != nullptr) arUmData->u_data[12] = rtaResult;
       }
       inputLevel = 128;
@@ -5332,13 +6254,351 @@ class AudioReactive : public Usermod {
     ////////////////////////////
 
     /*
+     * addToJsonAr() - the /json/ar endpoint.
+     *
+     * The info page is for a person: a dozen numbers, read at a glance, each
+     * one a short piece of prose. This is the machine-readable twin of it -
+     * EVERY number the analysis knows, as a NUMBER, with the unit in the key's
+     * name. There are no strings anywhere in here except the few names that
+     * have no numeric form (the codec, the window's mode), because a script
+     * that has to parse "-23.1 dB" out of a sentence is doing this the hard
+     * way.
+     *
+     * The layout is nested by what the number IS rather than by what it is
+     * for: the levels, the display window, the two band sets, the filter bank,
+     * the timings, the self-tests, the calibration, the codec and the memory.
+     * Everything the info page shows is here too, plus everything it does not
+     * have room for.
+     */
+    void addToJsonAr(JsonObject& obj) override
+    {
+      JsonObject ar = obj.createNestedObject(FPSTR(_name));
+      const int rtaBands = bandLayoutReady ? lay31.count : 0;
+
+      // ---- what is running ---------------------------------------------
+      ar["enabled"]   = enabled;
+      ar["processing"] = (audioSource != nullptr) && !disableSoundProcessing;
+      ar["source"]    = ((audioSyncEnabled & AUDIOSYNC_REC) ||
+                         ((audioSyncEnabled == AUDIOSYNC_REC_PLUS) && !udpSyncConnected))
+                          ? "udp"
+                          : ((audioSource && audioSource->isInitialized())
+                              ? ((dmType == 51) ? "legacy i2s pdm" : "i2s")
+                              : "none");
+      ar["codec"]     = arCodecName(dmType);
+      ar["input_level"] = (int)inputLevel;
+      {
+        float post = (float)inputLevel / 128.0f;
+        if (post < 1.0f) post = ((post - 1.0f) * 0.8f) + 1.0f;
+        ar["input_gain_pct"] = (double)roundf(post * 100.0f);
+      }
+      ar["peak_pct"]  = (double)(100.0f * maxSample5sec / 255.0f);
+
+      // ---- the level / floor / gate / AGC chain -------------------------
+      //
+      // Four DIFFERENT quantities. They are separate here because they are
+      // separate in the firmware: the level is the fresh hop's RMS, the floor
+      // is a minimum statistic, the gate is a comparison between them, and the
+      // AGC is a display offset applied last.
+      {
+        JsonObject l = ar.createNestedObject("level");
+        l["level_db"]       = (double)arLevelDb;
+        l["noise_floor_db"] = (double)arFloorDb;
+        l["above_floor_db"] = (double)(arLevelDb - arFloorDb);
+        l["gate_open"]      = arGateOpen;
+        l["gate_open_db"]   = (double)soundSquelch;
+        l["agc_db"]         = (double)arAgcDb;
+        l["rta_agc_db"]     = (double)arRtaAgcDb;
+      }
+
+      // ---- the display window -------------------------------------------
+      {
+        JsonObject d = ar.createNestedObject("display");
+        d["trim_db"]    = (double)TROYHACKS_DBREF;
+        d["span_db"]    = (double)TROYHACKS_DBSPAN;
+        d["input_trim_db"] = (double)arInputTrimDb();
+        d["rta_window"] = rtaAutoRange ? "auto" : "fixed";
+        d["rta_floor_db"] = (double)rtaFloorDb;
+        d["rta_top_db"]   = (double)rtaTopDb;
+        d["rta_span_db"]  = (double)(rtaAutoRange ? AR_RTA_DBSPAN : (rtaTopDb - rtaFloorDb));
+        // The absolute window the RTA bars are currently drawn in. In auto
+        // mode this is implied by the peak hold's offset; in fixed mode it is
+        // the user's own grid. It is the number to compare with an
+        // analyser's own scale.
+        d["rta_window_lo_db"] = (double)(rtaAutoRange ? (AR_RTA_TARGET_DB - arRtaAgcDb - AR_RTA_DBSPAN)
+                                                        : rtaFloorDb);
+        d["rta_window_hi_db"] = (double)(rtaAutoRange ? (AR_RTA_TARGET_DB - arRtaAgcDb) : rtaTopDb);
+        d["rta_ref_db"] = (double)rtaRefDb;
+        arJsonFloats(d.createNestedArray("rta_trim_db"), rtaTrimDb, rtaBands);
+        arJsonFloats(d.createNestedArray("geq_trim_db"), bandTrimDb, NUM_GEQ_CHANNELS);
+      }
+
+      // ---- the 16 display bands ----------------------------------------
+      {
+        JsonObject g = ar.createNestedObject("geq");
+        g["count"]     = NUM_GEQ_CHANNELS;
+        g["layout"]    = "1/2-octave";
+        g["f_low_hz"]  = (double)lay16.fLow;
+        g["f_high_hz"] = (double)lay16.fHigh;
+        JsonArray gc = g.createNestedArray("centres_hz");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gc.add((double)lay16.centre[k]);
+        // One copy of the published bytes, taken under the publish lock so a
+        // swap cannot straddle it.
+        uint8_t bars[NUM_GEQ_CHANNELS];
+        {
+          ArPublishGuard guard;
+          memcpy(bars, fftResult, sizeof(bars));
+        }
+        JsonArray ba = g.createNestedArray("bars");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) ba.add((int)bars[k]);
+        // The point PSD at the band, and the same number with the input
+        // chain's response divided out. The second is what the bars show.
+        JsonArray psd = g.createNestedArray("psd_db");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+          const float p = estPeak[k] * powf(10.0f, estComp[k] / 20.0f);
+          psd.add((double)(p > 0.0f ? 10.0f * log10f(p) : -99.0f));
+        }
+        JsonArray bd = g.createNestedArray("band_db");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) bd.add((double)estBandDb[k]);
+        float bandMax = -1e30f;
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
+          if (estBandDb[k] > bandMax) bandMax = estBandDb[k];
+        JsonArray sh = g.createNestedArray("shape_db");
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+          const float db = (bandMax > -1e29f && estBandDb[k] > -119.0f)
+                           ? (estBandDb[k] - bandMax) : -99.0f;
+          sh.add((double)db);
+        }
+      }
+
+      // ---- the 31 RTA bands ---------------------------------------------
+      //
+      // These are the numbers to compare with a hardware analyser, one bar
+      // for one bar. They are PRE-AGC: an AGC offset is a display artefact
+      // and would destroy the comparison.
+      {
+        JsonObject r = ar.createNestedObject("rta");
+        r["count"]     = rtaBands;
+        r["layout"]    = "1/3-octave (ISO 266)";
+        r["f_low_hz"]  = (double)lay31.fLow;
+        r["f_high_hz"] = (double)lay31.fHigh;
+        JsonArray c = r.createNestedArray("centres_hz");
+        for (int k = 0; k < rtaBands; k++) c.add((double)lay31.centre[k]);
+        uint8_t bars[NUM_RTA_CHANNELS];
+        {
+          ArPublishGuard guard;
+          memcpy(bars, rtaResult, sizeof(bars));
+        }
+        JsonArray ba = r.createNestedArray("bars");
+        for (int k = 0; k < rtaBands; k++) ba.add((int)bars[k]);
+        JsonArray bp = r.createNestedArray("band_power_db");
+        for (int k = 0; k < rtaBands; k++)
+          bp.add((double)(estRta[k] > 0.0f ? 10.0f * log10f(estRta[k]) : -99.0f));
+        JsonArray bl = r.createNestedArray("band_level_db");
+        for (int k = 0; k < rtaBands; k++) bl.add((double)estRtaDb[k]);
+        JsonArray tr = r.createNestedArray("trim_db");
+        arJsonFloats(tr, rtaTrimDb, rtaBands);
+      }
+
+      // ---- the filter bank (the bottom 8 RTA bands) ----------------------
+      {
+        JsonObject b = ar.createNestedObject("bank");
+        b["ready"]      = bankReady;
+        b["bands"]      = AR_BANK_BANDS;
+        b["f_low_hz"]   = bandLayoutReady ? (double)lay31.centre[0] : 0.0;
+        b["f_high_hz"]  = bandLayoutReady ? (double)lay31.centre[AR_BANK_BANDS - 1] : 0.0;
+        b["rate_hz"]    = (double)AR_BANK_FS;
+        b["decimate"]   = AR_BANK_DEC;
+        b["aa_hz"]      = (double)AR_BANK_AA_HZ;
+        b["tau_ms"]     = (double)bankTauMs;
+        b["us_per_frame"] = (double)(bankTime * TIMING_UNIT_US);
+        // The filter's ENBW against the nominal band width: how much wider
+        // than the band the filter really is.
+        JsonArray e = b.createNestedArray("enbw_ratio_db");
+        for (int k = 0; k < AR_BANK_BANDS; k++) {
+          const float width = lay31.edgeHi[k] - lay31.edgeLo[k];
+          e.add((double)(10.0f * log10f(bankEnbw[k] / width)));
+        }
+        JsonObject st = b.createNestedObject("self_test");
+        st["done"]         = bankTestDone;
+        st["pass"]         = bankTestDone && (bankTestFails == 0) && (bankTestNbrFails == 0);
+        st["fails"]        = bankTestFails;
+        st["worst_db"]     = (double)bankTestWorst;
+        st["worst_hz"]     = (double)bankTestWorstF;
+        st["nbr_checks"]   = bankTestNbrChecks;
+        st["nbr_fails"]    = bankTestNbrFails;
+        st["worst_nbr_db"] = (double)bankTestWorstNbr;
+      }
+
+      // ---- the frame's timing -------------------------------------------
+      //
+      // Microseconds, everywhere. The firmware stores these in 10 us units,
+      // so the conversion happens here and nowhere else.
+      {
+        JsonObject t = ar.createNestedObject("timing_us");
+        t["cycle"]         = (double)(fftTaskCycle * TIMING_UNIT_US);
+        t["fastest_cycle"] = (double)(fftTaskMinCycle * TIMING_UNIT_US);
+        t["slowest_cycle"] = (double)(fftTaskMaxCycle * TIMING_UNIT_US);
+        t["sampling"]      = (double)(sampleTime * TIMING_UNIT_US);
+        t["filtering"]     = (double)(filterTime * TIMING_UNIT_US);
+        t["fft"]           = (double)(fftTime * TIMING_UNIT_US);
+        t["bank"]          = (double)(bankTime * TIMING_UNIT_US);
+        t["dma_surplus_ms"] = (double)(FRAME_PERIOD_MS - (sampleTime * TIMING_UNIT_US / 1000.0));
+        t["frames_total"]   = (unsigned long)arFramesTotal;
+        t["frames_overran"] = (unsigned long)arFramesOverran;
+        // The frame's work: the compute without the wait for the audio. The
+        // read's time is NOT in here - on a correctly paced board it is the
+        // task waiting for the next hop to arrive, and it is the largest
+        // single number in the cycle. The work is what has to fit inside the
+        // frame period, and it is what frames_overran counts against.
+        t["work_ms"] = (double)((fftTime + filterTime) * TIMING_UNIT_US / 1000.0);
+        JsonObject p = t.createNestedObject("parts");
+        p["read_carry"]    = (double)(sampleTime * TIMING_UNIT_US);
+        p["filtering"]     = (double)(filterTime * TIMING_UNIT_US);
+        p["fft_region"]    = (double)(fftTime * TIMING_UNIT_US);
+        p["tail"]          = (double)(tTail * TIMING_UNIT_US);
+        p["tick_floor"]    = (double)(tFloor * TIMING_UNIT_US);
+        p["deadline_wait"] = (double)(tWait * TIMING_UNIT_US);
+        p["loop_entry"]    = (double)(tLoop * TIMING_UNIT_US);
+        p["total"]         = (double)(tParts * TIMING_UNIT_US);
+        p["residual"]      = (double)(tResidual * TIMING_UNIT_US);
+        // "fft" above is the whole frame from windowing through the band
+        // mapping; the transform is only one of its five stages.
+        JsonObject fb = t.createNestedObject("fft_breakdown");
+        fb["windowing"]   = (double)(tWindow * TIMING_UNIT_US);
+        fb["frame_prep"]  = (double)(tPrep * TIMING_UNIT_US);
+        fb["esp_dsp_fft"] = (double)(tFft * TIMING_UNIT_US);
+        fb["bitrev_mag"]  = (double)(tPost * TIMING_UNIT_US);
+        fb["bands_post"]  = (double)(tFinal * TIMING_UNIT_US);
+        // The pipeline's health, as words. "ok" is what you want to see in
+        // all five; anything else says which of the three limits was crossed.
+        {
+          const ArHealth h = arHealth();
+          JsonObject hh = t.createNestedObject("health");
+          hh["budget"]        = h.budget;
+          hh["pacing"]        = h.pacing;
+          hh["fastest_cycle"] = h.fastest;
+          hh["dma_surplus"]   = h.surplus;
+          hh["read_blocking"] = h.readBlocking;
+        }
+      }
+
+      // ---- what the init cost -------------------------------------------
+      {
+        JsonObject i = ar.createNestedObject("init_ms");
+        i["buffers"]             = (double)arInitBuffersMs;
+        i["calibration"]         = (double)arInitCalMs;
+        i["chain_self_test"]     = (double)arInitChainMs;
+        i["estimator_self_test"] = (double)arInitEstMs;
+        i["total"]               = (double)arInitTotalMs;
+      }
+
+      // ---- the self-tests ------------------------------------------------
+      {
+        JsonObject s = ar.createNestedObject("self_test");
+        JsonObject c = s.createNestedObject("chain");
+        c["valid"]        = selfTestResult.valid;
+        c["probes"]       = selfTestResult.probes;
+        c["fails"]        = selfTestResult.fails;
+        c["worst_impl_db"] = (double)selfTestResult.worstImpl;
+        c["worst_impl_hz"] = (double)selfTestResult.worstImplF;
+        c["worst_sine_db"] = (double)selfTestResult.worstSine;
+        c["worst_sine_hz"] = (double)selfTestResult.worstSineF;
+        c["worst_lpf_db"]  = (double)selfTestResult.worstLpf;
+        c["worst_lpf_hz"]  = (double)selfTestResult.worstLpfF;
+        JsonArray pt = c.createNestedArray("probes_table");
+        for (int i = 0; i < selfTestResult.probes; i++) {
+          JsonObject row = pt.createNestedObject();
+          row["hz"]          = (double)selfTestResult.freq[i];
+          row["model_db"]    = (double)selfTestResult.modelDb[i];
+          row["impl_db"]     = (double)selfTestResult.implDb[i];
+          row["sine_db"]     = (double)selfTestResult.sineDb[i];
+          row["lpf_model_db"] = (double)selfTestResult.lpfModelDb[i];
+          row["lpf_impl_db"]  = (double)selfTestResult.lpfImplDb[i];
+          row["ok"]          = selfTestResult.ok[i];
+        }
+        JsonObject e = s.createNestedObject("estimator");
+        e["done"]         = estTestDone;
+        e["skipped"]      = estTestSkipped;
+        e["fails"]        = estTestFails;
+        e["checks"]       = NUM_GEQ_CHANNELS + rtaBands;
+        e["worst_db"]     = (double)estTestWorst;
+        e["worst_hz"]     = (double)estTestWorstF;
+        e["nbr_checks"]   = estTestNbrChecks;
+        e["nbr_fails"]    = estTestNbrFails;
+        e["worst_nbr_db"] = (double)estTestWorstNbr;
+        e["unresolvable"] = estTestUnresolvable;
+      }
+
+      // ---- the calibration ------------------------------------------------
+      {
+        JsonObject c = ar.createNestedObject("calibration");
+        c["target"]   = calTargetPink ? "pink" : "flat";
+        c["clamps"]   = calClamps;
+        c["clamp_db"] = (double)CAL_CLAMP_DB;
+        const int n = NUM_GEQ_CHANNELS + rtaBands;
+        float lo = 0.0f, hi = 0.0f;
+        for (int k = 0; k < n; k++) {
+          if (k == 0 || calChainDb[k] < lo) lo = calChainDb[k];
+          if (k == 0 || calChainDb[k] > hi) hi = calChainDb[k];
+        }
+        c["chain_db_min"] = (double)lo;
+        c["chain_db_max"] = (double)hi;
+        arJsonFloats(c.createNestedArray("chain_db"), calChainDb, n);
+      }
+
+      // ---- the codec ------------------------------------------------------
+      {
+        JsonObject c = ar.createNestedObject("codec");
+        const AR_CodecRegs& cregs = arCodecRegs();
+        c["registers_valid"] = cregs.valid;
+        arJsonBytes(c.createNestedArray("registers"), cregs.v, 32);
+        c["want_mclk_hz"]       = (double)ES8311_MCLK_HZ;
+        c["want_sample_rate_hz"] = (double)SAMPLE_RATE;
+        uint32_t gotMclk = 0, gotFs = 0;
+        if (audioSource) {
+          gotMclk = audioSource->getMclkHz();
+          gotFs   = audioSource->getClockSampleRateHz();
+        }
+        c["mclk_hz"]          = (double)gotMclk;
+        c["sample_rate_hz"]   = (double)gotFs;
+        c["ppm"] = gotFs ? (double)((((long long)gotFs - (long long)SAMPLE_RATE) * 1000000LL)
+                                    / (long long)SAMPLE_RATE) : 0.0;
+      }
+
+      // ---- the memory -----------------------------------------------------
+#ifdef ARDUINO_ARCH_ESP32
+      {
+        JsonObject m = ar.createNestedObject("memory");
+        m["fft_buf_bytes"]      = (unsigned)(sizeof(float) * samplesFFT * 2);
+        m["fft_buf_internal"]   = (fftBuf != nullptr && arFftBufInternal);
+        m["twiddle_bytes"]      = (unsigned)(sizeof(float) * 4 * (samplesFFT >> 1));
+        m["twiddle_internal"]   = (fftTwiddle != nullptr && arTwiddleInternal);
+        m["internal_free_bytes"] = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+      }
+#endif
+
+      // ---- the UDP sound sync ---------------------------------------------
+      {
+        JsonObject u = ar.createNestedObject("udp_sync");
+        const char* mode = "off";
+        if (audioSyncEnabled & AUDIOSYNC_SEND)                mode = "send";
+        else if (audioSyncEnabled == AUDIOSYNC_REC)           mode = "receive";
+        else if (audioSyncEnabled == AUDIOSYNC_REC_PLUS)      mode = "receive_plus";
+        u["enabled"]   = (audioSyncEnabled != 0);
+        u["mode"]      = mode;
+        u["connected"] = udpSyncConnected;
+        u["format"]    = receivedFormat;
+        u["last_packet_ms_ago"] = last_UDPTime ? (long)(millis() - last_UDPTime) : -1L;
+      }
+    }
+
+    /*
      * addToJsonInfo() can be used to add custom entries to the /json/info part of the JSON API.
      * Creating an "u" object allows you to add custom key/value pairs to the Info section of the WLED web UI.
      * Below it is shown how this could be used for e.g. a light sensor
      */
     void addToJsonInfo(JsonObject& root)
     {
-      char myStringBuffer[16]; // buffer for snprintf() - not used yet on 8266
       JsonObject user = root["u"];
       if (user.isNull()) user = root.createNestedObject("u");
 
@@ -5364,43 +6624,25 @@ class AudioReactive : public Usermod {
         if ((audioSource == nullptr) || (!audioSource->isInitialized()))                                   // local audio not configured
           audioSyncIDLE = false;
 
-        // Input Level Slider
-        if (disableSoundProcessing == false) {                                 // only show slider when audio processing is running
-          // The slider is a DISPLAY trim now, applied in dB after the AGC, so
-          // it moves the bars and nothing else. The old label distinguished
-          // the AGC's two modes ("GEQ Input Level" vs "Audio Input Level"),
-          // but the legacy AGC's presets are gone - there is one AGC and it is
-          // always on - so there is only one label left.
-          infoArr = user.createNestedArray(F("Audio Input Level"));
-          // show slider value as a number
-          float post_gain = (float)inputLevel/128.0f;
-          if (post_gain < 1.0f) post_gain = ((post_gain -1.0f) * 0.8f) +1.0f;
-          post_gain = roundf(post_gain * 100.0f);
-          snprintf_P(myStringBuffer, 15, PSTR("%3.0f %%"), post_gain);
-          infoArr.add(myStringBuffer);
-          uiDomString = F("<div class=\"slider\"><div class=\"sliderwrap il\"><input class=\"noslide\" onchange=\"requestJson({");
-          uiDomString += FPSTR(_name);
-          uiDomString += F(":{");
-          uiDomString += FPSTR(_inputLvl);
-          uiDomString += F(":parseInt(this.value)}});\" oninput=\"updateTrail(this);\" max=255 min=0 type=\"range\" value=");
-          uiDomString += inputLevel;
-          uiDomString += F(" /><div class=\"sliderdisplay\"></div></div></div>"); //<output class=\"sliderbubble\"></output>
-          infoArr.add(uiDomString);
-        } 
+        // The input level slider is a CONTROL, and controls belong on the
+        // usermod's own settings page. The info pane is for reading, and a
+        // slider in it is one more thing to look past.
 
         // The following can be used for troubleshooting user errors and is so not enclosed in #ifdef WLED_DEBUG
         // current Audio input
+        //
+        // Every row in this pane is ONE short string. The pane renders a row's
+        // first two elements back to back with no separator, so prose reads as
+        // more value rather than as a unit - and the whole point of the pane
+        // is to be read at a glance.
         infoArr = user.createNestedArray(F("Audio Source"));
         if ((audioSyncEnabled == AUDIOSYNC_REC) || (!audioSyncIDLE && (audioSyncEnabled == AUDIOSYNC_REC_PLUS))){
           // UDP sound sync - receive mode
-          infoArr.add(F("UDP sound sync"));
           if (udpSyncConnected) {
-            if (millis() - last_UDPTime < AUDIOSYNC_IDLE_MS)
-              infoArr.add(F(" - receiving"));
-            else
-              infoArr.add(F(" - idle"));
+            infoArr.add((millis() - last_UDPTime < AUDIOSYNC_IDLE_MS)
+                          ? F("UDP sync, receiving") : F("UDP sync, idle"));
           } else {
-            infoArr.add(F(" - no connection"));
+            infoArr.add(F("UDP sync, no connection"));
           }
 #ifndef ARDUINO_ARCH_ESP32  // substitute for 8266
         } else {
@@ -5411,139 +6653,34 @@ class AudioReactive : public Usermod {
           // I2S digital input (analog-ADC path removed with I2SAdcSource)
           if (audioSource && (audioSource->isInitialized())) {
             // audio source successfully configured
-            if (dmType != 51)
-              infoArr.add(F("I2S digital"));
-            else
-              infoArr.add(F("legacy I2S PDM"));
-            // input level or "silence"
-            if (maxSample5sec > 1.0) {
-              float my_usage = 100.0f * (maxSample5sec / 255.0f);
-              snprintf_P(myStringBuffer, 15, PSTR(" - peak %3d%%"), int(my_usage));
-              infoArr.add(myStringBuffer);
-            } else {
-              infoArr.add(F(" - quiet"));
-            }
+            infoArr.add((dmType != 51) ? F("I2S digital") : F("legacy I2S PDM"));
           } else {
             // error during audio source setup
             infoArr.add(F("not initialized"));
-            if (dmType < 254) infoArr.add(F(" - check pin settings"));
           }
         }
 
         // Active codec name (matches the "Audio Source" dropdown in the
         // usermod settings page). This is the verbatim label string used
         // for the currently-selected dmType, so the info pane stays in sync
-        // with whatever the user picked.
+        // with whatever the user picked. The spelling lives in arCodecName(),
+        // which the /json/ar endpoint uses too - the two must not disagree.
         {
           infoArr = user.createNestedArray(F("Active codec"));
-          const char* codecName = "";
-          switch (dmType) {
-            case 0:   codecName = PSTR("Generic Analog"); break;
-            case 1:   codecName = PSTR("Generic I2S"); break;
-            case 2:   codecName = PSTR("ES7243"); break;
-            case 3:   codecName = PSTR("SPH0654"); break;
-            case 4:   codecName = PSTR("Generic I2S with MCLK"); break;
-            case 5:   codecName = PSTR("Generic I2S PDM"); break;
-            case 51:  codecName = PSTR("Legacy I2S PDM"); break;
-            case 6:   codecName = PSTR("ES8388"); break;
-            case 7:   codecName = PSTR("WM8978"); break;
-            case 8:   codecName = PSTR("AC101"); break;
-            case 9:   codecName = PSTR("ES8311"); break;
-            case 10:  codecName = PSTR("ES8311 (esp_codec_dev)"); break;
-            case 11:  codecName = PSTR("ES8388 (esp_codec_dev)"); break;
-            case 12:  codecName = PSTR("ES8374 (esp_codec_dev)"); break;
-            case 13:  codecName = PSTR("ZL38063 (esp_codec_dev)"); break;
-            case 14:  codecName = PSTR("ES8389 (esp_codec_dev)"); break;
-            case 15:  codecName = PSTR("ES7210 (esp_codec_dev)"); break;
-            case 16:  codecName = PSTR("ES7243 (esp_codec_dev)"); break;
-            case 17:  codecName = PSTR("ES7243E (esp_codec_dev)"); break;
-            case 18:  codecName = PSTR("CJC8910 (esp_codec_dev)"); break;
-            case 254: codecName = PSTR("None - network receive only"); break;
-            default:  codecName = PSTR("Unknown"); break;
-          }
-          infoArr.add(codecName);
+          infoArr.add(arCodecName(dmType));
         }
 
-        // The codec's own registers, read back off the chip.
-        //
-        // Two things in the codec decide what the analysis is looking at, and
-        // neither can be checked from the WLED side: the clock manager (which
-        // sets the rate the ADC actually runs at - and therefore which
-        // frequency a bar represents) and the ALC (which ducks the gain of the
-        // whole spectrum when it decides the input is too hot). They are
-        // published here because the serial console is UART0 on this build and
-        // the USB port carries only the IDF log.
-        {
-          const AR_CodecRegs& cregs = arCodecRegs();
-          if (cregs.valid) {
-            infoArr = user.createNestedArray(F("Codec registers"));
-            char cbuf[256];
-            // The clock manager, decoded: DIV_PRE is bits 7:5 of 0x02 and
-            // holds (divider - 1); MULT_PRE is bits 4:3 and holds 0/1/2/3 for
-            // 1x/2x/4x/8x. 0x07/0x08 hold the LRCK divider (value - 1).
-            uint8_t r02 = cregs.v[0x02];
-            unsigned divPre  = ((r02 >> 5) & 0x07) + 1u;
-            unsigned multPre = (r02 >> 3) & 0x03;
-            unsigned multVal = 1u << multPre;
-            unsigned lrckDiv = ((unsigned)cregs.v[0x07] << 8) | cregs.v[0x08];
-            snprintf(cbuf, sizeof(cbuf),
-                     "clk 01=%02X 02=%02X(DIV_PRE=%u MULT_PRE=%ux) 03=%02X 04=%02X 05=%02X 06=%02X 07=%02X 08=%02X | LRCK div=%u",
-                     cregs.v[0x01], r02, divPre, multVal, cregs.v[0x03], cregs.v[0x04],
-                     cregs.v[0x05], cregs.v[0x06], cregs.v[0x07], cregs.v[0x08], lrckDiv + 1);
-            infoArr.add(cbuf);
+        // The codec's own registers, the clock it is actually fed with, the
+        // UDP sync status, the frame's timings and every band array live on
+        // the /json/ar endpoint now. They are numbers a script wants, not
+        // things a person reads at a glance, and the info pane had grown into
+        // a wall of them.
 
-            snprintf(cbuf, sizeof(cbuf),
-                     "gain 14=%02X (PGA %+d dB, LINSEL=%u) 16=%02X 17=%02X | ALC 18=%02X (enable=%u automute=%u) 19=%02X 1A=%02X 1B=%02X",
-                     cregs.v[0x14], (int)(cregs.v[0x14] & 0x0F) * 3, (cregs.v[0x14] & 0x10) ? 1u : 0u,
-                     cregs.v[0x16], cregs.v[0x17],
-                     cregs.v[0x18], (cregs.v[0x18] & 0x80) ? 1u : 0u, (cregs.v[0x18] & 0x40) ? 1u : 0u,
-                     cregs.v[0x19], cregs.v[0x1A], cregs.v[0x1B]);
-            infoArr.add(cbuf);
-          } else {
-            infoArr = user.createNestedArray(F("Codec registers"));
-            infoArr.add(F("not read (codec did not answer)"));
-          }
-        }
-
-        // The clock the codec is fed, and the clock it is actually fed with.
-        //
-        // This is the one link in the chain that can silently be wrong: the
-        // codec never reports its own clock, and the I2S driver never reports
-        // the clock it programmed. If the MCLK is not 256 x the sample rate the
-        // analysis believes it is looking at, every bar is on the wrong
-        // frequency - while the level, the noise floor and the bar heights all
-        // keep looking perfectly normal, just at the wrong pitches.
-        //
-        // On the ESP32-P4 the fractional divider behind the I2S clock is
-        // readable, so the measured figure is a measurement and not a
-        // restatement of what was asked for.
-        {
-          infoArr = user.createNestedArray(F("I2S clock"));
-          char kbuf[160];
-          uint32_t gotMclk = 0, gotFs = 0;
-          if (audioSource) {
-            gotMclk = audioSource->getMclkHz();
-            gotFs   = audioSource->getClockSampleRateHz();
-          }
-          if (gotMclk && gotFs) {
-            long ppm = (long)((((long long)gotFs - (long long)SAMPLE_RATE) * 1000000LL) / (long long)SAMPLE_RATE);
-            snprintf(kbuf, sizeof(kbuf),
-                     "want MCLK %.3f MHz (256 x %d Hz) | measured MCLK %.3f MHz -> %.1f Hz (%+ld ppm)",
-                     (double)ES8311_MCLK_HZ / 1000000.0, (int)SAMPLE_RATE,
-                     (double)gotMclk / 1000000.0, (double)gotFs, ppm);
-          } else {
-            snprintf(kbuf, sizeof(kbuf),
-                     "want MCLK %.3f MHz (256 x %d Hz) | not readable on this target",
-                     (double)ES8311_MCLK_HZ / 1000000.0, (int)SAMPLE_RATE);
-          }
-          infoArr.add(kbuf);
-        }
-
-        // Sound processing (FFT and input filters)
-        infoArr = user.createNestedArray(F("Sound Processing"));
-        if (audioSource && (disableSoundProcessing == false)) {
-          infoArr.add(F("running"));
-        } else {
+        // Sound processing (FFT and input filters). Only when it is NOT
+        // running - "running" is the good case, and the good case does not
+        // need a row.
+        if (!audioSource || (disableSoundProcessing != false)) {
+          infoArr = user.createNestedArray(F("Sound Processing"));
           infoArr.add(F("suspended"));
         }
 
@@ -5551,29 +6688,23 @@ class AudioReactive : public Usermod {
         // contract, on the hardware, with the real transform and the real
         // window. A centre that reads more than 0.15 dB off the contract is a
         // normalisation error, and it would be invisible in the bars.
-        if (estTestDone) {
+        //
+        // It only gets a row when it FAILS. A passing self-test is the
+        // expected case, and a pane that lists it is a pane with one more
+        // line of noise in it.
+        if (estTestDone && (estTestSkipped || (estTestFails != 0) || (estTestNbrFails != 0))) {
           infoArr = user.createNestedArray(F("Estimator self-test"));
-          char esBuf[128];
+          char esBuf[96];
           const int total = NUM_GEQ_CHANNELS + lay31.count;
           if (estTestSkipped) {
             // A test that did not run must never report PASS.
-            snprintf(esBuf, sizeof(esBuf), "SKIPPED - the estimator could not be tested");
+            infoArr.add(F("FAILED - could not be tested"));
           } else {
-            snprintf(esBuf, sizeof(esBuf), "%d/%d centres %s - worst %+0.3f dB at %.2f Hz",
-                     total - estTestFails, total, estTestFails ? "FAIL" : "PASS",
+            snprintf(esBuf, sizeof(esBuf),
+                     "FAILED: %d of %d centres, %d of %d neighbours, worst %+.3f dB @ %.0f Hz",
+                     estTestFails, total, estTestNbrFails, estTestNbrChecks,
                      (double)estTestWorst, (double)estTestWorstF);
-          }
-          infoArr.add(esBuf);
-          if (!estTestSkipped) {
-            snprintf(esBuf, sizeof(esBuf), "%d/%d neighbour checks %s - worst disagreement %+0.3f dB",
-                     estTestNbrChecks - estTestNbrFails, estTestNbrChecks,
-                     estTestNbrFails ? "FAIL" : "PASS", (double)estTestWorstNbr);
             infoArr.add(esBuf);
-            if (estTestUnresolvable) {
-              snprintf(esBuf, sizeof(esBuf), "%d neighbour pairs unresolvable - the kernel is wider than the band gap",
-                       estTestUnresolvable);
-              infoArr.add(esBuf);
-            }
           }
         }
 
@@ -5582,46 +6713,17 @@ class AudioReactive : public Usermod {
         // reachable - on this build the app's console is UART0 while the USB
         // port carries only the IDF log, so a self-test that exists only as
         // serial output cannot be read.
-        if (selfTestResult.valid) {
+        //
+        // Like the estimator's, it only gets a row when it FAILS.
+        if (selfTestResult.valid && (selfTestResult.fails != 0)) {
           infoArr = user.createNestedArray(F("Chain self-test"));
-          char stBuf[128];
-          snprintf(stBuf, sizeof(stBuf), "%d/%d probes %s - impl-model %.3f dB @ %.0f Hz, sine-impl %.3f dB @ %.0f Hz",
-                   selfTestResult.probes - selfTestResult.fails, selfTestResult.probes,
-                   selfTestResult.fails ? "FAIL" : "PASS",
+          char stBuf[96];
+          snprintf(stBuf, sizeof(stBuf),
+                   "FAILED: %d of %d probes, impl %+.3f dB @ %.0f Hz, sine %+.3f dB @ %.0f Hz",
+                   selfTestResult.fails, selfTestResult.probes,
                    (double)selfTestResult.worstImpl, (double)selfTestResult.worstImplF,
                    (double)selfTestResult.worstSine, (double)selfTestResult.worstSineF);
           infoArr.add(stBuf);
-
-          infoArr = user.createNestedArray(F("Self-test table"));
-          // static: this buffer is 2.6 KB and has no business on the stack
-          static char tblBuf[2600];
-          int off = snprintf(tblBuf, sizeof(tblBuf), "<pre style=\"text-align:left;font-size:11px\">");
-          int n = snprintf(tblBuf + off, sizeof(tblBuf) - off,
-                            "%6s %9s %9s %9s %9s %9s %9s %9s  %s\n",
-                            "Hz", "model dB", "impl dB", "sine dB", "LPFmodel", "LPFimpl", "d(impl)", "d(sine)", "verdict");
-          if (n > 0) off += n;
-          for (int p = 0; (p < selfTestResult.probes) && (off < (int)sizeof(tblBuf) - 160); p++) {
-            n = snprintf(tblBuf + off, sizeof(tblBuf) - off,
-                         "%6.0f %+9.3f %+9.3f %+9.3f %+9.3f %+9.3f %+9.3f %+9.3f  %s\n",
-                         (double)selfTestResult.freq[p],
-                         (double)selfTestResult.modelDb[p],
-                         (double)selfTestResult.implDb[p],
-                         (double)selfTestResult.sineDb[p],
-                         (double)selfTestResult.lpfModelDb[p],
-                         (double)selfTestResult.lpfImplDb[p],
-                         (double)(selfTestResult.implDb[p] - selfTestResult.modelDb[p]),
-                         (double)(selfTestResult.sineDb[p] - selfTestResult.implDb[p]),
-                         selfTestResult.ok[p] ? "PASS" : "FAIL");
-            if (n > 0) off += n;
-          }
-          if (off < (int)sizeof(tblBuf) - 8) {
-            n = snprintf(tblBuf + off, sizeof(tblBuf) - off, "</pre>");
-            if (n > 0) off += n;
-          }
-          infoArr.add(tblBuf);
-        } else {
-          infoArr = user.createNestedArray(F("Chain self-test"));
-          infoArr.add(F("not run yet"));
         }
 
         // The level tracker: the four numbers that decide what is published.
@@ -5636,23 +6738,18 @@ class AudioReactive : public Usermod {
           infoArr = user.createNestedArray(F("Level (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%.1f", (double)arLevelDb);
           infoArr.add(lvlBuf);
-          infoArr.add(F("RMS of the fresh hop, dB re full scale"));
 
           infoArr = user.createNestedArray(F("Noise floor (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%.1f", (double)arFloorDb);
           infoArr.add(lvlBuf);
-          infoArr.add(F("minimum statistic, creeps up with tau = 10 s"));
 
           infoArr = user.createNestedArray(F("Gate"));
-          infoArr.add(arGateOpen ? F("open") : F("shut"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%.1f dB above the floor (squelch %d)",
-                   (double)(arLevelDb - arFloorDb), (int)soundSquelch);
+          snprintf(lvlBuf, sizeof(lvlBuf), "%s, %+.1f dB over floor",
+                   arGateOpen ? "open" : "shut", (double)(arLevelDb - arFloorDb));
           infoArr.add(lvlBuf);
 
           infoArr = user.createNestedArray(F("Display AGC (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)arAgcDb);
-          infoArr.add(lvlBuf);
-          snprintf(lvlBuf, sizeof(lvlBuf), "loudest band held at %.1f dB", (double)AR_AGC_TARGET_DB);
           infoArr.add(lvlBuf);
 
           // The RTA view has its own auto-range, on its own unit (the
@@ -5660,383 +6757,117 @@ class AudioReactive : public Usermod {
           infoArr = user.createNestedArray(F("RTA display offset (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)arRtaAgcDb);
           infoArr.add(lvlBuf);
-          snprintf(lvlBuf, sizeof(lvlBuf), "loudest RTA band held at %.1f dB, span %.0f dB",
-                   (double)AR_RTA_TARGET_DB, (double)AR_RTA_DBSPAN);
+
+          // The RTA view's WINDOW: auto-range or fixed, and in the fixed case
+          // the two numbers that define it.
+          //
+          // The auto-range has no absolute scale - its top is wherever the
+          // last peak put it - so the implied absolute window is reported as
+          // well. That is the number to compare with an analyser's own grid:
+          // "our display is currently showing -12 to -52 dB" is comparable
+          // with the analyser's, "our bars look like that" is not.
+          infoArr = user.createNestedArray(F("RTA window"));
+          if (rtaAutoRange) {
+            snprintf(lvlBuf, sizeof(lvlBuf), "auto, %.1f..%.1f dB",
+                     (double)(AR_RTA_TARGET_DB - arRtaAgcDb - AR_RTA_DBSPAN),
+                     (double)(AR_RTA_TARGET_DB - arRtaAgcDb));
+          } else {
+            snprintf(lvlBuf, sizeof(lvlBuf), "fixed, %.1f..%.1f dB",
+                     (double)rtaFloorDb, (double)rtaTopDb);
+          }
+          infoArr.add(lvlBuf);
+
+          // The reference offset: the difference between our dB and the
+          // analyser's. It is applied to the MEASUREMENT, so the band levels
+          // below are already on the analyser's scale.
+          infoArr = user.createNestedArray(F("RTA reference (dB)"));
+          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)rtaRefDb);
           infoArr.add(lvlBuf);
 
           // The display trim and the span: the last two numbers that decide
           // where a bar lands. The trim is the user's ('d'/'D'), the span is
           // how much of the spectrum's shape the bar covers below the top.
           infoArr = user.createNestedArray(F("Display trim (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)TROYHACKS_DBREF);
+          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f, span %.0f dB",
+                   (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
           infoArr.add(lvlBuf);
-          snprintf(lvlBuf, sizeof(lvlBuf), "span %.0f dB", (double)TROYHACKS_DBSPAN);
-          infoArr.add(lvlBuf);
+
+          // The 31 RTA band levels: the numbers to compare with a hardware
+          // analyser, one bar for one bar. They are PRE-AGC and already carry
+          // the reference offset and the per-band trim, so they are on the
+          // analyser's scale and not on the display's.
+          //
+          // ONE string, not 31 elements: the pane renders a row's first two
+          // elements back to back, so 31 elements would show two of them.
+          {
+            char estBuf[8 * NUM_RTA_CHANNELS];
+            int n = 0;
+            estBuf[0] = 0;
+            for (int k = 0; k < lay31.count && n < (int)sizeof(estBuf) - 8; k++) {
+              const int w = snprintf(estBuf + n, sizeof(estBuf) - n, "%s%.1f",
+                                     k ? "," : "", (double)estRtaDb[k]);
+              if (w < 0) break;
+              n += w;
+            }
+            infoArr = user.createNestedArray(F("RTA band level (dB)"));
+            infoArr.add(estBuf);
+          }
+
+          // The filter bank that measures the bottom eight of those bands
+          // reports the SHAPED power - the bandpass's output power - which is
+          // what a hardware analyser shows, and it is the only form in which
+          // these bars can be compared with one bar for bar.
+          //
+          // The bank's own numbers - its band count, its rate, its detector's
+          // time constant, its cost per frame - live on the /json/ar endpoint.
+          //
+          // Its self-test still gets a row, because a self-test that FAILED
+          // is a fault, and faults belong where they are seen.
+          if (bankReady) {
+            // The self-test's verdict - only when it FAILED. A passing
+            // self-test is the expected case and does not need a row.
+            if (!bankTestDone) {
+              infoArr = user.createNestedArray(F("RTA bank self-test"));
+              infoArr.add(F("not run"));
+            } else if ((bankTestFails != 0) || (bankTestNbrFails != 0)) {
+              char bankBuf[96];
+              infoArr = user.createNestedArray(F("RTA bank self-test"));
+              snprintf(bankBuf, sizeof(bankBuf),
+                       "FAILED: %d bands, %d of %d neighbours, worst %+.3f dB @ %.0f Hz",
+                       bankTestFails, bankTestNbrFails, bankTestNbrChecks,
+                       (double)bankTestWorst, (double)bankTestWorstF);
+              infoArr.add(bankBuf);
+            }
+          }
         }
 #endif
-        // UDP Sound Sync status
-        infoArr = user.createNestedArray(F("UDP Sound Sync"));
-        if (audioSyncEnabled) {
-          if (audioSyncEnabled & AUDIOSYNC_SEND) {
-            infoArr.add(F("send mode"));
-            if ((udpSyncConnected) && (millis() - lastTime < AUDIOSYNC_IDLE_MS)) infoArr.add(F(" v2+"));
-          } else if (audioSyncEnabled == AUDIOSYNC_REC) {
-              infoArr.add(F("receive mode"));
-          } else if (audioSyncEnabled == AUDIOSYNC_REC_PLUS) {
-              infoArr.add(F("receive+local mode"));
-          }
-        } else
-          infoArr.add("off");
-        if (audioSyncEnabled && !udpSyncConnected) infoArr.add(" <i>(unconnected)</i>");
-        if (audioSyncEnabled && udpSyncConnected && (millis() - last_UDPTime < AUDIOSYNC_IDLE_MS)) {
-            if (receivedFormat == 1) infoArr.add(F(" v1"));
-            if (receivedFormat == 2) infoArr.add(F(" v2"));
-            if (receivedFormat == 3) {
-              if (audioSyncSequence) infoArr.add(F(" v2+")); // Sequence checking enabled
-              else infoArr.add(F(" v2"));
-            }
+
+        // The button that puts the display's auto-range back where it started.
+        //
+        // The serial console's 'A' does the same thing: the trim and the span
+        // go back to their boot values, and both auto-ranges go back to zero
+        // with the RTA view in auto-range mode again.
+        {
+          infoArr = user.createNestedArray(F("Reset range"));
+          infoArr.add(F("<button class=\"btn btn-xs\" onclick=\"requestJson({AudioReactive:{resetRange:true}});\">reset</button>"));
         }
+
+        // The link to the machine-readable twin of this page.
+        //
+        // Everything the analysis knows is published there as NUMBERS - the
+        // timings, the codec's registers, the calibration, every band array -
+        // so a script can read it without scraping prose off this pane.
+        {
+          infoArr = user.createNestedArray(F("Statistics"));
+          infoArr.add(F("<a href=\"/json/ar\" target=\"_blank\">/json/ar</a>"));
+        }
+        // The UDP sync status, the frame's timings, the codec's registers and
+        // every band array live on the /json/ar endpoint now. They are numbers
+        // a script wants, not things a person reads at a glance, and the info
+        // pane had grown into a wall of them.
 
         #if 1 || (defined(WLED_DEBUG) || defined(SR_DEBUG) || defined(SR_STATS))
         #ifdef ARDUINO_ARCH_ESP32
-        // Auto-scale timing values to µs / ms / s based on magnitude. Most
-        // values land in the ms range; very small ones (filter, idle) use µs
-        // and very large ones (over budget) use s.
-        //
-        // This takes a RAW stored value in TIMING_UNIT_US, NOT microseconds,
-        // and does the conversion itself. That is deliberate: the previous
-        // version took microseconds, so every row was handed a 10 µs-unit
-        // number and divided it by 1000 - reporting a 24.9 ms frame as
-        // "2.49 ms" and making a saturated core look comfortable. Taking the
-        // stored value makes that class of bug impossible to reintroduce at a
-        // call site.
-        char timeBuf[16];
-        auto fmtTime = [](char *buf, size_t buflen, float stored) {
-          const float us = stored * TIMING_UNIT_US;
-          if (us < 1000.0f)         snprintf(buf, buflen, "%.1f µs", us);
-          else if (us < 1000000.0f)  snprintf(buf, buflen, "%.2f ms", us / 1000.0f);
-          else                      snprintf(buf, buflen, "%.2f s",  us / 1000000.0f);
-        };
-
-        infoArr = user.createNestedArray(F("I2S cycle time"));
-        fmtTime(timeBuf, sizeof(timeBuf), fftTaskCycle);
-        infoArr.add(timeBuf);
-        infoArr.add(pacingVerdict(fftTaskCycle));
-
-        // The shortest cycle the task has ever run. It should be the frame
-        // period; anything much shorter means the task went round ahead of
-        // the audio at some point - which is a defect, and one the smoothed
-        // figure above cannot show once it has settled.
-        infoArr = user.createNestedArray(F("  fastest cycle"));
-        fmtTime(timeBuf, sizeof(timeBuf), fftTaskMinCycle);
-        infoArr.add(timeBuf);
-        infoArr.add(fftTaskMinCycle > 0.0f ? fastestCycleVerdict(fftTaskMinCycle) : "n/a");
-
-        // The longest cycle the task has ever run, and how many frames have
-        // overrun their deadline. A frame that overruns cannot be pulled
-        // back - the DMA ring absorbs the difference - so a rising overrun
-        // count is the early warning that the ring will eventually start
-        // losing samples.
-        infoArr = user.createNestedArray(F("  slowest cycle"));
-        fmtTime(timeBuf, sizeof(timeBuf), fftTaskMaxCycle);
-        infoArr.add(timeBuf);
-        {
-          char slowBuf[40];
-          snprintf(slowBuf, sizeof(slowBuf), "%lu of %lu frames ended late",
-                   (unsigned long)arFramesOverran, (unsigned long)arFramesTotal);
-          infoArr.add(slowBuf);
-        }
-
-        // Mostly the task waiting on the DMA, not working. See pacingVerdict().
-        infoArr = user.createNestedArray(F("Sampling time"));
-        fmtTime(timeBuf, sizeof(timeBuf), sampleTime);
-        infoArr.add(timeBuf);
-        infoArr.add(readVerdict(sampleTime));
-
-        // How much audio is already in the DMA ring when the task asks for
-        // its next hop. The read blocks until the hop arrives, so this is the
-        // frame period minus the wait - the same number read the other way
-        // round, and the most direct measure of the ring's health.
-        {
-          char surplusBuf[40];
-          const double surplusMs = (double)FRAME_PERIOD_MS - ((double)sampleTime * TIMING_UNIT_US / 1000.0);
-          infoArr = user.createNestedArray(F("  DMA surplus"));
-          snprintf(surplusBuf, sizeof(surplusBuf), "%.2f ms", surplusMs);
-          infoArr.add(surplusBuf);
-          infoArr.add(surplusVerdict(surplusMs));
-        }
-
-        // The cycle's parts.
-        //
-        // The cycle time is the rate at which this task consumes the DMA
-        // ring, so a millisecond that is not accounted for is a millisecond
-        // of audio-clock error - and the parts below have to add up to the
-        // cycle, or one of them is hiding something. They used not to: the
-        // peak detection, the publish and the two waits were inside no timer
-        // at all, which is how a delay(1) at the top of the loop managed to
-        // cost a full tick on every frame for as long as it was there.
-        {
-          // The parts, summed, and the residual - both filtered exactly the
-          // way the cycle is, so cycle = parts + residual holds and the
-          // residual is a fact about the frame rather than an artefact of
-          // two different smoothers.
-          infoArr = user.createNestedArray(F("  cycle accounted"));
-          fmtTime(timeBuf, sizeof(timeBuf), tParts);
-          infoArr.add(timeBuf);
-          char resBuf[40];
-          snprintf(resBuf, sizeof(resBuf), "residual %+.3f ms", tResidual * TIMING_UNIT_US / 1000.0f);
-          infoArr.add(resBuf);
-
-          infoArr = user.createNestedArray(F("    read + carry"));
-          fmtTime(timeBuf, sizeof(timeBuf), sampleTime);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    filtering"));
-          fmtTime(timeBuf, sizeof(timeBuf), filterTime);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    FFT region"));
-          fmtTime(timeBuf, sizeof(timeBuf), fftTime);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    tail (peak+pub)"));
-          fmtTime(timeBuf, sizeof(timeBuf), tTail);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    tick floor"));
-          fmtTime(timeBuf, sizeof(timeBuf), tFloor);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    deadline wait"));
-          fmtTime(timeBuf, sizeof(timeBuf), tWait);
-          infoArr.add(timeBuf);
-
-          infoArr = user.createNestedArray(F("    loop entry"));
-          fmtTime(timeBuf, sizeof(timeBuf), tLoop);
-          infoArr.add(timeBuf);
-        }
-
-        infoArr = user.createNestedArray(F("FFT time (ESP-DSP)"));
-
-        fmtTime(timeBuf, sizeof(timeBuf), fftTime);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(fftTime, fftTime + filterTime));
-
-        // Breakdown of the row above. "FFT time (ESP-DSP)" is a misleading name
-        // for what it measures - it is the whole frame from windowing through
-        // postProcessFFTResults, and the transform is only one of five stages in
-        // it. Until that is understood, treat the split as the real diagnosis
-        // and the total as the sum of it.
-        infoArr = user.createNestedArray(F("  windowing"));
-        fmtTime(timeBuf, sizeof(timeBuf), tWindow);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(tWindow, fftTime + filterTime));
-
-        infoArr = user.createNestedArray(F("  frame prep"));
-        fmtTime(timeBuf, sizeof(timeBuf), tPrep);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(tPrep, fftTime + filterTime));
-
-        infoArr = user.createNestedArray(F("  ESP-DSP FFT"));
-        fmtTime(timeBuf, sizeof(timeBuf), tFft);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(tFft, fftTime + filterTime));
-
-        infoArr = user.createNestedArray(F("  bitrev + mag"));
-        fmtTime(timeBuf, sizeof(timeBuf), tPost);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(tPost, fftTime + filterTime));
-
-        infoArr = user.createNestedArray(F("  bands + post"));
-        fmtTime(timeBuf, sizeof(timeBuf), tFinal);
-        infoArr.add(timeBuf);
-        infoArr.add(fftBudgetVerdict(tFinal, fftTime + filterTime));
-
-        infoArr = user.createNestedArray(F("Filtering time"));
-        fmtTime(timeBuf, sizeof(timeBuf), filterTime);
-        infoArr.add(timeBuf);
-
-        // Total CPU work: filtering + FFT. This is the number that has to fit
-        // inside the frame period - the sampling wait is not a term in it,
-        // because waiting for audio is not something the task can hurry up.
-        infoArr.add(fftBudgetVerdict(filterTime, fftTime + filterTime));
-
-        // Where the FFT's buffers live, and how much internal RAM is left.
-        //
-        // The transform's working set is asked for in internal RAM on purpose:
-        // the P4's PSRAM is shared with the display, and the transform's
-        // traffic is bursty enough to starve the DSI when it is not, which
-        // costs display frames. This row is how that placement gets checked
-        // rather than assumed - and the internal free figure is here because
-        // the placement spends internal RAM, which is the scarce kind.
-        {
-          char memBuf[96];
-          infoArr = user.createNestedArray(F("Buffer memory"));
-          snprintf(memBuf, sizeof(memBuf), "fftBuf %u B %s", (unsigned)(sizeof(float) * samplesFFT * 2),
-                   (fftBuf != nullptr && arFftBufInternal) ? "internal" : "PSRAM");
-          infoArr.add(memBuf);
-          snprintf(memBuf, sizeof(memBuf), "twiddle %u B %s", (unsigned)(sizeof(float) * 4 * (samplesFFT >> 1)),
-                   (fftTwiddle != nullptr && arTwiddleInternal) ? "internal" : "PSRAM");
-          infoArr.add(memBuf);
-          snprintf(memBuf, sizeof(memBuf), "internal free %u B", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-          infoArr.add(memBuf);
-        }
-
-        // The init's bill - what the AudioReactive usermod cost the boot.
-        // This is the row that answers "is the system slow at startup?": the
-        // estimator self-test is the big number, and it is a one-off.
-        {
-          char initBuf[128];
-          infoArr = user.createNestedArray(F("AR init"));
-          snprintf(initBuf, sizeof(initBuf), "buffers %.1f ms", (double)arInitBuffersMs);
-          infoArr.add(initBuf);
-          snprintf(initBuf, sizeof(initBuf), "calibration %.1f ms", (double)arInitCalMs);
-          infoArr.add(initBuf);
-          snprintf(initBuf, sizeof(initBuf), "chain self-test %.1f ms", (double)arInitChainMs);
-          infoArr.add(initBuf);
-          snprintf(initBuf, sizeof(initBuf), "estimator self-test %.1f ms", (double)arInitEstMs);
-          infoArr.add(initBuf);
-          snprintf(initBuf, sizeof(initBuf), "total %.1f ms", (double)arInitTotalMs);
-          infoArr.add(initBuf);
-        }
-
-        // GEQ band centres. The display has 16 half-octave bands, NOT
-        // 1/3-octave like a typical RTA, so the centre frequencies are different
-        // from what an external analyser shows at the same bar. The RTA's "40 Hz"
-        // bar covers 35.5-44.7 Hz; AudioReactive band 0 covers 35.0-50.1 Hz
-        // (centre 41.9 Hz). When comparing against an RTA, look at the actual
-        // centre here, not the bar index.
-        char geqBuf[8];
-        infoArr = user.createNestedArray(F("GEQ band centres (Hz)"));
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-          snprintf(geqBuf, sizeof(geqBuf), "%u", (unsigned)(lay16.centre[k] + 0.5f));
-          infoArr.add(geqBuf);
-        }
-        infoArr.add(F("1/2-octave, 35 Hz - 11.025 kHz"));
-
-        // The RTA scale. This is the layout a hardware analyser's bars follow:
-        // the ISO 266 third-octave preferred series, 31 bands from 19.95 Hz to
-        // 19952.6 Hz. It is built alongside the display layout so the two can
-        // be compared against each other - and against an external RTA - without
-        // either one having to know how the other is built.
-        {
-          char rtaBuf[64];
-          infoArr = user.createNestedArray(F("RTA layout"));
-          snprintf(rtaBuf, sizeof(rtaBuf), "%d bands, 1/3-octave (ISO 266)", lay31.count);
-          infoArr.add(rtaBuf);
-          snprintf(rtaBuf, sizeof(rtaBuf), "centres %.2f - %.1f Hz",
-                   (double)lay31.centre[0], (double)lay31.centre[lay31.count - 1]);
-          infoArr.add(rtaBuf);
-          snprintf(rtaBuf, sizeof(rtaBuf), "edges %.2f - %.0f Hz",
-                   (double)lay31.fLow, (double)lay31.fHigh);
-          infoArr.add(rtaBuf);
-        }
-
-        // The published band values, so the bars can be watched over HTTP
-        // without a serial console.
-        //
-        // Two rows: the published bytes (the bar heights - what the effects
-        // actually read) and the calibrated band level relative to the
-        // loudest band. The second row is the one to read for shape: it shows
-        // the spectrum's shape, and a change of shape is what a wrong clock
-        // divider or a wrong sample rate looks like.
-        {
-          char bandBuf[24];
-          // Copy the published bytes out in one go: fftResult is a pointer that
-          // the FFT task swaps, so reading it band by band could straddle a swap
-          // and mix two frames.
-          uint8_t barVals[NUM_GEQ_CHANNELS];
-          memcpy(barVals, fftResult, sizeof(barVals));
-          infoArr = user.createNestedArray(F("GEQ bar values"));
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            snprintf(bandBuf, sizeof(bandBuf), "%d", (int)barVals[k]);
-            infoArr.add(bandBuf);
-          }
-          infoArr.add(F("published 0..255, what the effects read"));
-
-          float bandMax = -1e30f;
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            if (estBandDb[k] > bandMax) bandMax = estBandDb[k];
-          }
-          infoArr = user.createNestedArray(F("GEQ band shape (dB rel. max)"));
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            const float db = (bandMax > -1e29f && estBandDb[k] > -119.0f)
-                             ? (estBandDb[k] - bandMax) : -99.0f;
-            snprintf(bandBuf, sizeof(bandBuf), "%.1f", (double)db);
-            infoArr.add(bandBuf);
-          }
-          infoArr.add(F("calibrated band level, relative to the loudest"));
-        }
-
-        // The ESTIMATOR's own numbers, which are the ones with a stated unit.
-        //
-        // "GEQ band PSD (dB)" is the display bands' peak of the one-sided
-        // spectral density over the band, in units^2/Hz, crest-compensated so
-        // that flat input reads flat. "RTA band power (dB)" is the integrated
-        // power of each 1/3-octave band, in units^2 - the unit a hardware
-        // analyser's bar shows, where white noise rises 3 dB/octave.
-        //
-        // Both are PRE-AGC: an AGC offset is a display artefact, and it would
-        // make these useless for the comparison they exist for.
-        {
-          char estBuf[24];
-          infoArr = user.createNestedArray(F("GEQ band PSD (dB)"));
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            const float p = estPeak[k] * powf(10.0f, estComp[k] / 20.0f);
-            snprintf(estBuf, sizeof(estBuf), "%.1f",
-                     (double)(p > 0.0f ? 10.0f * log10f(p) : -99.0f));
-            infoArr.add(estBuf);
-          }
-          infoArr.add(F("PSD, peak over band, crest-compensated"));
-
-          infoArr = user.createNestedArray(F("RTA band power (dB)"));
-          for (int k = 0; k < lay31.count; k++) {
-            snprintf(estBuf, sizeof(estBuf), "%.1f",
-                     (double)(estRta[k] > 0.0f ? 10.0f * log10f(estRta[k]) : -99.0f));
-            infoArr.add(estBuf);
-          }
-          infoArr.add(F("integrated power per 1/3-octave band"));
-
-          // The same two quantities with the input chain's response divided
-          // out. This is the difference between "what came out of the chain"
-          // and "what went into it", and it is the number the bars and the
-          // RTA comparison use.
-          infoArr = user.createNestedArray(F("GEQ band level (dB)"));
-          for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-            snprintf(estBuf, sizeof(estBuf), "%.1f", (double)estBandDb[k]);
-            infoArr.add(estBuf);
-          }
-          infoArr.add(F("calibrated PSD at the band, chain-corrected"));
-
-          infoArr = user.createNestedArray(F("RTA band level (dB)"));
-          for (int k = 0; k < lay31.count; k++) {
-            snprintf(estBuf, sizeof(estBuf), "%.1f", (double)estRtaDb[k]);
-            infoArr.add(estBuf);
-          }
-          infoArr.add(F("calibrated integrated power, chain-corrected"));
-        }
-
-        // The calibration itself: the chain's measured response and what was
-        // done about it. A clamp count that is not zero means a band sits where
-        // the chain has taken more than CAL_CLAMP_DB away, and the correction
-        // there is deliberately short of the full amount.
-        {
-          char calBuf[96];
-          infoArr = user.createNestedArray(F("Calibration"));
-          snprintf(calBuf, sizeof(calBuf), "target %s, %d of %d bands clamped at %.0f dB",
-                   calTargetPink ? "pink" : "flat", calClamps,
-                   NUM_GEQ_CHANNELS + lay31.count, (double)CAL_CLAMP_DB);
-          infoArr.add(calBuf);
-          float lo = 0.0f, hi = 0.0f;
-          for (int k = 0; k < NUM_GEQ_CHANNELS + lay31.count; k++) {
-            if (k == 0 || calChainDb[k] < lo) lo = calChainDb[k];
-            if (k == 0 || calChainDb[k] > hi) hi = calChainDb[k];
-          }
-          snprintf(calBuf, sizeof(calBuf), "chain response %.2f to %.2f dB (measured)",
-                   (double)lo, (double)hi);
-          infoArr.add(calBuf);
-        }
-
         // These print in ms directly from the same 10 µs stored units, so they
         // now AGREE with the info page above by construction. They always did -
         // the info page was the side that was wrong - but the agreement is now a
@@ -6121,6 +6952,27 @@ class AudioReactive : public Usermod {
           for (int k = 0; k < NUM_GEQ_CHANNELS && k < (int)trim.size(); k++) {
             const float v = trim[k].as<float>();
             bandTrimDb[k] = constrain(v, -24.0f, 24.0f);
+          }
+        }
+        // Put the display's auto-range back where it started.
+        //
+        // This is what the serial console's 'A' does, and it does the whole
+        // job: the display's manual trim and span go back to the values the
+        // board booted with, and both auto-ranges (the 16 display bands and
+        // the 31 RTA bands) go back to zero, with the RTA view back in
+        // auto-range MODE rather than left in a fixed window the user had
+        // asked to get rid of.
+        //
+        // The calibration - the reference offset and the per-band trim - is
+        // NOT reset: those correct the MEASUREMENT, and this is about the
+        // display.
+        if (usermod[F("resetRange")].is<bool>()) {
+          if (usermod[F("resetRange")].as<bool>()) {
+            TROYHACKS_DBREF  = TROYHACKS_DBREF_BOOT;
+            TROYHACKS_DBSPAN = TROYHACKS_DBSPAN_BOOT;
+            audioReactiveResetAutoRange();
+            USER_PRINTF("AR: display back to auto-range - trim %+.1f dB, span %.0f dB\n",
+                        (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
           }
         }
         // Diagnostic: the codec's MCLK pre-divider. The vendor coefficient
@@ -6255,6 +7107,24 @@ class AudioReactive : public Usermod {
       // when it cannot be measured by the self-test.
       JsonArray trimArr = freqScale.createNestedArray(F("trim"));
       for (int k = 0; k < NUM_GEQ_CHANNELS; k++) trimArr.add(bandTrimDb[k]);
+      // The RTA view's window and its calibration.
+      //
+      // "rtaAuto"  1 = the auto-range (the peak hold), 0 = the fixed window.
+      // "rtaFloor" the fixed window's floor, in dB.
+      // "rtaTop"   the fixed window's top, in dB.
+      // "rtaRef"   the reference offset, in dB: our dB = the analyser's dB
+      //            + this. One number for the whole installation.
+      // "rtaTrim"  the per-band trim, in dB - the residual that makes our
+      //            third-octave shape match the analyser's.
+      // "rtaTau"   the filter bank's detector time constant, in ms: how fast
+      //            the bottom 8 bars follow the signal.
+      freqScale[F("rtaAuto")]  = rtaAutoRange ? 1 : 0;
+      freqScale[F("rtaFloor")] = rtaFloorDb;
+      freqScale[F("rtaTop")]   = rtaTopDb;
+      freqScale[F("rtaRef")]   = rtaRefDb;
+      freqScale[F("rtaTau")]   = bankTauMs;
+      JsonArray rtaTrimArr = freqScale.createNestedArray(F("rtaTrim"));
+      for (int k = 0; k < NUM_RTA_CHANNELS; k++) rtaTrimArr.add(rtaTrimDb[k]);
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       dynLim[F("limiter")] = limiterOn;
@@ -6383,6 +7253,13 @@ class AudioReactive : public Usermod {
       configComplete &= getJsonValue(top["frequency"][F("dBspan")], dbSpanRead);
       if (dbTrimRead >= -24.0f && dbTrimRead <= 24.0f) TROYHACKS_DBREF = dbTrimRead;
       if (dbSpanRead >= 12.0f  && dbSpanRead <= 96.0f) TROYHACKS_DBSPAN = dbSpanRead;
+      // What was loaded is what the board boots with, so remember it: the
+      // serial 'A' command puts the display back to this state, undoing any
+      // runtime 'd'/'D'/'s'/'S' adjustment. The serial adjustments are not
+      // written back to the configuration, so this is the only record of
+      // where the display started.
+      TROYHACKS_DBREF_BOOT  = TROYHACKS_DBREF;
+      TROYHACKS_DBSPAN_BOOT = TROYHACKS_DBSPAN;
       // The measurement mode: 0 = the point PSD at the band centre (the
       // default), 1 = the integrated band power.
       //
@@ -6428,6 +7305,53 @@ class AudioReactive : public Usermod {
           }
         } else {
           configComplete = false;   // the trim array is missing - the config gets rewritten
+        }
+      }
+      // The RTA view's window and its calibration.
+      //
+      // These are read here and applied to the statics, and the statics are
+      // read by the estimator every frame - so a changed value takes effect
+      // on the next frame, with no rebuild of anything. The calibration is
+      // part of the MEASUREMENT, not of the display, so it does not need the
+      // FFT task's cooperation.
+      {
+        uint8_t autoRead = 1;
+        if (getJsonValue(top["frequency"][F("rtaAuto")], autoRead)) {
+          rtaAutoRange = (autoRead != 0);
+        } else {
+          configComplete = false;   // the key is missing - the config gets rewritten
+        }
+        float floorRead = rtaFloorDb, topRead = rtaTopDb, refRead = rtaRefDb;
+        if (getJsonValue(top["frequency"][F("rtaFloor")], floorRead) &&
+            getJsonValue(top["frequency"][F("rtaTop")],   topRead) &&
+            getJsonValue(top["frequency"][F("rtaRef")],   refRead)) {
+          rtaFloorDb = constrain(floorRead, AR_RTA_FLOOR_MIN, AR_RTA_FLOOR_MAX);
+          rtaTopDb   = constrain(topRead,   AR_RTA_FLOOR_MIN, AR_RTA_FLOOR_MAX);
+          rtaRefDb   = constrain(refRead,  -AR_RTA_REF_MAX,   AR_RTA_REF_MAX);
+          // The window has to have a width, or the bar mapping divides by
+          // zero.
+          if (rtaTopDb - rtaFloorDb < AR_RTA_SPAN_MIN) rtaTopDb = rtaFloorDb + AR_RTA_SPAN_MIN;
+        } else {
+          configComplete = false;
+        }
+        JsonVariantConst rtaTrimVar = top["frequency"][F("rtaTrim")];
+        if (rtaTrimVar.is<JsonArrayConst>()) {
+          JsonArrayConst rtaTrim = rtaTrimVar.as<JsonArrayConst>();
+          for (int k = 0; k < NUM_RTA_CHANNELS && k < (int)rtaTrim.size(); k++) {
+            rtaTrimDb[k] = constrain(rtaTrim[k].as<float>(), -24.0f, 24.0f);
+          }
+        } else {
+          configComplete = false;   // the trim array is missing - the config gets rewritten
+        }
+        // The bank's detector time constant. It is applied through
+        // bankSetTau(), which recomputes the one-pole coefficient, so the two
+        // cannot disagree - and it works whether or not the bank has been
+        // built yet, because bankInit() reads the same variable.
+        float tauRead = bankTauMs;
+        if (getJsonValue(top["frequency"][F("rtaTau")], tauRead)) {
+          bankSetTau(tauRead);
+        } else {
+          configComplete = false;
         }
       }
 #endif

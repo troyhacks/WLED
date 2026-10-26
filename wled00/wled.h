@@ -515,6 +515,16 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 // adjustment in the units the display is actually built in, and both ends of
 // its travel are usable.
 WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.0f);
+// The values the board BOOTS with - the trim and the span as they were loaded
+// from the saved configuration.
+//
+// The serial 'd'/'D' and 's'/'S' adjustments are runtime-only: they change the
+// live globals and are not written back to the configuration, so they do not
+// survive a reboot. These two copies remember what the last boot loaded, so
+// the serial 'A' command can put the display back to exactly the state it
+// booted in - the auto-range in sole control, with no manual adjustment on
+// top of it.
+WLED_GLOBAL float TROYHACKS_DBREF_BOOT _INIT(0.0f);
 // WLED-MM/TroyHacks: how many dB the bar covers below that reference ('s' to adjust,
 // also on the AudioReactive settings page). This is the "variance" control. Constant-Q
 // band power reports f^(1-a) for a spectrum of slope 1/f^a, so typical music only
@@ -523,12 +533,19 @@ WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.0f);
 // gives an RTA its shape. 26 dB is where this landed by ear against a reference RTA;
 // anything further below the loudest band reads as an empty bar, which is the trade.
 WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
+WLED_GLOBAL float TROYHACKS_DBSPAN_BOOT _INIT(26.0f);
 // WLED-MM/TroyHacks: the AudioReactive usermod's serial entry points.
 // Implemented in the AudioReactive usermod; declared here because
 // wled_serial.cpp has no visibility into usermods/audioreactive/.
 //
 //   't' - run the input chain's self-test (synthetic signals only)
 //   'g' - plot the 31-band RTA view
+//   'A' - reset the display's auto-ranges to their on-boot state
+//
+// The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 'o'/'O' the
+// reference offset, 'n'/'p' the band to trim, 'y'/'Y' that band's trim,
+// 'k'/'K' the filter bank's detector time constant) are handled inside the
+// usermod, by audioReactiveRtaCommand().
 //
 // The chain A/B switches that used to live here ('b' DC blocker, 'w' input
 // LPF, 'e' print the chain model) are gone: the chain is fixed and
@@ -537,6 +554,8 @@ WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
 #ifdef USERMOD_AUDIOREACTIVE
 void audioReactiveSelfTest();
 void audioReactiveRtaPlot();
+void audioReactiveResetAutoRange();
+void audioReactiveRtaCommand(char c);
 #endif
 
 // User Interface CONFIG

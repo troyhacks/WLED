@@ -387,6 +387,13 @@ class Usermod {
     virtual void appendConfigData() {}                                       // helper function called from usermod settings page to add metadata for entry fields
     virtual void addToJsonState(JsonObject& obj) {}                          // add JSON objects for WLED state
     virtual void addToJsonInfo(JsonObject& obj) {}                           // add JSON objects for UI Info page
+    // WLEDMM: publish the usermod's own statistics to the /json/ar endpoint.
+    //
+    // The info page is for a person reading a handful of numbers at a glance;
+    // the endpoint is the machine-readable twin of it - every number, as a
+    // number, with the unit in the key's name. A usermod with nothing to
+    // publish leaves the default alone.
+    virtual void addToJsonAr(JsonObject& obj) {}                              // add JSON objects for the /json/ar endpoint
     virtual void readFromJsonState(JsonObject& obj) {}                       // process JSON messages received from web server
     virtual void addToConfig(JsonObject& obj) {                              // add JSON entries that go to cfg.json
       JsonObject top = obj.createNestedObject(FPSTR(_name));                 // WLEDMM: set enabled and _name
@@ -424,6 +431,7 @@ class UsermodManager {
     // void appendConfigData(); //WLEDMM not used
     void addToJsonState(JsonObject& obj);
     void addToJsonInfo(JsonObject& obj);
+    void addToJsonAr(JsonObject& obj);   // WLEDMM: the /json/ar endpoint
     void readFromJsonState(JsonObject& obj);
     void addToConfig(JsonObject& obj);
     bool readFromConfig(JsonObject& obj);

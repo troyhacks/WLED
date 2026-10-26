@@ -27,6 +27,9 @@ bool UsermodManager::getUMData(um_data_t **data, uint8_t mod_id) {
 }
 void UsermodManager::addToJsonState(JsonObject& obj)    { for (unsigned i = 0; i < numMods; i++) ums[i]->addToJsonState(obj); }
 void UsermodManager::addToJsonInfo(JsonObject& obj)     { for (unsigned i = 0; i < numMods; i++) ums[i]->addToJsonInfo(obj); }
+// WLEDMM: the /json/ar endpoint's fan-out - the machine-readable twin of the
+// info page. Same shape as addToJsonInfo: every usermod adds its own object.
+void UsermodManager::addToJsonAr(JsonObject& obj)       { for (unsigned i = 0; i < numMods; i++) ums[i]->addToJsonAr(obj); }
 void UsermodManager::readFromJsonState(JsonObject& obj) { for (unsigned i = 0; i < numMods; i++) ums[i]->readFromJsonState(obj); }
 void UsermodManager::addToConfig(JsonObject& obj)       { for (unsigned i = 0; i < numMods; i++) ums[i]->addToConfig(obj); }
 bool UsermodManager::readFromConfig(JsonObject& obj)    {
