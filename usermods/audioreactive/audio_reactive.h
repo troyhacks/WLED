@@ -447,6 +447,16 @@ static float tPrep = 0;          // frame prep - the sub-bin DFT that used to be
 static float tFft     = 0;          // dsps_fft4r_fc32 - the hardware transform itself
 static float tPost    = 0;          // bitrev + cplx2real + magnitude fold + peak scan + pink
 static float tFinal   = 0;          // band mapping + the publish step
+// The two halves of tPost, measured separately.
+//
+// tPost was a single number covering four quite different things, and the
+// bit-reversal permutation is the one of them that is worth arguing about: it
+// moves 16 KB of the spectrum into a different order so that everything
+// downstream can read it in order.  If it is a large part of tPost, it is
+// worth replacing with a lookup; if it is not, it is not worth touching.  So
+// measure it rather than guess.
+static float tBitrev  = 0;          // dsps_bit_rev4r_fc32 - the permutation itself
+static float tEst     = 0;          // estComputeTransform - the estimator's reads of the spectrum
 
 // The rest of the cycle.
 //
@@ -728,7 +738,7 @@ static float* windowBuf = nullptr;
 //
 // The library allocates this itself, in PSRAM, when it is asked to initialise
 // with a NULL buffer. It is asked for with a buffer of our own instead, so
-// that it lands in internal RAM - see arAllocHotBuf() for why that matters.
+// that the placement is ours to decide - see arAllocHotBuf() for why.
 static float* fftTwiddle = nullptr;
 
 // Where the transform's working set lives.
@@ -743,10 +753,12 @@ static float* fftTwiddle = nullptr;
 // up - the picture updates, but later than it should.
 //
 // So the two buffers the transform touches hardest - the frame itself and the
-// twiddle table - are asked for in internal RAM first. They are 64 KB between
-// them, which is most of what internal RAM has to spare on this board, so the
-// allocation falls back to PSRAM if it cannot be had. Everything else stays in
-// PSRAM: its traffic is thinner, and spread thinly enough, not to matter.
+// twiddle table - are the two that could be asked for in internal RAM instead
+// of PSRAM.  They are 64 KB between them, which is a lot of what internal RAM
+// has to spare on this board, so the choice is worth making explicitly.  With
+// AR_HOT_BUFFERS=1 they are asked for in internal RAM first, falling back to
+// PSRAM if internal RAM cannot take them.  Everything else stays in PSRAM: its
+// traffic is thinner, and spread thinly enough, not to matter.
 //
 // The placement is reported on the info page, because "which buffer is where"
 // has to be checkable rather than assumed.
@@ -758,11 +770,35 @@ static float* fftTwiddle = nullptr;
 //
 // The placement is a build-time switch rather than a fixed decision, because
 // internal RAM is the scarce kind on this board and other things want it too.
-// Build with -D AR_HOT_BUFFERS=0 to put both buffers back in PSRAM and leave
-// internal RAM alone; the effect of that on the frame cost is measurable, and
-// the measurement is what decides whether the trade is worth it.
+// Build with -D AR_HOT_BUFFERS=1 to put both buffers in internal RAM instead.
+//
+// The default is 0 - both buffers in PSRAM - because internal RAM on this board
+// is worth more to the web server than it is to the transform.  The web server
+// refuses a client outright, with no answer at all, when the internal heap is
+// under 8 KB or its largest free block is under 2 KB; the browser then shows
+// "net::ERR_EMPTY_RESPONSE" and the GUI never loads.  With these two buffers
+// in internal RAM the free heap sat at 7.9 KB - under the floor - and five of
+// six parallel requests came back empty.
+//
+// And the transform does not miss the buffers.  Measured A/B on this board, the
+// same build twice, medians over eight polls of the running average:
+//
+//                       internal      PSRAM
+//   fft region          2975 us      2799 us
+//   esp-dsp fft         1313 us      1319 us
+//   windowing            523 us       433 us
+//   bit-rev + magnitude  858 us       844 us
+//   free internal heap   7 890 B     74 068 B
+//
+// PSRAM is not slower at all - the transform's cost is identical - and it hands
+// back 66 KB of internal RAM, which is the difference between a GUI that loads
+// and one that does not.
+//
+// The DSI underruns that first prompted the internal placement were traced to
+// the USB mass storage cache writing into PSRAM at boot, not to the transform,
+// so they are not a reason to hold on to internal RAM.
 #ifndef AR_HOT_BUFFERS
-#define AR_HOT_BUFFERS 1
+#define AR_HOT_BUFFERS 0
 #endif
 
 static bool arFftBufInternal = false;
@@ -955,7 +991,21 @@ static void layoutISOThirdOctave(BandLayout &L) {
 // Forward declarations: the estimator's self-test below needs both of them,
 // and they are defined further down the file. bandLayoutReady is zero
 // initialised here and set by initBandLayout().
-static bool bandLayoutReady;
+//
+// VOLATILE, and so are the other flags that cross a task boundary. The
+// analysis runs on the FFT task; the serial console and the JSON handler run
+// on the main loop; the endpoint reads what the analysis decided. A plain
+// bool gives the compiler permission to keep the value in a register across
+// the frame, so the reader can be a whole frame behind - and the flags below
+// are the ones that say what is RUNNING ("the bank drives", "the transform
+// has a valid reading", "the self-test passed"). A flag that says what is
+// running must not be a frame out of date.
+//
+// The floats are not marked volatile: a 32-bit float load and store are
+// atomic on this core, so a trim or an offset is seen whole, just possibly
+// one frame late - and late by one frame is the right answer for a setting
+// the user just changed.
+static volatile bool bandLayoutReady;
 static void initBandLayout();
 
 // ---------------------------------------------------------------------------
@@ -1043,8 +1093,8 @@ static constexpr float CAL_PINK_REF_HZ = 1000.0f;           // the pink target's
 static float calDb[AR_EST_SLOTS];                           // the correction, dB
 static float calChainDb[AR_EST_SLOTS];                      // the chain's response, dB
 static int   calClamps = 0;                                 // bands that hit the clamp
-static bool  calReady = false;
-static bool  calTargetPink = false;                         // T(f): flat (default) or pink
+static volatile bool  calReady = false;
+static volatile bool  calTargetPink = false;                // T(f): flat (default) or pink
 
 // Set when the calibration's target curve changes at runtime. The FFT task
 // rebuilds the calibration and clears the flag: the rebuild measures an
@@ -1164,7 +1214,7 @@ static float bankCalDb[AR_BANK_BANDS];  // the bank's calibration, dB
 static float bankEnbw[AR_BANK_BANDS];   // the band filter's ENBW, Hz
 static float bankDetAlpha = 0.0f;       // the detector's one-pole coefficient
 static float bankTauMs = AR_BANK_TAU_DEFAULT_MS;  // the detector's time constant
-static bool  bankReady = false;
+static volatile bool  bankReady = false;
 
 // Set the detector's time constant and the coefficient that goes with it.
 //
@@ -1442,6 +1492,1594 @@ static void bankProcess(BankPath *b, const float *in, int n) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE DISPLAY BANK - the 16 WLED bands, measured by their own filters.
+//
+// The transform measures every band as a weighted average over its whole
+// 4096-sample window, so every band's content is 42.7 ms old before it is
+// even mapped to a bar - and no amount of frame rate changes that: the window
+// IS the window. A bank has no window. Each band is its own filter, and its
+// answer is as new as its own bandwidth allows.
+//
+// The design is a FLAT bank: all sixteen filters run at the full sample rate,
+// with no decimation and no anti-alias filter. That was not the first design.
+// The decimation tree was measured first, and it is SLOWER at every band, not
+// faster, because every anti-alias filter in the tree adds its own group
+// delay to the band it feeds - and that delay lands hardest on the bands that
+// are already the slowest:
+//
+//   band   centre     flat bank    tree     transform
+//     0     41.9 Hz    16.2 ms    18.7 ms     42.7 ms
+//     8    743.5 Hz     5.6 ms     5.8 ms     42.7 ms
+//    15   9211.0 Hz     5.0 ms     5.0 ms     42.7 ms
+//
+// The flat bank also has no aliasing question at all: nothing is decimated,
+// so nothing can fold back.
+//
+// The unit is the display band's own: a POINT PSD in units^2/Hz. The
+// transform's display reading is the PEAK of the point PSD over the band with
+// the expected crest excess taken back off, which is the band's MEAN - and the
+// bank's reading is the mean over its own filter shape, which is the same
+// quantity. So the two are directly comparable, and there is no crest
+// compensation on the bank's side.
+//
+// The cost is 16 sections over the fresh hop - 8192 section-samples a frame,
+// about 1.0 ms - against the transform's 2.5 ms. It is not free, and it is
+// not cheap either; it is bought with a freshness the transform cannot have.
+// ---------------------------------------------------------------------------
+
+static constexpr int AR_DISP_BANDS = NUM_GEQ_CHANNELS;   // the 16 WLED bands
+
+// The display smoothing, when the user's own settings are not set.
+//
+// BOTH paths use the user's rise and fall - deliberately. It makes the switch
+// a comparison of the MEASUREMENT and nothing else: the bank's advantage is
+// then a pure 27 to 38 ms of content age (the transform's window is 42.7 ms
+// old, the bank's filters are 5 to 16 ms old), with the same smoothing on
+// top of both. A shorter smoothing on one side only would confound the
+// measurement with the display, and the measurement is the thing being
+// compared.
+//
+// These two are the fallback for a zero setting, and they are the values the
+// bank path was first built with. A bank reading carries 2-3 dB of fluctuation
+// at the bottom band, so it can be smoothed harder than the transform's.
+static constexpr float AR_DISP_ATTACK_MS  = 8.0f;
+static constexpr float AR_DISP_RELEASE_MS = 60.0f;
+
+// The bank's state: one filter's delay line per band, and one detector.
+struct DispBank {
+  float secW[AR_DISP_BANDS][2];   // the band filters' delay lines
+  float det[AR_DISP_BANDS];        // the detectors' states
+};
+
+static DispBank liveDisp;
+
+// The coefficients, baked once at init: b0, b1, b2, a1, a2.
+static float dispSecCoeffs[AR_DISP_BANDS][5];
+
+// What the init measured about the bank.
+static float dispEnbw[AR_DISP_BANDS];    // the band's ENBW, Hz
+static float dispWidthHz[AR_DISP_BANDS]; // the band's measured -3 dB width, Hz
+static float dispCalDb[AR_DISP_BANDS];   // the calibration, dB
+static float dispRespMs[AR_DISP_BANDS];  // the measured 63% response time, ms
+static float dispBandDb[AR_DISP_BANDS];  // the calibrated reading, dB
+static float dispTransformDb[AR_DISP_BANDS];  // the transform's reading, dB
+static float dispMoveDb[AR_DISP_BANDS];   // how far the band moved last frame, dB
+static float dispPrevDb[AR_DISP_BANDS];   // the last frame's band value, dB
+// The same measurement, kept SEPARATELY for each path.
+//
+// Both paths run every frame now, so both can be watched on the same audio.
+// The driving path's movement is dispMoveDb[]; these two say how much the
+// transform's reading moved and how much the bank's did, so the freshness
+// the bank buys is a measurement rather than an argument.
+static float dispMoveTfDb[AR_DISP_BANDS];    // the transform's movement, dB/frame
+static float dispMoveBankDb[AR_DISP_BANDS];  // the bank's movement, dB/frame
+static float dispPrevTfDb[AR_DISP_BANDS];    // the transform's last value, dB
+static float dispPrevBankDb[AR_DISP_BANDS];  // the bank's last value, dB
+
+// The transform's RAW reading of each display band: the peak of the point PSD
+// over the band, with the calibration, but WITHOUT the crest compensation.
+//
+// It is published so the live difference between the two readings can be taken
+// apart. That difference is the crest compensation PLUS the difference between
+// a peak and a mean, and only the first of them is a number anybody can check
+// against something else.
+static float dispTransformRawDb[AR_DISP_BANDS];
+
+// The transform's BAND-AVERAGE reading: the mean density over the layout's
+// own edges.
+//
+// It is the same quantity the 31-band RTA view shows - an integrated power
+// over the band - divided by the width to put it back into the density unit.
+// The transform can read it as well as the bank can, so it is published
+// beside both: the three readings together say what the difference between
+// the two paths is made of.
+static float dispTransformMeanDb[AR_DISP_BANDS];
+
+// The display bank's self-test. See dispBankSelfTest() for what each number
+// means.
+static volatile bool  dispTestDone = false;
+static int   dispTestFails = 0;
+static float dispTestWorst = 0.0f;       // the worst tone error, dB
+static float dispTestWorstF = 0.0f;      // ... and the band it was on
+static float dispTestWhiteWorst = 0.0f;  // the worst white-noise error, dB
+static float dispTestWhiteWorstF = 0.0f;
+static float dispTestEnbwWorst = 0.0f;   // the worst ENBW disagreement, dB
+static float dispTestEnbwWorstF = 0.0f;
+static float dispTestNbrWorst = -99.0f;  // the worst neighbour leakage, dB
+static float dispTestToneDb[AR_DISP_BANDS];   // per band: the tone error, dB
+static float dispTestWhiteDb[AR_DISP_BANDS];  // per band: the white error, dB
+static float dispTestEnbwDb[AR_DISP_BANDS];   // per band: the ENBW disagreement, dB
+static float dispTestNbrDb[AR_DISP_BANDS];    // per band: the worst neighbour, dB
+static float dispTestTimeMs = 0.0f;
+
+// The lag between the two paths, measured on the live signal.
+//
+// The bank's content is newer than the transform's - the filters see the last
+// few milliseconds, the transform sees a 4096-sample window - and the response
+// times say how new each reading is on its own. This says how far APART the
+// two readings are on the music that is actually playing, which is the
+// question the response times cannot answer.
+//
+// It is a cross-correlation over a ring of recent frames, computed in the
+// firmware so that only a small number has to cross the network.
+static constexpr int AR_LAG_FRAMES = 48;   // 48 frames = 512 ms of history
+static constexpr int AR_LAG_MAX = 8;       // the lags searched, in frames
+static float dispHistTf[AR_LAG_FRAMES][AR_DISP_BANDS];
+static float dispHistBk[AR_LAG_FRAMES][AR_DISP_BANDS];
+static int   dispHistPos = 0;      // where the next frame goes
+static int   dispHistFill = 0;     // how many frames are in the ring
+static int   dispLagTick = 0;      // the frame counter for the correlation
+static float dispLagMs[AR_DISP_BANDS];    // the measured delay, ms
+static float dispLagCorr[AR_DISP_BANDS];  // the correlation there
+// Whether the lag means anything. It is the distance between the two paths,
+// so with the transform off - one path only - there is nothing to measure.
+static volatile bool  dispLagTfValid = true;
+
+static float dispDetAlpha = 0.0f;        // the detector's one-pole coefficient
+static float dispTauMs = AR_BANK_TAU_DEFAULT_MS;   // the detector's time constant
+static float dispTime = 0.0f;            // its own cost, in TIMING_UNIT_US
+static volatile bool  dispReady = false;
+
+// The A/B switch: the bank drives the 16 display bands, or the transform does.
+//
+// The bank is the DEFAULT now, and the reason is the one that was measured:
+// the transform's reading cannot be newer than 42.7 ms, because that is how
+// old its 4096-sample window is, and the bank's reading is 5 to 16 ms old -
+// measured on the hardware, by the filters' own response times, and
+// cross-checked against the transform on the music with a lag correlation.
+//
+// The bank is also five times cheaper (580 us against 2658 us a frame), and
+// its self-test passes: the ENBW against the impulse response to 0.003 dB,
+// the filter's gain at the band centre to 0.044 dB, and white noise to the
+// density the transform reads for the same noise.
+//
+// What changes with the switch is the MEASUREMENT: the transform reads the
+// PEAK of the point PSD over the band - the loudest narrow slice inside it -
+// and the bank reads the MEAN over the band's own shape. The transform's
+// reading is spiky by nature: a single frame during a transient can sit 13 dB
+// above the band's mean. The bank's is smooth.
+//
+// 'W' gives the bands back to the transform, and 'w' brings them forward
+// again.
+//
+// VOLATILE: the serial console and the JSON handler write it on the userloop
+// task, and the frame reads it on the FFT task. Without volatile the compiler
+// is free to keep the value in a register across a frame and act on a stale
+// answer.
+static volatile bool  dispUseBank = true;
+
+// The Q that makes the DIGITAL -3 dB width exactly the wanted width.
+//
+// The cookbook's rule - Q = f0/width - is the ANALOGUE relative Q, and the
+// bilinear transform's frequency axis is not linear, so the digital band comes
+// out NARROWER than asked for as f0/fs rises: at the top display band (9211 Hz
+// at 48 kHz, f0/fs = 0.192) the plain Q gives a band 23% narrower than the
+// layout asks for, and the band above it is worse.
+//
+// The closed form comes from the magnitude of the bandpass. With
+// s = tan(w/2)/tan(w_d/2) the response is
+//
+//   |H|^2 = s^2 / (s^2 + Q^2 (1 - s^2)^2)
+//
+// whose half-power points s_lo and s_hi satisfy s_lo*s_hi = 1 and
+// s_hi - s_lo = 1/Q, so the digital width is
+//
+//   df = (fs/pi) * atan( u / (Q (1 + u^2)) ),   u = tan(pi*f0/fs)
+//
+// and inverting it for Q gives the expression below. It was checked against a
+// numerical scan of |H| at every band: the worst error is 0.55% at the bottom
+// band - where the correction is nearly nothing - and 0.001% at the top.
+static float dispQForWidth(float f0, float fs, float width) {
+  const float u = tanf((float)M_PI * f0 / fs);
+  return u / ((1.0f + u * u) * tanf((float)M_PI * width / fs));
+}
+
+// Set the detector's time constant and the coefficient that goes with it.
+//
+// The coefficient is the one-pole's step size at the FULL rate:
+// alpha = 1 - exp(-1/(tau * fs)). It is a function of the constant alone, so
+// the two can never disagree - which is what would happen if the constant
+// were changed without recomputing it.
+static void dispSetTau(float ms) {
+  if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
+  if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
+  dispTauMs = ms;
+  dispDetAlpha = 1.0f - expf(-1.0f / (dispTauMs * 0.001f * (float)SAMPLE_RATE));
+}
+
+// The bank's filters, baked.
+//
+// The bandpass is the file's own bankRbjBpf, which IS the bilinear transform
+// of the analogue prototype with the prewarping already in it: its peak is
+// exactly at f0 and its gain is exactly 1 there. The only thing that has to be
+// chosen is the Q, and that is what dispQForWidth() is for.
+static void dispInitCoefficients() {
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float fc    = lay16.centre[k];
+    const float width = lay16.edgeHi[k] - lay16.edgeLo[k];
+    const float q     = dispQForWidth(fc, (float)SAMPLE_RATE, width);
+    bankRbjBpf(fc, (float)SAMPLE_RATE, q, dispSecCoeffs[k]);
+  }
+}
+
+// The band's equivalent noise bandwidth: the integral of |H|^2 over the
+// spectrum, in Hz.
+//
+// It is the width of the filter a flat input actually sees, and it is what
+// divides the detector's power out into a density.
+//
+// It is not the nominal width, and it cannot be: a two-pole bandpass has a
+// skirt, and the skirt is part of the measurement. The ratio is 1.51 at the
+// bottom band and 1.31 at the top, so a flat input reads the bank's density
+// against a filter that is genuinely wider than the layout's band - and the
+// transform's reading, which is a rectangular average over the layout's own
+// edges, reads the same flat input against the narrower shape. The two
+// therefore differ by the shape, not by the level, and on a flat input they
+// agree to the difference in their definitions.
+static void dispMeasureEnbw() {
+  constexpr int n = 1500;
+  const float f0 = 0.01f, f1 = (float)SAMPLE_RATE * 0.5f;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    float tot = 0.0f;
+    float fprev = f0;
+    float prev = bankSecMag2(dispSecCoeffs[k], f0, (float)SAMPLE_RATE);
+    for (int i = 1; i <= n; i++) {
+      const float f = f0 * powf(f1 / f0, (float)i / (float)n);
+      const float cur = bankSecMag2(dispSecCoeffs[k], f, (float)SAMPLE_RATE);
+      tot += 0.5f * (prev + cur) * (f - fprev);
+      prev = cur; fprev = f;
+    }
+    dispEnbw[k] = tot;
+  }
+}
+
+// The band's digital -3 dB width, MEASURED.
+//
+// This is the check on the Q correction: the closed form in dispQForWidth()
+// puts the half-power points on the wanted width, and this measures where they
+// actually are in the firmware's own float arithmetic. A bandpass has one
+// peak and two half-power points, so the width is found by walking out from
+// the peak until the response falls through half of it.
+//
+// The plain cookbook Q would put the top band's edges 23% closer together
+// than the layout asks for. This is what says whether that is still true
+// here.
+static void dispMeasureWidth() {
+  constexpr int MAXSTEP = 40000;
+  const float fs = (float)SAMPLE_RATE;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float *c = dispSecCoeffs[k];
+    const float fc  = lay16.centre[k];
+    const float peak = bankSecMag2(c, fc, fs);
+    const float step = fc * 0.0005f;
+    float lo = 0.0f;
+    for (int i = 1; i <= MAXSTEP; i++) {
+      const float f = fc - (float)i * step;
+      if (f <= 0.0f) break;
+      if (bankSecMag2(c, f, fs) <= 0.5f * peak) { lo = f; break; }
+    }
+    float hi = fs * 0.5f;
+    for (int i = 1; i <= MAXSTEP; i++) {
+      const float f = fc + (float)i * step;
+      if (f >= fs * 0.5f) break;
+      if (bankSecMag2(c, f, fs) <= 0.5f * peak) { hi = f; break; }
+    }
+    dispWidthHz[k] = hi - lo;
+  }
+}
+
+// The band's 63% response time, MEASURED.
+//
+// It is measured the way the reading actually arrives. An impulse goes into
+// the filter; the detector's expected value rises as the cumulative energy of
+// the impulse response fills up; the detector is a one-pole over that. The 63%
+// point is the moment the bar reaches 63% of its final value - which is the
+// number that says how old the content on the bar is.
+//
+// This is the firmware measuring the design's prediction, so a disagreement
+// between the two is a finding rather than a surprise.
+//
+// The record is 4096 samples - 85.3 ms. The bottom band's impulse response
+// decays as exp(-pi*f0*t/Q) = exp(-47.6*t), so it is 17 time constants gone by
+// the end of it and the energy is complete.
+static void dispMeasureResponse() {
+  constexpr int N = 4096;
+  const float alpha = dispDetAlpha;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float *c = dispSecCoeffs[k];
+
+    // First pass: the detector's final value.
+    float det = 0.0f, energy = 0.0f;
+    {
+      float s1 = 0.0f, s2 = 0.0f, x = 1.0f;
+      for (int i = 0; i < N; i++) {
+        const float y = c[0] * x + s1;
+        s1 = c[1] * x - c[3] * y + s2;
+        s2 = c[2] * x - c[4] * y;
+        x = 0.0f;                       // the impulse is over
+        energy += y * y;
+        det += alpha * (energy - det);
+      }
+    }
+    const float finalV = det;
+
+    // Second pass: the moment it reaches 63% of it.
+    float t63 = 0.0f;
+    if (finalV > 0.0f) {
+      det = 0.0f; energy = 0.0f;
+      float s1 = 0.0f, s2 = 0.0f, x = 1.0f;
+      for (int i = 0; i < N; i++) {
+        const float y = c[0] * x + s1;
+        s1 = c[1] * x - c[3] * y + s2;
+        s2 = c[2] * x - c[4] * y;
+        x = 0.0f;
+        energy += y * y;
+        det += alpha * (energy - det);
+        if (det >= 0.63f * finalV) {
+          t63 = (float)i * 1000.0f / (float)SAMPLE_RATE;
+          break;
+        }
+      }
+    }
+    dispRespMs[k] = t63;
+  }
+}
+
+// The bank's calibration.
+//
+// It is the same correction the transform's display bands use: the chain's
+// MEASURED response divided out, plus the target curve. calDb[] is built by
+// estInitCalibration() from the chain that is really running, and it is
+// reused here unchanged - the chain is in front of the bank exactly as it is
+// in front of the transform, so it is the same correction.
+//
+// The band filter itself is NOT corrected for. It is the measurement, and its
+// peak gain of 1.0 at the band centre is what makes a centred tone read its
+// own level.
+static void dispInitCalibration() {
+  for (int k = 0; k < AR_DISP_BANDS; k++) dispCalDb[k] = calDb[k];
+}
+
+// Clear the bank's state: the filters start from silence and the detectors
+// from zero.
+static void dispReset() {
+  memset(&liveDisp, 0, sizeof(liveDisp));
+  // The movement history belongs to the bank's old readings, so it starts
+  // again too - otherwise the first frame after a switch reports the step
+  // from the transform's numbers to the bank's as a movement.
+  memset(dispMoveDb, 0, sizeof(dispMoveDb));
+  memset(dispMoveTfDb, 0, sizeof(dispMoveTfDb));
+  memset(dispMoveBankDb, 0, sizeof(dispMoveBankDb));
+  // The previous values start as "no reading" (-120), not as zero: zero is a
+  // legal level, and the first frame after a switch would report the step up
+  // to it as a movement.
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    dispPrevDb[k] = -120.0f;
+    dispPrevTfDb[k] = -120.0f;
+    dispPrevBankDb[k] = -120.0f;
+  }
+}
+
+// Build the bank: the coefficients, the ENBW, the calibration, the measured
+// response times.
+//
+// It runs after estInitCalibration(), because the calibration is built from
+// the chain's MEASURED response - the same number the main path's calibration
+// uses.
+static void dispInit() {
+  if (!bandLayoutReady) initBandLayout();
+  dispInitCoefficients();
+  dispMeasureEnbw();
+  dispMeasureWidth();
+  dispInitCalibration();
+  // The current value, not the default: the constant may have been set from
+  // the configuration before the bank was built.
+  dispSetTau(dispTauMs);
+  dispMeasureResponse();
+  dispReset();
+  dispReady = true;
+}
+
+// Run the bank over n fresh samples and update the sixteen detectors.
+//
+// The samples are read, never written: the filters are transposed direct form
+// II, so each section's state is two floats and the output is a local
+// variable - the bank needs no buffer of its own, and it cannot disturb the
+// FFT's input.
+//
+// The bands are the OUTER loop and the samples the inner one, so each band's
+// coefficients and delay line stay in the same place for all 512 samples. The
+// filters are independent, so the order does not change the result.
+static void dispProcess(DispBank *b, const float *in, int n) {
+  const float alpha = dispDetAlpha;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float *c = dispSecCoeffs[k];
+    float *w = b->secW[k];
+    float det = b->det[k];
+    for (int i = 0; i < n; i++) {
+      const float x = in[i];
+      const float y = c[0] * x + w[0];
+      w[0] = c[1] * x - c[3] * y + w[1];
+      w[1] = c[2] * x - c[4] * y;
+      const float p = y * y;
+      det += alpha * (p - det);
+    }
+    b->det[k] = det;
+  }
+}
+
+// The display bank's own self-test.
+//
+// The transform's estimator is checked against a truth the signal itself
+// provides, so the bank gets the same treatment. There are three checks, and
+// each of them has an exact answer:
+//
+//   1. THE ENBW, from the impulse response. Parseval says the integral of
+//      |H|^2 over the spectrum is fs times the sum of h^2, so the filter's own
+//      impulse response gives the ENBW exactly - no integration, no
+//      statistics. The code computes the ENBW the other way, by integrating
+//      |H(f)|^2 numerically, and the two have to agree. This is the check on
+//      the number that divides the measured power out into a density.
+//
+//   2. A TONE at a band's centre. The filter's peak gain is 1.0 there, so the
+//      detector must read the tone's own power, A^2/2. That checks the
+//      filter's gain, the Q correction that put the peak on the centre, and
+//      the detector's averaging.
+//
+//   3. WHITE NOISE. A flat input of variance v must read back as the flat
+//      density 2v/fs - the same number the transform's point PSD reads for the
+//      same noise. That checks the whole chain end to end, from the sample
+//      through the filter and the detector to the published density.
+//
+// The neighbours are read as well. A tone in one band must not light the
+// bands either side of it. The bank's filters ARE wider than the layout's
+// bands - their ENBW is 1.31 to 1.51 times the nominal width - so they do
+// leak, and the amount is REPORTED rather than asserted: it is a design fact,
+// not a correctness one, and it is the number that says how much the bands
+// overlap.
+//
+// The chain is NOT in this test. The chain's correction is shared with the
+// transform and is checked there. What is checked here is the bank's own
+// measurement, running the real code.
+static void dispBankSelfTest() {
+  if (dispTestDone) return;
+  dispTestDone = true;
+  if (!bandLayoutReady) initBandLayout();
+  if (!dispReady) {
+    USER_PRINTLN("AR: display bank self-test skipped - the bank is not built");
+    return;
+  }
+
+  const uint64_t t0 = esp_timer_get_time();
+
+  const float amp    = 0.5f;
+  const float tonePow = amp * amp * 0.5f;             // the tone's own power
+  const float toneDb  = 10.0f * log10f(tonePow);
+
+  constexpr int N = 512;                              // the chunk the bank runs in
+  static float buf[N];
+  DispBank tb;                                        // the bank's own state
+
+  int fails = 0;
+  float worst = 0.0f, worstF = 0.0f;
+  float whiteWorst = 0.0f, whiteWorstF = 0.0f;
+  float enbwWorst = 0.0f, enbwWorstF = 0.0f;
+  float nbrWorst = -99.0f;
+
+  USER_PRINTLN("\n=== AudioReactive display-bank self-test ===========================");
+  USER_PRINTF("  %d bands, %.0f Hz, detector %.0f ms\n",
+              AR_DISP_BANDS, (double)SAMPLE_RATE, (double)dispTauMs);
+
+  // ---- 1. the ENBW, from the impulse response --------------------------
+  //
+  // The impulse goes through the SAME recursion the bank runs, so this is a
+  // measurement of the code and not of a model of it. The one-sided ENBW the
+  // code uses is half of the two-sided integral Parseval gives.
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float *c = dispSecCoeffs[k];
+    float s1 = 0.0f, s2 = 0.0f, h2 = 0.0f;
+    for (int i = 0; i < 4096; i++) {
+      const float x = (i == 0) ? 1.0f : 0.0f;
+      const float y = c[0] * x + s1;
+      s1 = c[1] * x - c[3] * y + s2;
+      s2 = c[2] * x - c[4] * y;
+      h2 += y * y;
+    }
+    const float enbwExact = 0.5f * (float)SAMPLE_RATE * h2;
+    const float errDb = 10.0f * log10f(dispEnbw[k] / enbwExact);
+    dispTestEnbwDb[k] = errDb;
+    if (fabsf(errDb) > 0.20f) fails++;
+    if (fabsf(errDb) > fabsf(enbwWorst)) { enbwWorst = errDb; enbwWorstF = lay16.centre[k]; }
+  }
+
+  // ---- 2. a tone at each band's centre ---------------------------------
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    const float fc = lay16.centre[k];
+    memset(&tb, 0, sizeof(tb));
+
+    // The tone, by rotation. sinf() per sample would cost more than the
+    // sixteen filters it feeds.
+    const float dw = (float)(2.0 * (double)M_PI * (double)fc / (double)SAMPLE_RATE);
+    const float cs = cosf(dw);
+    const float sn = sinf(dw);
+    float cr = 1.0f, ci = 0.0f;
+
+    // Time to settle, and time to average.
+    //
+    // The settle has to cover the FILTER, not just the detector: the filter
+    // decays as exp(-pi*ENBW*t), so the bottom band needs about 100 ms to be
+    // quiet. The average has to cover the detector's ripple at twice the
+    // tone's frequency, which at the bottom band is 83.8 Hz - a 12 ms period,
+    // so 200 ms is seventeen of them.
+    const float settleSecs = fmaxf(0.12f, 6.0f / dispEnbw[k]);
+    const float avgSecs    = 0.2f;
+    const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
+    const int avgChunks    = (int)(avgSecs    * (float)SAMPLE_RATE / (float)N);
+
+    float acc[AR_DISP_BANDS] = {0.0f};
+    int   accN = 0;
+    for (int c = 0; c < settleChunks + avgChunks; c++) {
+      for (int i = 0; i < N; i++) {
+        buf[i] = amp * cr;
+        const float nr = cr * cs - ci * sn;
+        ci = cr * sn + ci * cs;
+        cr = nr;
+      }
+      dispProcess(&tb, buf, N);
+      if (c >= settleChunks) {
+        for (int j = 0; j < AR_DISP_BANDS; j++) acc[j] += tb.det[j];
+        accN++;
+      }
+    }
+
+    float raw[AR_DISP_BANDS];
+    for (int j = 0; j < AR_DISP_BANDS; j++) raw[j] = acc[j] / (float)accN;
+
+    // The band itself: the detector must read the tone's own power.
+    const float errDb = 10.0f * log10f(raw[k] / tonePow);
+    dispTestToneDb[k] = errDb;
+    const bool ok = (errDb > -0.25f) && (errDb < 0.25f);
+    if (!ok) fails++;
+    if (fabsf(errDb) > fabsf(worst)) { worst = errDb; worstF = fc; }
+
+    // The neighbours: how far the tone reaches into the bands either side.
+    float nbrDb = -99.0f;
+    for (int s = 0; s < 2; s++) {
+      const int j = (s == 0) ? k - 1 : k + 1;
+      if (j < 0 || j >= AR_DISP_BANDS) continue;
+      const float d = 10.0f * log10f(raw[j] / raw[k]);
+      if (d > nbrDb) nbrDb = d;
+    }
+    dispTestNbrDb[k] = nbrDb;
+    if (nbrDb > nbrWorst) nbrWorst = nbrDb;
+
+    USER_PRINTF("  band %2d %8.2f Hz  enbw %+6.3f dB  tone %+7.3f dB %s  nbr %+7.2f dB\n",
+                k, (double)fc, (double)dispTestEnbwDb[k], (double)errDb,
+                ok ? "PASS" : "FAIL", (double)nbrDb);
+  }
+
+  // ---- 3. white noise ---------------------------------------------------
+  //
+  // A flat input of variance v must read back as the flat density 2v/fs. That
+  // is the same number the transform's point PSD reads for the same noise, so
+  // this is where the two paths' UNITS are checked against each other.
+  //
+  // The precision is bounded by the filter's own bandwidth, and that is
+  // physics rather than a defect: the bottom band averages over 44.7 Hz of
+  // spectrum, so a one-second average holds about forty-five independent
+  // samples and the estimate of the mean power carries about 1 dB of scatter.
+  // The tolerance below is four times that scatter, computed per band from
+  // that band's own ENBW.
+  {
+    memset(&tb, 0, sizeof(tb));
+    uint32_t seed = 0x1234567u;
+    const float var = 1.0f / 3.0f;                       // uniform in [-1, 1)
+    const float expect = 2.0f * var / (float)SAMPLE_RATE; // the flat density
+    const float settleSecs = 0.3f;
+    const float avgSecs = 1.0f;
+    const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
+    const int avgChunks    = (int)(avgSecs    * (float)SAMPLE_RATE / (float)N);
+
+    float acc[AR_DISP_BANDS] = {0.0f};
+    int accN = 0;
+    for (int c = 0; c < settleChunks + avgChunks; c++) {
+      for (int i = 0; i < N; i++) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        buf[i] = ((float)(seed & 0xFFFFFF) / 8388608.0f) - 1.0f;   // [-1, 1)
+      }
+      dispProcess(&tb, buf, N);
+      if (c >= settleChunks) {
+        for (int j = 0; j < AR_DISP_BANDS; j++) acc[j] += tb.det[j];
+        accN++;
+      }
+    }
+    for (int k = 0; k < AR_DISP_BANDS; k++) {
+      const float dens = (acc[k] / (float)accN) / dispEnbw[k];
+      const float errDb = 10.0f * log10f(dens / expect);
+      dispTestWhiteDb[k] = errDb;
+      const float nEff = avgSecs * dispEnbw[k];
+      const float tolDb = 4.0f * 4.342944819f * sqrtf(2.0f / (nEff > 1.0f ? nEff : 1.0f));
+      if (fabsf(errDb) > tolDb) fails++;
+      if (fabsf(errDb) > fabsf(whiteWorst)) { whiteWorst = errDb; whiteWorstF = lay16.centre[k]; }
+    }
+  }
+
+  dispTestFails      = fails;
+  dispTestWorst      = worst;
+  dispTestWorstF     = worstF;
+  dispTestWhiteWorst = whiteWorst;
+  dispTestWhiteWorstF = whiteWorstF;
+  dispTestEnbwWorst  = enbwWorst;
+  dispTestEnbwWorstF = enbwWorstF;
+  dispTestNbrWorst   = nbrWorst;
+  dispTestTimeMs     = (float)((double)(esp_timer_get_time() - t0) / 1000.0);
+
+  USER_PRINTF("  ENBW vs the impulse response: worst %+.3f dB at %.2f Hz\n",
+              (double)enbwWorst, (double)enbwWorstF);
+  USER_PRINTF("  tone at the centre:          worst %+.3f dB at %.2f Hz\n",
+              (double)worst, (double)worstF);
+  USER_PRINTF("  white noise:                 worst %+.3f dB at %.2f Hz\n",
+              (double)whiteWorst, (double)whiteWorstF);
+  USER_PRINTF("  neighbour leakage:           worst %+.2f dB\n", (double)nbrWorst);
+  USER_PRINTF("  %s   self-test time: %.0f ms\n",
+              fails ? "FAIL" : "PASS", (double)dispTestTimeMs);
+  USER_PRINTLN("=== end of display-bank self-test ==================================");
+  USER_FLUSH();
+}
+
+// ---------------------------------------------------------------------------
+// The RTA's TOP bands, on their own filters
+// ---------------------------------------------------------------------------
+//
+// The RTA's bottom eight bands already come from a filter bank - see the bank
+// above - and the top twenty-three still come from the FFT.  That is what
+// keeps the 4096-sample window alive: a window that long cannot see anything
+// younger than 42.7 ms, and the FFT costs 2.8 to 3.5 ms a frame.
+//
+// This is that bank again, at the full rate, over the RTA's own layout.
+//
+// THE CONVENTION.  The bottom eight report the SHAPED power - the power
+// through the bandpass - and their filter's ENBW is 0.85 of the nominal band
+// width.  The top twenty-three have to have the same kernel, or the RTA view
+// gets a step at band 8: a flat input would read 0.71 dB low in the bottom
+// bands and something else entirely in the top ones.
+//
+// So this kernel is chosen by its ENBW, not by its -3 dB width.  The plain
+// Butterworth design gives the right ENBW by itself below 1.6 kHz, but the
+// bilinear transform's warping collapses the digital band as f0/fs rises - at
+// 19 952 Hz it is a seventh of the width it should be - so the design is
+// solved per band until the ENBW lands on the target.
+//
+// The search uses Parseval's identity, ENBW = fs/2 * sum(h^2), so it needs
+// no integration and no statistics, and it runs on the filter's own impulse
+// response - through the same recursion the bank runs.
+//
+// Measured on the design: every band lands within 0.001 dB of the target,
+// the gain at the centre is 1.000, and the leakage into the neighbouring
+// bands is -12.2 dB at the bottom and -7.8 dB at the top - the same shape as
+// the bottom eight's -12.35 dB.
+static constexpr int   AR_RTA_TOP_FIRST  = AR_BANK_BANDS;                 // 8
+static constexpr int   AR_RTA_TOP_BANDS  = NUM_RTA_CHANNELS - AR_BANK_BANDS;  // 23
+static constexpr float AR_RTA_ENBW_RATIO = 0.85f;   // the bottom bank's, to 3 places
+
+// The 4th-order Butterworth bandpass's two pole Qs: 1/(2 sin(pi/8)) and
+// 1/(2 sin(3 pi/8)).  The bottom bank uses the same two, and so does this
+// one: the kernel's SHAPE is what has to match, not only its width.
+static constexpr float AR_BANK_POLE_Q1 = 1.30656296f;
+static constexpr float AR_BANK_POLE_Q2 = 0.54119610f;
+
+// The bank's state: two delay lines per band (two sections each) and a
+// detector.
+struct RtaTopBank {
+  float secW[AR_RTA_TOP_BANDS][2][2];
+  float det[AR_RTA_TOP_BANDS];
+};
+
+static RtaTopBank liveRtaTop;
+static float rtaSecCoeffs[AR_RTA_TOP_BANDS][2][5];
+static float rtaEnbw[AR_RTA_TOP_BANDS];      // the band's ENBW, Hz (the integral)
+static float rtaEnbwImp[AR_RTA_TOP_BANDS];   // ... and the impulse response's
+static float rtaCalDb[AR_RTA_TOP_BANDS];     // the calibration, dB
+static float rtaWidthHz[AR_RTA_TOP_BANDS];   // the measured -3 dB width, Hz
+static float rtaRespMs[AR_RTA_TOP_BANDS];    // the measured 63% response time, ms
+static float rtaDetAlpha = 0.0f;
+static float rtaTauMs = AR_BANK_TAU_DEFAULT_MS;
+static float rtaTime = 0.0f;                 // its own cost, in TIMING_UNIT_US
+static volatile bool  rtaTopReady = false;
+// Whether the detector's time constant has been set deliberately. Until it
+// has, the top bank follows the bottom bank's, so the RTA's thirty-one bars
+// behave alike out of the box.
+static bool  rtaTauSet = false;
+
+// The transform's OWN reading of the RTA's top bands, kept beside the bank's.
+//
+// The two are different measurements of the same audio - the transform
+// integrates the spectrum over the band's nominal edges, the bank measures the
+// power through its own filter - and the difference between them is the point
+// of publishing both.
+static float rtaTfPower[NUM_RTA_CHANNELS];
+
+// THE PUBLISHED FRAME.
+//
+// The analysis runs on the FFT task and rewrites its arrays every 10.67 ms.
+// The JSON endpoint runs on the main loop and reads them, so a reader that
+// just looked at estRtaDb[] could see half of one frame and half of the
+// next - a set of band levels that never existed.
+//
+// The serial plot already had this fixed (arRtaDbPub, under the publish
+// lock). This is the same fix for the endpoint, and it carries the same
+// reason: the numbers a reader gets must be ONE frame's numbers.
+//
+// What is copied is the PUBLISHED value - the dB the reader would have
+// computed for itself - so the reader cannot disagree with the frame about
+// which path drove the display, or about the level of a band. That is why
+// the frame's decision travels with the numbers: dispBankDrives is decided
+// once per frame, and a reader that asked again at its own moment could get
+// a different answer (the 'w'/'W' switches can be thrown between two reads)
+// and then read a transform's number out of a bank-driven frame.
+struct ArFrameSnapshot {
+  float psdDb[NUM_GEQ_CHANNELS];         // the 16 display bands, raw point PSD, dB
+  float bandDb[NUM_GEQ_CHANNELS];        // the 16 display bands, calibrated, dB
+  float dispBandDb[NUM_GEQ_CHANNELS];    // the display bank's own reading, dB
+  float dispTransformDb[NUM_GEQ_CHANNELS];   // the transform's reading, dB
+  float dispTransformRawDb[NUM_GEQ_CHANNELS];// ... without the crest comp
+  float dispTransformMeanDb[NUM_GEQ_CHANNELS];// ... and the band mean
+  float dispLagMs[NUM_GEQ_CHANNELS];     // the measured lag between the two
+  float dispLagCorr[NUM_GEQ_CHANNELS];   // ... and the correlation there
+  float rtaPowDb[AR_MAX_BANDS];          // the 31 RTA bands, integrated power, dB
+  float rtaLevelDb[AR_MAX_BANDS];        // the 31 RTA bands, calibrated, dB
+  float rtaTopPowDb[AR_RTA_TOP_BANDS];   // the top bank's power, dB
+  float rtaTopTfDb[AR_RTA_TOP_BANDS];    // the transform's power, dB
+  float rtaTopPowLin[AR_RTA_TOP_BANDS];  // ... and the same, linear, so a
+  float rtaTopTfLin[AR_RTA_TOP_BANDS];   //     ratio can be taken of them
+  bool  dispBankDrives;                  // the frame's decision, not a re-ask
+  bool  rtaTopBankDrives;                // ... and the same for the RTA top
+};
+
+// The snapshot before there has been a frame: every reading is "no reading".
+//
+// The sentinels are the file's own: -99 for a power that was not measured,
+// -120 for a dB that was not measured. A zero would be a lie - 0 dB is a
+// perfectly good level, and a reader cannot tell it from a measurement.
+static ArFrameSnapshot arFrameSnapshotInit() {
+  ArFrameSnapshot s;
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    s.psdDb[k] = -99.0f;  s.bandDb[k] = -120.0f;
+    s.dispBandDb[k] = -120.0f;  s.dispTransformDb[k] = -120.0f;
+    s.dispTransformRawDb[k] = -120.0f;  s.dispTransformMeanDb[k] = -120.0f;
+    s.dispLagMs[k] = 0.0f;  s.dispLagCorr[k] = 0.0f;
+  }
+  for (int k = 0; k < AR_MAX_BANDS; k++)       { s.rtaPowDb[k] = -99.0f; s.rtaLevelDb[k] = -120.0f; }
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++)   { s.rtaTopPowDb[k] = -99.0f; s.rtaTopTfDb[k] = -99.0f;
+                                                  s.rtaTopPowLin[k] = 0.0f;  s.rtaTopTfLin[k] = 0.0f; }
+  s.dispBankDrives = true;
+  s.rtaTopBankDrives = true;
+  return s;
+}
+
+static ArFrameSnapshot arFrameSnap = arFrameSnapshotInit();
+
+// The A/B switch: the RTA's top bands come from the bank, or from the FFT.
+//
+// The bank is the default, and the reason is the one that was measured: the
+// transform's reading cannot be newer than 42.7 ms, because that is how old
+// its 4096-sample window is, and the bank's is a few milliseconds old.
+//
+// The switch exists so the two can be compared on the SAME audio, which is
+// the only comparison worth anything: a switch changes the music, the room
+// and the AGC.  Both run every frame, and the JSON publishes both readings.
+//
+// VOLATILE for the same reason as dispUseBank: it is written from the
+// userloop task (the serial console, the JSON handler) and read on the FFT
+// task.
+static volatile bool  rtaUseBank = true;
+
+// THE PROOF-OF-CONCEPT SWITCH: run the AudioReactive with no FFT at all.
+//
+// With the transform off, the whole analysis path is the filter banks: the
+// sixteen display bands come from the display bank, the thirty-one RTA bands
+// from the two RTA banks, and the dominant frequency and the peak magnitude -
+// the two things the transform still owned - are derived from the banks' own
+// densities. There is no windowing, no FFT, no bit reversal and no
+// magnitude fold in the frame.
+//
+// It is a RUNTIME switch on purpose. The point of the comparison is that both
+// paths can be measured on the SAME audio, in the SAME frame, on the SAME
+// board - a switch between two runs would compare two different pieces of
+// music.
+//
+// The switch is the single key 'a', which TOGGLES. See
+// audioReactiveTransformCommand().
+//
+// THE DEFAULT IS OFF. The filter banks are the whole measurement - the
+// sixteen display bands, the thirty-one RTA bands, the dominant frequency
+// and the peak magnitude - and the transform is the A/B reference that
+// proves it.
+//
+// Measured on the board, 2026-10-27, on the same live audio:
+//
+//   The transform's error on a tone at an RTA band's centre, against truth:
+//     20 Hz -7.08 dB, 25 Hz -6.06, 32 Hz -5.06, 40 Hz -4.06, 50 Hz -3.06,
+//     63 Hz -2.07, 79 Hz -1.06, 100 Hz -0.06, and 0.00 above 125 Hz.
+//   The bank's error on the same tones: 0.085 dB worst, all thirty-one
+//   bands inside 0.09 dB.
+//
+// The transform's error is not a calibration error - it is a RESOLUTION
+// limit. The transform's kernel is the window, 23.49 Hz wide, so every band
+// narrower than that reads the same smeared number, and the bank's own
+// filter - 4.6 Hz wide at the bottom - does not. Above about 100 Hz the two
+// agree, because there the band is wider than the kernel and both resolve
+// it. Below it, only the bank resolves it, and it is right.
+//
+// The cost of the transform: 2830 us of a 10670 us frame. With it off the
+// AudioReactive's work per frame falls from 5.3 ms to 2.9 ms - 2.4 ms of
+// CPU back - and the frame RATE does not change, because the frame is paced
+// by the 10.67 ms hop and not by the work.
+//
+// It is VOLATILE because it is written from another task: the serial console
+// handler and the JSON handler both run on the userloop task, and the frame
+// reads it on the FFT task. Without volatile the compiler is free to keep the
+// value in a register across the frame and act on a stale answer.
+static volatile bool  arUseTransform = false;
+
+// Whether the transform's numbers are current.
+//
+// The banks' numbers always are - they update every frame. The transform's
+// are only current if the transform ran, so everything that reads a
+// transform-derived value has to know whether it is looking at a live number
+// or at the last one it saw.
+static volatile bool  arTransformValid = false;
+
+// The banks' own health, from their boot self-tests.
+//
+// The ready flags say a bank EXISTS. These say it WORKS: a bank that failed
+// its own self-test is not a measurement, because its numbers do not mean
+// what the contract they were built on says they mean.
+//
+// They are separate from the ready flags on purpose. The calibration is
+// rebuilt at runtime and the rebuild calls the banks' init - which sets the
+// ready flags again - so if health lived in the ready flags, a rebuild would
+// quietly declare a failed bank healthy again.
+static volatile bool  arBankHealthy   = true;
+static volatile bool  arDispHealthy   = true;
+static volatile bool  arRtaTopHealthy = true;
+
+// Whether the transform actually runs this frame.
+//
+// The switch says whether the user WANTS it. This says whether it HAPPENS.
+//
+// If any of the banks is missing - not built, or not ready - then the
+// transform is the only measurement left, and a display with no measurement
+// in it is worse than a slow one. So the transform turns itself back on in
+// that case and the frame is measured the old way.
+//
+// If a bank is BUILT and READY but FAILED its own self-test, the transform
+// takes the frame back too - with one exception. It cannot separate the RTA's
+// bottom eight bands at all: its measurement kernel is 23.49 Hz wide and
+// those bands are 4.62 Hz, so it would read the same smeared number into
+// five or six of them. A bank that is out of contract by half a decibel is
+// still a far better measurement of a 4.62 Hz band than a 23.49 Hz smeared
+// one, so the bottom bank keeps those bands even when it has failed its
+// test, and the failure is reported instead.
+//
+// With the banks healthy, which is the normal case and the case the boot
+// self-tests assert, this is exactly the switch.
+static inline bool arTransformRuns() {
+  if (arUseTransform) return true;
+  if (!dispReady || !bankReady || !rtaTopReady) return true;
+  if (!arDispHealthy || !arRtaTopHealthy) return true;
+  return false;
+}
+
+// Which measurement drives the sixteen display bands.
+//
+// Three things decide it: whether the bank exists, whether it passed its own
+// self-test, and the user's A/B preference.
+//
+// The preference is between two measurements that BOTH work, so it is
+// overridden in exactly one case - the transform is running because a bank
+// FAILED, and then there is nothing to prefer.
+static inline bool arDispBankDrives(bool tfRuns) {
+  return dispReady && arDispHealthy && (dispUseBank || !tfRuns);
+}
+
+// The same question for the RTA's top twenty-three.
+static inline bool arRtaTopBankDrives(bool tfRuns) {
+  return rtaTopReady && arRtaTopHealthy && (rtaUseBank || !tfRuns);
+}
+
+// The bank's own answers to the two questions the transform was answering:
+// the dominant frequency and the peak magnitude.
+//
+// They are computed every frame, so the comparison is live: with the
+// transform on, the transform's answer is what the effects use and the bank's
+// is published beside it; with the transform off, the bank's IS the answer.
+static float arBankPeakHz = 0.0f;       // the dominant frequency, Hz
+static float arBankMagnitude = 0.0f;    // the peak magnitude, legacy scale
+
+// The self-test's verdict.
+static volatile bool  rtaTestDone = false;
+static int   rtaTestFails = 0;
+static float rtaTestWorst = 0.0f;        // the worst tone error, dB
+static float rtaTestWorstF = 0.0f;
+static float rtaTestWhiteWorst = 0.0f;   // the worst white-noise error, dB
+static float rtaTestWhiteWorstF = 0.0f;
+static float rtaTestEnbwWorst = 0.0f;    // the worst ENBW disagreement, dB
+static float rtaTestEnbwWorstF = 0.0f;
+static float rtaTestNbrWorst = -99.0f;   // the worst neighbour leakage, dB
+static float rtaTestToneDb[AR_RTA_TOP_BANDS];
+static float rtaTestWhiteDb[AR_RTA_TOP_BANDS];
+static float rtaTestEnbwDb[AR_RTA_TOP_BANDS];
+static float rtaTestNbrDb[AR_RTA_TOP_BANDS];
+static float rtaTestTimeMs = 0.0f;
+
+// THE HEAD-TO-HEAD: the transform against the banks, on the same tone.
+//
+// The banks' self-tests already prove that each bank reads a tone at its own
+// band's centre as that tone's power. The transform's own answer to the same
+// question is measured here, with the same tone and the same truth, so the
+// two are directly comparable.
+//
+// The two answers should agree - both are supposed to be the band's
+// integrated power - and they do not, and the size of the disagreement is the
+// whole argument for the banks.
+//
+// xfTestTfDb[k]   the transform's error, dB, on a tone at RTA band k's centre
+// xfTestBankDb[k] the bank's error, dB, on the same tone
+// xfTestPredDb[k] what the transform's kernel width predicts its error to be
+static float xfTestTfDb[NUM_RTA_CHANNELS];
+static float xfTestBankDb[NUM_RTA_CHANNELS];
+static float xfTestPredDb[NUM_RTA_CHANNELS];
+static bool  xfTestHas[NUM_RTA_CHANNELS];   // was this band measured at all?
+static int   xfTestBands = 0;              // how many bands were measured
+static int   xfTestTfFails = 0;            // bands where the transform missed by > 1 dB
+static int   xfTestBankFails = 0;          // bands where the bank missed by > 1 dB
+static float xfTestTfWorst = 0.0f;         // the worst transform error, dB
+static int   xfTestTfWorstBand = -1;
+static float xfTestBankWorst = 0.0f;       // the worst bank error, dB
+static int   xfTestBankWorstBand = -1;
+static volatile bool  xfTestDone = false;
+
+// The head-to-head's helpers, defined further down next to the estimator they
+// use. The RTA top bank's self-test is above them, and it is one of the two
+// places that measures the transform.
+static float xfTransformBandDb(const float *frame, int k);
+static void   xfRecord(int k, float tfDb, float bankDb, float toneDb);
+static float xfKernelEnbw();
+
+// One band's two sections, at a given scale.
+//
+// The scale multiplies both pole Qs, so it is the WIDTH of the kernel: a
+// bigger scale is a narrower band.  The design is the bottom bank's, with the
+// same two pole Qs - so the kernel's shape matches and only its width moves.
+static void rtaTopDesign(int k, float scale) {
+  const int j = AR_RTA_TOP_FIRST + k;
+  const float fc    = lay31.centre[j];
+  const float width = lay31.edgeHi[j] - lay31.edgeLo[j];
+  const float ratio = fc / width;
+  bankRbjBpf(fc, (float)SAMPLE_RATE, scale * AR_BANK_POLE_Q1 * ratio, rtaSecCoeffs[k][0]);
+  bankRbjBpf(fc, (float)SAMPLE_RATE, scale * AR_BANK_POLE_Q2 * ratio, rtaSecCoeffs[k][1]);
+}
+
+// The band's ENBW, from its impulse response.
+//
+// Parseval says the integral of |H|^2 over the spectrum is fs times the sum
+// of h^2, so the one-sided integral - half of it - is fs/2 times the sum.  The
+// impulse goes through the SAME recursion the bank runs, so this measures the
+// code and not a model of it.
+//
+// The record is 4096 samples - 85.3 ms - and it is long enough: the shortest
+// band's impulse decays as exp(-pi*f0*t/Q) = exp(-65 t), and the energy left
+// in the tail at 85 ms is a part in ten thousand.
+static float rtaTopEnbwByImpulse(int k) {
+  const float *c0 = rtaSecCoeffs[k][0];
+  const float *c1 = rtaSecCoeffs[k][1];
+  float a1 = 0.0f, a2 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+  float h2 = 0.0f;
+  for (int i = 0; i < 4096; i++) {
+    const float x = (i == 0) ? 1.0f : 0.0f;
+    const float y = c0[0] * x + a1;
+    a1 = c0[1] * x - c0[3] * y + a2;
+    a2 = c0[2] * x - c0[4] * y;
+    const float z = c1[0] * y + b1;
+    b1 = c1[1] * y - c1[3] * z + b2;
+    b2 = c1[2] * y - c1[4] * z;
+    h2 += z * z;
+  }
+  return 0.5f * (float)SAMPLE_RATE * h2;
+}
+
+// Solve the band: the scale whose ENBW lands on the target.
+//
+// The ENBW falls as the scale rises, so the search is a bisection on the
+// geometric mean of the bracket.  The plain design is tried first and
+// accepted when it is already on the target, which is the case for every band
+// below 1.6 kHz - and that is most of the work saved.
+static float rtaTopSolveScale(int k) {
+  const int j = AR_RTA_TOP_FIRST + k;
+  const float width = lay31.edgeHi[j] - lay31.edgeLo[j];
+  const float target = AR_RTA_ENBW_RATIO * width;
+  rtaTopDesign(k, 1.0f);
+  const float e0 = rtaTopEnbwByImpulse(k);
+  if (fabsf(10.0f * log10f(e0 / target)) < 0.02f) return 1.0f;
+  float lo = 0.02f, hi = 50.0f;
+  for (int i = 0; i < 14; i++) {
+    const float mid = sqrtf(lo * hi);
+    rtaTopDesign(k, mid);
+    if (rtaTopEnbwByImpulse(k) > target) lo = mid; else hi = mid;
+  }
+  return sqrtf(lo * hi);
+}
+
+// The bands, baked.
+static void rtaTopInitCoefficients() {
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    rtaTopDesign(k, rtaTopSolveScale(k));
+    rtaEnbwImp[k] = rtaTopEnbwByImpulse(k);
+  }
+}
+
+// The band's ENBW, the other way: the integral of |H|^2 over the spectrum.
+//
+// This is the number the reading is divided by, and the self-test checks it
+// against the impulse response's - a check on the number and not on a model
+// of it.
+static void rtaTopMeasureEnbw() {
+  constexpr int n = 1200;
+  const float fs = (float)SAMPLE_RATE;
+  const float f0 = 0.01f, f1 = fs * 0.5f;
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    float tot = 0.0f;
+    float fprev = f0;
+    float prev = bankSecMag2(rtaSecCoeffs[k][0], f0, fs)
+               * bankSecMag2(rtaSecCoeffs[k][1], f0, fs);
+    for (int i = 1; i <= n; i++) {
+      const float f = f0 * powf(f1 / f0, (float)i / (float)n);
+      const float cur = bankSecMag2(rtaSecCoeffs[k][0], f, fs)
+                      * bankSecMag2(rtaSecCoeffs[k][1], f, fs);
+      tot += 0.5f * (prev + cur) * (f - fprev);
+      prev = cur; fprev = f;
+    }
+    rtaEnbw[k] = tot;
+  }
+}
+
+// The band's digital -3 dB width, MEASURED.
+//
+// It is the check on the design: the ENBW is the target, and this says how
+// wide the half-power points actually ended up.
+static void rtaTopMeasureWidth() {
+  constexpr int MAXSTEP = 20000;
+  const float fs = (float)SAMPLE_RATE;
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const float *c0 = rtaSecCoeffs[k][0];
+    const float *c1 = rtaSecCoeffs[k][1];
+    const float fc = lay31.centre[AR_RTA_TOP_FIRST + k];
+    const float peak = bankSecMag2(c0, fc, fs) * bankSecMag2(c1, fc, fs);
+    const float step = fc * 0.0005f;
+    float lo = 0.0f;
+    for (int i = 1; i <= MAXSTEP; i++) {
+      const float f = fc - (float)i * step;
+      if (f <= 0.0f) break;
+      if (bankSecMag2(c0, f, fs) * bankSecMag2(c1, f, fs) <= 0.5f * peak) { lo = f; break; }
+    }
+    float hi = fs * 0.5f;
+    for (int i = 1; i <= MAXSTEP; i++) {
+      const float f = fc + (float)i * step;
+      if (f >= fs * 0.5f) break;
+      if (bankSecMag2(c0, f, fs) * bankSecMag2(c1, f, fs) <= 0.5f * peak) { hi = f; break; }
+    }
+    rtaWidthHz[k] = hi - lo;
+  }
+}
+
+// The bank's calibration: the chain's measured response, divided out.
+//
+// It is the same correction the transform's RTA bands get - calDb[] holds the
+// chain's MEASURED response at every band centre of both layouts, and the
+// chain is in front of this bank exactly as it is in front of the transform.
+// So rtaCalDb[] IS calDb[]'s RTA half, and nothing about the calibration
+// changes when the source does.
+//
+// The band filter itself is NOT corrected for.  It is the measurement, and its
+// peak gain of 1.0 at the centre is what makes a centred tone read its own
+// power.
+static void rtaTopInitCalibration() {
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    rtaCalDb[k] = calDb[NUM_GEQ_CHANNELS + AR_RTA_TOP_FIRST + k];
+  }
+}
+
+// The detector's time constant and the coefficient that goes with it.
+static void rtaTopSetTau(float ms) {
+  if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
+  if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
+  rtaTauMs = ms;
+  rtaDetAlpha = 1.0f - expf(-1.0f / (rtaTauMs * 0.001f * (float)SAMPLE_RATE));
+}
+
+// The band's 63% response time, MEASURED.
+//
+// The same measurement the display bank makes: an impulse goes in, the
+// detector's expected value rises as the cumulative energy fills up, and the
+// 63% point says how old the content on the bar is.
+static void rtaTopMeasureResponse() {
+  constexpr int N = 4096;
+  const float alpha = rtaDetAlpha;
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const float *c0 = rtaSecCoeffs[k][0];
+    const float *c1 = rtaSecCoeffs[k][1];
+    float det = 0.0f, energy = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f, b1 = 0.0f, b2 = 0.0f, x = 1.0f;
+    for (int i = 0; i < N; i++) {
+      const float y = c0[0] * x + a1;
+      a1 = c0[1] * x - c0[3] * y + a2;
+      a2 = c0[2] * x - c0[4] * y;
+      const float z = c1[0] * y + b1;
+      b1 = c1[1] * y - c1[3] * z + b2;
+      b2 = c1[2] * y - c1[4] * z;
+      x = 0.0f;
+      energy += z * z;
+      det += alpha * (energy - det);
+    }
+    const float finalV = det;
+    float t63 = 0.0f;
+    if (finalV > 0.0f) {
+      det = 0.0f; energy = 0.0f;
+      a1 = a2 = b1 = b2 = 0.0f; x = 1.0f;
+      for (int i = 0; i < N; i++) {
+        const float y = c0[0] * x + a1;
+        a1 = c0[1] * x - c0[3] * y + a2;
+        a2 = c0[2] * x - c0[4] * y;
+        const float z = c1[0] * y + b1;
+        b1 = c1[1] * y - c1[3] * z + b2;
+        b2 = c1[2] * y - c1[4] * z;
+        x = 0.0f;
+        energy += z * z;
+        det += alpha * (energy - det);
+        if (det >= 0.63f * finalV) {
+          t63 = (float)i * 1000.0f / (float)SAMPLE_RATE;
+          break;
+        }
+      }
+    }
+    rtaRespMs[k] = t63;
+  }
+}
+
+// Clear the bank's state: the filters start from silence and the detectors
+// from zero.
+static void rtaTopReset() {
+  memset(&liveRtaTop, 0, sizeof(liveRtaTop));
+}
+
+// Build the bank: the coefficients, the ENBW, the width, the calibration, the
+// measured response times.
+static void rtaTopInit() {
+  if (!bandLayoutReady) initBandLayout();
+  rtaTopInitCoefficients();
+  rtaTopMeasureEnbw();
+  rtaTopMeasureWidth();
+  rtaTopInitCalibration();
+  // The RTA's detector: the same time constant as the bottom eight bands, so
+  // the thirty-one bars behave alike. The FIRST build takes the bottom bank's
+  // value; after that it keeps its own, because a change to the RTA's
+  // detector has to stick across a chain rebuild.
+  if (!rtaTauSet) { rtaTauMs = bankTauMs; rtaTauSet = true; }
+  rtaTopSetTau(rtaTauMs);
+  rtaTopMeasureResponse();
+  rtaTopReset();
+  rtaTopReady = true;
+}
+
+// Run the bank over n fresh samples and update the twenty-three detectors.
+//
+// The samples are read, never written: the filters are transposed direct form
+// II, so each section's state is two floats and the output is a local
+// variable - the bank needs no buffer of its own, and it cannot disturb the
+// FFT's input.
+//
+// The bands are the OUTER loop and the samples the inner one, so each band's
+// coefficients and delay line stay in the same place for all 512 samples.
+static void rtaTopProcess(RtaTopBank *b, const float *in, int n) {
+  const float alpha = rtaDetAlpha;
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const float *c0 = rtaSecCoeffs[k][0];
+    const float *c1 = rtaSecCoeffs[k][1];
+    float *w0 = b->secW[k][0];
+    float *w1 = b->secW[k][1];
+    float det = b->det[k];
+    for (int i = 0; i < n; i++) {
+      const float x = in[i];
+      const float y = c0[0] * x + w0[0];
+      w0[0] = c0[1] * x - c0[3] * y + w0[1];
+      w0[1] = c0[2] * x - c0[4] * y;
+      const float z = c1[0] * y + w1[0];
+      w1[0] = c1[1] * y - c1[3] * z + w1[1];
+      w1[1] = c1[2] * y - c1[4] * z;
+      const float p = z * z;
+      det += alpha * (p - det);
+    }
+    b->det[k] = det;
+  }
+}
+
+// The RTA top bank's self-test.
+//
+// The display bank's test is the model, and the checks are the same three:
+//
+//   1. THE ENBW, from the impulse response against the integral.  Parseval
+//      gives the first exactly; the code uses the second.  They have to
+//      agree, and the ratio to the nominal width is what the bottom eight
+//      bands are set to - so this is the check that the two halves of the RTA
+//      are the same measurement.
+//
+//   2. A TONE at a band's centre.  The filter's peak gain is 1.0 there, so
+//      the detector must read the tone's own power, A^2/2.
+//
+//   3. WHITE NOISE.  A flat input of variance v reads back as the shaped
+//      power 2v*ENBW/fs - the power through a filter of that noise bandwidth.
+//      This is the number the bottom eight bands read too.
+//
+// The neighbours are read as well, and REPORTED rather than asserted: the
+// kernel is wider than the layout's band, so it leaks, and the amount says
+// how much the bands overlap.
+// A scratch buffer for the self-tests, taken from PSRAM and handed back when
+// the test that asked for it ends.
+//
+// The self-tests each need a frame's worth of samples - 16 KB apiece, and
+// there are four of them across the two tests.  As plain function-local
+// statics they sit in the internal heap for the rest of the board's life, and
+// the internal heap is what the web server's client objects are allocated
+// from.  This board does not have that much to spare: with the self-test
+// buffers resident the free heap sat at 8 KB, which is under the web
+// server's own 8 KB floor, so it dropped every incoming connection without
+// answering it and the GUI failed to load with "net::ERR_EMPTY_RESPONSE".
+//
+// PSRAM is where the FFT working set already lives (see the note there), and
+// there is megabytes of it spare.
+class PSRAMScratch {
+public:
+  explicit PSRAMScratch(size_t count) {
+    _p = (float *)heap_caps_calloc_prefer(count, sizeof(float), 1,
+                                          MALLOC_CAP_SPIRAM, MALLOC_CAP_INTERNAL);
+    if (!_p) {
+      // No PSRAM and no room in the internal heap either.  The self-test
+      // will fault on the first write; say so rather than faulting quietly.
+      USER_PRINTLN("AR: no memory for the self-test's scratch buffer");
+    }
+  }
+  ~PSRAMScratch() { if (_p) heap_caps_free(_p); }
+  PSRAMScratch(const PSRAMScratch &) = delete;
+  PSRAMScratch &operator=(const PSRAMScratch &) = delete;
+  float *get() const { return _p; }
+  float &operator[](size_t i) { return _p[i]; }
+private:
+  float *_p = nullptr;
+};
+
+static void rtaTopSelfTest() {
+  if (rtaTestDone) return;
+  rtaTestDone = true;
+  if (!bandLayoutReady) initBandLayout();
+  if (!rtaTopReady) {
+    USER_PRINTLN("AR: RTA top-bank self-test skipped - the bank is not built");
+    return;
+  }
+
+  const uint64_t t0 = esp_timer_get_time();
+
+  const float amp    = 0.5f;
+  const float tonePow = amp * amp * 0.5f;             // the tone's own power
+  const float toneDb  = 10.0f * log10f(tonePow);
+
+  constexpr int N = 512;                              // the chunk the bank runs in
+  static float buf[N];
+  // The last frame of the tone, for the transform's side of the head-to-head.
+  //
+  // This bank runs no input chain, so the signal the transform is given here
+  // is the tone itself - which is also the signal the bank is given, so the
+  // two are asked the same question about the same samples.
+  PSRAMScratch ring(samplesFFT);
+  PSRAMScratch frame(samplesFFT);
+  int   ringPos = 0;
+  RtaTopBank tb;                                      // the bank's own state
+
+  int fails = 0;
+  float worst = 0.0f, worstF = 0.0f;
+  float whiteWorst = 0.0f, whiteWorstF = 0.0f;
+  float enbwWorst = 0.0f, enbwWorstF = 0.0f;
+  float nbrWorst = -99.0f;
+
+  USER_PRINTLN("\n=== AudioReactive RTA top-bank self-test ===========================");
+  USER_PRINTF("  %d bands, %.0f Hz, detector %.0f ms\n",
+              AR_RTA_TOP_BANDS, (double)SAMPLE_RATE, (double)rtaTauMs);
+
+  // ---- 1. the ENBW, from the impulse response --------------------------
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const float errDb = 10.0f * log10f(rtaEnbw[k] / rtaEnbwImp[k]);
+    rtaTestEnbwDb[k] = errDb;
+    if (fabsf(errDb) > 0.20f) fails++;
+    if (fabsf(errDb) > fabsf(enbwWorst)) {
+      enbwWorst = errDb; enbwWorstF = lay31.centre[AR_RTA_TOP_FIRST + k];
+    }
+  }
+
+  // ---- 2. a tone at each band's centre ---------------------------------
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const float fc = lay31.centre[AR_RTA_TOP_FIRST + k];
+    memset(&tb, 0, sizeof(tb));
+
+    // The tone, by rotation.  sinf() per sample would cost more than the
+    // twenty-three filters it feeds.
+    const float dw = (float)(2.0 * (double)M_PI * (double)fc / (double)SAMPLE_RATE);
+    const float cs = cosf(dw);
+    const float sn = sinf(dw);
+    float cr = 1.0f, ci = 0.0f;
+
+    // Time to settle, and time to average.
+    //
+    // The settle has to cover the FILTER, not just the detector: the filter
+    // decays as exp(-pi*ENBW*t).  The average has to cover the detector's
+    // ripple at twice the tone's frequency, which at the lowest band here is
+    // 252 Hz - a 4 ms period, so 200 ms is fifty of them.
+    const float settleSecs = fmaxf(0.12f, 6.0f / rtaEnbw[k]);
+    const float avgSecs    = 0.2f;
+    const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
+    const int avgChunks    = (int)(avgSecs    * (float)SAMPLE_RATE / (float)N);
+
+    float acc[AR_RTA_TOP_BANDS] = {0.0f};
+    int   accN = 0;
+    for (int c = 0; c < settleChunks + avgChunks; c++) {
+      for (int i = 0; i < N; i++) {
+        buf[i] = amp * cr;
+        const float nr = cr * cs - ci * sn;
+        ci = cr * sn + ci * cs;
+        cr = nr;
+      }
+      rtaTopProcess(&tb, buf, N);
+      // Keep the last frame of the tone for the transform.
+      for (int i = 0; i < N; i++) {
+        ring[ringPos] = buf[i];
+        ringPos++;
+        if (ringPos >= samplesFFT) ringPos = 0;
+      }
+      if (c >= settleChunks) {
+        for (int j = 0; j < AR_RTA_TOP_BANDS; j++) acc[j] += tb.det[j];
+        accN++;
+      }
+    }
+
+    float raw[AR_RTA_TOP_BANDS];
+    for (int j = 0; j < AR_RTA_TOP_BANDS; j++) raw[j] = acc[j] / (float)accN;
+
+    // The band itself: the detector must read the tone's own power.
+    const float errDb = 10.0f * log10f(raw[k] / tonePow);
+    rtaTestToneDb[k] = errDb;
+    const bool ok = (errDb > -0.25f) && (errDb < 0.25f);
+    if (!ok) fails++;
+    if (fabsf(errDb) > fabsf(worst)) { worst = errDb; worstF = fc; }
+
+    // The neighbours: how far the tone reaches into the bands either side.
+    float nbrDb = -99.0f;
+    for (int s = 0; s < 2; s++) {
+      const int j = (s == 0) ? k - 1 : k + 1;
+      if (j < 0 || j >= AR_RTA_TOP_BANDS) continue;
+      const float d = 10.0f * log10f(raw[j] / raw[k]);
+      if (d > nbrDb) nbrDb = d;
+    }
+    rtaTestNbrDb[k] = nbrDb;
+    if (nbrDb > nbrWorst) nbrWorst = nbrDb;
+
+    // THE HEAD-TO-HEAD, the top bank's half of it.
+    //
+    // No chain runs here, so neither side is calibrated and the truth is the
+    // tone's own power. The transform sees the last frame of the tone, which
+    // is the tone.
+    for (int i = 0; i < samplesFFT; i++) frame[i] = ring[(ringPos + i) % samplesFFT];
+    const float tfDb   = xfTransformBandDb(frame.get(), AR_RTA_TOP_FIRST + k);
+    const float bankDb = (raw[k] > 0.0f) ? 10.0f * log10f(raw[k]) : -120.0f;
+    xfRecord(AR_RTA_TOP_FIRST + k, tfDb, bankDb, toneDb);
+
+    USER_PRINTF("  band %2d %9.2f Hz  enbw %+6.3f dB  tone %+7.3f dB %s  nbr %+7.2f dB"
+                "  | transform %+7.3f dB %s  bank %+7.3f dB %s\n",
+                k, (double)fc, (double)rtaTestEnbwDb[k], (double)errDb,
+                ok ? "PASS" : "FAIL", (double)nbrDb,
+                (double)(tfDb - toneDb), (fabsf(tfDb - toneDb) <= 1.0f) ? "  " : "!!",
+                (double)(bankDb - toneDb), (fabsf(bankDb - toneDb) <= 0.35f) ? "  " : "!!");
+  }
+
+  // ---- 3. white noise ---------------------------------------------------
+  //
+  // A flat input of variance v reads back as the shaped power 2v*ENBW/fs -
+  // the power through a filter of that noise bandwidth.  The precision is
+  // bounded by the filter's own bandwidth, and that is physics rather than a
+  // defect, so the tolerance is four times the expected scatter, computed per
+  // band from that band's own ENBW.
+  {
+    memset(&tb, 0, sizeof(tb));
+    uint32_t seed = 0x7654321u;
+    const float var = 1.0f / 3.0f;                       // uniform in [-1, 1)
+    const float settleSecs = 0.3f;
+    const float avgSecs = 1.0f;
+    const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
+    const int avgChunks    = (int)(avgSecs    * (float)SAMPLE_RATE / (float)N);
+
+    float acc[AR_RTA_TOP_BANDS] = {0.0f};
+    int accN = 0;
+    for (int c = 0; c < settleChunks + avgChunks; c++) {
+      for (int i = 0; i < N; i++) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        buf[i] = ((float)(seed & 0xFFFFFF) / 8388608.0f) - 1.0f;   // [-1, 1)
+      }
+      rtaTopProcess(&tb, buf, N);
+      if (c >= settleChunks) {
+        for (int j = 0; j < AR_RTA_TOP_BANDS; j++) acc[j] += tb.det[j];
+        accN++;
+      }
+    }
+    for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+      const float expect = 2.0f * var * rtaEnbw[k] / (float)SAMPLE_RATE;
+      const float errDb = 10.0f * log10f((acc[k] / (float)accN) / expect);
+      rtaTestWhiteDb[k] = errDb;
+      const float nEff = avgSecs * rtaEnbw[k];
+      const float tolDb = 4.0f * 4.342944819f * sqrtf(2.0f / (nEff > 1.0f ? nEff : 1.0f));
+      if (fabsf(errDb) > tolDb) fails++;
+      if (fabsf(errDb) > fabsf(whiteWorst)) {
+        whiteWorst = errDb; whiteWorstF = lay31.centre[AR_RTA_TOP_FIRST + k];
+      }
+    }
+  }
+
+  rtaTestFails        = fails;
+  rtaTestWorst        = worst;
+  rtaTestWorstF       = worstF;
+  rtaTestWhiteWorst   = whiteWorst;
+  rtaTestWhiteWorstF  = whiteWorstF;
+  rtaTestEnbwWorst    = enbwWorst;
+  rtaTestEnbwWorstF   = enbwWorstF;
+  rtaTestNbrWorst     = nbrWorst;
+  rtaTestTimeMs       = (float)((double)(esp_timer_get_time() - t0) / 1000.0);
+
+  USER_PRINTF("  ENBW vs the impulse response: worst %+.3f dB at %.2f Hz\n",
+              (double)enbwWorst, (double)enbwWorstF);
+  USER_PRINTF("  tone at the centre:          worst %+.3f dB at %.2f Hz\n",
+              (double)worst, (double)worstF);
+  USER_PRINTF("  white noise:                 worst %+.3f dB at %.2f Hz\n",
+              (double)whiteWorst, (double)whiteWorstF);
+  USER_PRINTF("  neighbour leakage:           worst %+.2f dB\n", (double)nbrWorst);
+  USER_PRINTF("  %s   self-test time: %.0f ms\n",
+              fails ? "FAIL" : "PASS", (double)rtaTestTimeMs);
+  USER_PRINTLN("=== end of RTA top-bank self-test =================================");
+
+  // THE HEAD-TO-HEAD's verdict. This is the last of the two self-tests that
+  // feed it, so this is where it is complete.
+  xfTestDone = true;
+  if (xfTestBands > 0) {
+    USER_PRINTLN("\n=== AudioReactive head-to-head: the transform against the banks =======");
+    USER_PRINTF("  %d bands measured.  The transform's kernel is %.2f Hz wide.\n",
+                xfTestBands, (double)xfKernelEnbw());
+    USER_PRINTF("  transform: %2d of %d bands off by more than 1.00 dB   worst %+7.3f dB at band %d\n",
+                xfTestTfFails, xfTestBands, (double)xfTestTfWorst, xfTestTfWorstBand);
+    USER_PRINTF("  banks:     %2d of %d bands off by more than 0.35 dB   worst %+7.3f dB at band %d\n",
+                xfTestBankFails, xfTestBands, (double)xfTestBankWorst, xfTestBankWorstBand);
+    USER_PRINTLN("   band      Hz    transform      bank   predicted");
+    for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
+      if (!xfTestHas[k]) continue;
+      USER_PRINTF("  %4d %9.2f   %+8.3f   %+8.3f   %+8.3f\n",
+                  k, (double)lay31.centre[k], (double)xfTestTfDb[k],
+                  (double)xfTestBankDb[k], (double)xfTestPredDb[k]);
+    }
+    USER_PRINTLN("=== end of the head-to-head ===========================================");
+  }
+  USER_FLUSH();
+}
+
+// The lag between the two paths, measured on the live signal.
+//
+// The transform's reading at frame i is what the bank read L frames EARLIER,
+// so the lag is measured as the alignment tf[i+L] against bk[i], over the
+// whole ring. The series are demeaned first: the two readings differ by a
+// constant offset - the crest compensation, and the peak-versus-mean
+// difference - and a constant offset does not move a correlation peak.
+//
+// The correlation's own noise does not move it either. The transform's
+// measurement noise is independent of the bank's, so it lowers every lag's
+// correlation by the same factor and leaves the peak where it was.
+static void dispLagPush() {
+  if (!dispReady) return;
+  const int p = dispHistPos;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    dispHistTf[p][k] = dispTransformDb[k];
+    dispHistBk[p][k] = dispBandDb[k];
+  }
+  dispHistPos = (p + 1) % AR_LAG_FRAMES;
+  if (dispHistFill < AR_LAG_FRAMES) dispHistFill++;
+
+  // The lag is the distance between the two paths, so it needs both of them.
+  // With the transform off there is only one path, and the correlation would
+  // be between a frozen series and a live one - which reads as a number and
+  // means nothing.
+  if (!arTransformValid) {
+    dispLagTfValid = false;
+    return;
+  }
+  dispLagTfValid = true;
+
+  if (++dispLagTick < 8) return;
+  dispLagTick = 0;
+  const int cnt = dispHistFill;
+  if (cnt < AR_LAG_FRAMES) return;      // the ring has to be full first
+
+  // The oldest frame's slot: the ring is written forwards and read back in
+  // time order from here.
+  const int base = dispHistPos;
+
+  // The ring's index, without a division. The value is at most 102, so two
+  // conditional subtractions wrap it - and an integer division per access
+  // would cost more than the whole correlation.
+  auto ringIdx = [](int v) {
+    while (v >= AR_LAG_FRAMES) v -= AR_LAG_FRAMES;
+    return v;
+  };
+
+  float mt[AR_DISP_BANDS], mb[AR_DISP_BANDS];
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    float st = 0.0f, sb = 0.0f;
+    for (int i = 0; i < cnt; i++) {
+      const int s = ringIdx(base + i);
+      st += dispHistTf[s][k];
+      sb += dispHistBk[s][k];
+    }
+    mt[k] = st / (float)cnt;
+    mb[k] = sb / (float)cnt;
+  }
+
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    float best = -2.0f;
+    int   bestL = 0;
+    for (int L = 0; L <= AR_LAG_MAX; L++) {
+      float sxy = 0.0f, sxx = 0.0f, syy = 0.0f;
+      const int n = cnt - L;
+      for (int i = 0; i < n; i++) {
+        const int a = ringIdx(base + i + L);
+        const int b = ringIdx(base + i);
+        const float x = dispHistTf[a][k] - mt[k];
+        const float y = dispHistBk[b][k] - mb[k];
+        sxy += x * y; sxx += x * x; syy += y * y;
+      }
+      const float den = sqrtf(sxx * syy);
+      const float c = (den > 1e-9f) ? (sxy / den) : 0.0f;
+      if (c > best) { best = c; bestL = L; }
+    }
+    // The argmax of a noisy correlation jumps about, so it is smoothed.
+    const float ms = (float)bestL * FRAME_PERIOD_MS;
+    dispLagMs[k]   = (dispLagMs[k] <= 0.0f) ? ms : (dispLagMs[k] * 0.7f + ms * 0.3f);
+    dispLagCorr[k] = best;
+  }
+}
+
 // Which measurement the 16 display bands read.
 //
 //   false (default) - the POINT PSD: the level in a narrowband at the band
@@ -1461,7 +3099,7 @@ static void bankProcess(BankPath *b, const float *in, int n) {
 // The default is the point measurement, because it is the one where a single
 // tone reads correctly: at the centre of a wide band a tone is 20 dB below
 // the band's integrated power.
-static bool  freqMeasureIntegrated = false;
+static volatile bool  freqMeasureIntegrated = false;
 
 // The per-band display trim, in dB.
 //
@@ -1564,7 +3202,7 @@ static constexpr float AR_RTA_TARGET_DB  = 0.0f;       // the loudest RTA band i
 // trim below - are applied to the MEASUREMENT, before the window, which is
 // what makes the fixed window an absolute one.
 // ---------------------------------------------------------------------------
-static bool  rtaAutoRange = true;        // false = the fixed window is in use
+static volatile bool  rtaAutoRange = true; // false = the fixed window is in use
 static float rtaFloorDb   = -60.0f;       // the fixed window's floor, dB
 static float rtaTopDb     = 0.0f;         // the fixed window's top, dB
 static constexpr float AR_RTA_FLOOR_MIN = -120.0f;  // the floor's travel
@@ -1582,8 +3220,8 @@ static constexpr float AR_RTA_REF_MAX   =  60.0f;   // the reference offset's tr
 // which is exactly what this number records.
 //
 // It is applied to the band levels themselves and not to the display, so the
-// published "RTA band level (dB)" row is already on the analyser's scale and
-// can be compared with it directly.
+// RTA band levels published on /json/ar are already on the analyser's scale
+// and can be compared with it directly.
 static float rtaRefDb = 0.0f;
 
 // The per-band trim, in dB.
@@ -1606,7 +3244,7 @@ static float arFloorDb   = AR_LEVEL_MIN_DB;   // the noise floor, dB
 static float arAgcDb     = 0.0f;              // the display AGC's offset, dB
 static float arRtaAgcDb  = 0.0f;             // the RTA display's own auto-range offset, dB
 static float arRtaSmth[NUM_RTA_CHANNELS] = {0.0f};  // the RTA bars' smoothing, dB
-static bool  arGateOpen  = false;             // the gate's state
+static volatile bool  arGateOpen  = false;   // the gate's state
 static bool  arTrackInit = false;             // the trackers have their first value
 static uint32_t arTrackMs = 0;                // when the trackers last ran
 static float arFrameDtMs = 0.0f;              // the time since the previous frame
@@ -1866,7 +3504,18 @@ void audioReactiveRtaCommand(char c) {
       // the squaring ripple starts to dominate the reading; longer and the
       // bars lag again.
       const float before = bankTauMs;
-      bankSetTau(bankTauMs + ((c == 'K') ? 5.0f : -5.0f));
+      const float delta = (c == 'K') ? 5.0f : -5.0f;
+      bankSetTau(bankTauMs + delta);
+      // The RTA's TOP bank walks with it: the thirty-one bars are one view and
+      // they should move together. The display bank does NOT walk with this
+      // one. The two measure different things and they want opposite things
+      // from their detectors: the RTA's bands want a LONG average, because a
+      // 5 ms detector on a 20 Hz band is all ripple, while the display bands
+      // want a SHORT one, because the whole point of the display bank is that
+      // its content is new. They have their own key ('j'/'J').
+      rtaTauMs = bankTauMs;
+      rtaTauSet = true;
+      rtaTopSetTau(rtaTauMs);
       if (bankTauMs <= AR_BANK_TAU_MIN_MS + 0.01f && before > AR_BANK_TAU_MIN_MS + 0.01f) {
         USER_PRINTF("RTA bank detector now %.0f ms - that is the floor, it cannot go shorter\n",
                     (double)bankTauMs);
@@ -1876,9 +3525,158 @@ void audioReactiveRtaCommand(char c) {
       }
       break;
     }
+    case 'h': case 'H': {
+      // The RTA's top twenty-three bands: the bank or the transform.
+      //
+      // 'h' hands them to the bank - each measured by its own filter, on the
+      // freshest audio in the frame - and 'H' hands them back to the
+      // transform and its 42.7 ms window.
+      //
+      // It is a switch and not a trim, because the two measurements are
+      // different things: the transform integrates the spectrum over the
+      // band's nominal edges, the bank measures the power through its own
+      // filter. Only one of them can be the number on the bar at a time.
+      //
+      // Both run every frame, so both readings are published either way and
+      // the two can be compared on the same audio without switching.
+      const bool want = (c == 'h');
+      if (want == rtaUseBank) break;
+      rtaUseBank = want;
+      if (want) {
+        USER_PRINTF("RTA top bands: FILTER BANK - %.1f ms at the bottom band, %.1f ms at the top\n",
+                    (double)rtaRespMs[0], (double)rtaRespMs[AR_RTA_TOP_BANDS - 1]);
+      } else if (arTransformRuns()) {
+        USER_PRINTLN("RTA top bands: TRANSFORM - the FFT's 42.7 ms window");
+      } else {
+        // The choice is KEPT - it takes effect the moment the transform is
+        // switched on - but the message has to say what is on the bars NOW,
+        // because the bank is what is driving them and claiming otherwise
+        // would be a lie the bars could not back up.
+        USER_PRINTLN("RTA top bands: still the FILTER BANK - the transform is off (press a to switch it on)");
+      }
+      break;
+    }
     default:
       break;
   }
+}
+
+// The display bank's A/B switch.
+//
+// 'w' hands the 16 display bands to the bank and 'W' hands them back to the
+// transform. It is a switch and not a trim, because the two measurements are
+// different things: the transform's bands are a weighted average over an
+// 85 ms window, and the bank's are each their own filter. Only one of them
+// can be the number on the bar at a time.
+//
+// The transform's numbers stay published either way, so the two can be
+// compared on the same audio from the info page - and the bank's own
+// response times are published with them.
+void audioReactiveDispBankCommand(char c) {
+  switch (c) {
+    case 'j': case 'J': {
+      // The display bank's detector: how long it averages the filter's output.
+      //
+      // This is the knob that trades fluctuation against lag, and it is
+      // SEPARATE from the RTA bank's ('k'/'K') because the two want opposite
+      // things: the RTA's bottom bands are narrow and want a long average,
+      // while the display bands want a short one - a long average would undo
+      // the freshness the bank exists to provide.
+      //
+      // The response times are measured again afterwards, because they are a
+      // function of this number and the published ones have to keep telling
+      // the truth.
+      const float delta = (c == 'J') ? 5.0f : -5.0f;
+      dispSetTau(dispTauMs + delta);
+      dispMeasureResponse();
+      USER_PRINTF("Display bank detector now %.0f ms - %.1f ms at the bottom band, %.1f ms at the top\n",
+                  (double)dispTauMs, (double)dispRespMs[0], (double)dispRespMs[AR_DISP_BANDS - 1]);
+      break;
+    }
+    case 'w': case 'W': {
+      const bool want = (c == 'w');
+      if (want == dispUseBank) break;
+      dispUseBank = want;
+      // The bank's state is NOT cleared here. The bank runs every frame
+      // whether or not it drives the display, so its filters are never stale
+      // and there is no carry-over to clear - and clearing them would put a
+      // settling transient into the very comparison the switch exists for.
+      if (want) {
+        USER_PRINTF("Display bands: FILTER BANK - %.1f ms at the bottom band, %.1f ms at the top\n",
+                    (double)dispRespMs[0], (double)dispRespMs[AR_DISP_BANDS - 1]);
+      } else if (arTransformRuns()) {
+        USER_PRINTLN("Display bands: TRANSFORM - the FFT's 42.7 ms window");
+      } else {
+        // The choice is KEPT - it takes effect the moment the transform is
+        // switched on - but the message has to say what is on the bars NOW,
+        // because the bank is what is driving them and claiming otherwise
+        // would be a lie the bars could not back up.
+        USER_PRINTLN("Display bands: still the FILTER BANK - the transform is off (press a to switch it on)");
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// The proof-of-concept switch: the transform on or off.
+//
+// With the transform OFF the AudioReactive runs on the filter banks alone:
+// the sixteen display bands from the display bank, the thirty-one RTA bands
+// from the two RTA banks, and the dominant frequency and the peak magnitude
+// from the banks' own densities. There is no windowing, no transform, no bit
+// reversal and no magnitude fold in the frame.
+//
+// It is a RUNTIME switch, and that is the whole point: switching between two
+// runs would compare two different pieces of music, because the music, the
+// room and the AGC all move while you press the key. This way both paths run
+// on the SAME audio, in the SAME frame.
+//
+// Nothing is reset when it is switched: the banks have been running all along
+// - they update every frame whether or not they drive - so their filters are
+// never stale and there is no settling transient to wait out.
+
+// Set the transform's state and say so. The shared entry point: the serial
+// key and the JSON API both come through here, so the two can never disagree
+// about what the switch did.
+//
+// What is RUNNING is not always what was ASKED for. A bank that failed its
+// self-test forces the transform back on, because then it is the only
+// measurement left - and the print has to say THAT, not "off". A claim the
+// bars cannot back up is worse than no print at all.
+void audioReactiveTransformSet(bool want) {
+  arUseTransform = want;
+  const bool running = arTransformRuns();
+
+  if (want && running) {
+    USER_PRINTLN("Transform ON: the FFT runs as well, and the banks are the comparison");
+    USER_PRINTLN("  it costs about 2.4 ms a frame, and below 100 Hz it is LESS");
+    USER_PRINTLN("  accurate than the banks it is being compared against");
+  } else if (!want && running) {
+    USER_PRINTLN("Transform OFF was asked for, but a bank cannot be trusted:");
+    USER_PRINTLN("  the transform keeps running - it is the only measurement left");
+    USER_PRINTLN("  (the boot log says which bank failed its self-test)");
+  } else {
+    USER_PRINTLN("Transform OFF: the filter banks are the whole measurement");
+    USER_PRINTLN("  no FFT, no windowing, no bit reversal in the frame");
+    USER_PRINTLN("  the 16 display bands and the 31 RTA bands come from the banks");
+    USER_PRINTLN("  the dominant frequency is the loudest RTA band's centre");
+    USER_PRINTLN("  the peak magnitude is that band's density, on the legacy scale");
+  }
+}
+
+// The serial key.
+//
+// ONE key, and it TOGGLES: 'a', for AudioReactive. 'x' was the obvious letter
+// and its upper-case partner the obvious second key, but 'X' is already
+// WLEDMM's "force reconnect" (wled_serial.cpp) and that branch comes first, so
+// 'X' would never arrive here - and 'x' itself has traditionally meant
+// "reconnect network", a key people already press. The print says which way
+// the switch went.
+void audioReactiveTransformCommand(char c) {
+  (void)c;
+  audioReactiveTransformSet(!arUseTransform);
 }
 
 // The display AGC: one dB offset, applied last.
@@ -1938,8 +3736,15 @@ static float arInputTrimDb() {
 }
 
 static void arPublishBands(float dtMs) {
-  const float attack  = (attackTime  > 0) ? (float)attackTime  : 30.0f;
-  const float release = (decayTime   > 0) ? (float)decayTime   : 250.0f;
+  // The smoothing.
+  //
+  // BOTH paths use the user's rise and fall, so the switch between them is a
+  // comparison of the measurement and not of the display. The bank's content
+  // is 5-16 ms old where the transform's is 42.7 ms old, and that difference
+  // is the whole of what the bank buys - the smoothing on top of it is the
+  // same on both sides.
+  const float attack  = (attackTime > 0) ? (float)attackTime : AR_DISP_ATTACK_MS;
+  const float release = (decayTime  > 0) ? (float)decayTime : AR_DISP_RELEASE_MS;
 
   const float trimDb = arInputTrimDb();
 
@@ -1949,6 +3754,37 @@ static void arPublishBands(float dtMs) {
   uint8_t frame[NUM_GEQ_CHANNELS];
 
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    // How far this band moved since the last frame.
+    //
+    // This is the freshness measured on the LIVE signal, rather than
+    // predicted from the filter's shape: a band whose content is 42.7 ms old
+    // cannot move as far between two frames as one whose content is 5 ms old.
+    // It is the number that says whether the bank bought anything, on the
+    // music that is actually playing.
+    //
+    // It is measured for BOTH paths, over the same frame, so the two can be
+    // compared on the same music. The bank's reading is the fresh one, but
+    // only when it is driving - when the transform drives, the bank's own
+    // reading is still published beside it.
+    //
+    // A band that has no reading yet (-120) does not count as a move: the
+    // step from silence to signal is not the signal changing.
+    const bool tfLive  = (dispTransformDb[k] > -119.0f) && (dispPrevTfDb[k] > -119.0f);
+    const float tfMove = tfLive ? fabsf(dispTransformDb[k] - dispPrevTfDb[k]) : 0.0f;
+    dispPrevTfDb[k] = dispTransformDb[k];
+    dispMoveTfDb[k] = (dispMoveTfDb[k] * 7.0f + tfMove) / 8.0f;
+
+    const bool bkLive  = (dispBandDb[k] > -119.0f) && (dispPrevBankDb[k] > -119.0f);
+    const float bkMove = bkLive ? fabsf(dispBandDb[k] - dispPrevBankDb[k]) : 0.0f;
+    dispPrevBankDb[k] = dispBandDb[k];
+    dispMoveBankDb[k] = (dispMoveBankDb[k] * 7.0f + bkMove) / 8.0f;
+
+    // And the driving path's own movement, which is what the display sees.
+    const bool live = (estBandDb[k] > -119.0f) && (dispPrevDb[k] > -119.0f);
+    const float move = live ? fabsf(estBandDb[k] - dispPrevDb[k]) : 0.0f;
+    dispPrevDb[k] = estBandDb[k];
+    dispMoveDb[k] = (dispMoveDb[k] * 7.0f + move) / 8.0f;
+
     const float db = (arGateOpen && (estBandDb[k] > -119.0f))
                      ? (estBandDb[k] + arAgcDb) : -120.0f;
     float &sm = arBandSmth[k];
@@ -2204,9 +4040,14 @@ static float estPointPsd(const float *spec, int slot) {
 // One frame's worth of band values, from the FFT's interleaved (re, im)
 // spectrum.
 //
+// THIS IS THE TRANSFORM HALF. Everything it produces needs a spectrum, and
+// nothing it produces reaches a bar when the transform is switched off: the
+// bands themselves are the banks' (see estFinalise()). What it does produce
+// is the transform's own reading of the same audio, kept for the A/B.
+//
 // Must run while the spectrum is still COMPLEX: the fold that turns it into
 // magnitudes throws the imaginary parts away, and the interpolation needs them.
-static void estCompute(const float *spec) {
+static void estComputeTransform(const float *spec) {
   const int halfN = samplesFFT >> 1;
 
   // The point PSD at every band centre of both layouts.
@@ -2234,9 +4075,21 @@ static void estCompute(const float *spec) {
   // analyser's bar shows. For a band narrower than three bins the integral
   // cannot be taken from bins at all, so it comes from the interpolated
   // spectrum at the centre times the width.
+  //
+  // This is the TRANSFORM's own answer, and it is kept in rtaTfPower[] - not
+  // in estRta[]. estRta[] belongs to the banks now: estFinalise() puts the
+  // banks' readings there, and it does so whether or not the transform ran.
+  // Keeping the two apart is what lets the comparison run on the same audio
+  // in the same frame, and it is what lets the transform be switched off
+  // without taking the RTA view down with it.
+  //
+  // The bottom eight bands are computed here too, even though the transform
+  // cannot resolve them: they are the clearest demonstration of why the
+  // banks exist. The transform's measurement kernel is 23.49 Hz wide and the
+  // narrowest band in the set is 4.62 Hz, so the transform reads a tone at
+  // the band's centre as P * (4.62 / 23.49) - nearly 7 dB low - and the
+  // A/B shows it.
   for (int k = 0; k < lay31.count; k++) {
-    // The bottom eight bands are the bank's, not the transform's - see below.
-    if (bankReady && k < AR_BANK_BANDS) continue;
     const float fLo = lay31.edgeLo[k], fHi = lay31.edgeHi[k];
     if ((fHi - fLo) >= 3.0f * binWidth) {
       const int lo = max(1, (int)ceilf(fLo / binWidth));
@@ -2246,9 +4099,9 @@ static void estCompute(const float *spec) {
         const float re = spec[2 * b], im = spec[2 * b + 1];
         acc += re * re + im * im;
       }
-      estRta[k] = 2.0f * acc * estNorm * binWidth;
+      rtaTfPower[k] = 2.0f * acc * estNorm * binWidth;
     } else {
-      estRta[k] = estPoint[NUM_GEQ_CHANNELS + k] * (fHi - fLo);
+      rtaTfPower[k] = estPoint[NUM_GEQ_CHANNELS + k] * (fHi - fLo);
     }
   }
 
@@ -2283,19 +4136,174 @@ static void estCompute(const float *spec) {
   // a flat input would read with a ramp across the bands - the same shape as
   // the ramp the old code had, arrived at from the other direction.
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-    if (freqMeasureIntegrated) {
-      // The integrated mode reports band POWER, so there is no crest
-      // compensation to apply: the sum over the band already includes the
-      // spread, and a peak-based compensation on top of it would be wrong.
-      estBandDb[k] = (estBandInt[k] > 0.0f)
-                   ? 10.0f * log10f(estBandInt[k]) + calDb[k]
-                   : -120.0f;
-    } else {
-      estBandDb[k] = (estPeak[k] > 0.0f)
-                   ? 10.0f * log10f(estPeak[k]) + estComp[k] + calDb[k]
-                   : -120.0f;
+    // The transform's own reading of this band.
+    //
+    // The integrated mode reports band POWER, so there is no crest
+    // compensation to apply: the sum over the band already includes the
+    // spread, and a peak-based compensation on top of it would be wrong.
+    const float t = freqMeasureIntegrated
+                  ? ((estBandInt[k] > 0.0f)
+                       ? 10.0f * log10f(estBandInt[k]) + calDb[k] : -120.0f)
+                  : ((estPeak[k] > 0.0f)
+                       ? 10.0f * log10f(estPeak[k]) + estComp[k] + calDb[k] : -120.0f);
+    // The RAW reading: the same number without the crest compensation, so the
+    // live difference between the two paths can be taken apart into the
+    // compensation and the peak-versus-mean difference.
+    dispTransformRawDb[k] = freqMeasureIntegrated
+                          ? ((estBandInt[k] > 0.0f)
+                               ? 10.0f * log10f(estBandInt[k]) + calDb[k] : -120.0f)
+                          : ((estPeak[k] > 0.0f)
+                               ? 10.0f * log10f(estPeak[k]) + calDb[k] : -120.0f);
+    // The band-AVERAGE reading, in the same density unit: the mean over the
+    // layout's own edges rather than the peak inside them.
+    dispTransformMeanDb[k] = (estBandInt[k] > 0.0f)
+        ? (10.0f * log10f(estBandInt[k] / (lay16.edgeHi[k] - lay16.edgeLo[k])) + calDb[k])
+        : -120.0f;
+    if (dispUseBank && dispReady) {
+      // The display bank is driving: its reading IS the band value.
+      //
+      // It was written in the frame's filtering region, whether or not the
+      // transform ran - the bank updates every frame and the transform does
+      // not always - so it is copied in estFinalise() rather than
+      // recomputed, and the transform's own reading is kept beside it for
+      // the comparison the info page publishes.
+      //
+      // There is no crest compensation on this side, and there is none needed:
+      // the transform's reading is the band's MEAN (the peak of the point PSD
+      // with the expected crest excess taken back off) and the bank's reading
+      // is the mean over its own filter shape. They are the same quantity, in
+      // the same unit, so the two are directly comparable.
+      dispTransformDb[k] = t;
+      continue;
     }
+    dispTransformDb[k] = t;
   }
+}
+
+// The transform's measurement kernel's equivalent noise bandwidth, in Hz.
+//
+// ENBW = fs * sum(w^2) / (sum(w))^2 - the width of the rectangle that passes
+// the same noise power as this window does.
+//
+// It is measured from the window buffer that is actually applied, so it
+// cannot drift away from the kernel. At 4096 points of Blackman-Harris and
+// 48 kHz it is 23.49 Hz, and every RTA band narrower than that is one the
+// transform cannot measure.
+static float xfKernelEnbw() {
+  double sw = 0.0, sw2 = 0.0;
+  for (int i = 0; i < samplesFFT; i++) {
+    sw  += (double)windowBuf[i];
+    sw2 += (double)windowBuf[i] * (double)windowBuf[i];
+  }
+  if (sw <= 0.0 || sw2 <= 0.0) return 0.0f;
+  return (float)((double)SAMPLE_RATE * sw2 / (sw * sw));
+}
+
+// The transform's answer to the question the banks are also asked: "what is
+// the power in RTA band k?".
+//
+// It runs the REAL path - the real window, the real transform, the real
+// estimator - on a frame of samples, and returns the reading in dB, BEFORE
+// any calibration: the caller adds the calibration its own path uses.
+//
+// The frame is the last samplesFFT samples of the signal the band path sees,
+// at the full rate, windowed exactly as the live path windows it. So the
+// transform and the bank are asked the same question about the same signal.
+//
+// This is used by the self-tests only. It writes the estimator's globals, so
+// it must not run while the FFT task is running.
+static float xfTransformBandDb(const float *frame, int k) {
+  for (int i = 0; i < samplesFFT; i++) {
+    fftBuf[2 * i]     = frame[i] * windowBuf[i];
+    fftBuf[2 * i + 1] = 0.0f;
+  }
+  dsps_fft4r_fc32(fftBuf, samplesFFT);
+  dsps_bit_rev4r_fc32(fftBuf, samplesFFT);
+  estComputeTransform(fftBuf);
+  const float p = rtaTfPower[k];
+  return (p > 0.0f) ? 10.0f * log10f(p) : -120.0f;
+}
+
+// Record one band's head-to-head result.
+//
+// 'tfDb'    the transform's reading of the tone, dB, already calibrated
+// 'bankDb'  the bank's reading of the same tone, dB, already calibrated
+// 'toneDb'  the truth: the tone's own power, dB
+static void xfRecord(int k, float tfDb, float bankDb, float toneDb) {
+  if (k < 0 || k >= NUM_RTA_CHANNELS) return;
+  xfTestBands++;
+  xfTestHas[k] = true;
+  const float tfErr   = tfDb   - toneDb;
+  const float bankErr = bankDb - toneDb;
+  xfTestTfDb[k]   = tfErr;
+  xfTestBankDb[k] = bankErr;
+  // What the kernel's width predicts: the transform reads the point PSD at
+  // the centre and multiplies it by the band's width, so for a band narrower
+  // than the kernel its reading is the tone's power times (width / ENBW).
+  const float width = lay31.edgeHi[k] - lay31.edgeLo[k];
+  const float enbw  = xfKernelEnbw();
+  xfTestPredDb[k]  = (enbw > 0.0f) ? 10.0f * log10f(width / enbw) : 0.0f;
+  // Two different tolerances, because the two answers are expected to be
+  // different. The bank is a filter whose peak gain is 1.0 at the centre, so
+  // it should read a centred tone as that tone's power to a fraction of a dB.
+  // The transform's kernel is 23.49 Hz wide whatever the band is, so it is
+  // given a dB: the question here is only whether it is in the ballpark.
+  if (fabsf(tfErr) > 1.0f) xfTestTfFails++;
+  if (fabsf(bankErr) > 0.35f) xfTestBankFails++;
+  if (xfTestTfWorstBand < 0 || fabsf(tfErr) > fabsf(xfTestTfWorst)) {
+    xfTestTfWorst = tfErr;
+    xfTestTfWorstBand = k;
+  }
+  if (xfTestBankWorstBand < 0 || fabsf(bankErr) > fabsf(xfTestBankWorst)) {
+    xfTestBankWorst = bankErr;
+    xfTestBankWorstBand = k;
+  }
+}
+
+// The part of the estimator that does not need a spectrum.
+//
+// Everything the banks measure is finished here: the display bands take the
+// bank's reading, the RTA bands take the banks' readings, and the RTA's dB
+// values and the published copy are made.
+//
+// It runs EVERY FRAME, whether or not the transform ran. That is the whole
+// point of the split: the transform's readings are the A/B comparison, and
+// the banks' readings are the measurement. Taking the measurement out of the
+// function that needs a spectrum is what makes "no FFT at all" possible
+// without taking the display and the RTA view down with it.
+//
+// tfRuns is the frame's answer to "did the transform run", handed in by the
+// caller. It is NOT asked for again here: the switch can be thrown from
+// another task at any moment, and a frame that asked the question three
+// times could get three different answers and disagree with itself.
+static void estFinalise(bool tfRuns) {
+  // The sixteen display bands.
+  //
+  // The bank's reading is its calibrated POINT PSD - the same quantity, in
+  // the same unit, as the transform's reading of the band.
+  //
+  // With the transform off there is nothing else to read, so the bank drives
+  // whether or not the user had asked for it: 'w'/'W' chooses between the
+  // transform and the bank only while there IS a transform.
+  //
+  // A bank that failed its own self-test does not drive, even when the
+  // preference says it should: the transform takes the frame back for it.
+  const bool dispBankDrives = arDispBankDrives(tfRuns);
+  // The frame's decision, kept for the published snapshot: the reader must
+  // not ask again, or it could read a transform's number out of a
+  // bank-driven frame (or the other way round) if the 'w'/'W' switch is
+  // thrown between the frame and the read.
+  arFrameSnap.dispBankDrives = dispBankDrives;
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    if (dispBankDrives) {
+      estBandDb[k] = dispBandDb[k];
+    } else if (arTransformValid) {
+      estBandDb[k] = dispTransformDb[k];
+    }
+    // Neither path had a reading: hold the last one, the way the display
+    // holds a frame that never arrives.
+  }
+
   // The bottom eight RTA bands come from the filter bank, not from the FFT.
   //
   // The transform's measurement kernel is 23.49 Hz wide and the narrowest band
@@ -2309,8 +4317,35 @@ static void estCompute(const float *spec) {
   // power inside the band's nominal edges. That is what a hardware analyser
   // shows, and it is the only form in which these bars can be compared with
   // one bar for bar.
+  //
+  // The bank's own health is deliberately NOT consulted here. The transform
+  // cannot separate these bands at all, so there is nothing to fall back to:
+  // a bank that is out of contract by half a decibel is still a far better
+  // measurement of a 4.62 Hz band than a 23.49 Hz smeared one. A failed bank
+  // is reported; it is not replaced with something worse.
   if (bankReady) {
     for (int k = 0; k < AR_BANK_BANDS; k++) estRta[k] = liveBank.det[k];
+  } else if (arTransformValid) {
+    for (int k = 0; k < AR_BANK_BANDS; k++) estRta[k] = rtaTfPower[k];
+  }
+
+  // The top twenty-three come from their own bank, on the same convention:
+  // the SHAPED power - the bandpass's own output power - and the same kernel,
+  // so the RTA's thirty-one bands are one measurement all the way up.
+  //
+  // The bank runs at the full rate and has no anti-alias filter, so its
+  // calibration is the chain's alone - which is exactly calDb[]'s RTA half,
+  // and is why nothing about the calibration changes when the source does.
+  const bool rtaTopActive = arRtaTopBankDrives(tfRuns);
+  arFrameSnap.rtaTopBankDrives = rtaTopActive;
+  if (rtaTopActive) {
+    for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+      estRta[AR_RTA_TOP_FIRST + k] = liveRtaTop.det[k];
+    }
+  } else if (arTransformValid) {
+    for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+      estRta[AR_RTA_TOP_FIRST + k] = rtaTfPower[AR_RTA_TOP_FIRST + k];
+    }
   }
 
   for (int k = 0; k < lay31.count; k++) {
@@ -2349,15 +4384,229 @@ static void estCompute(const float *spec) {
   }
 }
 
-// Zero the estimator's values - this frame had no spectrum to measure.
-static void estClear() {
+// Copy this frame's published numbers, so a reader on another task can take
+// ONE frame's worth of them.
+//
+// It is called at the end of the frame, after every stage that writes the
+// numbers, so the copy cannot be a frame behind. The reader takes the same
+// publish lock, so it cannot catch the copy half-done.
+//
+// The lock is a spin lock and the copy takes a few microseconds, so the
+// frame waits for a reader that happens to be in the middle of its copy -
+// and the reader waits for the frame. Neither is long.
+static void arPublishFrameSnapshot() {
+  ArPublishGuard guard;
+  for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
+    arFrameSnap.bandDb[k] = estBandDb[k];
+    // The display bank's own A/B readings, so the endpoint's whole
+    // side-by-side is one frame's side-by-side.
+    arFrameSnap.dispBandDb[k]         = dispBandDb[k];
+    arFrameSnap.dispTransformDb[k]     = dispTransformDb[k];
+    arFrameSnap.dispTransformRawDb[k]  = dispTransformRawDb[k];
+    arFrameSnap.dispTransformMeanDb[k] = dispTransformMeanDb[k];
+    arFrameSnap.dispLagMs[k]           = dispLagMs[k];
+    arFrameSnap.dispLagCorr[k]         = dispLagCorr[k];
+    // The raw point PSD: the display bank's own density over its ENBW, or the
+    // transform's peak, depending on which one drove this frame. The same
+    // choice the frame made, not a fresh question.
+    float p;
+    if (arFrameSnap.dispBankDrives) {
+      p = (dispEnbw[k] > 0.0f) ? (liveDisp.det[k] / dispEnbw[k]) : 0.0f;
+    } else {
+      p = estPeak[k] * powf(10.0f, estComp[k] / 20.0f);
+    }
+    arFrameSnap.psdDb[k] = (p > 0.0f) ? 10.0f * log10f(p) : -99.0f;
+  }
+  for (int k = 0; k < AR_MAX_BANDS; k++) {
+    arFrameSnap.rtaPowDb[k]   = (estRta[k] > 0.0f) ? 10.0f * log10f(estRta[k]) : -99.0f;
+    arFrameSnap.rtaLevelDb[k] = estRtaDb[k];
+  }
+  for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+    const int j = AR_RTA_TOP_FIRST + k;
+    arFrameSnap.rtaTopPowLin[k] = liveRtaTop.det[k];
+    arFrameSnap.rtaTopTfLin[k]  = rtaTfPower[j];
+    arFrameSnap.rtaTopPowDb[k] = (liveRtaTop.det[k] > 0.0f) ? 10.0f * log10f(liveRtaTop.det[k]) : -99.0f;
+    arFrameSnap.rtaTopTfDb[k]  = (rtaTfPower[j]   > 0.0f) ? 10.0f * log10f(rtaTfPower[j])   : -99.0f;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE DOMINANT FREQUENCY AND THE PEAK MAGNITUDE, FROM THE BANKS.
+//
+// With no transform there is no spectrum to find a peak in, so the banks
+// answer the question instead - and the question is a loose one.
+//
+// Every effect that reads FFT_MajorPeak takes its log and maps it to a pixel
+// or a colour index: mode_freqmap() does log10f(FFT_MajorPeak) and scales it
+// onto the segment, mode_freqpixels() and mode_freqwave() do the same for the
+// colour, mode_gravfreq() and mode_rocktaves() for the position. NONE of them
+// needs the frequency to be better than the band it came from - a band centre
+// IS a frequency, and it lands in the same octave as the transform's answer.
+//
+// The DENSITY is compared, not the power. The transform's peak was the
+// loudest BIN, and a bin is a density measurement - all the bins are the same
+// width, so comparing them compares densities. A band's POWER grows with its
+// width, so comparing powers would always pick the widest band and always
+// answer "the bottom of the spectrum".
+//
+// The density is the band's shaped power over its ENBW. That is the same
+// quantity, in the same units (power per Hz), as the estimator's point PSD:
+// for an input of density S, a filter of ENBW E passes S*E, so the band's
+// power over E is S.
+//
+// The MAGNITUDE is the transform's own measurement brought back onto the
+// legacy scale. The transform's magnitude was the largest FFT bin, |X(k)|,
+// times FFT_BIN_SCALE; and the estimator's point PSD is that same bin
+// magnitude in density form:
+//
+//     S1 = 2 * |X|^2 * estNorm      =>      |X| = sqrt(S1 / (2 * estNorm))
+//
+// so the bank can produce the transform's magnitude from its density without
+// knowing anything about the window: estNorm carries the window's
+// normalisation, and it is computed at init whether or not the transform ever
+// runs.
+//
+// What this cannot be is the transform's magnitude to the decibel, and it is
+// worth saying why. The transform's kernel is the WINDOW - 23.49 Hz wide -
+// and the bank's kernel is the BAND, 3.9 Hz wide at the bottom and 4 000 Hz
+// wide at the top. For a signal spread over the spectrum the two read the
+// same density, because a spread spectrum has no detail for a narrow kernel
+// to resolve. For a single TONE they differ by the ratio of the two kernel
+// widths, and the bank is the one that resolves it: the tone's power is
+// spread over 3.9 Hz by the bank and over 23.49 Hz by the window. That is
+// the whole point of the banks, and it is not a defect of the comparison.
+//
+// The band's ENBW, in Hz - the bottom eight from the bottom bank, the top
+// twenty-three from the top bank.
+static float arBandEnbw(int k) {
+  if (k < AR_BANK_BANDS) return bankEnbw[k];
+  const int j = k - AR_RTA_TOP_FIRST;
+  if (j < 0 || j >= AR_RTA_TOP_BANDS) return 0.0f;
+  return rtaEnbw[j];
+}
+
+// The band's density, in dB - its shaped power over its ENBW.
+static float arBandDensityDb(int k) {
+  const float e = arBandEnbw(k);
+  if (e <= 0.0f || estRta[k] <= 0.0f) return -120.0f;
+  return 10.0f * log10f(estRta[k] / e);
+}
+
+// The bank's magnitude at an arbitrary frequency, on the transform's scale.
+//
+// The beat detector asks for "the magnitude in bin n", and with the
+// transform that was vReal[n] - the FFT's magnitude in that bin. With no
+// transform there are no bins, so the answer is the bank's magnitude at that
+// bin's frequency: the density is interpolated in dB between the two RTA
+// bands that bracket it, because a spectrum moves in dB against log
+// frequency and not in dB per Hz.
+//
+// At a band's own centre the interpolation is exact - it returns that band's
+// density and no other.
+static float arBankBinMag(float fHz) {
+  if (!bandLayoutReady || estNorm <= 0.0f) return 0.0f;
+  if (fHz < lay31.centre[0]) fHz = lay31.centre[0];
+  if (fHz > lay31.centre[lay31.count - 1]) fHz = lay31.centre[lay31.count - 1];
+
+  // Which band? The centres are 10^((13+k)*0.1), so the index follows from
+  // the decade - no search, no loop.
+  int k = (int)floorf((log10f(fHz) - 1.3f) * 10.0f + 0.5f);
+  if (k < 0) k = 0;
+  if (k > lay31.count - 1) k = lay31.count - 1;
+
+  float dens;
+  const float d0 = arBandDensityDb(k);
+  if (k >= lay31.count - 1) {
+    dens = powf(10.0f, d0 * 0.1f);
+  } else {
+    const float d1 = arBandDensityDb(k + 1);
+    const float l0 = log10f(lay31.centre[k]);
+    const float l1 = log10f(lay31.centre[k + 1]);
+    const float t = (log10f(fHz) - l0) / (l1 - l0);
+    dens = powf(10.0f, (d0 + (d1 - d0) * t) * 0.1f);
+  }
+  return FFT_BIN_SCALE * sqrtf(dens / (2.0f * estNorm));
+}
+
+// The bank's dominant frequency and peak magnitude.
+//
+// Computed every frame, so the A/B is live.
+static void arBankPeak() {
+  if (!bandLayoutReady) return;
+
+  int   bestBand = -1;
+  float bestDb   = -1e30f;
+  for (int k = 0; k < lay31.count; k++) {
+    if (estRta[k] <= 0.0f) continue;          // no reading in this band
+    const float d = arBandDensityDb(k);
+    if (d > bestDb) { bestDb = d; bestBand = k; }
+  }
+
+  if (bestBand < 0) {
+    // Nothing in the spectrum at all.
+    arBankPeakHz = 0.0f;
+    arBankMagnitude = 0.0f;
+    if (!arTransformValid) {
+      FFT_MajorPeak = 1.0f; FFT_Magnitude = 0.0f;
+      // The smoother runs on EVERY frame in the transform path, so it has to
+      // run here too. Left frozen, it would publish the last peak for the
+      // whole silence - the effects would read a peak frequency that is not
+      // there, and it would never come back.
+      FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42f * (FFT_MajorPeak - FFT_MajPeakSmth);
+    }
+    return;
+  }
+
+  const float f = lay31.centre[bestBand];
+  arBankPeakHz = f;
+
+  // The magnitude, on the transform's scale.
+  float mag = 0.0f;
+  if (estNorm > 0.0f) {
+    const float dens = estRta[bestBand] / arBandEnbw(bestBand);
+    mag = FFT_BIN_SCALE * sqrtf(dens / (2.0f * estNorm));
+
+    // The same pink correction the transform applies to its peak magnitude,
+    // so the two are the same shape and not just the same units.
+    if ((f > (binWidth/1.25f)) && (f < (SAMPLE_RATE/2.2f)) && (mag > 4.0f)) {
+      const unsigned peakBin = constrain((int)((f + binWidth/2.0f) / binWidth), 0, samplesFFT - 1);
+      float peakFreq = peakBin * binWidth + binWidth/2.0f;
+      const float fold = SAMPLE_RATE * 0.42f;
+      if (peakFreq > fold) peakFreq = fold - 0.25f * (peakFreq - fold); // suppress noise and aliasing
+      if (peakFreq > 0.0f) mag *= fmaxf(pinkcenter / sqrtf(peakFreq), 1.0f);
+    }
+  }
+  arBankMagnitude = mag;
+
+  if (!arTransformValid) {
+    // The transform produced no answer this frame, so the banks answer for it.
+    //
+    // The test is the transform's OWN validity flag, not the switch: the
+    // transform can be switched on and still produce nothing (a bank that
+    // has failed its self-test turns it off again), and in that case the
+    // bank's answer is the one the effects should get.
+    FFT_MajorPeak = constrain(f, 1.0f, NYQUIST_HZ);
+    FFT_Magnitude = mag;
+    FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42f * (FFT_MajorPeak - FFT_MajPeakSmth);   // I like this "swooping peak" look
+  }
+}
+
+// Zero the estimator's TRANSFORM values - this frame had no spectrum to
+// measure.
+//
+// estRta[] is NOT cleared: it belongs to the banks now, and the banks update
+// every frame whether or not the transform ran. Clearing it here would take
+// the RTA view down every time the transform was skipped.
+static void estClearTransform() {
   for (int k = 0; k < AR_EST_SLOTS; k++) estPoint[k] = 0.0f;
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) { estPeak[k] = 0.0f; estBandInt[k] = 0.0f; }
-  for (int k = 0; k < AR_MAX_BANDS; k++) estRta[k] = 0.0f;
-  {
-    ArPublishGuard guard;
-    memset(arRtaDbPub, 0, sizeof(arRtaDbPub));
+  for (int k = 0; k < NUM_RTA_CHANNELS; k++) rtaTfPower[k] = 0.0f;
+  for (int k = 0; k < AR_DISP_BANDS; k++) {
+    dispTransformDb[k] = -120.0f;
+    dispTransformRawDb[k] = -120.0f;
+    dispTransformMeanDb[k] = -120.0f;
   }
+  arTransformValid = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2379,8 +4628,8 @@ static void estClear() {
 // It runs in the FFT task, before the first frame, because the transform is
 // not reentrant and the P4's FFT peripheral has one set of registers.
 // ---------------------------------------------------------------------------
-static bool  estTestDone = false;
-static bool  estTestSkipped = false;
+static volatile bool  estTestDone = false;
+static volatile bool  estTestSkipped = false;
 static int   estTestFails = 0;
 static float estTestWorst = 0.0f;     // worst |error| over the centres, dB
 static float estTestWorstF = 0.0f;    // and the frequency it happened at
@@ -2523,7 +4772,7 @@ static void estimatorSelfTest() {
     t0 = esp_timer_get_time();
     dsps_fft4r_fc32(fftBuf, samplesFFT);
     dsps_bit_rev4r_fc32(fftBuf, samplesFFT);
-    estCompute(fftBuf);
+    estComputeTransform(fftBuf);
     xformUs += esp_timer_get_time() - t0;
 
     const float got = estPoint[slot];
@@ -2920,7 +5169,7 @@ static float dcBlockerMagAt(float freqHz, float R) {
 // coefficients come from the corner, and the calibration is measured from the
 // coefficients. So the layout has to exist first, and the calibration has to be
 // rebuilt whenever the chain is rebuilt.
-static void initChainCalibration() {
+static void initChainCalibration(bool cold) {
   // Layout first: the LPF corner is derived from it.
   if (!bandLayoutReady) initBandLayout();
   dsps_biquad_gen_lpf_f32(coeffs_lpf, inputLpfHz / SAMPLE_RATE, INPUT_FILTER_Q);
@@ -2929,10 +5178,38 @@ static void initChainCalibration() {
   // same code - so it has to be rebuilt whenever the chain is rebuilt.
   estInitCalibration();
 
-  // The bank is calibrated from the same MEASURED chain response, and it is
-  // reset: a chain change is a change of what the bank is measuring, and the
-  // filters should not carry the old chain's history into the new one.
-  bankInit();
+  if (cold) {
+    // The bank is calibrated from the same MEASURED chain response, and it is
+    // reset: a chain change is a change of what the bank is measuring, and the
+    // filters should not carry the old chain's history into the new one.
+    bankInit();
+
+    // The display bank, the same way: the same measured chain response, and a
+    // reset for the same reason.
+    dispInit();
+
+    // The RTA's top twenty-three, the same way again.
+    rtaTopInit();
+  } else {
+    // A RUNTIME rebuild changes the CALIBRATION and not the FILTERS.
+    //
+    // The chain's coefficients are generated from the same corner and the
+    // same Q, so they are the same coefficients; the banks' filters are
+    // built from the same band centres and the same bandwidths, so they are
+    // the same filters. Nothing about what the banks MEASURE has changed -
+    // only the offsets that divide the chain's response out of the
+    // readings.
+    //
+    // So the banks are recalibrated and left alone. Rebuilding them and
+    // RESETTING their state would drop the thirty-one bars to the floor for
+    // a frame and put a settling transient into a comparison that did not
+    // change - and it would throw away the detectors' history, which is
+    // exactly the history that makes the change visible as the offset it
+    // is, instead of as a dropout followed by a re-convergence.
+    bankInitCalibration();
+    dispInitCalibration();
+    rtaTopInitCalibration();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3404,7 +5681,7 @@ void audioReactiveSelfTest() {
   // samples - for an answer that cannot differ, because the chain is fixed.
   // It is built here only if it is not there, which is the case when this runs
   // from serial 't' before anything else has built it.
-  if (!calReady) initChainCalibration();   // also lays out the bands if they are not laid out yet
+  if (!calReady) initChainCalibration(true);   // also lays out the bands if they are not laid out yet
 
   const int irLen = selfTestIrLength();
   float implDb[SELFTEST_NPROBE], sineDb[SELFTEST_NPROBE], lpfImpDb[SELFTEST_NPROBE];
@@ -3502,7 +5779,7 @@ void audioReactiveSelfTest() {
 // leakage is the band filter's own skirt at the tone's frequency, and the
 // calibration is not part of that.
 // ---------------------------------------------------------------------------
-static bool  bankTestDone = false;
+static volatile bool  bankTestDone = false;
 static int   bankTestFails = 0;      // bands that did not read their own power
 static float bankTestWorst = 0.0f;    // worst |error| over the bands, dB
 static float bankTestWorstF = 0.0f;   // and the band it happened at
@@ -3529,11 +5806,37 @@ static void bankSelfTest() {
   constexpr int N = 512;                              // the chunk the chain runs in
   static float buf[N];
   static float scratch[N];
+  // The last samplesFFT samples of the chain's output, for the transform.
+  //
+  // The transform and the bank are asked the same question about the same
+  // signal, so the transform has to see the same samples the bank sees: the
+  // chain's output, at the full rate. A ring of one frame's worth is enough -
+  // the transform only ever looks at the last frame.
+  PSRAMScratch ring(samplesFFT);
+  PSRAMScratch frame(samplesFFT);
   InputChain chain;
   BankPath bp;
 
   int fails = 0, nbrFails = 0, nbrChecks = 0;
   float worst = 0.0f, worstF = 0.0f, worstNbr = 0.0f;
+  int   ringPos = 0;
+
+  // The chain's response at the eight band centres, measured with the SAME
+  // flags the chain below runs with.
+  //
+  // The global calibration (calDb[]) is built with dcBlockerInChain(), which is
+  // not quite liveChainDcOn(): the PDM path runs the input LPF but not the DC
+  // blocker, and dcBlockerInChain() assumes the blocker is in for any
+  // non-zero setting. Using the global here would compare the transform
+  // against a chain that is not the one that ran - so the correction is
+  // measured here, for this chain.
+  float chainDb[AR_BANK_BANDS];
+  {
+    float freqs[AR_BANK_BANDS];
+    for (int k = 0; k < AR_BANK_BANDS; k++) freqs[k] = lay31.centre[k];
+    measureChainDb(chainDb, freqs, AR_BANK_BANDS, selfTestIrLength(),
+                   liveChainDcOn(), liveChainLpfOn());
+  }
 
   USER_PRINTLN("\n=== AudioReactive bank self-test =================================");
   USER_PRINTF("  %d bands, decimate %d -> %.0f Hz, AA %.0f Hz (%d-pole), detector %.0f ms\n",
@@ -3569,6 +5872,12 @@ static void bankSelfTest() {
       }
       chainProcess(&chain, buf, N, scratch);
       bankProcess(&bp, buf, N);
+      // Keep the last frame of the chain's output for the transform.
+      for (int i = 0; i < N; i++) {
+        ring[ringPos] = buf[i];
+        ringPos++;
+        if (ringPos >= samplesFFT) ringPos = 0;
+      }
       if (c >= settleChunks) {
         // One sample of every band per chunk: the counter is per CHUNK, not
         // per band. Counting it inside the band loop divides every band's
@@ -3604,8 +5913,35 @@ static void bankSelfTest() {
     }
     if (nbrDb > worstNbr) worstNbr = nbrDb;
 
-    USER_PRINTF("  band %d  %8.2f Hz   %+8.3f dB %s   neighbour %+7.2f dB\n",
-                k, (double)fc, (double)errDb, ok ? "PASS" : "FAIL", (double)nbrDb);
+    // THE HEAD-TO-HEAD: the transform, asked the same question about the same
+    // signal.
+    //
+    // The ring holds the last frame of the CHAIN'S OUTPUT, which is exactly
+    // what the live path hands the transform - the live frame is the chain's
+    // output too. The transform is then calibrated with the chain's own
+    // correction, so both sides are referred to the input and the only thing
+    // left between them is the measurement kernel.
+    //
+    // The band here is the bottom bank, whose chain also carries the
+    // anti-alias filter. That filter's response is inside bankCalDb[], and the
+    // transform never sees it - so the two are not corrected the same way
+    // unless it is put back. The anti-alias filter is flat to 0.00 dB across
+    // these eight centres (it is a 400 Hz corner), so the difference is
+    // negligible - but it is worth knowing it is there.
+    for (int i = 0; i < samplesFFT; i++) frame[i] = ring[(ringPos + i) % samplesFFT];
+    // The transform's side is calibrated exactly as calDb[] would calibrate
+    // it, but for the chain that actually ran.
+    float tfCorr = -chainDb[k];
+    if (calTargetPink) tfCorr += 10.0f * log10f(lay31.centre[k] / CAL_PINK_REF_HZ);
+    const float tfDb   = xfTransformBandDb(frame.get(), k) + tfCorr;
+    const float bankDb = (raw[k] > 0.0f) ? (10.0f * log10f(raw[k]) + bankCalDb[k]) : -120.0f;
+    xfRecord(k, tfDb, bankDb, toneDb);
+
+    USER_PRINTF("  band %d  %8.2f Hz   %+8.3f dB %s   neighbour %+7.2f dB"
+                "   | transform %+7.3f dB %s   bank %+7.3f dB %s\n",
+                k, (double)fc, (double)errDb, ok ? "PASS" : "FAIL", (double)nbrDb,
+                (double)(tfDb - toneDb), (fabsf(tfDb - toneDb) <= 1.0f) ? "  " : "!!",
+                (double)(bankDb - toneDb), (fabsf(bankDb - toneDb) <= 0.35f) ? "  " : "!!");
   }
 
   bankTestFails     = fails;
@@ -3801,7 +6137,7 @@ void FFTcode(void * parameter)
   // lowpass, inputLpfHz, INPUT_FILTER_Q - file scope so the calibration can
   // measure the very same filter (see initChainCalibration)
   const uint64_t tCal0 = esp_timer_get_time();
-  initChainCalibration();
+  initChainCalibration(true);
   const uint64_t tCal1 = esp_timer_get_time();
 
   // The live chain starts from a clean state. Its flags are refreshed from the
@@ -3832,6 +6168,40 @@ void FFTcode(void * parameter)
   // were built on.
   bankSelfTest();
 
+  // The display bank's self-test: the sixteen WLED bands are measured by
+  // their own filters, and those filters get the same treatment as
+  // everything else - the real code, on a synthetic tone and on synthetic
+  // noise, asserted against the contract they were built on.
+  dispBankSelfTest();
+
+  // The RTA's top bank's self-test: the twenty-three bands above the bottom
+  // eight are measured by their own filters now, and they get the same
+  // treatment - the real code, on a synthetic tone and on synthetic noise,
+  // asserted against the contract they were built on.
+  rtaTopSelfTest();
+
+  // The banks' health, from their own self-tests.
+  //
+  // This is what makes the fallback real. A bank that failed its test is not
+  // a measurement - its numbers do not mean what the contract says - so the
+  // flag goes false and the transform takes the frame back where the
+  // transform can do the job. The RTA's bottom bank is the exception, and
+  // the reason is in arTransformRuns(): the transform cannot separate those
+  // bands at all.
+  arBankHealthy   = (bankTestFails  == 0);
+  arDispHealthy   = (dispTestFails  == 0);
+  arRtaTopHealthy = (rtaTestFails   == 0);
+
+  if (!arBankHealthy) {
+    USER_PRINTLN("AR: the RTA's bottom bank FAILED its self-test - it keeps its eight bands (the FFT cannot separate them) and the failure is reported");
+  }
+  if (!arDispHealthy) {
+    USER_PRINTLN("AR: the display bank FAILED its self-test - the transform takes the sixteen display bands back");
+  }
+  if (!arRtaTopHealthy) {
+    USER_PRINTLN("AR: the RTA's top bank FAILED its self-test - the transform takes the twenty-three top bands back");
+  }
+
   // The init's bill. The buffers' time is what is left of the init before
   // the calibration started.
   arInitBuffersMs = (float)((double)(tCal0 - tInit0) / 1000.0);
@@ -3846,6 +6216,28 @@ void FFTcode(void * parameter)
               (double)(tChain1 - tChain0) / 1000.0,
               (double)(tEst1 - tChain1) / 1000.0,
               (double)(tEst1 - tInit0) / 1000.0);
+  // Which measurement the frame will use. The banks are the measurement and
+  // the transform is the reference they are checked against, so the normal
+  // answer is "banks only" - and the frame says so, because "is the FFT
+  // running?" is the first question anyone asks of this code.
+  //
+  // The forced case is printed differently, because it is not the same
+  // thing: the transform is running because a bank could not be trusted,
+  // not because anyone asked for it.
+  const bool tfAtBoot = arTransformRuns();
+  USER_PRINTF("AR measurement: %s\n",
+              tfAtBoot
+                ? (arUseTransform
+                    ? "the FFT transform (the banks are the comparison)"
+                    : "the FFT transform - FORCED, because a bank could not be trusted")
+                : "the filter banks alone (no FFT in the frame)");
+  // The key that switches the transform on, so the switch is findable without
+  // a web page. It is a runtime diagnostic: it is off at every boot. Not
+  // printed when the transform is already running - forced or asked for - the
+  // line above says why it is running, and this would contradict it.
+  if (!tfAtBoot) {
+    USER_PRINTLN("AR: press 'a' on the serial console to switch the transform on for the comparison");
+  }
   USER_FLUSH();
 
   // The clock check, once, at boot. The codec never reports its own clock and
@@ -4150,6 +6542,75 @@ void FFTcode(void * parameter)
       bankTime = (bankUnits * 3.0f + bankTime * 7.0f) / 10.0f;
     }
 
+    // The display bank: the 16 WLED bands, each measured by its own filter.
+    //
+    // It runs on the freshest audio in the frame - the last hopSamples of it
+    // - and it READS it: the filters are transposed direct form II, so they
+    // need no output buffer and cannot disturb the FFT's input.
+    //
+    // The slice is samplesStart/sampleCount, and in the SLIDING mode - the
+    // normal one - that IS the fresh hop: the window advances by hopSamples
+    // a frame, so the fresh hops tile the timeline and the filters see every
+    // sample exactly once, in order. That matters: a filter with memory fed a
+    // gapped stream is a different filter.
+    //
+    // In the non-sliding mode the whole frame is fresh and the slice is the
+    // whole frame, which is eight times the work - but the frame period there
+    // is 85.3 ms, so there is the budget, and the alternative (feeding only
+    // the tail) would leave the filters running at an eighth of the rate.
+    //
+    // It runs EVERY frame, whether or not it is driving the display.
+    //
+    // That is a deliberate change, and it is what makes the comparison
+    // trustworthy. With the bank running only while it drove, the two paths
+    // could only be compared by switching between them - and a switch changes
+    // the music, the room and the AGC, so the comparison was never between
+    // the same audio. Running both over the SAME frame makes it exact: the
+    // transform's reading and the bank's reading are two measurements of the
+    // same 10.67 ms of audio.
+    //
+    // The cost is about a millisecond a frame. That millisecond buys the
+    // measurement, and if the bank is going to replace the transform - which
+    // is the whole point of it - the millisecond is spent either way.
+    if (dispReady) {
+      const uint64_t tDisp0 = esp_timer_get_time();
+      dispProcess(&liveDisp, samplesStart, sampleCount);
+      const uint64_t rDispUs = esp_timer_get_time() - tDisp0;
+      const float dispUnits = (float)((rDispUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
+      dispTime = (dispUnits * 3.0f + dispTime * 7.0f) / 10.0f;
+      // The bank's own calibrated reading.
+      //
+      // It is written HERE rather than in estCompute(), because the bank
+      // updates every frame and the transform does not always: this way the
+      // bands are the bank's whenever the bank is driving, and they do not
+      // depend on the transform having run.
+      //
+      // WHICH one drives is decided in estCompute(), which runs later in the
+      // frame and knows whether the transform's reading is available.
+      for (int k = 0; k < AR_DISP_BANDS; k++) {
+        const float psd = (dispEnbw[k] > 0.0f) ? (liveDisp.det[k] / dispEnbw[k]) : 0.0f;
+        dispBandDb[k] = (psd > 0.0f) ? (10.0f * log10f(psd) + dispCalDb[k]) : -120.0f;
+      }
+    }
+
+    // The RTA's top twenty-three, on their own filters.
+    //
+    // Same reason, same fresh hop, same "always runs" rule as the display
+    // bank: the bank's reading and the transform's reading have to be two
+    // measurements of the SAME audio, or the comparison between them means
+    // nothing.
+    //
+    // It is the more expensive of the two - twenty-three bands of two sections
+    // each over the fresh hop - but it is also the last thing standing between
+    // the RTA and the transform's 42.7 ms window.
+    if (rtaTopReady) {
+      const uint64_t tRta0 = esp_timer_get_time();
+      rtaTopProcess(&liveRtaTop, samplesStart, sampleCount);
+      const uint64_t rRtaUs = esp_timer_get_time() - tRta0;
+      const float rtaUnits = (float)((rRtaUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
+      rtaTime = (rtaUnits * 3.0f + rtaTime * 7.0f) / 10.0f;
+    }
+
     // The broadband level of the FRESH HOP, and with it the noise floor and
     // the gate.
     //
@@ -4197,6 +6658,7 @@ void FFTcode(void * parameter)
     // Values are in TIMING_UNIT_US, matching fftTime.
     uint64_t tMark = start;
     float dWindow = 0.0f, dPrep = 0.0f, dFft = 0.0f, dPost = 0.0f, dFinal = 0.0f;
+    float dBitrev = 0.0f, dEst = 0.0f;
     auto probe = [&tMark](float &out) {
       const uint64_t now = esp_timer_get_time();
       out = (float)((now - tMark + 5ULL) / 10ULL); // "+5" to ensure proper rounding
@@ -4230,10 +6692,27 @@ void FFTcode(void * parameter)
         if (__builtin_signbit(vReal[i]) != __builtin_signbit(vReal[i+1]))  // test sign bit: sign changed -> zero crossing
             newZeroCrossingCount++;
       }
-      vReal[i] *= windowBuf[i]; // FFT windowing for ESP-DSP
     }
     newZeroCrossingCount = (newZeroCrossingCount*2)/3; // reduce value so it typically stays below 256
     zeroCrossingCount = newZeroCrossingCount; // update only once, to avoid that effects pick up an intermediate value
+
+    // Whether the transform runs this frame. Decided ONCE, here, so that
+    // every stage below - the windowing, the transform itself, the magnitude
+    // scaling and the beat detector - agrees about it. They must: a frame
+    // that windowed but did not transform would leave the spectrum reading
+    // the windowed frame as if it were magnitudes.
+    const bool transformRuns = arTransformRuns();
+
+    // The windowing, on its own pass.
+    //
+    // It is part of the ANALYSIS, not of the frame: the frame has to keep its
+    // time-domain content for the carry-forward and for the level, and with
+    // the transform off there is nothing to window for. The peak and the
+    // zero-crossing count above are taken on the UNWINDOWED samples, which is
+    // what they were before this was split out, and what they have to be.
+    if (transformRuns) {
+      for (int i = 0; i < samplesFFT; i++) vReal[i] *= windowBuf[i]; // FFT windowing for ESP-DSP
+    }
     probe(dWindow);
 
     // The frame's peak, released early for the volume-reactive effects. The
@@ -4296,6 +6775,19 @@ void FFTcode(void * parameter)
           // the bins around it. The direct DFT is gone - see the cleanup.
           probe(dPrep);
 
+          // THE TRANSFORM, OR NOT.
+          //
+          // With arUseTransform off, none of this runs: no windowing, no
+          // transform, no bit reversal, no magnitude fold. The frame keeps its
+          // TIME-DOMAIN content, because that is what the next frame's
+          // carry-forward and the level and the zero-crossing count need -
+          // and the banks, which ran earlier in the frame, are the whole
+          // measurement.
+          //
+          // The banks are not optional here: they update every frame from
+          // the fresh hop, and estFinalise() - which runs either way - is
+          // what turns their readings into the published bands.
+          if (transformRuns) {
           // The frame is transformed as a COMPLEX sequence of samplesFFT
           // points - the windowed frame in the real slots, zeros in the
           // imaginary ones - rather than with ESP-DSP's real-FFT helper.
@@ -4314,26 +6806,22 @@ void FFTcode(void * parameter)
           dsps_fft4r_fc32(fftBuf, samplesFFT);
           probe(dFft);
           dsps_bit_rev4r_fc32(fftBuf, samplesFFT);
+          probe(dBitrev);
 
           // The estimator runs here, while the spectrum is still complex. The
           // fold below turns the interleaved (re, im) pairs into magnitudes
           // and throws the imaginary parts away, and the interpolation needs
           // them: it reconstructs the spectrum BETWEEN the bins.
           //
-          // A target-curve change at runtime rebuilds the calibration HERE, in
-          // the FFT task. The rebuild measures an impulse response through the
-          // chain and writes the calibration's arrays, and this is the only
-          // thread that may do either - the JSON handler cannot.
-          if (arCalDirty) {
-            arCalDirty = false;
-            initChainCalibration();
-          }
-          if (bandLayoutReady) estCompute(fftBuf);
-          else                 estClear();
-
-          // The display AGC, on this frame's calibrated band values. It is the
-          // last thing that touches them.
-          arUpdateAgc(arFrameDtMs);
+          // (The calibration's rebuild is above, outside the transform - it
+          // belongs to the measurement, and the measurement is the banks'.)
+          if (bandLayoutReady) estComputeTransform(fftBuf);
+          else                 estClearTransform();
+          probe(dEst);
+          arTransformValid = bandLayoutReady;
+          // Both readings are now current for this frame, so they can go
+          // into the ring that measures how far apart they are.
+          if (bandLayoutReady) dispLagPush();
 
           // The transform's output is INTERLEAVED real/imaginary pairs:
           //   fftBuf[2k]   = Re(bin k)
@@ -4402,23 +6890,94 @@ void FFTcode(void * parameter)
         FFT_MajorPeak = constrain(FFT_MajorPeak, 1.0f, NYQUIST_HZ);   // restrict value to range expected by effects
         FFT_MajPeakSmth = FFT_MajPeakSmth + 0.42 * (FFT_MajorPeak - FFT_MajPeakSmth);   // I like this "swooping peak" look
 
+      } // end of the transform
+        else { // the transform is not running: the banks are the measurement
+          // The transform's own numbers are stale, so they are marked as stale
+          // rather than left to be read as live. The banks' numbers are NOT
+          // touched: they are current, and they are the measurement.
+          estClearTransform();
+          // The lag is the distance between the two readings, so with the
+          // transform off there is only one reading and nothing to measure.
+          // dispLagPush() is the only thing that sets this flag, and it does
+          // not run in this branch - so it is cleared here, or the JSON would
+          // keep reporting the last lag the transform ever measured.
+          dispLagTfValid = false;
+        }
+
       } else { // skip second run --> clear fft results, keep peaks
         memset(vReal, 0, sizeof(float) * samplesFFT);
         // The estimator had no spectrum to measure. The published band
         // values are NOT cleared: they are the last good frame's, and the
         // display holds them until the next spectrum arrives.
-        estClear();
+        estClearTransform();
       }
 
       haveDoneFFT = true;
 
     }
 
-    if ((skipSecondFFT == false) || (isFirstRun == true)) {
-      for (int i = 0; i < samplesFFT; i++) {
-        float t = fabsf(vReal[i]);                      // just to be sure - values in fft bins should be positive any way
-        vReal[i] = t * FFT_BIN_SCALE;                   // Reduce magnitude. Want end result to be scaled linear and ~4096 max.
-      } // for()
+    // The publish runs every frame when the transform is NOT running.
+    //
+    // The transform's gate is the FFT's: on the ESP32-C3 the second FFT of
+    // each pair is skipped, and the spectrum is a frame old. But the
+    // published bands are the BANKS' readings, and the banks update every
+    // frame whatever the FFT is doing - so holding the publish for a second
+    // frame would publish the banks at half their rate, and the AGC and the
+    // smoothing that ride on it with them.
+    //
+    // Nothing in this block needs a spectrum when the transform is off, so
+    // the gate does not apply.
+    if ((skipSecondFFT == false) || (isFirstRun == true) || (!transformRuns)) {
+      // The magnitudes in vReal[] are scaled here, for the beat detector,
+      // which reads one of them by bin number.
+      //
+      // With the transform off there are no magnitudes in vReal[] - it holds
+      // the time-domain frame, which the next frame's carry-forward and the
+      // level both need - so the scaling is skipped, and the beat detector
+      // reads the bank's magnitude at the same bin instead.
+      if (transformRuns) {
+        for (int i = 0; i < samplesFFT; i++) {
+          float t = fabsf(vReal[i]);                      // just to be sure - values in fft bins should be positive any way
+          vReal[i] = t * FFT_BIN_SCALE;                   // Reduce magnitude. Want end result to be scaled linear and ~4096 max.
+        } // for()
+      }
+
+      // A target-curve change at runtime rebuilds the calibration HERE, in
+      // the FFT task. The rebuild measures an impulse response through the
+      // chain and writes the calibration's arrays, and this is the only
+      // thread that may do either - the JSON handler cannot.
+      //
+      // It runs OUTSIDE the transform: the calibration belongs to the
+      // measurement, and the measurement is the banks' when the transform is
+      // off.
+      //
+      // It is a CALIBRATION rebuild, not a cold start: the filters do not
+      // change, so the banks keep their state and the bars do not drop to
+      // the floor for a frame.
+      if (arCalDirty) {
+        arCalDirty = false;
+        initChainCalibration(false);
+      }
+
+      // THE BANKS' READINGS BECOME THE PUBLISHED VALUES.
+      //
+      // This runs whether or not the transform ran. It is the whole
+      // measurement, and the transform was only ever the alternative to it:
+      // with the transform on, the A/B switches say which of the two drives;
+      // with it off, there is only the bank.
+      estFinalise(transformRuns);
+
+      // The display AGC, on this frame's calibrated band values. It is the
+      // last thing that touches them.
+      arUpdateAgc(arFrameDtMs);
+
+      // The dominant frequency and the peak magnitude.
+      //
+      // With the transform on these are the transform's, exactly as they have
+      // always been - the effects do not change. With it off they are the
+      // bank's, and the bank's are computed either way so the two can be
+      // compared on the same audio.
+      arBankPeak();
 
       // The 16 display bands.
       //
@@ -4442,6 +7001,11 @@ void FFTcode(void * parameter)
       // the band, not the point PSD at its centre - and it is published in
       // its own slot for the effects that draw an analyser.
       arPublishRta(arFrameDtMs);
+
+      // The published frame: this frame's numbers, copied under the publish
+      // lock so the JSON endpoint cannot read a mix of two frames. It is
+      // LAST, because everything above is what it copies.
+      arPublishFrameSnapshot();
 
     } else {
       // No new spectrum (the second FFT was skipped): the published values
@@ -4468,6 +7032,8 @@ void FFTcode(void * parameter)
       tFft    = (dFft    *3 + tFft    *7)/10.0;
       tPost   = (dPost   *3 + tPost   *7)/10.0;
       tFinal  = (dFinal  *3 + tFinal  *7)/10.0;
+      tBitrev = (dBitrev *3 + tBitrev *7)/10.0;
+      tEst    = (dEst    *3 + tEst    *7)/10.0;
     }
 
     // run peak detection
@@ -4680,7 +7246,13 @@ static void detectSamplePeak(void) {
   // Poor man's beat detection by seeing if sample > Average + some value.
   // This goes through ALL of the 255 bins - but ignores stupid settings
   // Then we got a peak, else we don't. The peak has to time out on its own in order to support UDP sound sync.
-  if (arGateOpen && (maxVol > 0) && (binNum > 4) && (vReal[binNum] > maxVol) && ((millis() - timeOfPeak) > 100)) {
+  //
+  // The magnitude in the selected bin: the FFT's own with the transform on,
+  // and the bank's at the same frequency with it off. vReal[] holds the
+  // TIME-DOMAIN frame when the transform is off, so reading it here would
+  // compare a sample against a threshold and call it a beat.
+  const float binMag = arTransformValid ? vReal[binNum] : arBankBinMag((float)binNum * binWidth);
+  if (arGateOpen && (maxVol > 0) && (binNum > 4) && (binMag > maxVol) && ((millis() - timeOfPeak) > 100)) {
     havePeak = true;
   }
 #endif
@@ -6220,9 +8792,9 @@ class AudioReactive : public Usermod {
           if (audioSource)
             xTaskCreateUniversal(
               #if defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
-              FFTcode, "FFT", FFT_TASK_STACK, NULL, FFTTASK_PRIORITY, &FFT_Task, 1
+              FFTcode, "AudioTask", FFT_TASK_STACK, NULL, FFTTASK_PRIORITY, &FFT_Task, 1
               #else 
-              FFTcode, "FFT", 8192, NULL, FFTTASK_PRIORITY, & FFT_Task, -1
+              FFTcode, "AudioTask", 8192, NULL, FFTTASK_PRIORITY, & FFT_Task, -1
               #endif
             );
         }
@@ -6275,15 +8847,50 @@ class AudioReactive : public Usermod {
       JsonObject ar = obj.createNestedObject(FPSTR(_name));
       const int rtaBands = bandLayoutReady ? lay31.count : 0;
 
+      // ONE frame's worth of the analysis numbers.
+      //
+      // The analysis task rewrites its arrays every 10.67 ms and this runs
+      // on the main loop, so reading them in place would give a set of band
+      // levels that never existed - half of one frame and half of the next.
+      // The published snapshot is the frame's own copy, taken under the same
+      // lock, so what is published here is a coherent frame.
+      ArFrameSnapshot snap;
+      {
+        ArPublishGuard guard;
+        snap = arFrameSnap;
+      }
+
       // ---- what is running ---------------------------------------------
       ar["enabled"]   = enabled;
       ar["processing"] = (audioSource != nullptr) && !disableSoundProcessing;
-      ar["source"]    = ((audioSyncEnabled & AUDIOSYNC_REC) ||
-                         ((audioSyncEnabled == AUDIOSYNC_REC_PLUS) && !udpSyncConnected))
-                          ? "udp"
-                          : ((audioSource && audioSource->isInitialized())
-                              ? ((dmType == 51) ? "legacy i2s pdm" : "i2s")
-                              : "none");
+      // WHICH source is actually feeding the analysis - not what is set.
+      //
+      // In "receive + local" mode (REC_PLUS) the local input is used
+      // whenever no UDP packets are arriving, so publishing "udp" there
+      // would be a lie: the board would be measuring its own microphone while
+      // the label said the network. "connected" only means the multicast
+      // group is joined - the packets can be dead while it says true.
+      //
+      // This mirrors the decision in the userloop, so the label and the
+      // measurement cannot disagree.
+      {
+        const bool udpLive  = udpSyncConnected && (last_UDPTime != 0) &&
+                              ((millis() - last_UDPTime) <= AUDIOSYNC_IDLE_MS);
+        const bool localOk  = (audioSource && audioSource->isInitialized());
+        const bool strictRec = (audioSyncEnabled == AUDIOSYNC_REC);
+        if (strictRec) {
+          // The local input is switched off in this mode, so "udp" is the
+          // only answer - even when the feed is dead and the board is
+          // measuring silence.
+          ar["source"] = "udp";
+        } else if ((audioSyncEnabled & AUDIOSYNC_REC) && udpLive) {
+          ar["source"] = "udp";
+        } else if (localOk) {
+          ar["source"] = (dmType == 51) ? "legacy i2s pdm" : "i2s";
+        } else {
+          ar["source"] = "none";
+        }
+      }
       ar["codec"]     = arCodecName(dmType);
       ar["input_level"] = (int)inputLevel;
       {
@@ -6310,12 +8917,65 @@ class AudioReactive : public Usermod {
         l["rta_agc_db"]     = (double)arRtaAgcDb;
       }
 
+      // ---- the transform ------------------------------------------------
+      //
+      // The proof of concept's switch, and the live A/B of the two things the
+      // transform owned that the banks had to take over: the dominant
+      // frequency and the peak magnitude.
+      {
+        JsonObject t = ar.createNestedObject("transform");
+        // "on" is what is RUNNING, which is not always what was asked for: a
+        // bank that failed its self-test forces the transform back on. The
+        // request is published next to it, and "forced" says the fallback
+        // is what is running it.
+        {
+          const bool tfNow = arTransformRuns();
+          t["on"]        = tfNow;
+          t["requested"] = arUseTransform;
+          t["forced"]    = (tfNow && !arUseTransform);
+        }
+        t["valid"]  = arTransformValid;
+        // The transform's own answers - what the effects are using.
+        t["peak_hz"]    = (double)FFT_MajorPeak;
+        t["magnitude"]  = (double)FFT_Magnitude;
+        // The bank's answers - computed every frame, so the two are two
+        // measurements of the same audio in the same frame.
+        t["bank_peak_hz"]   = (double)arBankPeakHz;
+        t["bank_magnitude"] = (double)arBankMagnitude;
+        // Which RTA band the bank's answer is in, and whether the two agree
+        // on the octave - which is all the effects need of it.
+        {
+          int band = -1;
+          if (bandLayoutReady && arBankPeakHz > 0.0f) {
+            band = (int)floorf((log10f(arBankPeakHz) - 1.3f) * 10.0f + 0.5f);
+            if (band < 0) band = 0;
+            if (band > lay31.count - 1) band = lay31.count - 1;
+          }
+          t["bank_band"] = band;
+          t["bank_centre_hz"] = (band >= 0) ? (double)lay31.centre[band] : 0.0;
+          // The transform's peak, expressed as the band it falls in.
+          int tfBand = -1;
+          if (bandLayoutReady && FFT_MajorPeak > 0.0f) {
+            tfBand = (int)floorf((log10f(FFT_MajorPeak) - 1.3f) * 10.0f + 0.5f);
+            if (tfBand < 0) tfBand = 0;
+            if (tfBand > lay31.count - 1) tfBand = lay31.count - 1;
+          }
+          t["tf_band"] = tfBand;
+          t["same_band"] = (band >= 0 && tfBand >= 0) ? (band == tfBand) : false;
+        }
+      }
+
       // ---- the display window -------------------------------------------
       {
         JsonObject d = ar.createNestedObject("display");
         d["trim_db"]    = (double)TROYHACKS_DBREF;
         d["span_db"]    = (double)TROYHACKS_DBSPAN;
         d["input_trim_db"] = (double)arInputTrimDb();
+        // The smoothing on the 16 bars: the user's own rise and fall, on both
+        // paths, so the switch between them compares the measurement and not
+        // the display.
+        d["rise_ms"]    = (double)(attackTime  > 0 ? attackTime  : AR_DISP_ATTACK_MS);
+        d["fall_ms"]    = (double)(decayTime   > 0 ? decayTime   : AR_DISP_RELEASE_MS);
         d["rta_window"] = rtaAutoRange ? "auto" : "fixed";
         d["rta_floor_db"] = (double)rtaFloorDb;
         d["rta_top_db"]   = (double)rtaTopDb;
@@ -6350,22 +9010,31 @@ class AudioReactive : public Usermod {
         }
         JsonArray ba = g.createNestedArray("bars");
         for (int k = 0; k < NUM_GEQ_CHANNELS; k++) ba.add((int)bars[k]);
-        // The point PSD at the band, and the same number with the input
-        // chain's response divided out. The second is what the bars show.
+        // The point PSD at the band, RAW - before the calibration divides the
+        // input chain's response out of it. The calibrated number is the
+        // band_db array below, and that is what the bars show.
+        //
+        // It is the RAW number of whichever measurement is driving the
+        // display. Reading estPeak[] unconditionally would publish sixteen
+        // -99s whenever the transform is not running - the transform's own
+        // peak array is zeroed every frame it does not run - and a field
+        // that always says -99 is worse than no field, because it looks like
+        // a measurement.
+        //
+        // It comes out of the published snapshot, so it is the same frame's
+        // reading as the band levels below, and it is the frame's own
+        // decision about which path drove the display.
         JsonArray psd = g.createNestedArray("psd_db");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-          const float p = estPeak[k] * powf(10.0f, estComp[k] / 20.0f);
-          psd.add((double)(p > 0.0f ? 10.0f * log10f(p) : -99.0f));
-        }
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) psd.add((double)snap.psdDb[k]);
         JsonArray bd = g.createNestedArray("band_db");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) bd.add((double)estBandDb[k]);
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) bd.add((double)snap.bandDb[k]);
         float bandMax = -1e30f;
         for (int k = 0; k < NUM_GEQ_CHANNELS; k++)
-          if (estBandDb[k] > bandMax) bandMax = estBandDb[k];
+          if (snap.bandDb[k] > bandMax) bandMax = snap.bandDb[k];
         JsonArray sh = g.createNestedArray("shape_db");
         for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-          const float db = (bandMax > -1e29f && estBandDb[k] > -119.0f)
-                           ? (estBandDb[k] - bandMax) : -99.0f;
+          const float db = (bandMax > -1e29f && snap.bandDb[k] > -119.0f)
+                           ? (snap.bandDb[k] - bandMax) : -99.0f;
           sh.add((double)db);
         }
       }
@@ -6391,10 +9060,9 @@ class AudioReactive : public Usermod {
         JsonArray ba = r.createNestedArray("bars");
         for (int k = 0; k < rtaBands; k++) ba.add((int)bars[k]);
         JsonArray bp = r.createNestedArray("band_power_db");
-        for (int k = 0; k < rtaBands; k++)
-          bp.add((double)(estRta[k] > 0.0f ? 10.0f * log10f(estRta[k]) : -99.0f));
+        for (int k = 0; k < rtaBands; k++) bp.add((double)snap.rtaPowDb[k]);
         JsonArray bl = r.createNestedArray("band_level_db");
-        for (int k = 0; k < rtaBands; k++) bl.add((double)estRtaDb[k]);
+        for (int k = 0; k < rtaBands; k++) bl.add((double)snap.rtaLevelDb[k]);
         JsonArray tr = r.createNestedArray("trim_db");
         arJsonFloats(tr, rtaTrimDb, rtaBands);
       }
@@ -6429,6 +9097,254 @@ class AudioReactive : public Usermod {
         st["worst_nbr_db"] = (double)bankTestWorstNbr;
       }
 
+      // ---- the head-to-head: the transform against the banks --------------
+      //
+      // Both were asked the same question about the same tone, with the same
+      // truth, at boot: "what is the power in RTA band k?". The transform's
+      // kernel is a fixed 23.49 Hz wide whatever the band is, so every band
+      // narrower than that is a band the transform cannot measure - and the
+      // banks' filters are built to the band they measure.
+      //
+      // "predicted" is what the kernel's width says the transform's error
+      // should be: it reads the point PSD at the band centre and multiplies it
+      // by the band's width, so a band narrower than the kernel reads low by
+      // exactly the ratio.
+      {
+        JsonObject x = ar.createNestedObject("transform_vs_bank");
+        x["done"]            = xfTestDone;
+        x["bands"]           = xfTestBands;
+        x["kernel_hz"]       = (double)xfKernelEnbw();
+        x["tf_fails"]        = xfTestTfFails;
+        x["tf_tol_db"]       = 1.00;
+        x["tf_worst_db"]     = (double)xfTestTfWorst;
+        x["tf_worst_band"]   = xfTestTfWorstBand;
+        x["bank_fails"]      = xfTestBankFails;
+        x["bank_tol_db"]     = 0.35;
+        x["bank_worst_db"]   = (double)xfTestBankWorst;
+        x["bank_worst_band"] = xfTestBankWorstBand;
+        JsonArray ms = x.createNestedArray("measured");
+        JsonArray tf = x.createNestedArray("transform_err_db");
+        JsonArray bk = x.createNestedArray("bank_err_db");
+        JsonArray pr = x.createNestedArray("predicted_err_db");
+        // The band's nominal width, and whether the transform could take the
+        // integral from the bins (wide) or had to multiply the point PSD at
+        // the centre by the width (narrow).
+        //
+        // The narrow path is where the kernel's width shows: the point PSD of
+        // a tone is its power spread over the kernel, so multiplying it by a
+        // width NARROWER than the kernel reads low by exactly the ratio. That
+        // is what "predicted" is - and it only applies to the narrow path.
+        JsonArray wd = x.createNestedArray("width_hz");
+        JsonArray nw = x.createNestedArray("narrow");
+        for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
+          ms.add(xfTestHas[k]);
+          tf.add((double)(xfTestHas[k] ? xfTestTfDb[k] : 0.0));
+          bk.add((double)(xfTestHas[k] ? xfTestBankDb[k] : 0.0));
+          pr.add((double)(xfTestHas[k] ? xfTestPredDb[k] : 0.0));
+          const float width = lay31.edgeHi[k] - lay31.edgeLo[k];
+          wd.add((double)width);
+          nw.add(width < 3.0f * binWidth);
+        }
+      }
+
+      // ---- the display bank (the 16 WLED bands, by their own filters) ----
+      //
+      // "active" says which measurement is on the bars. The transform's own
+      // reading is published beside the bank's either way, so the two can be
+      // compared on the same audio without switching.
+      //
+      // It is the SAME question estFinalise() asks, and it is estFinalise's
+      // ANSWER, not a fresh question: the bank drives whenever there is no
+      // transform to switch to, whether or not the preference says so, and a
+      // bank that failed its self-test does not drive at all. Asking again
+      // here would be a second opinion - and the 'w'/'W' switch can be
+      // thrown between the frame and this read, so the second opinion could
+      // disagree with the numbers printed beside it.
+      {
+        JsonObject b = ar.createNestedObject("dispbank");
+        b["ready"]        = dispReady;
+        b["healthy"]      = arDispHealthy;
+        b["active"]       = snap.dispBankDrives;
+        b["bands"]        = AR_DISP_BANDS;
+        b["rate_hz"]      = (double)SAMPLE_RATE;
+        b["tau_ms"]       = (double)dispTauMs;
+        b["us_per_frame"] = (double)(dispTime * TIMING_UNIT_US);
+        // The transform's answer for the same bands: its window is 4096
+        // samples long, so its content cannot be newer than 42.7 ms.
+        b["fft_resp_ms"]  = 42.7;
+        JsonArray c = b.createNestedArray("centres_hz");
+        for (int k = 0; k < AR_DISP_BANDS; k++) c.add((double)lay16.centre[k]);
+        // The width the layout asks for, and the width the filter really has.
+        JsonArray w = b.createNestedArray("width_hz");
+        for (int k = 0; k < AR_DISP_BANDS; k++)
+          w.add((double)(lay16.edgeHi[k] - lay16.edgeLo[k]));
+        JsonArray wm = b.createNestedArray("width_measured_hz");
+        for (int k = 0; k < AR_DISP_BANDS; k++) wm.add((double)dispWidthHz[k]);
+        JsonArray e = b.createNestedArray("enbw_hz");
+        for (int k = 0; k < AR_DISP_BANDS; k++) e.add((double)dispEnbw[k]);
+        // How much wider the transform's kernel is than the bank's, in dB.
+        //
+        // Both paths read the same quantity - the band's POINT PSD - and both
+        // are correct; they differ in the width of the kernel they measure it
+        // with. On a pure tone the two readings differ by exactly this, and
+        // on anything broadband they agree.
+        JsonArray kd = b.createNestedArray("kernel_delta_db");
+        {
+          const float kernel = xfKernelEnbw();
+          for (int k = 0; k < AR_DISP_BANDS; k++)
+            kd.add((double)(kernel > 0.0f ? 10.0f * log10f(dispEnbw[k] / kernel) : 0.0));
+        }
+        // How old the content on each bar is.
+        JsonArray r = b.createNestedArray("resp_ms");
+        for (int k = 0; k < AR_DISP_BANDS; k++) r.add((double)dispRespMs[k]);
+        // How far each band moved on the last frame, in dB. This is the
+        // freshness on the LIVE signal: the transform's bands are 42.7 ms old
+        // and cannot move as far between two frames as the bank's.
+        JsonArray mv = b.createNestedArray("move_db_per_frame");
+        for (int k = 0; k < AR_DISP_BANDS; k++) mv.add((double)dispMoveDb[k]);
+        // The same movement, measured separately for each path over the SAME
+        // frame. The two are what say whether the bank bought anything: the
+        // bank moves more per frame because its content is newer.
+        JsonArray mvt = b.createNestedArray("move_tf_db_per_frame");
+        for (int k = 0; k < AR_DISP_BANDS; k++) mvt.add((double)dispMoveTfDb[k]);
+        JsonArray mvb = b.createNestedArray("move_bank_db_per_frame");
+        for (int k = 0; k < AR_DISP_BANDS; k++) mvb.add((double)dispMoveBankDb[k]);
+        // The bank's reading and the transform's, side by side.
+        JsonArray bd = b.createNestedArray("band_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) bd.add((double)snap.dispBandDb[k]);
+        JsonArray td = b.createNestedArray("transform_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) td.add((double)snap.dispTransformDb[k]);
+        // The transform's RAW reading - the peak, calibrated, but with the
+        // crest compensation taken off. The difference between this and
+        // transform_db IS the compensation; the difference between
+        // transform_db and band_db is the peak-versus-mean difference.
+        JsonArray traw = b.createNestedArray("transform_raw_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) traw.add((double)snap.dispTransformRawDb[k]);
+        // The transform's band-AVERAGE reading: the same transform, the same
+        // frame, the same unit - but the mean over the band rather than the
+        // peak inside it. The bank's reading is a mean over its own filter
+        // shape, so this is what the bank is measured against.
+        JsonArray tmean = b.createNestedArray("transform_mean_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) tmean.add((double)snap.dispTransformMeanDb[k]);
+        // The crest compensation itself, dB.
+        JsonArray ecm = b.createNestedArray("est_comp_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) ecm.add((double)estComp[k]);
+        // The measured delay between the two paths, on the live signal: the
+        // lag at which the transform's reading best lines up with the bank's.
+        JsonArray lgm = b.createNestedArray("lag_ms");
+        for (int k = 0; k < AR_DISP_BANDS; k++) lgm.add((double)snap.dispLagMs[k]);
+        JsonArray lcc = b.createNestedArray("lag_corr");
+        for (int k = 0; k < AR_DISP_BANDS; k++) lcc.add((double)snap.dispLagCorr[k]);
+        // The lag is the distance between the two paths, so with the
+        // transform off - one path only - there is nothing to measure and
+        // the numbers above are the last ones that meant anything.
+        b["lag_valid"] = dispLagTfValid;
+        // The bank's self-test.
+        JsonObject dst = b.createNestedObject("self_test");
+        dst["done"]             = dispTestDone;
+        dst["pass"]             = dispTestDone && (dispTestFails == 0);
+        dst["fails"]            = dispTestFails;
+        dst["tone_worst_db"]    = (double)dispTestWorst;
+        dst["tone_worst_hz"]    = (double)dispTestWorstF;
+        dst["white_worst_db"]   = (double)dispTestWhiteWorst;
+        dst["white_worst_hz"]   = (double)dispTestWhiteWorstF;
+        dst["enbw_worst_db"]    = (double)dispTestEnbwWorst;
+        dst["enbw_worst_hz"]    = (double)dispTestEnbwWorstF;
+        dst["neighbour_worst_db"] = (double)dispTestNbrWorst;
+        dst["time_ms"]          = (double)dispTestTimeMs;
+        JsonArray stdb = dst.createNestedArray("tone_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) stdb.add((double)dispTestToneDb[k]);
+        JsonArray swdb = dst.createNestedArray("white_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) swdb.add((double)dispTestWhiteDb[k]);
+        JsonArray sedb = dst.createNestedArray("enbw_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) sedb.add((double)dispTestEnbwDb[k]);
+        JsonArray sndb = dst.createNestedArray("neighbour_db");
+        for (int k = 0; k < AR_DISP_BANDS; k++) sndb.add((double)dispTestNbrDb[k]);
+      }
+
+      // ---- the RTA's top bank (bands 8..30, by their own filters) ---------
+      //
+      // "active" says whether these bands are coming from the bank or from the
+      // transform. Both readings are published either way, so the two can be
+      // compared on the same audio without switching.
+      //
+      // The same question estFinalise() asks, and the same answer - the
+      // frame's answer, carried with the frame's numbers.
+      {
+        JsonObject b = ar.createNestedObject("rtatopbank");
+        b["ready"]        = rtaTopReady;
+        b["healthy"]      = arRtaTopHealthy;
+        b["active"]       = snap.rtaTopBankDrives;
+        b["bands"]        = AR_RTA_TOP_BANDS;
+        b["first_band"]   = AR_RTA_TOP_FIRST;
+        b["rate_hz"]      = (double)SAMPLE_RATE;
+        b["tau_ms"]       = (double)rtaTauMs;
+        b["us_per_frame"] = (double)(rtaTime * TIMING_UNIT_US);
+        // The transform's window is 4096 samples long, so its content cannot
+        // be newer than 42.7 ms.
+        b["fft_resp_ms"]  = 42.7;
+        JsonArray c = b.createNestedArray("centres_hz");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++)
+          c.add((double)lay31.centre[AR_RTA_TOP_FIRST + k]);
+        // The width the layout asks for, and the width the filter really has.
+        JsonArray w = b.createNestedArray("width_hz");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++)
+          w.add((double)(lay31.edgeHi[AR_RTA_TOP_FIRST + k] - lay31.edgeLo[AR_RTA_TOP_FIRST + k]));
+        JsonArray wm = b.createNestedArray("width_measured_hz");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) wm.add((double)rtaWidthHz[k]);
+        JsonArray e = b.createNestedArray("enbw_hz");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) e.add((double)rtaEnbw[k]);
+        // The filter's ENBW against the nominal band width: the bottom eight
+        // bands are set to 0.85, and so are these.
+        JsonArray er = b.createNestedArray("enbw_ratio_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+          const float width = lay31.edgeHi[AR_RTA_TOP_FIRST + k] - lay31.edgeLo[AR_RTA_TOP_FIRST + k];
+          er.add((double)(10.0f * log10f(rtaEnbw[k] / width)));
+        }
+        // How old the content on each bar is.
+        JsonArray r = b.createNestedArray("resp_ms");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) r.add((double)rtaRespMs[k]);
+        // The bank's reading and the transform's, side by side, in dB of power.
+        JsonArray bd = b.createNestedArray("band_power_db");
+        JsonArray td = b.createNestedArray("transform_power_db");
+        JsonArray df = b.createNestedArray("delta_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
+          // Both sides come out of the published snapshot, so the delta is
+          // the difference between ONE frame's bank and ONE frame's
+          // transform - not between a bank from now and a transform from
+          // ten milliseconds ago.
+          const float bv = snap.rtaTopPowLin[k];
+          const float tv = snap.rtaTopTfLin[k];
+          bd.add((double)snap.rtaTopPowDb[k]);
+          td.add((double)snap.rtaTopTfDb[k]);
+          // No delta when either side has no reading. Zero would read as
+          // "the two agree exactly", which is a claim the transform cannot
+          // make while it is switched off: -99 is this file's "no value".
+          df.add((double)((bv > 0.0f && tv > 0.0f) ? 10.0f * log10f(bv / tv) : -99.0));
+        }
+        // The bank's self-test.
+        JsonObject dst = b.createNestedObject("self_test");
+        dst["done"]             = rtaTestDone;
+        dst["pass"]             = rtaTestDone && (rtaTestFails == 0);
+        dst["fails"]            = rtaTestFails;
+        dst["tone_worst_db"]    = (double)rtaTestWorst;
+        dst["tone_worst_hz"]    = (double)rtaTestWorstF;
+        dst["white_worst_db"]   = (double)rtaTestWhiteWorst;
+        dst["white_worst_hz"]   = (double)rtaTestWhiteWorstF;
+        dst["enbw_worst_db"]    = (double)rtaTestEnbwWorst;
+        dst["enbw_worst_hz"]    = (double)rtaTestEnbwWorstF;
+        dst["neighbour_worst_db"] = (double)rtaTestNbrWorst;
+        dst["time_ms"]          = (double)rtaTestTimeMs;
+        JsonArray stdb = dst.createNestedArray("tone_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) stdb.add((double)rtaTestToneDb[k]);
+        JsonArray swdb = dst.createNestedArray("white_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) swdb.add((double)rtaTestWhiteDb[k]);
+        JsonArray sedb = dst.createNestedArray("enbw_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) sedb.add((double)rtaTestEnbwDb[k]);
+        JsonArray sndb = dst.createNestedArray("neighbour_db");
+        for (int k = 0; k < AR_RTA_TOP_BANDS; k++) sndb.add((double)rtaTestNbrDb[k]);
+      }
+
       // ---- the frame's timing -------------------------------------------
       //
       // Microseconds, everywhere. The firmware stores these in 10 us units,
@@ -6442,6 +9358,7 @@ class AudioReactive : public Usermod {
         t["filtering"]     = (double)(filterTime * TIMING_UNIT_US);
         t["fft"]           = (double)(fftTime * TIMING_UNIT_US);
         t["bank"]          = (double)(bankTime * TIMING_UNIT_US);
+        t["rtatopbank"]    = (double)(rtaTime * TIMING_UNIT_US);
         t["dma_surplus_ms"] = (double)(FRAME_PERIOD_MS - (sampleTime * TIMING_UNIT_US / 1000.0));
         t["frames_total"]   = (unsigned long)arFramesTotal;
         t["frames_overran"] = (unsigned long)arFramesOverran;
@@ -6469,6 +9386,12 @@ class AudioReactive : public Usermod {
         fb["esp_dsp_fft"] = (double)(tFft * TIMING_UNIT_US);
         fb["bitrev_mag"]  = (double)(tPost * TIMING_UNIT_US);
         fb["bands_post"]  = (double)(tFinal * TIMING_UNIT_US);
+        // The two halves of bitrev_mag: the permutation on its own, and the
+        // estimator's reads of the spectrum. What is left of bitrev_mag is
+        // the magnitude fold, the peak scan and the pink factor.
+        fb["bitrev"]      = (double)(tBitrev * TIMING_UNIT_US);
+        fb["estimator"]   = (double)(tEst * TIMING_UNIT_US);
+        fb["magnitude"]   = (double)((tPost - tEst) * TIMING_UNIT_US);
         // The pipeline's health, as words. "ok" is what you want to see in
         // all five; anything else says which of the three limits was crossed.
         {
@@ -6574,6 +9497,10 @@ class AudioReactive : public Usermod {
         m["twiddle_bytes"]      = (unsigned)(sizeof(float) * 4 * (samplesFFT >> 1));
         m["twiddle_internal"]   = (fftTwiddle != nullptr && arTwiddleInternal);
         m["internal_free_bytes"] = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        // The web server drops a client without answering it when the free heap
+        // is under 8 KB or the largest single free block is under 2 KB, so the
+        // block size matters as much as the total.
+        m["internal_largest_block"] = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
       }
 #endif
 
@@ -6589,6 +9516,12 @@ class AudioReactive : public Usermod {
         u["connected"] = udpSyncConnected;
         u["format"]    = receivedFormat;
         u["last_packet_ms_ago"] = last_UDPTime ? (long)(millis() - last_UDPTime) : -1L;
+        // "connected" means the multicast group is joined. "live" means
+        // packets are actually ARRIVING - the two are not the same thing,
+        // and a board that is measuring its own microphone says "connected"
+        // and not "live".
+        u["live"]      = udpSyncConnected && (last_UDPTime != 0) &&
+                          ((millis() - last_UDPTime) <= AUDIOSYNC_IDLE_MS);
       }
     }
 
@@ -6792,26 +9725,11 @@ class AudioReactive : public Usermod {
                    (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
           infoArr.add(lvlBuf);
 
-          // The 31 RTA band levels: the numbers to compare with a hardware
-          // analyser, one bar for one bar. They are PRE-AGC and already carry
-          // the reference offset and the per-band trim, so they are on the
-          // analyser's scale and not on the display's.
-          //
-          // ONE string, not 31 elements: the pane renders a row's first two
-          // elements back to back, so 31 elements would show two of them.
-          {
-            char estBuf[8 * NUM_RTA_CHANNELS];
-            int n = 0;
-            estBuf[0] = 0;
-            for (int k = 0; k < lay31.count && n < (int)sizeof(estBuf) - 8; k++) {
-              const int w = snprintf(estBuf + n, sizeof(estBuf) - n, "%s%.1f",
-                                     k ? "," : "", (double)estRtaDb[k]);
-              if (w < 0) break;
-              n += w;
-            }
-            infoArr = user.createNestedArray(F("RTA band level (dB)"));
-            infoArr.add(estBuf);
-          }
+          // The 31 RTA band levels are NOT a row here any more. They are a
+          // wall of thirty-one numbers, and the info pane is for the short
+          // facts - the machine detail belongs on /json/ar, where the same
+          // numbers live in the "rta" object, one per band, with the band
+          // centres beside them.
 
           // The filter bank that measures the bottom eight of those bands
           // reports the SHAPED power - the bandpass's output power - which is
@@ -6908,6 +9826,14 @@ class AudioReactive : public Usermod {
         usermod = root.createNestedObject(FPSTR(_name));
       }
       usermod["on"] = enabled;
+      // The transform's SWITCH position - what was asked for, not what is
+      // running. It is the request, because the state object is also the
+      // thing a client writes to: reading it back and posting it again must
+      // not change anything. What is actually RUNNING is published in
+      // /json/ar as "transform.on" / "transform.forced", because a bank that
+      // failed its self-test forces the transform back on whatever the
+      // request says.
+      usermod["transform"] = arUseTransform;
     }
 
 
@@ -6953,6 +9879,36 @@ class AudioReactive : public Usermod {
             const float v = trim[k].as<float>();
             bandTrimDb[k] = constrain(v, -24.0f, 24.0f);
           }
+        }
+        // The display bank's A/B switch. The bank measures the 16 display
+        // bands with their own filters instead of the transform's window, and
+        // this takes effect without a rebuild.
+        if (usermod[F("dispBank")].is<int>()) {
+          const bool want = (usermod[F("dispBank")].as<int>() != 0);
+          if (want != dispUseBank) {
+            dispUseBank = want;
+            // The bank's state is NOT cleared here, and it is not cleared by
+            // the serial handler either. The bank runs every frame whether
+            // or not it drives the display, so its filters are never stale
+            // and there is no carry-over to clear - clearing them would put
+            // a settling transient into the very comparison the switch
+            // exists for.
+            //
+            // It also would not be safe: this handler runs on the userloop
+            // task and the bank's filters run on the FFT task, so a memset
+            // of the live bank here could land between a delay line's read
+            // and its write.
+          }
+        }
+        // The proof-of-concept switch: the transform on or off.
+        //
+        // This and the serial console's 'a' are the same entry point, so the
+        // two can never disagree. (An earlier note here said the serial
+        // console was UART0 and that a keystroke never reached WLED's
+        // handler - that was wrong for this board: the USB-Serial-JTAG CDC
+        // console on COM4 does reach it, and 'a' was measured working there.)
+        if (usermod[F("transform")].is<bool>()) {
+          audioReactiveTransformSet(usermod[F("transform")].as<bool>());
         }
         // Put the display's auto-range back where it started.
         //
@@ -7071,6 +10027,22 @@ class AudioReactive : public Usermod {
       // Blackman-Harris (see dsps_wind_blackman_harris_f32 in alocateFFTBuffers).
       // The 6-option dropdown above was a no-op for this branch.
       poweruser[F("I2S_FastPath")] = doSlidingFFT;
+      // Whether the transform runs is NOT saved here, any more.
+      //
+      // It used to be, because the transform was the measurement and the
+      // banks were the experiment. Now it is the other way round: the banks
+      // are the measurement and the transform is the reference they are
+      // checked against. A reference that silently survives a reboot is a
+      // liability - it would put 2.4 ms of FFT back into every frame and
+      // nobody would remember asking for it.
+      //
+      // So the transform is a RUNTIME diagnostic: it is off at every boot,
+      // and one keypress ('a') or one POST to the state object turns it on
+      // for as long as you want the comparison. The live state is published
+      // in the state object as "transform".
+      //
+      // A config that still carries "experiments.transform" from an earlier
+      // build is simply ignored - see the read side.
       // The five "experiment" toggles (AutoLevel, BandCompress, NoiseFloorSub,
       // HistogramNorm, Band0Lifter) are gone. Each of them mutated the band
       // values - a per-band gain, a per-band compression, a floor subtraction,
@@ -7233,6 +10205,17 @@ class AudioReactive : public Usermod {
       // FFT_Window: removed. See addToConfig.
 
       configComplete &= getJsonValue(top["experiments"][F("I2S_FastPath")], doSlidingFFT);
+      // "experiments.transform" is deliberately NOT read.
+      //
+      // The transform is a runtime diagnostic now - the filter banks are the
+      // measurement, and the transform is what they are checked against. It
+      // is off at every boot, and a stored "transform" from an earlier build
+      // is ignored rather than honoured: a reference that puts the FFT back
+      // into every frame after a reboot, with nobody remembering asking for
+      // it, is worse than not having the switch at all.
+      //
+      // To have the transform running, turn it on for the session: the 'a'
+      // key, or the "transform" key in the state object.
       // The five deleted experiment toggles are not read any more - see the
       // note in addToConfig.
 
@@ -7347,9 +10330,15 @@ class AudioReactive : public Usermod {
         // bankSetTau(), which recomputes the one-pole coefficient, so the two
         // cannot disagree - and it works whether or not the bank has been
         // built yet, because bankInit() reads the same variable.
+        //
+        // The RTA's top bank walks with it: the thirty-one bars are one view
+        // and they move together.
         float tauRead = bankTauMs;
         if (getJsonValue(top["frequency"][F("rtaTau")], tauRead)) {
           bankSetTau(tauRead);
+          rtaTauMs = bankTauMs;
+          rtaTauSet = true;
+          rtaTopSetTau(rtaTauMs);
         } else {
           configComplete = false;
         }

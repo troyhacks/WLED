@@ -541,11 +541,16 @@ WLED_GLOBAL float TROYHACKS_DBSPAN_BOOT _INIT(26.0f);
 //   't' - run the input chain's self-test (synthetic signals only)
 //   'g' - plot the 31-band RTA view
 //   'A' - reset the display's auto-ranges to their on-boot state
+//   'w' - the 16 display bands come from the filter bank
+//   'W' - the 16 display bands come back from the transform
 //
 // The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 'o'/'O' the
 // reference offset, 'n'/'p' the band to trim, 'y'/'Y' that band's trim,
 // 'k'/'K' the filter bank's detector time constant) are handled inside the
-// usermod, by audioReactiveRtaCommand().
+// usermod, by audioReactiveRtaCommand(). The display bank's A/B switch
+// ('w'/'W') is handled by audioReactiveDispBankCommand(), and the transform
+// A/B (the single key 'a' - the transform on or off, which is the proof of
+// concept) by audioReactiveTransformCommand().
 //
 // The chain A/B switches that used to live here ('b' DC blocker, 'w' input
 // LPF, 'e' print the chain model) are gone: the chain is fixed and
@@ -556,6 +561,8 @@ void audioReactiveSelfTest();
 void audioReactiveRtaPlot();
 void audioReactiveResetAutoRange();
 void audioReactiveRtaCommand(char c);
+void audioReactiveDispBankCommand(char c);
+void audioReactiveTransformCommand(char c);
 #endif
 
 // User Interface CONFIG

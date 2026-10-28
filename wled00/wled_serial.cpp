@@ -297,12 +297,41 @@ void handleSerial() {
                   (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
     } else if (next == 'b' || next == 'B' || next == 'u' || next == 'U' ||
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
-               next == 'y' || next == 'Y' || next == 'k' || next == 'K') {
+               next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
+               next == 'h' || next == 'H') {
       // The RTA view's window and its calibration: the floor and the top in
       // absolute dB, the reference offset that ties our dB to the analyser's,
-      // the per-band trim that makes the shapes match, and the filter bank's
-      // detector time constant - how fast the bottom 8 bars follow.
+      // the per-band trim that makes the shapes match, the filter bank's
+      // detector time constant - how fast the bars follow - and 'h'/'H', which
+      // hands the RTA's top 23 bands to the filter bank or back to the
+      // transform.
       audioReactiveRtaCommand(next);
+    } else if (next == 'w' || next == 'W' || next == 'j' || next == 'J') {
+      // The display bank: 'w' gives the 16 display bands to the bank - each
+      // measured by its own filter - and 'W' gives them back to the transform
+      // and its 42.7 ms window. 'j'/'J' walk the bank's detector time
+      // constant, which is what trades its fluctuation against its lag.
+      //
+      // Not 'm': the HDMI mode menu takes 'm' at the top of this function
+      // on the P4 HDMI builds, and it waits up to ten seconds for a digit
+      // after it.
+      audioReactiveDispBankCommand(next);
+    } else if (next == 'a') {
+      // The transform switch: 'a' TOGGLES the transform, and the AudioReactive
+      // runs on the filter banks alone - no FFT, no windowing, no bit
+      // reversal - or back on the transform.
+      //
+      // It is a runtime switch so the two can be compared on the SAME audio:
+      // switching between two runs would compare two different pieces of
+      // music.
+      //
+      // NOT 'x': 'X' is the force-reconnect key (the branch above, and it
+      // comes first, so a capital X never gets this far), and 'x' has
+      // traditionally been "reconnect network" in WLED - putting the transform
+      // switch there would have taken a key people already press.
+      // 'a' is for AudioReactive; note that 'A' is the display's
+      // "back to auto-range" and is a different thing entirely.
+      audioReactiveTransformCommand(next);
 #endif
     } else if (next == 's' || next == 'S') {
       // Walk the display span in 1 dB steps. 's' narrows it (more variance,
