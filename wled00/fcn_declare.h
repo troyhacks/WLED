@@ -502,7 +502,7 @@ uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest
 #define NUM_GEQ_CHANNELS 16
 #endif
 
-// number of audioreactive RTA channels published in um_data->u_data[12].
+// number of audioreactive RTA channels published in arRtaBands.
 // The ISO 266 third-octave set, 19.95 Hz - 19.95 kHz: 31 bands. These are
 // the INTEGRATED power over each band - the unit a hardware analyser's bar
 // shows - and they are a different measurement from the 16 above, which are
@@ -510,6 +510,22 @@ uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest = 0, uint8_t highest
 #ifndef NUM_RTA_CHANNELS
 #define NUM_RTA_CHANNELS 31
 #endif
+
+// The AudioReactive RTA bands, published for the effects that draw an
+// analyser (the GEQ PPA effect's RTA mode).
+//
+// BOARD-LOCAL ON PURPOSE. The shared um_data structure is carried between
+// WLED instances and serialised with its type tags, so growing it - which is
+// what a 13th entry did - invalidates the packet on every instance that does
+// not carry this code. The UDP sound sync packet and um_data both stay at
+// their original sizes; this array is the only way the 31 bands get out of
+// the usermod and into an effect.
+//
+// Double buffered, and the index names the published frame: a reader copies
+// one whole frame and never mixes two.
+extern uint8_t arRtaBands[2][NUM_RTA_CHANNELS];
+extern uint8_t arRtaBandsIdx;   // the published frame; the other one is being written
+extern bool    arRtaBandsValid; // false until the first frame is published
 
 um_data_t* simulateSound(uint8_t simulationId);
 // WLEDMM enumerateLedmaps(); moved to FX.h

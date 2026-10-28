@@ -250,7 +250,7 @@ void handleSerial() {
       // Walk the dB display trim in 1 dB steps. 'd' lowers it (bars shrink),
       // 'D' raises it (bars grow).
       //
-      // The trim is applied to the band levels AFTER the display AGC has
+      // The trim is applied to the band levels AFTER the auto-range has
       // normalised them, so it is a pure display adjustment: it does not
       // change what was measured, only where the bars sit. It used to be a
       // linear gain coefficient, which could only be turned one way before it
@@ -260,6 +260,29 @@ void handleSerial() {
       if (TROYHACKS_DBREF >  24.0f) TROYHACKS_DBREF =  24.0f;
       USER_PRINTF("dB display trim now %+.1f dB\n", TROYHACKS_DBREF);
 #ifdef USERMOD_AUDIOREACTIVE
+    // ---------------------------------------------------------------------
+    // The AudioReactive keys. Single characters, every one of them live -
+    // they change a number while the display is being watched.
+    //
+    //   a        toggle the FFT transform (the banks alone, or the transform)
+    //   t        run the input chain's self-test (synthetic signals only)
+    //   g        plot the 31-band RTA view on the console
+    //   G        plot the 16 display bands on the console
+    //   A        the display back to auto-range, and the trim back to its
+    //            boot value
+    //   d / D    the dB display trim, down / up by 1 dB
+    //   b / B    the window's floor, down / up by 1 dB      (fixed window)
+    //   u / U    the window's top, down / up by 1 dB        (fixed window)
+    //   s / S    the auto window's span, narrower / wider by 1 dB
+    //   o / O    the reference offset, down / up by 1 dB     (calibration)
+    //   n / p    the band the trim applies to, next / previous
+    //   y / Y    that band's trim, down / up by 1 dB         (calibration)
+    //   k / K    the filter bank's detector, shorter / longer by 5 ms
+    //   h / H    the RTA's top 23 bands: the filter bank, or the transform
+    //
+    // Lowercase is the lower number and uppercase the higher one, for every
+    // pair. 'X' is NOT in this list: it is the force-reconnect key above.
+    // ---------------------------------------------------------------------
     } else if (next == 't') {
       // Run the input chain's self-test: it measures the chain as implemented
       // (impulse response and sine response) and compares both with the
@@ -274,48 +297,35 @@ void handleSerial() {
     } else if (next == 'A') {
       // Back to auto-range mode: the auto-range in sole control.
       //
-      // The auto-ranges are peak holds - the loudest band sets the top of the
-      // range and it stays there until something exceeds it - so the top ends
-      // up stuck wherever the last peak left it. On top of that, the 'd'/'D'
-      // trim and the 's'/'S' span are manual adjustments that the auto-range
-      // knows nothing about: a trim of +10 dB pushes the loudest band past
-      // the top of the window, and resetting the auto-range alone cannot undo
-      // that.
+      // On top of the auto-range, the 'd'/'D' trim is a manual adjustment that
+      // the auto-range knows nothing about: a trim of +10 dB pushes the
+      // loudest band past the top of the window, and resetting the auto-range
+      // alone cannot undo that.
       //
-      // So this clears the auto-ranges AND puts the trim and the span back to
-      // the values the board booted with, which is the state the display was
-      // in before anything was touched. It also puts the RTA view back into
-      // auto-range mode, because the fixed window is a MODE and not an offset.
+      // So this clears the auto-ranges AND puts the trim back to the value the
+      // board booted with, which is the state the display was in before
+      // anything was touched. It also puts the display back into auto-range
+      // MODE, because the fixed window is a MODE and not an offset.
       //
       // The calibration - the reference offset and the per-band trim - is NOT
       // reset: those correct the measurement, and the measurement is not what
       // this command is about.
-      TROYHACKS_DBREF  = TROYHACKS_DBREF_BOOT;
-      TROYHACKS_DBSPAN = TROYHACKS_DBSPAN_BOOT;
+      TROYHACKS_DBREF = TROYHACKS_DBREF_BOOT;
       audioReactiveResetAutoRange();
-      USER_PRINTF("Display back to auto-range: trim %+.1f dB, span %.0f dB\n",
-                  (double)TROYHACKS_DBREF, (double)TROYHACKS_DBSPAN);
+      USER_PRINTF("Display back to auto-range: trim %+.1f dB\n",
+                  (double)TROYHACKS_DBREF);
     } else if (next == 'b' || next == 'B' || next == 'u' || next == 'U' ||
+               next == 's' || next == 'S' ||
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
                next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
                next == 'h' || next == 'H') {
-      // The RTA view's window and its calibration: the floor and the top in
-      // absolute dB, the reference offset that ties our dB to the analyser's,
-      // the per-band trim that makes the shapes match, the filter bank's
-      // detector time constant - how fast the bars follow - and 'h'/'H', which
-      // hands the RTA's top 23 bands to the filter bank or back to the
-      // transform.
+      // The window and the calibration: the floor and the top in absolute dB,
+      // the auto window's span, the reference offset that ties our dB to the
+      // analyser's, the per-band trim that makes the shapes match, the filter
+      // bank's detector time constant - how fast the bars follow - and
+      // 'h'/'H', which hands the RTA's top 23 bands to the filter bank or
+      // back to the transform.
       audioReactiveRtaCommand(next);
-    } else if (next == 'w' || next == 'W' || next == 'j' || next == 'J') {
-      // The display bank: 'w' gives the 16 display bands to the bank - each
-      // measured by its own filter - and 'W' gives them back to the transform
-      // and its 42.7 ms window. 'j'/'J' walk the bank's detector time
-      // constant, which is what trades its fluctuation against its lag.
-      //
-      // Not 'm': the HDMI mode menu takes 'm' at the top of this function
-      // on the P4 HDMI builds, and it waits up to ten seconds for a digit
-      // after it.
-      audioReactiveDispBankCommand(next);
     } else if (next == 'a') {
       // The transform switch: 'a' TOGGLES the transform, and the AudioReactive
       // runs on the filter banks alone - no FFT, no windowing, no bit
@@ -333,16 +343,6 @@ void handleSerial() {
       // "back to auto-range" and is a different thing entirely.
       audioReactiveTransformCommand(next);
 #endif
-    } else if (next == 's' || next == 'S') {
-      // Walk the display span in 1 dB steps. 's' narrows it (more variance,
-      // bars move more), 'S' widens it. This is the "variance" control:
-      // constant-Q band power flattens most music, so a wide span squeezes the
-      // whole spectrum into a few rows and it reads as a dead line. Real
-      // analysers auto-range over roughly 30-50 dB.
-      TROYHACKS_DBSPAN += (next == 'S') ? 1.0f : -1.0f;
-      if (TROYHACKS_DBSPAN < 12.0f) TROYHACKS_DBSPAN = 12.0f;
-      if (TROYHACKS_DBSPAN > 96.0f) TROYHACKS_DBSPAN = 96.0f;
-      USER_PRINTF("dB display span now %.0f dB\n", TROYHACKS_DBSPAN);
     } else if (next == 0xB0) {
       updateBaudRate(115200);
     } else if (next == 0xB1) {

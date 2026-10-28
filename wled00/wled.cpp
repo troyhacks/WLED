@@ -1067,6 +1067,12 @@ void WLED::disableWatchdog() {
 
 int retry_num=0;
 
+// The AudioReactive RTA bands, published board-locally for the effects that
+// draw an analyser. See fcn_declare.h for why this is not in um_data.
+uint8_t arRtaBands[2][NUM_RTA_CHANNELS] = {{0}};
+uint8_t arRtaBandsIdx   = 0;
+bool    arRtaBandsValid = false;
+
 static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 
   if (event_base == WIFI_EVENT) {

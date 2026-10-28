@@ -1183,7 +1183,7 @@ class ES8311Source : public I2SSource {
 // band 0's 5: a 17.9 dB ramp. Against a 26 dB display span that ramp is 69% of
 // the display, so the top two bars read hot on noise alone while the low bands -
 // only 5-25 bins - looked correct. The overload set the level; the ramp decided
-// where it showed.
+// where it showed. (The span is 48 dB now, and shared by both views.)
 //
 // The AGC had been reporting this the whole time. On the info page, "AGC Gain"
 // read 0.03x, i.e. -30.5 dB: the servo saturating as it tried to pull down a

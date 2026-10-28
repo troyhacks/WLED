@@ -508,32 +508,32 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 // Live-adjustable over serial with 'd' (down, bars shrink) and 'D' (up, bars
 // grow); saved and restored by the AudioReactive usermod (Frequency > dB trim).
 //
-// It is a TRIM, in dB, applied to the band levels after the display AGC has
-// normalised them: 0 means "as the AGC left it". It used to be a linear gain
-// coefficient (1/0 dB magnitude), which could only ever be turned in one
+// It is a TRIM, in dB, applied to the band levels after the auto-range has
+// normalised them: 0 means "as the auto-range left it". It used to be a linear
+// gain coefficient (1/0 dB magnitude), which could only ever be turned in one
 // useful direction and read as a negative number; a dB offset is the same
 // adjustment in the units the display is actually built in, and both ends of
 // its travel are usable.
 WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.0f);
-// The values the board BOOTS with - the trim and the span as they were loaded
-// from the saved configuration.
+// The value the board BOOTS with - the trim as it was loaded from the saved
+// configuration.
 //
-// The serial 'd'/'D' and 's'/'S' adjustments are runtime-only: they change the
-// live globals and are not written back to the configuration, so they do not
-// survive a reboot. These two copies remember what the last boot loaded, so
-// the serial 'A' command can put the display back to exactly the state it
-// booted in - the auto-range in sole control, with no manual adjustment on
-// top of it.
+// The serial 'd'/'D' adjustment is runtime-only: it changes the live global
+// and is not written back to the configuration, so it does not survive a
+// reboot. This copy remembers what the last boot loaded, so the serial 'A'
+// command can put the display back to exactly the state it booted in - the
+// auto-range in sole control, with no manual adjustment on top of it.
 WLED_GLOBAL float TROYHACKS_DBREF_BOOT _INIT(0.0f);
-// WLED-MM/TroyHacks: how many dB the bar covers below that reference ('s' to adjust,
-// also on the AudioReactive settings page). This is the "variance" control. Constant-Q
-// band power reports f^(1-a) for a spectrum of slope 1/f^a, so typical music only
-// spans ~10 dB across all 16 bands - spread over a 66 dB window that is 16% of the
-// bar and reads as a flat line. Real analysers auto-range over 30-50 dB, which is what
-// gives an RTA its shape. 26 dB is where this landed by ear against a reference RTA;
-// anything further below the loudest band reads as an empty bar, which is the trade.
-WLED_GLOBAL float TROYHACKS_DBSPAN _INIT(26.0f);
-WLED_GLOBAL float TROYHACKS_DBSPAN_BOOT _INIT(26.0f);
+// The window's SPAN - how many dB the bar covers below the reference - is not
+// a setting any more. It is a constant, AR_WINDOW_DBSPAN in the AudioReactive
+// usermod, shared by the 16 bars and the 31 RTA bars: one window, one span.
+//
+// It used to be 's'/'S' and a per-install "dBspan" in the saved config, and
+// that is how the 16 bars ended up in a 24 dB window against a spectrum that
+// spans 25 to 46 dB - six to ten of the sixteen bars on the floor at all
+// times. The window has to be wide enough to hold the material's own dynamic
+// range, which is what an analyser's is, and that is not something a stored
+// number should be able to narrow.
 // WLED-MM/TroyHacks: the AudioReactive usermod's serial entry points.
 // Implemented in the AudioReactive usermod; declared here because
 // wled_serial.cpp has no visibility into usermods/audioreactive/.
@@ -541,16 +541,17 @@ WLED_GLOBAL float TROYHACKS_DBSPAN_BOOT _INIT(26.0f);
 //   't' - run the input chain's self-test (synthetic signals only)
 //   'g' - plot the 31-band RTA view
 //   'A' - reset the display's auto-ranges to their on-boot state
-//   'w' - the 16 display bands come from the filter bank
-//   'W' - the 16 display bands come back from the transform
 //
 // The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 'o'/'O' the
 // reference offset, 'n'/'p' the band to trim, 'y'/'Y' that band's trim,
 // 'k'/'K' the filter bank's detector time constant) are handled inside the
-// usermod, by audioReactiveRtaCommand(). The display bank's A/B switch
-// ('w'/'W') is handled by audioReactiveDispBankCommand(), and the transform
-// A/B (the single key 'a' - the transform on or off, which is the proof of
-// concept) by audioReactiveTransformCommand().
+// usermod, by audioReactiveRtaCommand(). The transform A/B (the single key
+// 'a' - the transform on or off, which is the proof of concept) is handled by
+// audioReactiveTransformCommand().
+//
+// The display bank's A/B switch ('w'/'W') is gone with the bank: the sixteen
+// display bands are sixteen of the thirty-one RTA bands, so there is no
+// second measurement to choose between.
 //
 // The chain A/B switches that used to live here ('b' DC blocker, 'w' input
 // LPF, 'e' print the chain model) are gone: the chain is fixed and
@@ -561,7 +562,6 @@ void audioReactiveSelfTest();
 void audioReactiveRtaPlot();
 void audioReactiveResetAutoRange();
 void audioReactiveRtaCommand(char c);
-void audioReactiveDispBankCommand(char c);
 void audioReactiveTransformCommand(char c);
 #endif
 

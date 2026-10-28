@@ -9765,8 +9765,8 @@ uint16_t mode_GEQPPA() {
   uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
   if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
 
-  // The RTA view: the 31 third-octave bands, published by the AudioReactive
-  // usermod in u_data[12].
+  // The RTA view: the 31 third-octave bands, published board-locally by the
+  // AudioReactive usermod in arRtaBands.
   //
   // They are a different measurement from the 16 GEQ bands above - the
   // integrated power over each band, in the unit a hardware analyser's bar
@@ -9774,12 +9774,15 @@ uint16_t mode_GEQPPA() {
   // their own auto-range, so they arrive on their own scale and are drawn
   // with their own bar count.
   //
-  // If the usermod is not there (or is too old to publish them), the effect
-  // stays on the GEQ view rather than drawing nothing.
+  // They are NOT in the shared um_data structure: that structure is carried
+  // between instances and serialised, so putting a 13th entry in it
+  // invalidated the packet everywhere that does not have this code.
+  //
+  // If the usermod is not there (or has not published a frame yet), the
+  // effect stays on the GEQ view rather than drawing nothing.
   uint8_t rtaResult[NUM_RTA_CHANNELS] = {0};
-  const bool rtaMode = SEGMENT.check2 && (um_data->u_data != nullptr)
-                       && (um_data->u_size > 12) && (um_data->u_data[12] != nullptr);
-  if (rtaMode) memcpy(rtaResult, um_data->u_data[12], NUM_RTA_CHANNELS);  // WLEDMM snapshot: publisher may recycle the buffer
+  const bool rtaMode = SEGMENT.check2 && arRtaBandsValid;
+  if (rtaMode) memcpy(rtaResult, arRtaBands[arRtaBandsIdx], NUM_RTA_CHANNELS);  // WLEDMM snapshot: publisher may recycle the buffer
 
   const int bars = rtaMode ? NUM_RTA_CHANNELS : NUM_GEQ_CHANNELS;
   const uint8_t* values = rtaMode ? rtaResult : fftResult;
