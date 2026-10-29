@@ -264,7 +264,6 @@ void handleSerial() {
     // The AudioReactive keys. Single characters, every one of them live -
     // they change a number while the display is being watched.
     //
-    //   a        toggle the FFT transform (the banks alone, or the transform)
     //   t        run the input chain's self-test (synthetic signals only)
     //   g        plot the 31-band RTA view on the console
     //   G        plot the 16 display bands on the console
@@ -278,7 +277,6 @@ void handleSerial() {
     //   n / p    the band the trim applies to, next / previous
     //   y / Y    that band's trim, down / up by 1 dB         (calibration)
     //   k / K    the filter bank's detector, shorter / longer by 5 ms
-    //   h / H    the RTA's top 23 bands: the filter bank, or the transform
     //
     // Lowercase is the lower number and uppercase the higher one, for every
     // pair. 'X' is NOT in this list: it is the force-reconnect key above.
@@ -317,31 +315,12 @@ void handleSerial() {
     } else if (next == 'b' || next == 'B' || next == 'u' || next == 'U' ||
                next == 's' || next == 'S' ||
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
-               next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
-               next == 'h' || next == 'H') {
+               next == 'y' || next == 'Y' || next == 'k' || next == 'K') {
       // The window and the calibration: the floor and the top in absolute dB,
       // the auto window's span, the reference offset that ties our dB to the
-      // analyser's, the per-band trim that makes the shapes match, the filter
-      // bank's detector time constant - how fast the bars follow - and
-      // 'h'/'H', which hands the RTA's top 23 bands to the filter bank or
-      // back to the transform.
+      // analyser's, the per-band trim that makes the shapes match, and the
+      // filter bank's detector time constant - how fast the bars follow.
       audioReactiveRtaCommand(next);
-    } else if (next == 'a') {
-      // The transform switch: 'a' TOGGLES the transform, and the AudioReactive
-      // runs on the filter banks alone - no FFT, no windowing, no bit
-      // reversal - or back on the transform.
-      //
-      // It is a runtime switch so the two can be compared on the SAME audio:
-      // switching between two runs would compare two different pieces of
-      // music.
-      //
-      // NOT 'x': 'X' is the force-reconnect key (the branch above, and it
-      // comes first, so a capital X never gets this far), and 'x' has
-      // traditionally been "reconnect network" in WLED - putting the transform
-      // switch there would have taken a key people already press.
-      // 'a' is for AudioReactive; note that 'A' is the display's
-      // "back to auto-range" and is a different thing entirely.
-      audioReactiveTransformCommand(next);
 #endif
     } else if (next == 0xB0) {
       updateBaudRate(115200);

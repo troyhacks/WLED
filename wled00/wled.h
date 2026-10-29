@@ -545,9 +545,7 @@ WLED_GLOBAL float TROYHACKS_DBREF_BOOT _INIT(0.0f);
 // The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 'o'/'O' the
 // reference offset, 'n'/'p' the band to trim, 'y'/'Y' that band's trim,
 // 'k'/'K' the filter bank's detector time constant) are handled inside the
-// usermod, by audioReactiveRtaCommand(). The transform A/B (the single key
-// 'a' - the transform on or off, which is the proof of concept) is handled by
-// audioReactiveTransformCommand().
+// usermod, by audioReactiveRtaCommand().
 //
 // The display bank's A/B switch ('w'/'W') is gone with the bank: the sixteen
 // display bands are sixteen of the thirty-one RTA bands, so there is no
@@ -562,7 +560,6 @@ void audioReactiveSelfTest();
 void audioReactiveRtaPlot();
 void audioReactiveResetAutoRange();
 void audioReactiveRtaCommand(char c);
-void audioReactiveTransformCommand(char c);
 #endif
 
 // User Interface CONFIG
