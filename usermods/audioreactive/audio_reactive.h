@@ -235,10 +235,10 @@ uint8_t soundSquelch = SR_SQUELCH;            // the margin above the noise floo
 //
 // The old usermod had an "AGC" setting with three presets (normal / vivid /
 // lazy), each one a table of PI gains and setpoints driving a bang-bang
-// integrator. There is no AGC now at all: the display's reference is a latched
-// level and the offset that goes with it, and there is nothing left for a
-// preset to select. The tables are gone, and so is the setting: the
-// "AGC" key is removed from a stored config by readFromConfig().
+// integrator. There is no AGC now at all: the display's reference is the
+// loudest band's level, followed, and the offset that goes with it, and there
+// is nothing left for a preset to select. The tables are gone, and so is the
+// setting: the "AGC" key is removed from a stored config by readFromConfig().
 
 static AudioSource *audioSource = nullptr;
 static uint8_t useInputFilter = 0;                        // enables low-cut filtering. Applies before the banks.
@@ -2110,22 +2110,15 @@ static constexpr float AR_TRIM_MAX_DB    = 24.0f;      // the display trim's tra
 //
 // The reference FOLLOWS the loudest band, and it follows it two ways:
 //
-//   1. THE DISPLAY CANNOT OVERFLOW. The reference is always >= the current
-//      loudest band, so the loudest band can never be drawn above the top of
-//      the window - whatever the signal does. This used to be a follower with
-//      a 20 ms attack, so every transient - and every burst of noise - drew
-//      itself ABOVE the top for a frame or two, pegged the bar at 255, and
-//      then dragged the whole picture down as the offset caught up. The
-//      latch makes that impossible, not merely unlikely.
+//   - FAST when the signal gets louder (AR_REF_ATTACK_MS). The top of the
+//     window jumps to the new peak at once, so the bar that caused it is
+//     drawn AT THE TOP, and the whole picture is pushed down under it. That
+//     visible rescale is the point: the bars scale to the full height and
+//     the top of the display is where the music is.
 //
-//   2. THE DISPLAY NEVER GAINS HEIGHT ON ITS OWN. The offset is
-//      -reference, and the reference only ever RISES, and only when the
-//      signal produces a higher level. So the number of dB between the top
-//      of the window and the signal never shrinks by itself. The 6 s release
-//      this replaces did exactly that - it walked the offset back up over
-//      six seconds, which is dB of gain added to the display WHILE THE MUSIC
-//      WAS PLAYING. Measured on the board: a 3.8 dB swing in the offset
-//      inside ten seconds.
+//   - SLOWLY when the signal gets quieter (AR_REF_RELEASE_MS). The top comes
+//     back down over seconds rather than with every transient, so the picture
+//     does not pump.
 //
 // A LATCHED maximum - holding the loudest thing ever seen - was tried and
 // rejected: it cannot overflow and it never creeps, but after the first peak
@@ -2139,12 +2132,25 @@ static constexpr float AR_TRIM_MAX_DB    = 24.0f;      // the display trim's tra
 // a gap from a stop).
 // ---------------------------------------------------------------------------
 
-// The reference: the loudest band's level, latched.
+// The reference: the loudest band's level, followed.
 //
 // AR_REF_UNSET means "no reference yet". It is NOT a level: 0 dB is a level
 // like any other, and the reference has to be allowed to be negative.
 static constexpr float AR_REF_UNSET    = -1.0e9f;
 static constexpr float AR_REF_MAX_DB   =  150.0f;     // a runaway guard on the reference
+// How fast the reference follows the loudest band.
+//
+// UP is fast: the top of the window jumps to the new peak and the picture is
+// pushed down under it at once. DOWN is slow: the picture comes back up over
+// seconds instead of pumping with every transient.
+//
+// The release is a setting (the serial 'w'/'W' keys): it is the number that
+// decides how long the display stays down after a peak, and it wants to be
+// watched rather than guessed.
+static constexpr float AR_REF_ATTACK_MS  = 20.0f;     // the reference's attack
+static constexpr float AR_REF_RELEASE_MS = 6000.0f;   // its release, as it boots
+static constexpr float AR_REF_RELEASE_MIN_MS = 100.0f;
+static constexpr float AR_REF_RELEASE_MAX_MS = 30000.0f;
 // How long the gate must be SHUT before the reference is dropped.
 //
 // It has to be more than a moment, because the gate FICKERS on ordinary
@@ -2155,13 +2161,14 @@ static constexpr float AR_REF_MAX_DB   =  150.0f;     // a runaway guard on the 
 // Three seconds of a shut gate is a real absence of audio rather than a gap
 // in it, and the display is blank for all of it, so the hold costs nothing.
 static constexpr float AR_REF_RESET_MS = 3000.0f;
-// How many frames of signal are seen before the reference is latched. It is
-// latched from the level that is ACTUALLY THERE by then, not from whatever
-// transient happened to open the gate - a click at the start of a track must
-// not set the top of the display for the whole piece.
+// How many frames of signal are seen before the reference is set. It is set
+// from the level that is ACTUALLY THERE by then, not from whatever transient
+// happened to open the gate - a click at the start of a track must not set
+// the top of the display for the whole piece.
 static constexpr uint8_t AR_REF_SET_FRAMES = 3;
 
-static float arRefDb = AR_REF_UNSET;                // the latched reference level
+static float arRefDb = AR_REF_UNSET;                // the reference level, followed
+static float arRefReleaseMs = AR_REF_RELEASE_MS;    // its release, in ms (the 'w'/'W' keys)
 static float arGateShutMs = 0.0f;                   // how long the gate has been shut
 static uint8_t arRefSetFrames = 0;                  // frames of signal seen while unset
 
@@ -2208,7 +2215,7 @@ static constexpr float AR_WINDOW_TARGET_DB = 0.0f;    // the loudest band is hel
 // in dB and nothing moves.
 //
 //   auto  - the reference. The window is arWindowRangeDb wide and its top is
-//           the latched reference, so the bars read as "dB below the loudest
+//           the followed reference, so the bars read as "dB below the loudest
 //           thing in this piece". Good for SHAPE, useless for LEVEL.
 //   fixed - an absolute window: a floor in dB and a top in dB, on the same
 //           scale as the analyser they are being compared with. Good for
@@ -2373,7 +2380,7 @@ static void arTrackLevel(float levelDb) {
 // that moves it.
 // ---------------------------------------------------------------------------
 
-// The reference, latched, and the offset that goes with it.
+// The reference, followed, and the offset that goes with it.
 //
 // The reference tracks the loudest band: fast when the signal gets louder,
 // so a peak is at the top of the window at once and the picture is pushed
@@ -2384,11 +2391,17 @@ static void arTrackLevel(float levelDb) {
 // window is [ reference - span , reference ] in absolute terms.
 //
 // The runaway guard is on the REFERENCE and not on the offset. Clamping the
-// offset would break the first property - the loudest band could then be
-// drawn above the top - so the reference is clamped instead and the offset
-// follows it exactly.
-static inline void arLatchReference(float loudestDb) {
-  if (loudestDb > arRefDb) arRefDb = loudestDb;
+// offset would let the loudest band be drawn above the top, so the reference
+// is clamped instead and the offset follows it exactly.
+static inline void arFollowReference(float loudestDb, float dtMs) {
+  if (loudestDb <= -119.0f) return;              // no signal: the reference holds
+  if (arRefDb == AR_REF_UNSET || dtMs <= 0.0f) {
+    arRefDb = loudestDb;                         // set outright, not followed
+  } else {
+    const float tau = (loudestDb > arRefDb) ? AR_REF_ATTACK_MS : arRefReleaseMs;
+    const float k = 1.0f - expf(-dtMs / tau);
+    arRefDb += k * (loudestDb - arRefDb);
+  }
   if (arRefDb > AR_REF_MAX_DB) arRefDb = AR_REF_MAX_DB;
   arRefOffsetDb = AR_WINDOW_TARGET_DB - arRefDb;
 }
@@ -2458,13 +2471,6 @@ static void arJsonBytes(JsonArray arr, const uint8_t *v, int n) {
 }
 
 // Reset the display's auto-ranges to the state they are in on boot.
-//
-// The reference is a latch, so it only ever travels one way: once a loud
-// passage has set the top of the range, it stays there until something
-// exceeds it. That is what an analyser does, but it also means the range is
-// stuck at whatever the loudest thing to happen was - a different input, a
-// different gain setting, or simply the start of the session all leave the
-// top where the last peak put it.
 //
 // This drops the reference and puts the offset back to zero, which is where
 // they start on boot: the display starts low, and the next loud band earns
@@ -2621,6 +2627,23 @@ void audioReactiveRtaCommand(char c) {
       }
       break;
     }
+    case 'w': case 'W': {
+      // The auto-range's RELEASE: how long the top of the window stays where a
+      // peak put it before it comes back down to the loudest band.
+      //
+      // 'w' makes it shorter (the top tracks the signal closely, so the bars
+      // sit nearer the top and the picture moves more), 'W' longer (the top
+      // holds a peak for longer and the picture is steadier).
+      //
+      // This is the number that decides how long the display stays pushed
+      // down after a peak, so it wants to be watched rather than guessed.
+      arRefReleaseMs += (c == 'W') ? 500.0f : -500.0f;
+      if (arRefReleaseMs < AR_REF_RELEASE_MIN_MS) arRefReleaseMs = AR_REF_RELEASE_MIN_MS;
+      if (arRefReleaseMs > AR_REF_RELEASE_MAX_MS) arRefReleaseMs = AR_REF_RELEASE_MAX_MS;
+      USER_PRINTF("auto-range release now %.0f ms (the attack is %.0f ms)\n",
+                  (double)arRefReleaseMs, (double)AR_REF_ATTACK_MS);
+      break;
+    }
     default:
       break;
   }
@@ -2635,27 +2658,9 @@ void audioReactiveRtaCommand(char c) {
 // across the bands it produced.
 //
 // It is the SAME mechanism as the 31-band view's, and it draws in the same
-// window: there is no reference of the 16-band's own any more.
-//
-// The reference is LATCHED: it only ever rises, and it rises at once. There
-// is no attack and no release any more, and that is the whole point:
-//
-//   - no release means the display never gains height while the music is
-//     playing. The 6 s release this replaces was measured walking the offset
-//     back up 3.8 dB inside ten seconds - dB of gain added to the display
-//     mid-playback;
-//   - latching means the reference is always >= the current loudest band, so
-//     the loudest band can never be drawn above the top of the window. A
-//     transient - or a burst of noise - used to draw itself above the top,
-//     peg the bar at 255, and then drag the whole picture down as the offset
-//     caught up. That is now impossible.
-//
-// The reference is DROPPED after a real absence - the gate shut for
-// AR_REF_RESET_MS (3 s) - and not before. The gate shuts for a frame or two
-// on ordinary material, and a reset keyed directly to "gate shut" would re-set
-// the display's top on every gap in the music, which is the opposite of "set
-// once and hold". A piece that really has stopped finds the reference gone,
-// and the next piece sets its own.
+// window: there is no reference of the 16-band's own any more. The follow, its
+// two time constants and the drop on a real absence are described with the
+// reference above.
 //
 // The reference is maintained even in FIXED mode, where the offset is not
 // used: it is a property of the signal, and coming back to the auto-range
@@ -2691,15 +2696,14 @@ static void arUpdateReference() {
   if (arRefDb == AR_REF_UNSET) {
     // The reference is not set yet - the first audio of a piece is arriving.
     // The display is blank until it is (see arPublishBands), and the
-    // reference is latched from the level that is actually there a few
-    // frames later, not from the transient that opened the gate.
+    // reference is set from the level that is actually there a few frames
+    // later, not from the transient that opened the gate.
     if (++arRefSetFrames >= AR_REF_SET_FRAMES) {
-      arRefDb = maxDb;
-      arLatchReference(maxDb);
+      arFollowReference(maxDb, 0.0f);      // set outright, not followed
     }
     return;
   }
-  arLatchReference(maxDb);
+  arFollowReference(maxDb, arFrameDtMs);
 }
 
 // The 16 display bands.
@@ -2762,7 +2766,7 @@ static void arPublishBands(float dtMs) {
   // In AUTO mode the display needs the reference: without it there is no
   // window to draw the bars in, and they would be drawn against an
   // arbitrary scale - and pegged, at that. So the display is BLANK until
-  // the reference is latched, which is only the first few frames of a
+  // the reference is set, which is only the first few frames of a
   // piece of audio. In FIXED mode the window is the user's and the
   // reference is not needed at all.
   const bool noRef = arAutoRange && (arRefDb == AR_REF_UNSET);
@@ -2840,7 +2844,7 @@ static void arPublishRta(float dtMs) {
   arWindowEdges(TROYHACKS_DBREF + trimDb, winLo, winHi, valueAdj);
 
   // As in the GEQ view: without a reference there is no window to draw the
-  // bars in, so the display is blank until it is latched.
+  // bars in, so the display is blank until it is set.
   const bool noRef = arAutoRange && (arRefDb == AR_REF_UNSET);
 
   uint8_t frame[NUM_RTA_CHANNELS];
@@ -6961,6 +6965,10 @@ class AudioReactive : public Usermod {
         d["window_floor_db"] = (double)arWindowFloorDb;
         d["window_top_db"]   = (double)arWindowTopDb;
         d["window_span_db"]  = (double)(arAutoRange ? arWindowRangeDb : (arWindowTopDb - arWindowFloorDb));
+        // How fast the auto-range's top follows the loudest band. The attack
+        // is fixed; the release is a setting (the serial 'w'/'W' keys).
+        d["auto_attack_ms"]  = (double)AR_REF_ATTACK_MS;
+        d["auto_release_ms"] = (double)arRefReleaseMs;
         // The absolute window the display is currently drawn in. In auto mode
         // this is implied by the auto-range offset, and in fixed mode it is
         // the user's own grid. There is ONE window and ONE offset: the sixteen
@@ -7507,6 +7515,13 @@ class AudioReactive : public Usermod {
           }
           infoArr.add(lvlBuf);
 
+          // How fast the auto-range's top follows the loudest band. The
+          // release is a setting ('w'/'W'), the attack is not.
+          infoArr = user.createNestedArray(F("Auto-range follow (ms)"));
+          snprintf(lvlBuf, sizeof(lvlBuf), "attack %.0f, release %.0f",
+                   (double)AR_REF_ATTACK_MS, (double)arRefReleaseMs);
+          infoArr.add(lvlBuf);
+
           // The reference offset: the difference between our dB and the
           // analyser's. It is applied to the MEASUREMENT, so the band levels
           // below are already on the analyser's scale.
@@ -7764,8 +7779,9 @@ class AudioReactive : public Usermod {
       // "gain" (sampleGain) was never applied to anything - it was written,
       // read, and then ignored, so it was a field that did nothing.
       // "AGC" (soundAgc) was the old bang-bang AGC's preset (none / normal /
-      // vivid / lazy). There is no AGC now at all - the display's reference is a
-      // latched level - so there is no preset left to choose.
+      // vivid / lazy). There is no AGC now at all - the display's reference is
+      // the loudest band's level, followed - so there is no preset left to
+      // choose.
       //
       // Neither is written any more, and readFromConfig() removes them from
       // a stored config. That last part is not a detail: the settings page
@@ -8325,8 +8341,8 @@ class AudioReactive : public Usermod {
       // The "config:AGC" dropdown is GONE. It chose between the legacy AGC's
       // three presets (normal / vivid / lazy), each one a table of PI gains
       // driving a bang-bang integrator. There is no AGC now at all - the
-      // display's reference is a latched level - so there is nothing left for a
-      // preset to select. The config
+      // display's reference is the loudest band's level, followed - so there is
+      // nothing left for a preset to select. The config
       // key is removed from a stored config as well.
 
       //WLEDMM: experimental settings
