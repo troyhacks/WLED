@@ -1317,7 +1317,9 @@ class ES8311Source : public I2SSource {
 
     // The codec's MCLK pre-divider (1..8). The vendor coefficient tables all
     // use 1 for MCLK = 256 x rate. Kept as a member so it can be changed at
-    // runtime (POST /json/state {"codecDiv": n}) and A/B'd without a reflash.
+    // runtime (POST /json/state {"mclk_div": n}) and A/B'd without a reflash.
+    // The state object publishes it under the same name it reads it by, so
+    // the setting can be read back as well as written.
     uint8_t _codecClkDiv = 1;
 
 public:

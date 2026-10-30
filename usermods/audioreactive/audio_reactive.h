@@ -5570,6 +5570,30 @@ static bool arGetNumber(const JsonVariant& v, T& dst) {
   return getJsonValue(v, dst);
 }
 
+// The same, for a number that has to FIT.
+//
+// ArduinoJson's convertNumber() does not report a value that does not fit
+// the destination type - it returns 0. So a config that says 300 for a
+// uint8_t setting does not set 300 (it cannot) and does not set 255 (the
+// closest it could): it sets 0, silently. For a PIN, 0 is a real GPIO.
+//
+// So the number is read as a double - which covers everything a settings
+// page or a hand-edited config can hold - and checked against the range the
+// setting allows BEFORE it is accepted. A number out of range is refused:
+// the setting keeps the value it has, and the caller marks the config
+// incomplete, so the config is rewritten with a good number instead of with
+// a silent zero.
+template<typename T>
+static bool arGetRangedNumber(const JsonVariant& v, T& dst, double lo, double hi) {
+  if (v.isNull()) return false;
+  double d = 0.0;
+  if (!arGetNumber(v, d)) return false;   // a string that is not a number
+  if (!(d == d)) return false;            // NaN
+  if (d < lo || d > hi) return false;     // out of range: refused
+  dst = static_cast<T>(d);
+  return true;
+}
+
 // The same for a boolean. as<bool>() on a string returns TRUE - it is not a
 // boolean, but ArduinoJson's asBoolean() has no "not a boolean" case and
 // falls through to true. The two spellings a config file may use are spelled
@@ -7726,6 +7750,16 @@ class AudioReactive : public Usermod {
         }
         c["mclk_hz"]          = (double)gotMclk;
         c["sample_rate_hz"]   = (double)gotFs;
+        // The MCLK PRE-DIVIDER - the setting the clock tree is actually built
+        // from, next to the clock it produces.
+        {
+          int div = 1;
+          if (audioSource) {
+            const uint8_t d = audioSource->getCodecClockDiv();
+            if (d >= 1 && d <= 8) div = d;
+          }
+          c["mclk_div"] = div;
+        }
         c["ppm"] = gotFs ? (double)((((long long)gotFs - (long long)SAMPLE_RATE) * 1000000LL)
                                     / (long long)SAMPLE_RATE) : 0.0;
       }
@@ -8078,6 +8112,27 @@ class AudioReactive : public Usermod {
       // toggle. See resolveStateEnabled().
       usermod[FPSTR(_on)]      = enabled;
       usermod[FPSTR(_enabled)] = enabled;
+
+      // The input level, under the name the diagnostic endpoint publishes it
+      // as - so a value read from /json/ar can be posted straight back, and
+      // the two objects cannot disagree about what the value is called.
+      usermod[F("input_level")] = (int)inputLevel;
+
+      // The codec's MCLK pre-divider.
+      //
+      // It was write-only: the state took it and nothing ever gave it back,
+      // so there was no way to read what the clock tree was actually set to.
+      // It is published now, under the name the diagnostic endpoint publishes
+      // it as, next to "mclk_hz".
+      //
+      // A source with no clock manager reports 0, and 0 is not a setting - 1
+      // is the one that would be applied - so 1 is what is published.
+      int mclkDiv = 1;
+      if (audioSource) {
+        const uint8_t d = audioSource->getCodecClockDiv();
+        if (d >= 1 && d <= 8) mclkDiv = d;
+      }
+      usermod[F("mclk_div")] = mclkDiv;
     }
 
 
@@ -8097,9 +8152,20 @@ class AudioReactive : public Usermod {
           if (prevEnabled != enabled) onUpdateBegin(!enabled);
         }
 #ifdef ARDUINO_ARCH_ESP32
-        if (usermod[FPSTR(_inputLvl)].is<int>()) {
-          inputLevel = min(255,max(0,usermod[FPSTR(_inputLvl)].as<int>()));
+        // The input level.
+        //
+        // It is published as "input_level" - the name the diagnostic endpoint
+        // uses - and the old spelling "inputLevel" is still accepted, so
+        // anything that already posts it keeps working.
+        //
+        // The range is checked before the value is taken: a number that does
+        // not fit is refused and the level keeps what it has, rather than
+        // being turned into a silent zero by the conversion.
+        int levelRead = -1;
+        if (!arGetRangedNumber(usermod[F("input_level")], levelRead, 0, 255)) {
+          arGetRangedNumber(usermod[FPSTR(_inputLvl)], levelRead, 0, 255);
         }
+        if (levelRead >= 0) inputLevel = (uint8_t)levelRead;
 #endif
         // The calibration's target curve is GONE. It was the point unit's
         // correction applied to an integrated-unit measurement, which added
@@ -8136,19 +8202,26 @@ class AudioReactive : public Usermod {
                         (double)TROYHACKS_DBREF, (double)arSettingsSnapshot().windowRangeDb);
           }
         }
-        // Diagnostic: the codec's MCLK pre-divider. The vendor coefficient
-        // tables all use 1 for MCLK = 256 x rate; this exists so 1 vs 3 can be
-        // compared live, without reflashing, when working out what the codec's
-        // clock tree is really doing. Not persisted - it is a diagnostic knob,
-        // not a setting.
-        if (usermod[FPSTR("codecDiv")].is<int>()) {
-          int div = usermod[FPSTR("codecDiv")].as<int>();
-          if (div < 1) div = 1;
-          if (div > 8) div = 8;
-          if (audioSource) {
-            audioSource->setCodecClockDiv((uint8_t)div);
-            USER_PRINTF("AR: codec MCLK pre-divider set to %d.\n", div);
-          }
+        // The codec's MCLK pre-divider.
+        //
+        // The vendor coefficient tables all use 1 for MCLK = 256 x rate; this
+        // exists so 1 vs 3 can be compared live, without reflashing, when
+        // working out what the codec's clock tree is really doing. Not
+        // persisted - it is a diagnostic knob, not a setting.
+        //
+        // It is published as "mclk_div" - the name the diagnostic endpoint
+        // uses - and "codecDiv" is still accepted, because that is what the
+        // key was called before it was published anywhere.
+        //
+        // The range is checked before the value is taken, so a number that
+        // does not fit is refused rather than clamped to something nobody
+        // asked for.
+        int div = 0;
+        bool haveDiv = arGetRangedNumber(usermod[F("mclk_div")], div, 1, 8);
+        if (!haveDiv) haveDiv = arGetRangedNumber(usermod[FPSTR("codecDiv")], div, 1, 8);
+        if (haveDiv && audioSource) {
+          audioSource->setCodecClockDiv((uint8_t)div);
+          USER_PRINTF("AR: codec MCLK pre-divider set to %d.\n", div);
         }
       }
     }
@@ -8372,12 +8445,12 @@ class AudioReactive : public Usermod {
       configComplete &= arGetBool(top[FPSTR(_enabled)], enabled);
 #ifdef ARDUINO_ARCH_ESP32
     #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
-      configComplete &= arGetNumber(top[FPSTR(_analogmic)]["pin"], audioPin);
+      configComplete &= arGetRangedNumber(top[FPSTR(_analogmic)]["pin"], audioPin, -128, 127);
     #else
       audioPin = -1; // MCU does not support analog mic
     #endif
 
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["type"],   dmType);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["type"], dmType, 0, 255);
     #if  defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)
       if (dmType == 0) dmType = SR_DMTYPE;   // MCU does not support analog
       #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -8389,12 +8462,12 @@ class AudioReactive : public Usermod {
       if (dmType == 51) useInputFilter = 1;     // switch on filter for legacy PDM    
     #endif
 
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][0], i2ssdPin);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][1], i2swsPin);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][2], i2sckPin);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][3], mclkPin);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][4], sdaPin);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)]["pin"][5], sclPin);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][0], i2ssdPin, -128, 127);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][1], i2swsPin, -128, 127);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][2], i2sckPin, -128, 127);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][3], mclkPin, -128, 127);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][4], sdaPin, -128, 127);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)]["pin"][5], sclPin, -128, 127);
 
       uint8_t bitsRead = i2sBitsPerSample;
       // "rightSlot" and "master" are stored as 0/1 numbers so that the
@@ -8404,9 +8477,9 @@ class AudioReactive : public Usermod {
       // form.
       uint8_t rightSlotRead = i2sUseRightSlot ? 1 : 0;
       uint8_t masterRead    = i2sMaster ? 1 : 0;
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)][F("bits")],      bitsRead);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)][F("rightSlot")], rightSlotRead);
-      configComplete &= arGetNumber(top[FPSTR(_digitalmic)][F("master")],    masterRead);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)][F("bits")],      bitsRead,      0, 255);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)][F("rightSlot")], rightSlotRead, 0, 1);
+      configComplete &= arGetRangedNumber(top[FPSTR(_digitalmic)][F("master")],    masterRead,    0, 1);
       // Sanitize bit-width: only 16/24/32 are valid.
       if (bitsRead == 16 || bitsRead == 24 || bitsRead == 32) i2sBitsPerSample = bitsRead;
       i2sUseRightSlot = (rightSlotRead != 0);
@@ -8418,7 +8491,7 @@ class AudioReactive : public Usermod {
       // is read into a local and applied through the settings - under the
       // publish lock, like every other change.
       uint8_t squelchRead = arSettingsSnapshot().squelch;
-      if (arGetNumber(top["config"][F("squelch")], squelchRead)) {
+      if (arGetRangedNumber(top["config"][F("squelch")], squelchRead, 0, 255)) {
         arSettingsEdit([squelchRead](ArLiveSettings& st) { st.squelch = squelchRead; });
       }
 
