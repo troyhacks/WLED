@@ -266,10 +266,8 @@ void handleSerial() {
     //
     //   t        run the input chain's self-test (synthetic signals only)
     //   g        plot the 31-band RTA view on the console
-    //   G        plot the 16 display bands on the console
     //   A        the display back to auto-range, and the trim back to its
     //            boot value
-    //   d / D    the dB display trim, down / up by 1 dB
     //   b / B    the window's floor, down / up by 1 dB      (fixed window)
     //   u / U    the window's top, down / up by 1 dB        (fixed window)
     //   s / S    the auto window's span, narrower / wider by 1 dB
@@ -280,6 +278,13 @@ void handleSerial() {
     //
     // Lowercase is the lower number and uppercase the higher one, for every
     // pair. 'X' is NOT in this list: it is the force-reconnect key above.
+    //
+    // Two more are AudioReactive keys, but they are handled ABOVE this
+    // block, with the other WLED-MM keys: they need the published bands and
+    // not the usermod's internals.
+    //
+    //   G        plot the 16 display bands on the console
+    //   d / D    the dB display trim, down / up by 1 dB
     // ---------------------------------------------------------------------
     } else if (next == 't') {
       // Run the input chain's self-test: it measures the chain as implemented

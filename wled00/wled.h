@@ -506,7 +506,8 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 
 // WLED-MM/TroyHacks: the dB display trim for the AudioReactive bars.
 // Live-adjustable over serial with 'd' (down, bars shrink) and 'D' (up, bars
-// grow); saved and restored by the AudioReactive usermod (Frequency > dB trim).
+// grow). It is RUNTIME-ONLY: it starts at 0 dB on every boot and is not
+// saved.
 //
 // It is a TRIM, in dB, applied to the band levels after the auto-range has
 // normalised them: 0 means "as the auto-range left it". It used to be a linear
@@ -515,25 +516,25 @@ WLED_GLOBAL uint_fast16_t briMultiplier _INIT(100);          // % of brightness 
 // adjustment in the units the display is actually built in, and both ends of
 // its travel are usable.
 WLED_GLOBAL float TROYHACKS_DBREF _INIT(0.0f);
-// The value the board BOOTS with - the trim as it was loaded from the saved
-// configuration.
+// The value the board BOOTS with - which, the trim not being a saved setting,
+// is always 0 dB.
 //
 // The serial 'd'/'D' adjustment is runtime-only: it changes the live global
 // and is not written back to the configuration, so it does not survive a
-// reboot. This copy remembers what the last boot loaded, so the serial 'A'
-// command can put the display back to exactly the state it booted in - the
-// auto-range in sole control, with no manual adjustment on top of it.
+// reboot. This copy remembers where the display started, so the serial 'A'
+// command can put it back to exactly the state it booted in - the auto-range
+// in sole control, with no manual adjustment on top of it.
 WLED_GLOBAL float TROYHACKS_DBREF_BOOT _INIT(0.0f);
-// The window's SPAN - how many dB the bar covers below the reference - is not
-// a setting any more. It is a constant, AR_WINDOW_DBSPAN in the AudioReactive
-// usermod, shared by the 16 bars and the 31 RTA bars: one window, one span.
+// The window's SPAN - how many dB the bar covers below the reference - IS a
+// setting: "frequency.rtaRange" in the saved config, adjustable live with
+// 's'/'S'. Its default is AR_WINDOW_DBSPAN in the AudioReactive usermod, and
+// the 16 bars and the 31 RTA bars share it: one window, one span.
 //
-// It used to be 's'/'S' and a per-install "dBspan" in the saved config, and
-// that is how the 16 bars ended up in a 24 dB window against a spectrum that
-// spans 25 to 46 dB - six to ten of the sixteen bars on the floor at all
-// times. The window has to be wide enough to hold the material's own dynamic
-// range, which is what an analyser's is, and that is not something a stored
-// number should be able to narrow.
+// The old "dBspan" key was a per-install number, and that is how the 16 bars
+// ended up in a 24 dB window against a spectrum that spans 25 to 46 dB - six
+// to ten of the sixteen bars on the floor at all times. The window has to be
+// wide enough to hold the material's own dynamic range, which is what an
+// analyser's is.
 // WLED-MM/TroyHacks: the AudioReactive usermod's serial entry points.
 // Implemented in the AudioReactive usermod; declared here because
 // wled_serial.cpp has no visibility into usermods/audioreactive/.
@@ -542,10 +543,14 @@ WLED_GLOBAL float TROYHACKS_DBREF_BOOT _INIT(0.0f);
 //   'g' - plot the 31-band RTA view
 //   'A' - reset the display's auto-ranges to their on-boot state
 //
-// The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 'o'/'O' the
-// reference offset, 'n'/'p' the band to trim, 'y'/'Y' that band's trim,
-// 'k'/'K' the filter bank's detector time constant) are handled inside the
-// usermod, by audioReactiveRtaCommand().
+// The RTA window's own commands ('b'/'B' floor, 'u'/'U' top, 's'/'S' the
+// auto window's span, 'o'/'O' the reference offset, 'n'/'p' the band to
+// trim, 'y'/'Y' that band's trim, 'k'/'K' the filter bank's detector time
+// constant) are handled inside the usermod, by audioReactiveRtaCommand().
+//
+// Two more belong to the AudioReactive bars but are handled in
+// wled_serial.cpp itself, next to the other WLED-MM keys: 'd'/'D' walk the
+// dB display trim, and 'G' plots the sixteen display bands.
 //
 // The display bank's A/B switch ('w'/'W') is gone with the bank: the sixteen
 // display bands are sixteen of the thirty-one RTA bands, so there is no

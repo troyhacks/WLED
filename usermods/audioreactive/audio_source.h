@@ -174,7 +174,7 @@ static bool arReadP4I2SClock(uint32_t &mclkHz, uint32_t &fsHz) {
 
 // Number of descriptors in the I2S DMA ring. The ring holds this many blocks of
 // BLOCK_SIZE samples, and that depth is the ONLY hard deadline in the audio path:
-// if the FFT task overruns it, the driver has nowhere to put the incoming samples
+// if the analysis task overruns it, the driver has nowhere to put the incoming samples
 // and the audio drops. Nothing else in the chain has a limit this loose, which is
 // worth knowing before treating a stale "time budget" comment as the constraint.
 // AudioReactive derives its overrun threshold from this, so keep them in step.
@@ -188,8 +188,8 @@ static bool arReadP4I2SClock(uint32_t &mclkHz, uint32_t &fsHz) {
 // and https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/i2s.html#overview-of-all-modes
 #if !defined(CONFIG_SOC_CPU_HAS_FPU) || defined(ESP8266) || defined(ESP8265)
   // there are two things in these MCUs that could lead to problems with audio processing:
-  // * no floating point hardware (FPU) support - FFT uses float calculations. If done in software, a strong slow-down can be expected (between 8x and 20x)
-  // * single core, so FFT task might slow down other things like LED updates
+  // * no floating point hardware (FPU) support - the analysis uses float calculations. If done in software, a strong slow-down can be expected (between 8x and 20x)
+  // * single core, so analysis task might slow down other things like LED updates
   #if !defined(SOC_I2S_NUM) || (SOC_I2S_NUM < 1)
   #error This audio reactive usermod does not support devices without FPUs and I2S.
   #else
@@ -254,7 +254,7 @@ static bool arReadP4I2SClock(uint32_t &mclkHz, uint32_t &fsHz) {
 
 
 // max number of samples for a single i2s_read --> size of global buffer.
-#define I2S_SAMPLES_MAX 512  // same as samplesFFT
+#define I2S_SAMPLES_MAX 512  // same as the frame's hop size
 
 /* Interface class
    AudioSource serves as base class for all microphone types
@@ -795,10 +795,14 @@ class I2SSource : public AudioSource {
     virtual void getSamples(float *buffer, uint16_t num_samples) {
       // The destination is defined before anything else happens, so a caller
       // that does not clear its own buffer gets zeros rather than stale
-      // samples. The FFT task relies on that: it fills the frame completely
+      // samples. The analysis task relies on that: it fills the frame completely
       // from getSamples() and the carry-over memcpy, and does not clear the
-      // frame itself (see FFTcode()).
-      memset(buffer, 0, sizeof(float) * num_samples);
+      // frame itself (see arAnalysisTask()).
+      //
+      // It is only cleared where it is needed - on a failed read. Clearing it
+      // on every frame would be 2 KB of writes that the loop below
+      // immediately overwrites.
+      const uint16_t want = num_samples;
       if (_initialized && _rx_handle) {
         size_t bytes_read = 0;
 
@@ -808,11 +812,13 @@ class I2SSource : public AudioSource {
         esp_err_t err = i2s_channel_read(_rx_handle, (void *)newSamples, num_samples * sizeof(I2S_datatype), &bytes_read, portMAX_DELAY);
         if (err != ESP_OK) {
           DEBUGSR_PRINTF("Failed to get samples: %d\n", err);
+          memset(buffer, 0, sizeof(float) * want);
           return;
         }
 
         if (bytes_read != (num_samples * sizeof(I2S_datatype))) {
           DEBUGSR_PRINTF("Failed to get enough samples: wanted: %d read: %d\n", num_samples * sizeof(I2S_datatype), bytes_read);
+          memset(buffer, 0, sizeof(float) * want);
           return;
         }
 
@@ -827,6 +833,11 @@ class I2SSource : public AudioSource {
           buffer[i] = currSample;
           buffer[i] *= _sampleScale;
         }
+        // A request longer than the buffer can hold is truncated above, so
+        // the tail is cleared here rather than being stale.
+        if (want > num_samples) memset(buffer + num_samples, 0, sizeof(float) * (want - num_samples));
+      } else {
+        memset(buffer, 0, sizeof(float) * want);
       }
     }
 
@@ -1604,8 +1615,6 @@ class CodecDevSource : public AudioSource {
       bool i2sMaster     = true) override
     {
       (void)mclkPinIn;
-      (void)useRightSlot;
-      (void)i2sMaster;
       _deinitialize();
 
       if (i2swsPin < 0 || i2ssdPin < 0 || i2sckPin < 0) {
