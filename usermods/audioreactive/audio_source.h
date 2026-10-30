@@ -1053,6 +1053,29 @@ class ES8388Source : public I2SSource {
    I2C before I2S data can be received. 
 */
 class ES8311Source : public I2SSource {
+  public:
+    // The LEVEL of the signal plugged into the input.
+    //
+    // A microphone's output sits about 30 dB below a line-level source's, so
+    // the PGA's gain has to be set for what is actually plugged in: too much
+    // gain and the ADC is overloaded before the signal ever reaches the
+    // software, too little and it sits near the noise floor. The gain is
+    // bits 3:0 of REG14 - 0 = 0 dB, 1 = 3 dB, 2 = 6 dB ... 10 = 30 dB - and
+    // the "analog MIC" bit is bit 4.
+    //
+    // So there are two settings and not one: a microphone wants the chip's
+    // full +30 dB, a line-level source wants 0 dB. Both use the SAME input
+    // pins - only the gain differs - so this choice is the PGA code and
+    // nothing else.
+    //
+    // The default is the line level, because that is what this driver has
+    // always written: a caller that does not say which level it wants gets
+    // the behaviour that was already there.
+    enum InputLevel : uint8_t {
+      MIC_LEVEL  = 0,   // +30 dB - for a microphone
+      LINE_LEVEL = 1    //   0 dB - for a line-level source
+    };
+
   private:
     // Returns the active ADC device — the ES8311 normally, or the ES7210 if one
     // is present on the bus (the ES8311 is then held in reset).
@@ -1207,19 +1230,32 @@ class ES8311Source : public I2SSource {
 // instead of 0.03x - which is the check that this diagnosis is right. If that
 // number does not move, the reasoning above is wrong.
 //
-// NOTE: this is hardcoded, but it is a genuinely per-installation setting.
+// NOTE: this was hardcoded once. It is a genuinely per-installation setting,
+// and it is now ONE of two: the source is created at a level - microphone or
+// line - and the PGA is written to suit it. See InputLevel.
+//
 // The right value depends on what is plugged into the mic/TRRS input - a
 // microphone wants ~+30 dB, a line-level source wants 0 dB, and consumer line
-// outputs vary by more than 10 dB. It wants to become a web-GUI setting
-// alongside the existing i2sBitsPerSample / audio source options, writing the
-// same register with the gain encoded in bits 3:0 (0=0dB, 1=3dB, 2=6dB ...
-// 10=30dB). Until then, changing this line is how you set it.
+// outputs vary by more than 10 dB. The gain is the same register, encoded in
+// bits 3:0 (0=0dB, 1=3dB, 2=6dB ... 10=30dB).
 //
 // configure_mic_() equivalent — enable analog MIC + PGA gain
       //
-      // GAIN: 0 dB, not the +30 dB this used to set. See the long note below.
-      // _i2cWrite(dev, 0x14, 0x1A);              // ORIGINAL: PGAGAIN = 0b1010 = +30 dB
-      _i2cWrite(dev, 0x14, 0x10);                  // REG14 = 0x10: LINSEL=1 (Mic1p-Mic1n), PGAGAIN=0b0000 = 0 dB
+      // The PGA's GAIN, set by the input's level.
+      //
+      // 0x1A = the analog MIC path (bit 4) with PGAGAIN = 0b1010 = +30 dB:
+      //         a microphone's output is about 30 dB below a line-level
+      //         source's, so the chip has to make it up or the signal arrives
+      //         at the ADC near the noise floor.
+      // 0x10 = the same path with PGAGAIN = 0b0000 = 0 dB: a line-level
+      //         source wants the PGA out of the way, because any gain here
+      //         is gain that cannot be undone later - and 30 dB of it puts
+      //         the ADC into overload before the signal ever reaches the
+      //         software.
+      //
+      // Same pins either way. Only the gain differs, and the difference is
+      // exactly the 30 dB between the two levels.
+      _i2cWrite(dev, 0x14, _micLevel ? 0x1A : 0x10);
       _i2cWrite(dev, 0x16, 0x00);                  // REG16 = ADC mixer/scale (0 = no scale)
       _i2cWrite(dev, 0x17, 0xC8);                  // REG17 = 0xC8 (ADC_VOLUME +4.5 dB)
 
@@ -1322,10 +1358,15 @@ class ES8311Source : public I2SSource {
     // the setting can be read back as well as written.
     uint8_t _codecClkDiv = 1;
 
+    // Which level the input is running at. See InputLevel.
+    bool _micLevel = true;
+
 public:
-  ES8311Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster = true) :
+  ES8311Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster = true,
+               InputLevel level = LINE_LEVEL) :
     I2SSource(sampleRate, blockSize, sampleScale, i2sMaster) {
     _slotMask = I2S_STD_SLOT_LEFT;
+    _micLevel = (level == MIC_LEVEL);
   };
 
   void initialize(int8_t i2swsPin, int8_t i2ssdPin, int8_t i2sckPin, int8_t mclkPin,

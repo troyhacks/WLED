@@ -2682,7 +2682,8 @@ static const char* arCodecName(uint8_t type) {
     case 6:   return PSTR("ES8388");
     case 7:   return PSTR("WM8978");
     case 8:   return PSTR("AC101");
-    case 9:   return PSTR("ES8311");
+    case 9:   return PSTR("ES8311 (line level)");
+    case 19:  return PSTR("ES8311 (mic level)");
     case 10:  return PSTR("ES8311 (esp_codec_dev)");
     case 11:  return PSTR("ES8388 (esp_codec_dev)");
     case 12:  return PSTR("ES8374 (esp_codec_dev)");
@@ -5981,6 +5982,7 @@ class AudioReactive : public Usermod {
       if (dmType == 0) offsetDb += 6.02f;   // correction for ADC analog (x2)
       if (dmType == 5) offsetDb += 6.02f;   // correction for PDM (x2)
       if (dmType == 4) offsetDb -= 20.0f;  // line-in is not a microphone: it runs hot
+      if (dmType == 19) offsetDb -= 30.0f; // the ES8311's PGA adds +30 dB at mic level: it runs hot
       const float dbSpl = 105.0f + arLevelDb + offsetDb;
       return fminf(fmaxf((dbSpl - 5.0f) * 2.55f, 0.0f), 255.0f);   // 5..105 dB -> 0..255
     }
@@ -6692,9 +6694,33 @@ class AudioReactive : public Usermod {
                                                     i2sBitsPerSample, i2sUseRightSlot, i2sMaster);
           break;
         case 9:
-          DEBUGSR_PRINTLN(F("AR: ES8311 Source (Mic)"));
-          audioSource = new ES8311Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster);
+          // The ES8311 at a LINE level: the PGA at 0 dB, so a line-level
+          // source reaches the ADC as it is. This is what this entry has
+          // always done - a saved type 9 keeps meaning type 9.
+          DEBUGSR_PRINTLN(F("AR: ES8311 Source (line level)"));
+          audioSource = new ES8311Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster,
+                                         ES8311Source::LINE_LEVEL);
           //useInputFilter = 0; // to disable low-cut software filtering and restore previous behaviour
+          delay(100);
+          // WLEDMM align global pins
+          if ((sdaPin >= 0) && (i2c_sda < 0)) i2c_sda = sdaPin; // copy usermod prefs into globals (if globals not defined)
+          if ((sclPin >= 0) && (i2c_scl < 0)) i2c_scl = sclPin;
+          if (i2c_sda >= 0) sdaPin = -1;                        // -1 = use global
+          if (i2c_scl >= 0) sclPin = -1;
+          if (audioSource) audioSource->initialize(i2swsPin, i2ssdPin, i2sckPin, mclkPin,
+                                                    i2sBitsPerSample, i2sUseRightSlot, i2sMaster);
+          break;
+        case 19:
+          // The SAME codec, at a different level.
+          //
+          // The ES8311's PGA is 30 dB higher here, which is what a microphone
+          // wants: its output sits about 30 dB below a line-level source's,
+          // so the chip makes the difference up rather than letting the
+          // signal arrive at the ADC near the noise floor. The input pins
+          // are the same; only the PGA code differs.
+          DEBUGSR_PRINTLN(F("AR: ES8311 Source (mic level)"));
+          audioSource = new ES8311Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster,
+                                         ES8311Source::MIC_LEVEL);
           delay(100);
           // WLEDMM align global pins
           if ((sdaPin >= 0) && (i2c_sda < 0)) i2c_sda = sdaPin; // copy usermod prefs into globals (if globals not defined)
@@ -8788,10 +8814,29 @@ class AudioReactive : public Usermod {
       #else
         oappend(SET_F("addOption(dd,'AC101 ☾',8);"));
       #endif
+      // The ES8311, at a line level.
+      //
+      // This is the entry that has always been here, and its gain is the one
+      // this branch has always used: 0 dB of PGA, so a line-level source
+      // reaches the ADC as it is instead of being amplified into overload
+      // first. A config that says 9 keeps meaning exactly what it meant.
       #if SR_DMTYPE==9
-        oappend(SET_F("addOption(dd,'ES8311 ☾ (⎌)',9);"));
+        oappend(SET_F("addOption(dd,'ES8311 ☾ (line level) (⎌)',9);"));
       #else
-        oappend(SET_F("addOption(dd,'ES8311 ☾',9);"));
+        oappend(SET_F("addOption(dd,'ES8311 ☾ (line level)',9);"));
+      #endif
+      // The same codec at a microphone level.
+      //
+      // The ES8311's PGA is 30 dB higher here, which is what a microphone
+      // wants: its output sits about 30 dB below a line-level source's, so
+      // the chip has to make the difference up or the signal arrives at the
+      // ADC near the noise floor. The pins are the same - only the PGA code
+      // differs - so this is one entry in a list of two, not a different
+      // codec.
+      #if SR_DMTYPE==19
+        oappend(SET_F("addOption(dd,'ES8311 ☾ (mic level) (⎌)',19);"));
+      #else
+        oappend(SET_F("addOption(dd,'ES8311 ☾ (mic level)',19);"));
       #endif
       #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
         #ifdef CONFIG_CODEC_ES8311_SUPPORT

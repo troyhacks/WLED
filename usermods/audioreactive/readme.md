@@ -276,9 +276,18 @@ changing them (I2S microphone or selected GPIOs).
 
 `0` generic analog · `1` generic I2S · `2` ES7243 · `3` SPH0645 ·
 `4` generic I2S with MCLK · `5` generic I2S PDM · `6` ES8388 · `7` WM8978 ·
-`8` AC101 · `9` ES8311 · `10`–`18` the `esp_codec_dev` codecs (ES8311,
+`8` AC101 · `9` ES8311 at **line level** (the PGA at 0 dB) ·
+`19` the same ES8311 at **mic level** (the PGA at +30 dB) ·
+`10`–`18` the `esp_codec_dev` codecs (ES8311,
 ES8388, ES8374, ZL38063, ES8389, ES7210, ES7243, ES7243E, CJC8910) ·
 `51` legacy I2S PDM.
+
+The two ES8311 entries are the same codec on the same pins at different
+input levels: a microphone's output is about 30 dB below a line-level
+source's, so the PGA's gain has to suit what is plugged in. `9` leaves the
+PGA at 0 dB, so a line-level source reaches the ADC as it is instead of
+being amplified into overload first; `19` makes up the 30 dB a microphone
+needs. Choose `9` for a line-level feed, `19` for a microphone.
 
 ---
 
