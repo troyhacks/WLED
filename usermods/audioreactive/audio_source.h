@@ -315,6 +315,31 @@ class AudioSource {
     virtual void setCodecClockDiv(uint8_t) {}          // default: no clock manager
     virtual uint8_t getCodecClockDiv(void) {return(0);}
 
+    /* Input gain - the gain the CODEC applies to the signal before the ADC
+       converts it.
+
+       This is a TRIM on top of what the source type already set. The ES8311
+       is the clearest example: type 9 (line level) starts with the PGA at
+       0 dB and type 19 (mic level) starts with it at +30 dB, and the trim is
+       added to whichever of those is in force. So a trim of 0 dB leaves every
+       codec exactly as it was, and no saved config changes meaning by
+       existing.
+
+       A trim is the only form that works across codecs, because there is no
+       register that means "gain" in general: every codec has its own
+       register, its own range, its own step size and its own sign
+       convention. Each codec quantises the request to whatever its hardware
+       can do, and reports back what it ACTUALLY applied.
+
+       The value that comes back is the applied trim, in dB, after the
+       quantisation - not the one that was asked for. The sound-pressure
+       estimate uses it, so that turning the input up does not also inflate
+       the estimated sound pressure.
+
+       Sources whose codec has no input gain report 0 and refuse the change. */
+    virtual bool  setInputGainTrimDb(float trimDb) {(void)trimDb; return(false);}  // default: no input gain
+    virtual float getInputGainTrimDb(void) {return(0.0f);}
+
     /* The clock the codec is actually being fed.
        getMclkHz() is the MCLK the I2S peripheral is generating, in Hz;
        getClockSampleRateHz() is the sample rate that implies (MCLK / 256).
@@ -1089,6 +1114,62 @@ class ES8311Source : public I2SSource {
       }
     }
 
+    // ---------------------------------------------------------------------------
+    // The input gain
+    // ---------------------------------------------------------------------------
+    // The ES8311 has TWO gain controls, and they are not the same thing:
+    //
+    //   REG14 (bits 3:0) - the ANALOG PGA, in front of the ADC. 3 dB per
+    //     code, 0 = 0 dB ... 10 = +30 dB. This is what the source TYPE
+    //     chooses: line level is 0 dB, mic level is +30 dB. It is the
+    //     meaning of the two source types, so the trim does not touch it.
+    //
+    //   REG17 - the ADC's DIGITAL volume, after the conversion. 0.5 dB per
+    //     code, 0xBF = 0 dB, 0x00 = -95.5 dB, 0xFF = +32 dB. This is where
+    //     the TRIM goes: it is eight times finer than the PGA, and it can
+    //     attenuate as well as boost.
+    //
+    // That scale is Espressif's own - their es8311 driver carries exactly
+    // this range (esp_codec_dev_vol_range_t: 0x00 = -95.5 dB, 0xFF =
+    // +32.0 dB) and writes 0xBF, which is 0 dB, when it starts the ADC.
+    //
+    // This driver has always written 0xC8 here, which is +4.5 dB - the
+    // difference between the chip's 0 dB and the level this driver has run
+    // at. The trim is added to THAT, so a trim of 0 dB leaves the register
+    // byte-for-byte as it was.
+    static constexpr uint8_t ES8311_ADCVOL_BASE = 0xC8;  // +4.5 dB - the driver's own baseline
+    static constexpr uint8_t ES8311_ADCVOL_MIN  = 0x00;  // -95.5 dB
+    static constexpr uint8_t ES8311_ADCVOL_MAX  = 0xFF;  // +32.0 dB
+    static constexpr float   ES8311_ADCVOL_STEP = 0.5f;  // dB per code
+
+    // The register code for a trim, quantised to what REG17 can do.
+    static uint8_t _es8311GainCode(float trimDb) {
+      // Round half away from zero, so +0.25 dB is one code up and -0.25 dB
+      // is one code down. (No lroundf: this file does not include math.h on
+      // every target, and this is the only rounding it needs.)
+      float stepsF = trimDb / ES8311_ADCVOL_STEP;
+      long steps = (long)(stepsF + (stepsF >= 0.0f ? 0.5f : -0.5f));
+      long code = steps + (long)ES8311_ADCVOL_BASE;
+      if (code < (long)ES8311_ADCVOL_MIN) code = ES8311_ADCVOL_MIN;
+      if (code > (long)ES8311_ADCVOL_MAX) code = ES8311_ADCVOL_MAX;
+      return (uint8_t)code;
+    }
+
+    // The trim a code is worth, in dB - what the chip really got, as opposed
+    // to what was asked for.
+    static float _es8311TrimOf(uint8_t code) {
+      return ((float)((int)code - (int)ES8311_ADCVOL_BASE)) * ES8311_ADCVOL_STEP;
+    }
+
+    // Write the trim into REG17 and remember what the chip actually got.
+    bool _es8311WriteGain(audioreactive_I2CDevice *dev) {
+      if (!dev) return false;
+      const uint8_t code = _es8311GainCode(_gainTrimDb);
+      _i2cWrite(dev, 0x17, code);
+      _appliedTrimDb = _es8311TrimOf(code);
+      return true;
+    }
+
     void _es7210_init_22k_32bit(audioreactive_I2CDevice *dev) {
       // --- 1. RESET ---
       _i2cWrite(dev, 0x00, 0xFF);
@@ -1257,7 +1338,10 @@ class ES8311Source : public I2SSource {
       // exactly the 30 dB between the two levels.
       _i2cWrite(dev, 0x14, _micLevel ? 0x1A : 0x10);
       _i2cWrite(dev, 0x16, 0x00);                  // REG16 = ADC mixer/scale (0 = no scale)
-      _i2cWrite(dev, 0x17, 0xC8);                  // REG17 = 0xC8 (ADC_VOLUME +4.5 dB)
+      // REG17 is the ADC's digital volume, and it is where the input-gain
+      // trim lives. The PGA above is the source type's business and the
+      // trim does not touch it.
+      _es8311WriteGain(dev);
 
       // ALC and automute: OFF, explicitly.
       //
@@ -1361,12 +1445,29 @@ class ES8311Source : public I2SSource {
     // Which level the input is running at. See InputLevel.
     bool _micLevel = true;
 
+    // The input-gain trim, in dB, on top of the level the source type chose.
+    //
+    // _gainTrimDb is what was asked for; _appliedTrimDb is what the register
+    // could actually do. They differ when the request is off the end of
+    // REG17's range (0.5 dB per code, -95.5 dB ... +32 dB around the
+    // driver's own +4.5 dB baseline), and the APPLIED one is what the
+    // sound-pressure estimate has to take off - so it is the one that is
+    // published.
+    float _gainTrimDb    = 0.0f;
+    float _appliedTrimDb = 0.0f;
+
+    // True when an ES7210 took the ADC over. The ES8311 is then held in
+    // reset, so its gain register means nothing.
+    bool _es7210Active = false;
+
 public:
   ES8311Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster = true,
-               InputLevel level = LINE_LEVEL) :
+               InputLevel level = LINE_LEVEL, float gainTrimDb = 0.0f) :
     I2SSource(sampleRate, blockSize, sampleScale, i2sMaster) {
     _slotMask = I2S_STD_SLOT_LEFT;
     _micLevel = (level == MIC_LEVEL);
+    _gainTrimDb = gainTrimDb;
+    _appliedTrimDb = _es8311TrimOf(_es8311GainCode(gainTrimDb));
   };
 
   void initialize(int8_t i2swsPin, int8_t i2ssdPin, int8_t i2sckPin, int8_t mclkPin,
@@ -1394,6 +1495,8 @@ public:
       USER_PRINTLN("Overriding ES8311 because an ES7210 is present on the I2C bus.");
       _es8311_holdReset(_es8311);
       _es7210_init_22k_32bit(_es7210);
+      _es7210Active = true;
+      _appliedTrimDb = 0.0f;   // the ES7210 is the ADC now - this trim does not apply
     } else {
       _es8311InitAdc(_es8311);
     }
@@ -1420,6 +1523,34 @@ public:
   }
 
   uint8_t getCodecClockDiv(void) override { return _codecClkDiv; }
+
+  // Set the input-gain trim, in dB, on top of the level the source type set.
+  //
+  // The trim goes into REG17 - the ADC's digital volume - and NOT into the
+  // PGA, for two reasons: the digital volume is half a dB per step against
+  // the PGA's 3 dB, and the PGA is what "line level" and "mic level" MEAN,
+  // so leaving it alone keeps those two source types saying exactly what
+  // they say today.
+  //
+  // It can be called before the codec is up: the value is remembered and
+  // written when the codec is initialised. It returns false when there is no
+  // codec to write to - which is also the answer on a board whose ADC is an
+  // ES7210, because there the ES8311 is held in reset and its registers
+  // mean nothing.
+  bool setInputGainTrimDb(float trimDb) override {
+    _gainTrimDb = trimDb;
+    _appliedTrimDb = _es8311TrimOf(_es8311GainCode(trimDb));
+    if (!_es8311 || _es7210Active) {
+      if (_es7210Active) _appliedTrimDb = 0.0f;
+      return false;
+    }
+    _es8311WriteGain(_es8311);
+    _es8311ReadRegs(_es8311);   // so the info page shows the new values
+    return true;
+  }
+
+  // The trim the chip actually has, after the register's quantisation.
+  float getInputGainTrimDb(void) override { return _appliedTrimDb; }
 
   // The MCLK the ESP is actually generating, read out of the I2S clock
   // registers. On the ESP32-P4 this is a measurement; elsewhere it is 0
