@@ -7579,8 +7579,12 @@ class AudioReactive : public Usermod {
         // go back to their boot values, and both auto-ranges go back to zero
         // with the RTA view in auto-range mode again.
         {
+          //
+          // 'btn-p' and not 'btn-xs': btn-xs is the 42x42 ICON button, and it
+          // clips its text - 'reset' came out as 'res'. btn-p is the web UI's
+          // text button.
           infoArr = user.createNestedArray(F("Reset range"));
-          infoArr.add(F("<button class=\"btn btn-xs\" onclick=\"requestJson({AudioReactive:{resetRange:true}});\">reset</button>"));
+          infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{resetRange:true}});\">reset</button>"));
         }
 
         // The link to the machine-readable twin of this page.
