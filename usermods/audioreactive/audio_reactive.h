@@ -223,7 +223,8 @@ static uint8_t inputLevel = 128;              // UI slider value
 #ifndef SR_SQUELCH
   #define SR_SQUELCH 10
 #endif
-uint8_t soundSquelch = SR_SQUELCH;            // the margin above the noise floor, dB (config value)
+// The squelch itself lives in the live settings, with the other settings the
+// analysis task reads - see ArLiveSettings.
 // sampleGain is GONE. It was the "config:gain" setting: it was written, read,
 // and then never applied to anything. The key is removed from a stored config
 // by readFromConfig().
@@ -821,6 +822,87 @@ static constexpr float BAND_F_HIGH = 11025.0f;               // top band edge, H
 // The largest layout we build: 16 for the display bands, 31 for the RTA set.
 constexpr int AR_MAX_BANDS = 32;
 
+// ---------------------------------------------------------------------------
+// THE LIVE SETTINGS.
+//
+// These are the settings the ANALYSIS TASK reads while it works, and that
+// another task can change at any moment: the serial console, and the settings
+// update.
+//
+// They used to be plain globals, and a plain global that two tasks share is a
+// race. A float write is atomic, so there was never a torn NUMBER; the
+// problem was the FRAME. The analysis task applies the trim band by band, and
+// the reference and the window as it goes, and a change that landed in the
+// middle of a frame gave that frame two versions of the settings - the new
+// trim for the bands after the change and the old one for the bands before
+// it. Such a frame was then published: a spectrum that never existed, and
+// one that no amount of averaging would make sense of.
+//
+// So the settings live in ONE place, behind the publish lock, and the analysis
+// task takes ONE snapshot of them at the top of its frame. Every stage of that
+// frame then works from the same copy, so a frame is always built from one
+// version of the settings.
+//
+// The lock is the publish lock, because that is the lock the analysis task
+// already takes when it publishes, and because one lock keeps the settings
+// and the frame they produced together.
+// ---------------------------------------------------------------------------
+struct ArLiveSettings {
+  uint8_t squelch;              // the gate's margin above the noise floor, dB
+  bool    autoRange;             // the window follows the signal?
+  float   windowRangeDb;         // the AUTO window's span
+  float   windowFloorDb;         // the FIXED window's floor
+  float   windowTopDb;           // the FIXED window's top
+  float   rtaRefDb;              // the RTA reference offset, dB (calibration)
+  float   refReleaseMs;          // the reference's release
+  int     trimBand;              // the band the serial trim works on
+  float   trimDb[AR_MAX_BANDS];  // the per-band trim, dB
+  float   bankTauMs;             // the bank's detector time constant
+};
+
+// The settings as they are on boot.
+//
+// The definition is further down, where the constants it starts from are; the
+// initialiser below runs before main(), which is what puts the defaults in
+// place BEFORE the stored configuration is read.
+//
+//   arSettings      - the settings as they are RIGHT NOW. Written by the serial
+//                     console and by the settings update, read by the analysis
+//                     task - always under the publish lock.
+//   arFrameSettings - the analysis task's copy of the settings, for the frame
+//                     it is building. It is refreshed once per frame, under the
+//                     lock, and every stage of that frame reads it.
+static ArLiveSettings arSettingsBoot();
+static ArLiveSettings arSettings      = arSettingsBoot();
+static ArLiveSettings arFrameSettings = arSettingsBoot();
+
+// A copy of the settings, taken under the publish lock.
+//
+// This is what the analysis task uses at the top of its frame, and what the
+// main loop uses to publish a coherent set of numbers: the endpoint's window,
+// the info page and the settings page all read a SNAPSHOT, so they cannot
+// show a floor from one version and a top from another.
+static inline ArLiveSettings arSettingsSnapshot() {
+  ArPublishGuard guard;
+  return arSettings;
+}
+
+// Change the settings, under the publish lock, and hand back the result.
+//
+// The change is made through a lambda so that the lock is taken ONCE, around
+// the whole change: a change made in two steps - read here, write there -
+// would leave the settings half-changed for anyone who looked in between.
+//
+// The settings come back from inside the same critical section, so a caller
+// that changes a number and then prints what it now is prints the number it
+// wrote - not a number that was changed again by somebody else in between.
+template <typename Fn>
+static inline ArLiveSettings arSettingsEdit(Fn change) {
+  ArPublishGuard guard;
+  change(arSettings);
+  return arSettings;
+}
+
 struct BandLayout {
   int   count;                      // number of bands
   float fLow, fHigh;                // outer band EDGES of the layout, Hz
@@ -1139,21 +1221,35 @@ static float bankSecCoeffs[AR_BANK_BANDS][2][5];
 static float bankAaDb[AR_BANK_BANDS];   // the anti-alias filter's response at the band centres, dB
 static float bankCalDb[AR_BANK_BANDS];  // the bank's calibration, dB
 static float bankEnbw[AR_BANK_BANDS];   // the band filter's ENBW, Hz
-static float bankDetAlpha = 0.0f;       // the detector's one-pole coefficient
-static float bankTauMs = AR_BANK_TAU_DEFAULT_MS;  // the detector's time constant
 static volatile bool  bankReady = false;
 
-// Set the detector's time constant and the coefficient that goes with it.
+// The detector's one-pole coefficient for a given time constant.
 //
-// The coefficient is the one-pole's step size at the bank's 3 kHz rate:
-// alpha = 1 - exp(-1/(tau * fs)). It is a function of the constant alone, so
-// the two can never disagree - which is what would happen if the constant
+// It is a pure function of the constant - alpha = 1 - exp(-1/(tau * fs)) -
+// so the two can never disagree, which is what would happen if the constant
 // were changed without recomputing it.
+//
+// The coefficient is recomputed for EVERY FRAME, from that frame's copy of
+// the constant, so the detector a frame runs with is always the detector its
+// time constant asks for. The constant itself is a live setting - see
+// ArLiveSettings.
+static inline float bankTauAlpha(float ms) {
+  return 1.0f - expf(-1.0f / (ms * 0.001f * AR_BANK_FS));
+}
+
+// Set the detector's time constant.
+//
+// The constant is a live setting, so it is changed under the publish lock -
+// the analysis task reads it once a frame, and a change that landed in the
+// middle of a frame would have given that frame two detectors.
+//
+// The coefficient that goes with it is NOT set here: it is recomputed for
+// every frame, from that frame's copy of the constant, so the detector a
+// frame runs with is always the one its constant asks for.
 static void bankSetTau(float ms) {
   if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
   if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
-  bankTauMs = ms;
-  bankDetAlpha = 1.0f - expf(-1.0f / (bankTauMs * 0.001f * AR_BANK_FS));
+  arSettingsEdit([ms](ArLiveSettings& s) { s.bankTauMs = ms; });
 }
 
 // The bank's own cost, in TIMING_UNIT_US, like the other timers.
@@ -1373,8 +1469,10 @@ static void bankInit() {
   bankInitCalibration();
   bankMeasureEnbw();
   // The current value, not the default: the constant may have been set from
-  // the configuration before the bank was built.
-  bankSetTau(bankTauMs);
+  // the configuration before the bank was built. The write is a no-op - it
+  // puts back what is already there - but it goes through the settings, so
+  // there is only one way the constant is ever set.
+  bankSetTau(arSettingsSnapshot().bankTauMs);
   bankReset();
   bankReady = true;
 }
@@ -1385,8 +1483,7 @@ static void bankInit() {
 // II, so each section's state is two floats and the output is a local
 // variable - the bank needs no buffer of its own, and it cannot disturb the
 // The analysis's input.
-static void bankProcess(BankPath *b, const float *in, int n) {
-  const float alpha = bankDetAlpha;
+static void bankProcess(BankPath *b, const float *in, int n, float alpha) {
   // The anti-alias sections' coefficients, in locals - see the note on
   // rtaTopProcess() for why.
   float aa0[AR_BANK_AA_SECS], aa1[AR_BANK_AA_SECS], aa2[AR_BANK_AA_SECS];
@@ -1514,14 +1611,16 @@ static float rtaEnbw[AR_RTA_TOP_BANDS];      // the band's ENBW, Hz (the integra
 static float rtaEnbwImp[AR_RTA_TOP_BANDS];   // ... and the impulse response's
 static float rtaWidthHz[AR_RTA_TOP_BANDS];   // the measured -3 dB width, Hz
 static float rtaRespMs[AR_RTA_TOP_BANDS];    // the measured 63% response time, ms
-static float rtaDetAlpha = 0.0f;
-static float rtaTauMs = AR_BANK_TAU_DEFAULT_MS;
 static float rtaTime = 0.0f;                 // its own cost, in TIMING_UNIT_US
 static volatile bool  rtaTopReady = false;
-// Whether the detector's time constant has been set deliberately. Until it
-// has, the top bank follows the bottom bank's, so the RTA's thirty-one bars
-// behave alike out of the box.
-static bool  rtaTauSet = false;
+
+// The RTA top bank's detector coefficient.
+//
+// It used to be a global, set by rtaTopSetTau() from the main loop and read
+// by rtaTopProcess() in the analysis task - the same cross-task scalar the
+// settings were, in a different place. It is now a PARAMETER: every call
+// passes the coefficient its own frame asked for, and there is nothing left
+// for two tasks to disagree about.
 
 // THE PUBLISHED FRAME.
 //
@@ -1761,11 +1860,16 @@ static void rtaTopMeasureWidth() {
 // power.
 
 // The detector's time constant and the coefficient that goes with it.
-static void rtaTopSetTau(float ms) {
-  if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
-  if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
-  rtaTauMs = ms;
-  rtaDetAlpha = 1.0f - expf(-1.0f / (rtaTauMs * 0.001f * (float)SAMPLE_RATE));
+//
+// The coefficient is a pure function of the constant - alpha = 1 - exp(-1/(tau
+// * fs)) - so the two can never disagree.
+//
+// The top bank runs at the FULL sample rate, so its coefficient uses
+// SAMPLE_RATE where the bottom bank's uses the decimated rate. The constant
+// itself is the same number of milliseconds for both: the thirty-one bars are
+// one view, and they move together.
+static inline float rtaTauAlpha(float ms) {
+  return 1.0f - expf(-1.0f / (ms * 0.001f * (float)SAMPLE_RATE));
 }
 
 // The band's 63% response time, MEASURED.
@@ -1773,9 +1877,8 @@ static void rtaTopSetTau(float ms) {
 // The same measurement the display bank makes: an impulse goes in, the
 // detector's expected value rises as the cumulative energy fills up, and the
 // 63% point says how old the content on the bar is.
-static void rtaTopMeasureResponse() {
+static void rtaTopMeasureResponse(float alpha) {
   constexpr int N = 4096;
-  const float alpha = rtaDetAlpha;
   for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
     const float *c0 = rtaSecCoeffs[k][0];
     const float *c1 = rtaSecCoeffs[k][1];
@@ -1831,12 +1934,17 @@ static void rtaTopInit() {
   rtaTopMeasureEnbw();
   rtaTopMeasureWidth();
   // The RTA's detector: the same time constant as the bottom eight bands, so
-  // the thirty-one bars behave alike. The FIRST build takes the bottom bank's
-  // value; after that it keeps its own, because a change to the RTA's
-  // detector has to stick across a chain rebuild.
-  if (!rtaTauSet) { rtaTauMs = bankTauMs; rtaTauSet = true; }
-  rtaTopSetTau(rtaTauMs);
-  rtaTopMeasureResponse();
+  // the thirty-one bars behave alike.
+  //
+  // It used to be a second constant of its own, with a flag saying whether it
+  // had been set deliberately - but every path that changed it set it to the
+  // bottom bank's value, so the two were always the same number and the flag
+  // was only there to stop a chain rebuild from overwriting one with the
+  // other. There is ONE constant now, and the top bank's coefficient is
+  // derived from it - at the full rate, where the bottom bank's is derived at
+  // the decimated one.
+  const float tauMs = arSettingsSnapshot().bankTauMs;
+  rtaTopMeasureResponse(rtaTauAlpha(tauMs));
   rtaTopReset();
   rtaTopReady = true;
 }
@@ -1855,8 +1963,7 @@ static void rtaTopInit() {
 // compiler cannot otherwise prove that the store into w0[0] does not alias
 // c0[], so it reloads all ten of them from memory on every sample - and the
 // reloads sit on the dependency chain. In locals they stay in registers.
-static void rtaTopProcess(RtaTopBank *b, const float *in, int n) {
-  const float alpha = rtaDetAlpha;
+static void rtaTopProcess(RtaTopBank *b, const float *in, int n, float alpha) {
   for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
     const float *c0 = rtaSecCoeffs[k][0];
     const float *c1 = rtaSecCoeffs[k][1];
@@ -1958,9 +2065,15 @@ static void rtaTopSelfTest() {
   float enbwWorst = 0.0f, enbwWorstF = 0.0f;
   float nbrWorst = -99.0f;
 
+  // The detector the test runs with: the constant that is in force NOW, and
+  // the coefficient that goes with it. The test calls rtaTopProcess()
+  // directly, so it passes the coefficient rather than reading a global.
+  const float tauMs = arSettingsSnapshot().bankTauMs;
+  const float alpha = rtaTauAlpha(tauMs);
+
   USER_PRINTLN("\n=== AudioReactive RTA top-bank self-test ===========================");
   USER_PRINTF("  %d bands, %.0f Hz, detector %.0f ms\n",
-              AR_RTA_TOP_BANDS, (double)SAMPLE_RATE, (double)rtaTauMs);
+              AR_RTA_TOP_BANDS, (double)SAMPLE_RATE, (double)tauMs);
 
   // ---- 1. the ENBW, from the impulse response --------------------------
   for (int k = 0; k < AR_RTA_TOP_BANDS; k++) {
@@ -2004,7 +2117,7 @@ static void rtaTopSelfTest() {
         ci = cr * sn + ci * cs;
         cr = nr;
       }
-      rtaTopProcess(&tb, buf, N);
+      rtaTopProcess(&tb, buf, N, alpha);
       if (c >= settleChunks) {
         for (int j = 0; j < AR_RTA_TOP_BANDS; j++) acc[j] += tb.det[j];
         accN++;
@@ -2060,7 +2173,7 @@ static void rtaTopSelfTest() {
         seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
         buf[i] = ((float)(seed & 0xFFFFFF) / 8388608.0f) - 1.0f;   // [-1, 1)
       }
-      rtaTopProcess(&tb, buf, N);
+      rtaTopProcess(&tb, buf, N, alpha);
       if (c >= settleChunks) {
         for (int j = 0; j < AR_RTA_TOP_BANDS; j++) acc[j] += tb.det[j];
         accN++;
@@ -2235,7 +2348,7 @@ static constexpr float AR_REF_RESET_MS = 3000.0f;
 static constexpr uint8_t AR_REF_SET_FRAMES = 3;
 
 static float arRefDb = AR_REF_UNSET;                // the reference level, followed
-static float arRefReleaseMs = AR_REF_RELEASE_MS;    // its release, in ms (the 'w'/'W' keys)
+// The reference's RELEASE is a live setting - see ArLiveSettings.
 static float arGateShutMs = 0.0f;                   // how long the gate has been shut
 static uint8_t arRefSetFrames = 0;                  // frames of signal seen while unset
 
@@ -2297,20 +2410,33 @@ static constexpr float AR_WINDOW_TARGET_DB = 0.0f;    // the loudest band is hel
 // trim below - are applied to the MEASUREMENT, before the window, which is
 // what makes the fixed window an absolute one.
 // ---------------------------------------------------------------------------
-static volatile bool  arAutoRange = true;      // false = the fixed window is in use
-static float arWindowFloorDb = -60.0f;         // the fixed window's floor, dB
-static float arWindowTopDb   =  0.0f;          // the fixed window's top, dB
-// The AUTO window's span: how far below the reference's top the window
-// reaches. This is the only number that moves the floor of the auto-range -
-// the top is the reference's, and it is not a setting.
-//
-// It is the analyser's "Scale Range". The auto-range is the "Scale Top".
-static float arWindowRangeDb = AR_WINDOW_DBSPAN;
 static constexpr float AR_WINDOW_FLOOR_MIN = -120.0f;  // the floor's travel
 static constexpr float AR_WINDOW_FLOOR_MAX =  40.0f;
 static constexpr float AR_WINDOW_SPAN_MIN  =   6.0f;   // the window's minimum width
 static constexpr float AR_WINDOW_SPAN_MAX  = 120.0f;
 static constexpr float AR_RTA_REF_MAX   =  60.0f;   // the reference offset's travel
+
+// The settings as they are on boot.
+//
+// The defaults are here, and not at the declaration, because the constants
+// they come from are further down the file. The declaration above calls this
+// before main(), so the defaults are in place before the stored
+// configuration is read - a stored setting then overrides a default, and not
+// the other way round.
+static ArLiveSettings arSettingsBoot() {
+  ArLiveSettings s;
+  s.squelch        = SR_SQUELCH;
+  s.autoRange      = true;
+  s.windowRangeDb  = AR_WINDOW_DBSPAN;
+  s.windowFloorDb  = -60.0f;
+  s.windowTopDb    =  0.0f;
+  s.rtaRefDb       =  0.0f;
+  s.refReleaseMs   = AR_REF_RELEASE_MS;
+  s.trimBand       = 0;
+  for (int k = 0; k < AR_MAX_BANDS; k++) s.trimDb[k] = 0.0f;
+  s.bankTauMs      = AR_BANK_TAU_DEFAULT_MS;
+  return s;
+}
 
 // The reference offset: the difference between our dB and the analyser's.
 //
@@ -2323,8 +2449,9 @@ static constexpr float AR_RTA_REF_MAX   =  60.0f;   // the reference offset's tr
 // It is applied to the band levels themselves and not to the display, so the
 // RTA band levels published on /json/ar are already on the analyser's scale
 // and can be compared with it directly.
-static float rtaRefDb = 0.0f;
-
+//
+// The reference offset itself is a live setting - see ArLiveSettings.
+//
 // The per-band trim, in dB.
 //
 // The reference offset fixes the SCALE; this fixes the SHAPE. An analyser's
@@ -2337,8 +2464,8 @@ static float rtaRefDb = 0.0f;
 // It is applied in the same place as the reference offset - to the measured
 // level, before the auto-range - so the auto-range sees the corrected shape
 // and the published value is the corrected one.
-static float rtaTrimDb[AR_MAX_BANDS] = {0.0f};
-static int   rtaTrimBand = 0;            // the band the serial trim works on
+//
+// The trim itself is a live setting - see ArLiveSettings.
 
 static float arLevelDb   = AR_LEVEL_MIN_DB;   // the fresh hop's level, dB re full scale
 static float arFloorDb   = AR_LEVEL_MIN_DB;   // the noise floor, dB
@@ -2463,7 +2590,7 @@ static void arTrackLevel(float levelDb) {
   arFrameDtMs = dt;
 
   if (!arTrackInit) {
-    arFloorDb   = levelDb - (float)soundSquelch - 5.0f;
+    arFloorDb   = levelDb - (float)arFrameSettings.squelch - 5.0f;
     arTrackInit = true;
   }
 
@@ -2477,7 +2604,7 @@ static void arTrackLevel(float levelDb) {
   }
 
   // The gate: open `soundSquelch` dB above the floor, shut 4 dB below that.
-  const float openDb  = arFloorDb + (float)soundSquelch;
+  const float openDb  = arFloorDb + (float)arFrameSettings.squelch;
   const float closeDb = openDb - AR_GATE_CLOSE_DB;
   if (arGateOpen) { if (levelDb < closeDb) arGateOpen = false; }
   else            { if (levelDb >= openDb) arGateOpen = true; }
@@ -2511,7 +2638,7 @@ static inline void arFollowReference(float loudestDb, float dtMs) {
   if (arRefDb == AR_REF_UNSET || dtMs <= 0.0f) {
     arRefDb = loudestDb;                         // set outright, not followed
   } else {
-    const float tau = (loudestDb > arRefDb) ? AR_REF_ATTACK_MS : arRefReleaseMs;
+    const float tau = (loudestDb > arRefDb) ? AR_REF_ATTACK_MS : arFrameSettings.refReleaseMs;
     const float k = 1.0f - expf(-dtMs / tau);
     arRefDb += k * (loudestDb - arRefDb);
   }
@@ -2528,13 +2655,13 @@ static inline void arFollowReference(float loudestDb, float dtMs) {
 // FIXED: the window is the user's, in absolute dB, and NOTHING moves it - not
 // the auto-range, not the display trims.
 static inline void arWindowEdges(float trimAdj, float &lo, float &hi, float &valueAdj) {
-  if (arAutoRange) {
-    lo = -arWindowRangeDb;
+  if (arFrameSettings.autoRange) {
+    lo = -arFrameSettings.windowRangeDb;
     hi =  0.0f;
     valueAdj = trimAdj;
   } else {
-    lo = arWindowFloorDb;
-    hi = arWindowTopDb;
+    lo = arFrameSettings.windowFloorDb;
+    hi = arFrameSettings.windowTopDb;
     valueAdj = 0.0f;
   }
 }
@@ -2604,9 +2731,9 @@ void audioReactiveResetAutoRange() {
   // offset, so leaving the display in it after a reset would keep showing an
   // absolute window that the user had asked to get rid of.
   //
-  // The mode is not the task's: it is read by the task and written only from
-  // here, so it needs no handshake.
-  arAutoRange = true;
+  // The mode is not the task's: it is a SETTING, and settings are changed
+  // under the publish lock - see ArLiveSettings.
+  arSettingsEdit([](ArLiveSettings& s) { s.autoRange = true; });
 }
 
 // ---------------------------------------------------------------------------
@@ -2642,23 +2769,27 @@ void audioReactiveRtaCommand(char c) {
 
   switch (c) {
     case 'b': case 'B': {
-      arWindowFloorDb += (c == 'B') ? 1.0f : -1.0f;
-      if (arWindowFloorDb > arWindowTopDb - AR_WINDOW_SPAN_MIN) arWindowFloorDb = arWindowTopDb - AR_WINDOW_SPAN_MIN;
-      if (arWindowFloorDb < AR_WINDOW_FLOOR_MIN)          arWindowFloorDb = AR_WINDOW_FLOOR_MIN;
-      if (arWindowTopDb  > AR_WINDOW_FLOOR_MAX)           arWindowTopDb  = AR_WINDOW_FLOOR_MAX;
-      arAutoRange = false;
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.windowFloorDb += (c == 'B') ? 1.0f : -1.0f;
+        if (st.windowFloorDb > st.windowTopDb - AR_WINDOW_SPAN_MIN) st.windowFloorDb = st.windowTopDb - AR_WINDOW_SPAN_MIN;
+        if (st.windowFloorDb < AR_WINDOW_FLOOR_MIN)          st.windowFloorDb = AR_WINDOW_FLOOR_MIN;
+        if (st.windowTopDb  > AR_WINDOW_FLOOR_MAX)           st.windowTopDb  = AR_WINDOW_FLOOR_MAX;
+        st.autoRange = false;
+      });
       USER_PRINTF("window floor now %.1f dB (window %.1f dB to %.1f dB, fixed, both views)\n",
-                  (double)arWindowFloorDb, (double)arWindowFloorDb, (double)arWindowTopDb);
+                  (double)s.windowFloorDb, (double)s.windowFloorDb, (double)s.windowTopDb);
       break;
     }
     case 'u': case 'U': {
-      arWindowTopDb += (c == 'U') ? 1.0f : -1.0f;
-      if (arWindowTopDb < arWindowFloorDb + AR_WINDOW_SPAN_MIN) arWindowTopDb = arWindowFloorDb + AR_WINDOW_SPAN_MIN;
-      if (arWindowTopDb > AR_WINDOW_FLOOR_MAX)             arWindowTopDb = AR_WINDOW_FLOOR_MAX;
-      if (arWindowFloorDb < AR_WINDOW_FLOOR_MIN)           arWindowFloorDb = AR_WINDOW_FLOOR_MIN;
-      arAutoRange = false;
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.windowTopDb += (c == 'U') ? 1.0f : -1.0f;
+        if (st.windowTopDb < st.windowFloorDb + AR_WINDOW_SPAN_MIN) st.windowTopDb = st.windowFloorDb + AR_WINDOW_SPAN_MIN;
+        if (st.windowTopDb > AR_WINDOW_FLOOR_MAX)             st.windowTopDb = AR_WINDOW_FLOOR_MAX;
+        if (st.windowFloorDb < AR_WINDOW_FLOOR_MIN)           st.windowFloorDb = AR_WINDOW_FLOOR_MIN;
+        st.autoRange = false;
+      });
       USER_PRINTF("window top now %.1f dB (window %.1f dB to %.1f dB, fixed, both views)\n",
-                  (double)arWindowTopDb, (double)arWindowFloorDb, (double)arWindowTopDb);
+                  (double)s.windowTopDb, (double)s.windowFloorDb, (double)s.windowTopDb);
       break;
     }
     case 's': case 'S': {
@@ -2676,39 +2807,47 @@ void audioReactiveRtaCommand(char c) {
       // own width, and the auto-range still decides where the top is. In the
       // fixed window the span is implied by the floor and the top, so this
       // number waits there for the return to auto ('A').
-      arWindowRangeDb += (c == 'S') ? 1.0f : -1.0f;
-      if (arWindowRangeDb < AR_WINDOW_SPAN_MIN) arWindowRangeDb = AR_WINDOW_SPAN_MIN;
-      if (arWindowRangeDb > AR_WINDOW_SPAN_MAX) arWindowRangeDb = AR_WINDOW_SPAN_MAX;
-      if (arAutoRange) {
-        USER_PRINTF("auto window span now %.0f dB below the top\n", (double)arWindowRangeDb);
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.windowRangeDb += (c == 'S') ? 1.0f : -1.0f;
+        if (st.windowRangeDb < AR_WINDOW_SPAN_MIN) st.windowRangeDb = AR_WINDOW_SPAN_MIN;
+        if (st.windowRangeDb > AR_WINDOW_SPAN_MAX) st.windowRangeDb = AR_WINDOW_SPAN_MAX;
+      });
+      if (s.autoRange) {
+        USER_PRINTF("auto window span now %.0f dB below the top\n", (double)s.windowRangeDb);
       } else {
         USER_PRINTF("auto window span now %.0f dB below the top (the display is in the fixed window, so this waits for 'A')\n",
-                    (double)arWindowRangeDb);
+                    (double)s.windowRangeDb);
       }
       break;
     }
     case 'o': case 'O': {
-      rtaRefDb += (c == 'O') ? 1.0f : -1.0f;
-      if (rtaRefDb >  AR_RTA_REF_MAX) rtaRefDb =  AR_RTA_REF_MAX;
-      if (rtaRefDb < -AR_RTA_REF_MAX) rtaRefDb = -AR_RTA_REF_MAX;
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.rtaRefDb += (c == 'O') ? 1.0f : -1.0f;
+        if (st.rtaRefDb >  AR_RTA_REF_MAX) st.rtaRefDb =  AR_RTA_REF_MAX;
+        if (st.rtaRefDb < -AR_RTA_REF_MAX) st.rtaRefDb = -AR_RTA_REF_MAX;
+      });
       USER_PRINTF("RTA reference offset now %+.1f dB (our dB = the analyser's dB %+.1f)\n",
-                  (double)rtaRefDb, (double)rtaRefDb);
+                  (double)s.rtaRefDb, (double)s.rtaRefDb);
       break;
     }
     case 'n': case 'p': {
-      rtaTrimBand += (c == 'n') ? 1 : -1;
-      if (rtaTrimBand < 0)       rtaTrimBand = 0;
-      if (rtaTrimBand >= n)      rtaTrimBand = n - 1;
+      const ArLiveSettings s = arSettingsEdit([c, n](ArLiveSettings& st) {
+        st.trimBand += (c == 'n') ? 1 : -1;
+        if (st.trimBand < 0)  st.trimBand = 0;
+        if (st.trimBand >= n) st.trimBand = n - 1;
+      });
       USER_PRINTF("RTA trim band %d (%.1f Hz), trim %+.1f dB\n",
-                  rtaTrimBand, (double)lay31.centre[rtaTrimBand], (double)rtaTrimDb[rtaTrimBand]);
+                  s.trimBand, (double)lay31.centre[s.trimBand], (double)s.trimDb[s.trimBand]);
       break;
     }
     case 'y': case 'Y': {
-      rtaTrimDb[rtaTrimBand] += (c == 'Y') ? 1.0f : -1.0f;
-      if (rtaTrimDb[rtaTrimBand] >  24.0f) rtaTrimDb[rtaTrimBand] =  24.0f;
-      if (rtaTrimDb[rtaTrimBand] < -24.0f) rtaTrimDb[rtaTrimBand] = -24.0f;
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.trimDb[st.trimBand] += (c == 'Y') ? 1.0f : -1.0f;
+        if (st.trimDb[st.trimBand] >  24.0f) st.trimDb[st.trimBand] =  24.0f;
+        if (st.trimDb[st.trimBand] < -24.0f) st.trimDb[st.trimBand] = -24.0f;
+      });
       USER_PRINTF("RTA band %d (%.1f Hz) trim now %+.1f dB\n",
-                  rtaTrimBand, (double)lay31.centre[rtaTrimBand], (double)rtaTrimDb[rtaTrimBand]);
+                  s.trimBand, (double)lay31.centre[s.trimBand], (double)s.trimDb[s.trimBand]);
       break;
     }
     case 'k': case 'K': {
@@ -2723,21 +2862,28 @@ void audioReactiveRtaCommand(char c) {
       // move at the speed of the bands above them. Shorter than that and
       // the squaring ripple starts to dominate the reading; longer and the
       // bars lag again.
-      const float before = bankTauMs;
+      //
+      // The change is made and the clamped value read back in ONE critical
+      // section, so the number printed is the number that was stored.
+      const float before = arSettingsSnapshot().bankTauMs;
       const float delta = (c == 'K') ? 5.0f : -5.0f;
-      bankSetTau(bankTauMs + delta);
-      // The RTA's TOP bank walks with it: the thirty-one bars are one view and
-      // they should move together - and so do the sixteen display bands,
-      // because they are sixteen of the thirty-one.
-      rtaTauMs = bankTauMs;
-      rtaTauSet = true;
-      rtaTopSetTau(rtaTauMs);
-      if (bankTauMs <= AR_BANK_TAU_MIN_MS + 0.01f && before > AR_BANK_TAU_MIN_MS + 0.01f) {
+      const ArLiveSettings s = arSettingsEdit([delta](ArLiveSettings& st) {
+        float ms = st.bankTauMs + delta;
+        if (ms < AR_BANK_TAU_MIN_MS) ms = AR_BANK_TAU_MIN_MS;
+        if (ms > AR_BANK_TAU_MAX_MS) ms = AR_BANK_TAU_MAX_MS;
+        st.bankTauMs = ms;
+      });
+      // Both banks walk with it, and they do it on their own: the bottom
+      // eight run at 3 kHz and the top twenty-three at 48 kHz, and each
+      // derives its own detector coefficient from this one number of
+      // milliseconds, at the top of every frame. So there is no second
+      // constant to push and no way for the two banks to disagree.
+      if (s.bankTauMs <= AR_BANK_TAU_MIN_MS + 0.01f && before > AR_BANK_TAU_MIN_MS + 0.01f) {
         USER_PRINTF("RTA bank detector now %.0f ms - that is the floor, it cannot go shorter\n",
-                    (double)bankTauMs);
+                    (double)s.bankTauMs);
       } else {
         USER_PRINTF("RTA bank detector now %.0f ms (%.0f ms at the 3 kHz rate)\n",
-                    (double)bankTauMs, (double)bankTauMs);
+                    (double)s.bankTauMs, (double)s.bankTauMs);
       }
       break;
     }
@@ -2751,11 +2897,13 @@ void audioReactiveRtaCommand(char c) {
       //
       // This is the number that decides how long the display stays pushed
       // down after a peak, so it wants to be watched rather than guessed.
-      arRefReleaseMs += (c == 'W') ? 500.0f : -500.0f;
-      if (arRefReleaseMs < AR_REF_RELEASE_MIN_MS) arRefReleaseMs = AR_REF_RELEASE_MIN_MS;
-      if (arRefReleaseMs > AR_REF_RELEASE_MAX_MS) arRefReleaseMs = AR_REF_RELEASE_MAX_MS;
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.refReleaseMs += (c == 'W') ? 500.0f : -500.0f;
+        if (st.refReleaseMs < AR_REF_RELEASE_MIN_MS) st.refReleaseMs = AR_REF_RELEASE_MIN_MS;
+        if (st.refReleaseMs > AR_REF_RELEASE_MAX_MS) st.refReleaseMs = AR_REF_RELEASE_MAX_MS;
+      });
       USER_PRINTF("auto-range release now %.0f ms (the attack is %.0f ms)\n",
-                  (double)arRefReleaseMs, (double)AR_REF_ATTACK_MS);
+                  (double)s.refReleaseMs, (double)AR_REF_ATTACK_MS);
       break;
     }
     default:
@@ -2883,7 +3031,7 @@ static void arPublishBands(float dtMs) {
   // the reference is set, which is only the first few frames of a
   // piece of audio. In FIXED mode the window is the user's and the
   // reference is not needed at all.
-  const bool noRef = arAutoRange && (arRefDb == AR_REF_UNSET);
+  const bool noRef = arFrameSettings.autoRange && (arRefDb == AR_REF_UNSET);
 
   // The frame is assembled here, off to the side. It is only copied into the
   // published buffer under the publish lock, so the lock is held for a memcpy
@@ -2892,7 +3040,7 @@ static void arPublishBands(float dtMs) {
 
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
     const float db = (arGateOpen && !noRef && (estBandDb[k] > -119.0f))
-                     ? (estBandDb[k] + (arAutoRange ? arRefOffsetDb : 0.0f)) : -120.0f;
+                     ? (estBandDb[k] + (arFrameSettings.autoRange ? arRefOffsetDb : 0.0f)) : -120.0f;
     float &sm = arBandSmth[k];
     if (dtMs > 0.0f) {
       sm += ((db > sm) ? aRise : aFall) * (db - sm);
@@ -2959,7 +3107,7 @@ static void arPublishRta(float dtMs) {
 
   // As in the GEQ view: without a reference there is no window to draw the
   // bars in, so the display is blank until it is set.
-  const bool noRef = arAutoRange && (arRefDb == AR_REF_UNSET);
+  const bool noRef = arFrameSettings.autoRange && (arRefDb == AR_REF_UNSET);
 
   uint8_t frame[NUM_RTA_CHANNELS];
 
@@ -2967,7 +3115,7 @@ static void arPublishRta(float dtMs) {
     // The reference's offset only exists in auto mode - in fixed mode the
     // levels are where they are.
     const float db = (arGateOpen && !noRef && (estRtaDb[k] > -119.0f))
-                     ? (estRtaDb[k] + (arAutoRange ? arRefOffsetDb : 0.0f)) : -120.0f;
+                     ? (estRtaDb[k] + (arFrameSettings.autoRange ? arRefOffsetDb : 0.0f)) : -120.0f;
     float &sm = arRtaSmth[k];
     if (dtMs > 0.0f) {
       sm += ((db > sm) ? aRise : aFall) * (db - sm);
@@ -3082,7 +3230,7 @@ static void estFinalise() {
     // A display trim moves a bar and nothing else, and it is already one
     // layer further out (TROYHACKS_DBREF, the input-level trim).
     estRtaDb[k] = (estRta[k] > 0.0f)
-                  ? estRtaPowDb[k] + cal + rtaRefDb + rtaTrimDb[k]
+                  ? estRtaPowDb[k] + cal + arFrameSettings.rtaRefDb + arFrameSettings.trimDb[k]
                   : -120.0f;
   }
 
@@ -3680,13 +3828,18 @@ void audioReactiveRtaPlot() {
 
   // The window: the fixed one if the display is in fixed mode, and otherwise
   // the shared span below the peak.
+  //
+  // The window comes from ONE snapshot of the settings, so the plot cannot
+  // draw itself in a window whose floor and top belong to different versions
+  // of the settings.
+  const ArLiveSettings st = arSettingsSnapshot();
   float winLo, winHi;
-  if (arAutoRange) {
+  if (st.autoRange) {
     winHi = maxDb;
-    winLo = maxDb - arWindowRangeDb;
+    winLo = maxDb - st.windowRangeDb;
   } else {
-    winLo = arWindowFloorDb;
-    winHi = arWindowTopDb;
+    winLo = st.windowFloorDb;
+    winHi = st.windowTopDb;
   }
   const float span = winHi - winLo;
   if (span < 1.0f) {
@@ -3694,7 +3847,7 @@ void audioReactiveRtaPlot() {
     return;
   }
 
-  if (arAutoRange) {
+  if (st.autoRange) {
     USER_PRINTF("RTA 31-band, 1/3-octave ISO 266, integrated power, calibrated, peak %.1f dB (auto-range, %.0f dB)\n",
                 (double)maxDb, (double)span);
   } else {
@@ -4206,10 +4359,19 @@ static void bankSelfTest() {
   int fails = 0, nbrFails = 0, nbrChecks = 0;
   float worst = 0.0f, worstF = 0.0f, worstNbr = 0.0f;
 
+  // The detector the test runs with.
+  //
+  // The test calls bankProcess() directly, so it passes the coefficient rather
+  // than reading a global - and the coefficient it passes is the one the
+  // constant in force NOW asks for, taken from the settings in the same
+  // breath, so the two cannot disagree.
+  const float tauMs = arSettingsSnapshot().bankTauMs;
+  const float alpha = bankTauAlpha(tauMs);
+
   USER_PRINTLN("\n=== AudioReactive bank self-test =================================");
   USER_PRINTF("  %d bands, decimate %d -> %.0f Hz, AA %.0f Hz (%d-pole), detector %.0f ms\n",
               AR_BANK_BANDS, AR_BANK_DEC, (double)AR_BANK_FS, (double)AR_BANK_AA_HZ,
-              2 * AR_BANK_AA_SECS, (double)bankTauMs);
+              2 * AR_BANK_AA_SECS, (double)tauMs);
 
   for (int k = 0; k < AR_BANK_BANDS; k++) {
     const float fc = lay31.centre[k];
@@ -4228,7 +4390,7 @@ static void bankSelfTest() {
     // a fixed settle would leave a long detector short of its answer and the
     // test would read low. The filters themselves need about 100 ms at the
     // bottom band, which 1.2 s covers comfortably.
-    const float settleSecs = fmaxf(1.2f, 4.6f * bankTauMs * 0.001f + 0.2f);
+    const float settleSecs = fmaxf(1.2f, 4.6f * tauMs * 0.001f + 0.2f);
     const int settleChunks = (int)(settleSecs * (float)SAMPLE_RATE / (float)N);
     const int avgChunks    = (int)(0.4f * (float)SAMPLE_RATE / (float)N);
 
@@ -4239,7 +4401,7 @@ static void bankSelfTest() {
         if (phase > 6.2831853f) phase -= 6.2831853f;
       }
       chainProcess(&chain, buf, N, scratch);
-      bankProcess(&bp, buf, N);
+      bankProcess(&bp, buf, N, alpha);
       if (c >= settleChunks) {
         // One sample of every band per chunk: the counter is per CHUNK, not
         // per band. Counting it inside the band loop divides every band's
@@ -4590,6 +4752,17 @@ void arAnalysisTask(void * parameter)
       arApplyAutoRangeReset();
     }
 
+    // The settings this frame is built with.
+    //
+    // ONE copy, taken once, under the publish lock. Every stage of the frame -
+    // the level tracker, the reference, the window, the estimator, the
+    // calibration - reads this copy and not the live settings, so a frame can
+    // never be built from two versions of the settings: a window's floor from
+    // the new settings and its top from the old.
+    //
+    // It is taken HERE, at the top of the frame, before anything is measured.
+    arFrameSettings = arSettingsSnapshot();
+
     // Don't run the analysis if we're in Receive mode or in realtime mode
     if (disableSoundProcessing || (audioSyncEnabled == AUDIOSYNC_REC)) {
       vTaskDelayUntil( &xLastWakeTime, xFrequency);        // release CPU, and let I2S fill its buffers
@@ -4828,7 +5001,7 @@ void arAnalysisTask(void * parameter)
     // number that says whether the bank is affordable.
     if (bankReady) {
       const uint64_t tBank0 = esp_timer_get_time();
-      bankProcess(&liveBank, samplesStart, sampleCount);
+      bankProcess(&liveBank, samplesStart, sampleCount, bankTauAlpha(arFrameSettings.bankTauMs));
       const uint64_t rBankUs = esp_timer_get_time() - tBank0;
       const float bankUnits = (float)((rBankUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
       bankTime = (bankUnits * 3.0f + bankTime * 7.0f) / 10.0f;
@@ -4847,7 +5020,7 @@ void arAnalysisTask(void * parameter)
     // the RTA and the transform's 42.7 ms window.
     if (rtaTopReady) {
       const uint64_t tRta0 = esp_timer_get_time();
-      rtaTopProcess(&liveRtaTop, samplesStart, sampleCount);
+      rtaTopProcess(&liveRtaTop, samplesStart, sampleCount, rtaTauAlpha(arFrameSettings.bankTauMs));
       const uint64_t rRtaUs = esp_timer_get_time() - tRta0;
       const float rtaUnits = (float)((rRtaUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
       rtaTime = (rtaUnits * 3.0f + rtaTime * 7.0f) / 10.0f;
@@ -7048,6 +7221,15 @@ class AudioReactive : public Usermod {
         snap = arFrameSnap;
       }
 
+      // ONE snapshot of the live settings.
+      //
+      // The endpoint publishes the window's mode, its floor, its top, the
+      // reference offset, the per-band trims and the detector's time constant
+      // - and they all come from the same place. Taking them one at a time
+      // would let a change land in the middle of the publishing, so the page
+      // could show a fixed window's floor beside an auto window's top.
+      const ArLiveSettings st = arSettingsSnapshot();
+
       // ---- what is running ---------------------------------------------
       ar["enabled"]   = enabled;
       ar["processing"] = (audioSource != nullptr) && !disableSoundProcessing;
@@ -7100,7 +7282,7 @@ class AudioReactive : public Usermod {
         l["noise_floor_db"] = (double)arFloorDb;
         l["above_floor_db"] = (double)(arLevelDb - arFloorDb);
         l["gate_open"]      = arGateOpen;
-        l["gate_open_db"]   = (double)soundSquelch;
+        l["gate_open_db"]   = (double)st.squelch;
         l["range_db"]       = (double)arRefOffsetDb;
         // There is ONE offset for the whole spectrum now: the sixteen display
         // bands are sixteen of the thirty-one RTA bands, so both views are
@@ -7135,7 +7317,7 @@ class AudioReactive : public Usermod {
       {
         JsonObject d = ar.createNestedObject("display");
         d["trim_db"]    = (double)TROYHACKS_DBREF;
-        d["span_db"]    = (double)arWindowRangeDb;
+        d["span_db"]    = (double)st.windowRangeDb;
         d["input_trim_db"] = (double)arInputTrimDb();
         // The smoothing on the 16 bars: the user's own rise and fall, on both
         // paths, so the switch between them compares the measurement and not
@@ -7144,32 +7326,32 @@ class AudioReactive : public Usermod {
         d["fall_ms"]    = (double)(decayTime   > 0 ? decayTime   : AR_DISP_RELEASE_MS);
         // The window is ONE window, for both views: the same mode, the same
         // span, the same fixed grid.
-        d["window"]      = arAutoRange ? "auto" : "fixed";
-        d["window_floor_db"] = (double)arWindowFloorDb;
-        d["window_top_db"]   = (double)arWindowTopDb;
-        d["window_span_db"]  = (double)(arAutoRange ? arWindowRangeDb : (arWindowTopDb - arWindowFloorDb));
+        d["window"]      = st.autoRange ? "auto" : "fixed";
+        d["window_floor_db"] = (double)st.windowFloorDb;
+        d["window_top_db"]   = (double)st.windowTopDb;
+        d["window_span_db"]  = (double)(st.autoRange ? st.windowRangeDb : (st.windowTopDb - st.windowFloorDb));
         // How fast the auto-range's top follows the loudest band. The attack
         // is fixed; the release is a setting (the serial 'w'/'W' keys).
         d["auto_attack_ms"]  = (double)AR_REF_ATTACK_MS;
-        d["auto_release_ms"] = (double)arRefReleaseMs;
+        d["auto_release_ms"] = (double)st.refReleaseMs;
         // The absolute window the display is currently drawn in. In auto mode
         // this is implied by the auto-range offset, and in fixed mode it is
         // the user's own grid. There is ONE window and ONE offset: the sixteen
         // display bands are sixteen of the thirty-one RTA bands, so the two
         // views are the same picture at two resolutions. The RTA's is the
         // number to compare with an analyser's own scale.
-        d["geq_window_lo_db"] = (double)(arAutoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb - arWindowRangeDb)
-                                                      : arWindowFloorDb);
-        d["geq_window_hi_db"] = (double)(arAutoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb) : arWindowTopDb);
-        d["rta_window_lo_db"] = (double)(arAutoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb - arWindowRangeDb)
-                                                      : arWindowFloorDb);
-        d["rta_window_hi_db"] = (double)(arAutoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb) : arWindowTopDb);
-        d["rta_ref_db"] = (double)rtaRefDb;
-        arJsonFloats(d.createNestedArray("rta_trim_db"), rtaTrimDb, rtaBands);
+        d["geq_window_lo_db"] = (double)(st.autoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb - st.windowRangeDb)
+                                                      : st.windowFloorDb);
+        d["geq_window_hi_db"] = (double)(st.autoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb) : st.windowTopDb);
+        d["rta_window_lo_db"] = (double)(st.autoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb - st.windowRangeDb)
+                                                      : st.windowFloorDb);
+        d["rta_window_hi_db"] = (double)(st.autoRange ? (AR_WINDOW_TARGET_DB - arRefOffsetDb) : st.windowTopDb);
+        d["rta_ref_db"] = (double)st.rtaRefDb;
+        arJsonFloats(d.createNestedArray("rta_trim_db"), st.trimDb, rtaBands);
         // The sixteen trims that belong to the sixteen bands that are shown -
         // the RTA's own trim, read at the sixteen bands the display draws.
         JsonArray gt = d.createNestedArray("geq_trim_db");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gt.add((double)rtaTrimDb[arGeqFromRta[k]]);
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gt.add((double)st.trimDb[arGeqFromRta[k]]);
       }
 
       // ---- the 16 display bands ----------------------------------------
@@ -7257,7 +7439,7 @@ class AudioReactive : public Usermod {
         JsonArray bl = r.createNestedArray("band_level_db");
         for (int k = 0; k < rtaBands; k++) bl.add((double)snap.rtaLevelDb[k]);
         JsonArray tr = r.createNestedArray("trim_db");
-        arJsonFloats(tr, rtaTrimDb, rtaBands);
+        arJsonFloats(tr, st.trimDb, rtaBands);
       }
 
       // ---- the filter bank (the bottom 8 RTA bands) ----------------------
@@ -7270,7 +7452,7 @@ class AudioReactive : public Usermod {
         b["rate_hz"]    = (double)AR_BANK_FS;
         b["decimate"]   = AR_BANK_DEC;
         b["aa_hz"]      = (double)AR_BANK_AA_HZ;
-        b["tau_ms"]     = (double)bankTauMs;
+        b["tau_ms"]     = (double)st.bankTauMs;
         b["us_per_frame"] = (double)(bankTime * TIMING_UNIT_US);
         // The filter's ENBW against the nominal band width: how much wider
         // than the band the filter really is.
@@ -7302,7 +7484,7 @@ class AudioReactive : public Usermod {
         b["bands"]        = AR_RTA_TOP_BANDS;
         b["first_band"]   = AR_RTA_TOP_FIRST;
         b["rate_hz"]      = (double)SAMPLE_RATE;
-        b["tau_ms"]       = (double)rtaTauMs;
+        b["tau_ms"]       = (double)st.bankTauMs;
         b["us_per_frame"] = (double)(rtaTime * TIMING_UNIT_US);
         JsonArray c = b.createNestedArray("centres_hz");
         for (int k = 0; k < AR_RTA_TOP_BANDS; k++)
@@ -7553,6 +7735,15 @@ class AudioReactive : public Usermod {
 
       JsonArray infoArr = user.createNestedArray(FPSTR(_name));
 
+      // ONE snapshot of the live settings.
+      //
+      // The pane shows the window's mode, its floor and its top, the
+      // reference offset and the release in the same breath - and they all
+      // come from the same place. One snapshot means the pane cannot show a
+      // fixed window's floor beside an auto window's top, which is what
+      // taking them one at a time would allow.
+      const ArLiveSettings st = arSettingsSnapshot();
+
       String uiDomString = F("<button class=\"btn btn-xs\" onclick=\"requestJson({");
       uiDomString += FPSTR(_name);
       uiDomString += F(":{");
@@ -7688,13 +7879,13 @@ class AudioReactive : public Usermod {
           // "our display is currently showing -12 to -52 dB" is comparable
           // with the analyser's, "our bars look like that" is not.
           infoArr = user.createNestedArray(F("RTA window"));
-          if (arAutoRange) {
+          if (st.autoRange) {
             snprintf(lvlBuf, sizeof(lvlBuf), "auto, %.1f..%.1f dB",
-                     (double)(AR_WINDOW_TARGET_DB - arRefOffsetDb - arWindowRangeDb),
+                     (double)(AR_WINDOW_TARGET_DB - arRefOffsetDb - st.windowRangeDb),
                      (double)(AR_WINDOW_TARGET_DB - arRefOffsetDb));
           } else {
             snprintf(lvlBuf, sizeof(lvlBuf), "fixed, %.1f..%.1f dB",
-                     (double)arWindowFloorDb, (double)arWindowTopDb);
+                     (double)st.windowFloorDb, (double)st.windowTopDb);
           }
           infoArr.add(lvlBuf);
 
@@ -7702,14 +7893,14 @@ class AudioReactive : public Usermod {
           // release is a setting ('w'/'W'), the attack is not.
           infoArr = user.createNestedArray(F("Auto-range follow (ms)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "attack %.0f, release %.0f",
-                   (double)AR_REF_ATTACK_MS, (double)arRefReleaseMs);
+                   (double)AR_REF_ATTACK_MS, (double)st.refReleaseMs);
           infoArr.add(lvlBuf);
 
           // The reference offset: the difference between our dB and the
           // analyser's. It is applied to the MEASUREMENT, so the band levels
           // below are already on the analyser's scale.
           infoArr = user.createNestedArray(F("RTA reference (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)rtaRefDb);
+          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)st.rtaRefDb);
           infoArr.add(lvlBuf);
 
           // The display trim and the span: the last two numbers that decide
@@ -7718,7 +7909,7 @@ class AudioReactive : public Usermod {
           // It is the shared window's span - both views are drawn in it.
           infoArr = user.createNestedArray(F("Display trim (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f, span %.0f dB",
-                   (double)TROYHACKS_DBREF, (double)arWindowRangeDb);
+                   (double)TROYHACKS_DBREF, (double)st.windowRangeDb);
           infoArr.add(lvlBuf);
 
           // The 31 RTA band levels are NOT a row here any more. They are a
@@ -7874,7 +8065,7 @@ class AudioReactive : public Usermod {
             TROYHACKS_DBREF = TROYHACKS_DBREF_BOOT;
             audioReactiveResetAutoRange();
             USER_PRINTF("AR: display back to auto-range - trim %+.1f dB, span %.0f dB\n",
-                        (double)TROYHACKS_DBREF, (double)arWindowRangeDb);
+                        (double)TROYHACKS_DBREF, (double)arSettingsSnapshot().windowRangeDb);
           }
         }
         // Diagnostic: the codec's MCLK pre-divider. The vendor coefficient
@@ -7960,7 +8151,14 @@ class AudioReactive : public Usermod {
       dmic[F("master")]  = i2sMaster ? 1 : 0;
 
       JsonObject cfg = top.createNestedObject("config");
-      cfg[F("squelch")] = soundSquelch;
+
+      // ONE snapshot of the live settings, for everything this function
+      // writes. The settings page shows a form; the form is filled from one
+      // snapshot, so the numbers in it belong to the same version of the
+      // settings - and a save writes back what was shown.
+      const ArLiveSettings st = arSettingsSnapshot();
+
+      cfg[F("squelch")] = st.squelch;
       // "gain" and "AGC" are GONE.
       //
       // "gain" (sampleGain) was never applied to anything - it was written,
@@ -8045,12 +8243,12 @@ class AudioReactive : public Usermod {
       // setting. The same goes for the sixteen-band "trim" array of an older
       // build - the sixteen bands are sixteen of the thirty-one, so they
       // share the thirty-one's trim.
-      freqScale[F("rtaAuto")]  = arAutoRange ? 1 : 0;
-      freqScale[F("rtaRange")] = arWindowRangeDb;
-      freqScale[F("rtaFloor")] = arWindowFloorDb;
-      freqScale[F("rtaTop")]   = arWindowTopDb;
-      freqScale[F("rtaRef")]   = rtaRefDb;
-      freqScale[F("rtaTau")]   = bankTauMs;
+      freqScale[F("rtaAuto")]  = st.autoRange ? 1 : 0;
+      freqScale[F("rtaRange")] = st.windowRangeDb;
+      freqScale[F("rtaFloor")] = st.windowFloorDb;
+      freqScale[F("rtaTop")]   = st.windowTopDb;
+      freqScale[F("rtaRef")]   = st.rtaRefDb;
+      freqScale[F("rtaTau")]   = st.bankTauMs;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -8148,7 +8346,13 @@ class AudioReactive : public Usermod {
       if (top[FPSTR(_digitalmic)][F("rightSlot")].is<bool>()) configComplete = false;
       if (top[FPSTR(_digitalmic)][F("master")].is<bool>())    configComplete = false;
 
-      configComplete &= arGetNumber(top["config"][F("squelch")], soundSquelch);
+      // The gate's margin above the noise floor. It is a SETTING now, so it
+      // is read into a local and applied through the settings - under the
+      // publish lock, like every other change.
+      uint8_t squelchRead = arSettingsSnapshot().squelch;
+      if (arGetNumber(top["config"][F("squelch")], squelchRead)) {
+        arSettingsEdit([squelchRead](ArLiveSettings& st) { st.squelch = squelchRead; });
+      }
 
       //WLEDMM: experimental settings
       // "micLev" is DEPRECATED. Its three behaviours - a floating level, a
@@ -8216,60 +8420,78 @@ class AudioReactive : public Usermod {
       // MEASUREMENT, not of the display, so it does not need the analysis task's
       // cooperation.
       {
-        uint8_t autoRead = 1;
-        if (arGetNumber(top["frequency"][F("rtaAuto")], autoRead)) {
-          arAutoRange = (autoRead != 0);
-        } else {
-          configComplete = false;   // the key is missing - the config gets rewritten
-        }
-        // Each of these three is read on its own. They used to be read as one
+        // The values as they are now, so that a key that is NOT in the stored
+        // config leaves its number alone.
+        //
+        // Each of these is read on its own. They used to be read as one
         // all-or-nothing group, and that was a trap: a POST that set the
         // window's floor and top but left the reference offset out silently
         // discarded BOTH - the && short-circuited and the window never moved.
         // A missing key still marks the config incomplete (so it gets
         // rewritten with every key), but it does not undo the keys that were
         // there.
-        float floorRead = arWindowFloorDb, topRead = arWindowTopDb, refRead = rtaRefDb;
-        // The auto window's span. It is read on its own, like the floor and
-        // the top, so that a POST which leaves it out does not throw the
-        // others away.
-        float rangeRead = arWindowRangeDb;
+        //
+        // The numbers are read into locals and then applied in ONE change, so
+        // the window cannot be half-updated: a floor from the new config
+        // beside a top from the old one.
+        const ArLiveSettings before = arSettingsSnapshot();
+
+        uint8_t autoRead = 1;
+        bool haveAuto = arGetNumber(top["frequency"][F("rtaAuto")], autoRead);
+        if (!haveAuto) configComplete = false;   // the key is missing - the config gets rewritten
+
+        float floorRead = before.windowFloorDb;
+        float topRead   = before.windowTopDb;
+        float refRead   = before.rtaRefDb;
+        float rangeRead = before.windowRangeDb;
+
         if (arGetNumber(top["frequency"][F("rtaRange")], rangeRead)) {
-          arWindowRangeDb = constrain(rangeRead, AR_WINDOW_SPAN_MIN, AR_WINDOW_SPAN_MAX);
+          rangeRead = constrain(rangeRead, AR_WINDOW_SPAN_MIN, AR_WINDOW_SPAN_MAX);
         } else {
           configComplete = false;
         }
         if (arGetNumber(top["frequency"][F("rtaFloor")], floorRead)) {
-          arWindowFloorDb = constrain(floorRead, AR_WINDOW_FLOOR_MIN, AR_WINDOW_FLOOR_MAX);
+          floorRead = constrain(floorRead, AR_WINDOW_FLOOR_MIN, AR_WINDOW_FLOOR_MAX);
         } else {
           configComplete = false;
         }
         if (arGetNumber(top["frequency"][F("rtaTop")], topRead)) {
-          arWindowTopDb = constrain(topRead, AR_WINDOW_FLOOR_MIN, AR_WINDOW_FLOOR_MAX);
+          topRead = constrain(topRead, AR_WINDOW_FLOOR_MIN, AR_WINDOW_FLOOR_MAX);
         } else {
           configComplete = false;
         }
         if (arGetNumber(top["frequency"][F("rtaRef")], refRead)) {
-          rtaRefDb = constrain(refRead, -AR_RTA_REF_MAX, AR_RTA_REF_MAX);
+          refRead = constrain(refRead, -AR_RTA_REF_MAX, AR_RTA_REF_MAX);
         } else {
           configComplete = false;
         }
         // The window has to have a width, or the bar mapping divides by
         // zero.
-        if (arWindowTopDb - arWindowFloorDb < AR_WINDOW_SPAN_MIN) arWindowTopDb = arWindowFloorDb + AR_WINDOW_SPAN_MIN;
-        // The bank's detector time constant. It is applied through
-        // bankSetTau(), which recomputes the one-pole coefficient, so the two
-        // cannot disagree - and it works whether or not the bank has been
-        // built yet, because bankInit() reads the same variable.
+        if (topRead - floorRead < AR_WINDOW_SPAN_MIN) topRead = floorRead + AR_WINDOW_SPAN_MIN;
+
+        arSettingsEdit([haveAuto, autoRead, rangeRead, floorRead, topRead, refRead](ArLiveSettings& st) {
+          if (haveAuto) st.autoRange = (autoRead != 0);
+          st.windowRangeDb = rangeRead;
+          st.windowFloorDb = floorRead;
+          st.windowTopDb   = topRead;
+          st.rtaRefDb      = refRead;
+        });
+        // The detector's time constant.
         //
-        // The RTA's top bank walks with it: the thirty-one bars are one view
-        // and they move together.
-        float tauRead = bankTauMs;
+        // ONE constant for both banks now: the bottom eight run at 3 kHz and
+        // the top twenty-three at 48 kHz, and each derives its own detector
+        // coefficient from this one number of milliseconds. The thirty-one
+        // bars are one view and they move together, so they have one time
+        // constant.
+        //
+        // It works whether or not the bank has been built yet, because the
+        // coefficient is derived per frame from the frame's own copy of the
+        // constant.
+        float tauRead = before.bankTauMs;
         if (arGetNumber(top["frequency"][F("rtaTau")], tauRead)) {
-          bankSetTau(tauRead);
-          rtaTauMs = bankTauMs;
-          rtaTauSet = true;
-          rtaTopSetTau(rtaTauMs);
+          if (tauRead < AR_BANK_TAU_MIN_MS) tauRead = AR_BANK_TAU_MIN_MS;
+          if (tauRead > AR_BANK_TAU_MAX_MS) tauRead = AR_BANK_TAU_MAX_MS;
+          arSettingsEdit([tauRead](ArLiveSettings& st) { st.bankTauMs = tauRead; });
         } else {
           configComplete = false;
         }
@@ -8637,10 +8859,13 @@ class AudioReactive : public Usermod {
       // fighting it.
       {
         oappend(SET_F("arv=document.getElementsByName(ux+':frequency:rtaAuto')[1];if(arv)arv.value="));
-        oappendi(arAutoRange ? 1 : 0);
+        // What is RUNNING, taken in one snapshot: the page shows one version
+        // of the settings, not a mixture of two.
+        const ArLiveSettings live = arSettingsSnapshot();
+        oappendi(live.autoRange ? 1 : 0);
         oappend(";");
         const char *liveFields[5] = {"rtaRange", "rtaFloor", "rtaTop", "rtaRef", "rtaTau"};
-        const float liveValues[5] = {arWindowRangeDb, arWindowFloorDb, arWindowTopDb, rtaRefDb, bankTauMs};
+        const float liveValues[5] = {live.windowRangeDb, live.windowFloorDb, live.windowTopDb, live.rtaRefDb, live.bankTauMs};
         char num[24];
         for (int i = 0; i < 5; i++) {
           snprintf(num, sizeof(num), "%.3f", (double)liveValues[i]);
