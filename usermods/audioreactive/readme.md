@@ -1,258 +1,399 @@
-# Audioreactive usermod
+# AudioReactive usermod
 
-Enables controlling LEDs via audio input. Audio source can be a microphone or analog-in (AUX) using an appropriate adapter.
-Supported microphones range from analog (MAX4466, MAX9814, ...) to digital (INMP441, ICS-43434, ...).
+> **Experimental — subject to change.**
+> This usermod is under active rework. The measurement path was replaced
+> wholesale in 2026-10: the FFT and the transform are gone, the bands are
+> measured by filter banks, the AGC is gone, and the display is drawn in one
+> window shared by both views. Settings, JSON keys and the serial keys can and
+> do change without notice. Nothing here is API-stable yet.
 
-Does audio processing and provides data structure that specially written effects can use.
+Enables controlling LEDs via audio input. The audio source can be a microphone
+or an analog line-in (AUX) through an appropriate adapter. Supported sources
+range from analog (MAX4466, MAX9814, …) to digital (INMP441, ICS-43434, …)
+and to the `esp_codec_dev` codecs (ES8311, ES8388, ES8374, ES8389, ES7210,
+ES7243, ES7243E, ZL38063, CJC8910).
 
-**does not** provide effects or draw anything to an LED strip/matrix.
+The usermod does the audio processing and publishes a spectrum that specially
+written effects can use.
 
-## Additional Documentation
-This usermod is an evolution of [SR-WLED](https://github.com/atuline/WLED), and a lot of documentation and information can be found in the [SR-WLED wiki](https://github.com/atuline/WLED/wiki):
+**It does not** provide effects or draw anything to an LED strip or matrix.
+
+---
+
+## How the measurement works
+
+There is **no FFT** in the current build. The transform, its estimator, its
+A/B comparison and its fallback are all gone. The bands are measured directly.
+
+### The 31 bands
+
+The measurement scale is the **ISO 266 third-octave set**, 19.95 Hz to
+19 952.6 Hz. Each band is the **shaped power** — the power through a bandpass
+filter whose ENBW is that band's own width. That is the unit a hardware
+analyser shows, which is why these bars can be compared with an RTA bar for
+bar.
+
+Two filter banks do the work:
+
+| bank | bands | range | rate |
+|---|---|---|---|
+| bottom | 8 | 19.95 – 100 Hz | 3 kHz (16× decimated, 400 Hz anti-alias) |
+| top | 23 | 125.9 – 19 952.6 Hz | 48 kHz |
+
+Both report in the same unit and on the same scale: white noise steps
++1.00 dB per third-octave band across the boundary, and pink reads flat.
+
+### The 16 display bands
+
+The sixteen bars the WLED effects read **are sixteen of the thirty-one** —
+the nearest third-octave centre to each of the old half-octave bands. They
+are not a second measurement and not a re-scaling: same audio, same frame,
+same unit, same window, same height.
+
+### The calibration
+
+The input chain (DC blocker, input LPF, and the source's own filtering) is a
+filter, and everything downstream measures what came *out* of it. The chain's
+response is measured — a unit impulse through the real filter code — and
+divided out **once**, at band level, in dB. The correction is clamped to
+±12 dB and the number of clamped bands is published.
+
+There is **no target curve**. A "pink" target is the correction for the point
+unit, where a pink input reads −3 dB/octave. This measurement is in the
+integrated unit, where pink already reads flat; applying the point unit's
+correction added a +3 dB/octave slope to the bars. Which reference spectrum
+reads flat is a property of the unit, not a setting.
+
+### Level, floor, gate, reference
+
+Four separate quantities, deliberately kept apart:
+
+- **level** — the broadband level of the fresh hop, in dB re full scale.
+- **floor** — the noise floor, in the same dB. It snaps *down* instantly and
+  creeps *up* with τ = 10 s, and only while the level is still close to it.
+  While the signal is present the floor is frozen.
+- **gate** — open when the level is `squelch` dB above the floor, shut 4 dB
+  below that (hysteresis).
+- **reference** — the loudest band's level, **followed**, applied to the
+  display only.
+
+Nothing reads its own output, so the deadlocks the old design had are
+structurally impossible.
+
+### The display window
+
+The 16 bars and the 31 RTA bars are drawn in **one** window:
+
+```
+window = [ reference − span , reference ]
+```
+
+The reference **follows** the loudest band, and it follows it two ways:
+
+- **fast** when the signal gets louder (20 ms) — the top of the window jumps
+  to the new peak, the bar that caused it is drawn at the **top**, and the
+  whole picture is pushed down under it. That visible rescale is the point:
+  the bars scale to the full height.
+- **slowly** when the signal gets quieter (6 s by default) — the top comes
+  back down over seconds rather than with every transient, so the picture
+  does not pump.
+
+The release is a setting, and it is tuned live with the serial `w`/`W` keys
+(shorter/longer by 500 ms, 100 ms … 30 s), because it decides how long the
+display stays pushed down after a peak.
+
+A **latched** maximum — holding the loudest thing ever seen — was tried and
+rejected: it cannot overflow and it never creeps, but after the first peak
+the bars sat under the top for the rest of the session and never scaled to
+100% again.
+
+The reference is dropped after a **real** absence of audio (the gate shut for
+3 s), so it is set again once per piece of audio, not once per frame and not
+once per gap in the music.
+
+### Timing
+
+The frame is **one hop**: 512 samples at 48 kHz, 10.67 ms, ~93.75 Hz. There
+is no window and nothing is carried forward — every measurement already used
+only the fresh hop.
+
+The task is **audio-paced, not timer-paced**: the blocking sample read *is*
+the pacer, and a frame ends no earlier than one frame period after it
+started. A cycle shorter than the frame period drains the DMA ring faster
+than the codec fills it; a cycle longer than it grows the ring until the DMA
+overwrites samples it has not handed over yet. Both are bad, and the read
+holds the cycle at the frame period from below.
+
+---
+
+## Where to read the numbers
+
+- **`/json/ar`** — the machine-readable endpoint. Root key `AudioReactive`.
+  Objects: `level`, `peak`, `display`, `geq`, `rta`, `bank`, `rtatopbank`,
+  `timing_us` (with `parts`, `analysis_breakdown` and `health`), `calibration`,
+  `codec`, `memory`, `self_test`, `udp_sync`. Scalars: `enabled`, `source`,
+  `processing`, `input_level`, `input_gain_pct`, `peak_pct`, `init_ms`.
+- **`/json/info`** — the brief, human-facing rows. Failures only.
+
+`tools/verify_ar.py` checks the whole table and exits 0 only if every row
+passed. It reads `http://192.168.6.249/json/ar` by default, or takes a saved
+JSON file or another URL.
+
+The rows that matter most:
+
+| what | good value |
+|---|---|
+| `geq.bars[k]` == `rta.bars[geq.rta_band[k]]` | equal for all 16 — same window, same auto-range |
+| `geq.raw_db[k]` == `rta.band_power_db[geq.rta_band[k]]` | identical to 0.000000 dB |
+| `memory.frame_samples` / `frame_buf_bytes` | 512 / 4096 — the frame is one hop |
+| `timing_us.cycle` | 10 666.7 µs ± 200 |
+| `timing_us.parts.deadline_wait` | ~0 — the deadline wait must never fire |
+| `timing_us.frames_overran` | 0 |
+| `timing_us.health.budget` / `.pacing` / `.dma_surplus` | all `ok` |
+| `timing_us.health.read_blocking` | `true` — if false, the DMA ring is filling |
+| `bank.ready` / `rtatopbank.ready` / `.healthy` | all `true` |
+
+Do not over-poll `/json/ar`: the `async_tcp` task wedges after roughly 60–70
+cumulative GETs, and the board then stops answering HTTP while still
+answering ping. A flash resets it.
+
+---
+
+## The serial console
+
+Single characters, because the display is tuned while it is watched: every
+key changes one number and prints what it is now.
+
+| key | what it does |
+|---|---|
+| `t` | run the input-chain self-test |
+| `g` | plot the 31-band RTA |
+| `G` | plot the 16 display bands |
+| `k` / `K` | the filter bank's detector time, shorter / longer by 5 ms |
+| `b` / `B` | the window's floor, down / up by 1 dB |
+| `u` / `U` | the window's top, down / up by 1 dB |
+| `s` / `S` | the auto window's span, narrower / wider by 1 dB |
+| `w` / `W` | the auto-range's release, shorter / longer by 500 ms |
+| `o` / `O` | the RTA reference offset, down / up by 1 dB |
+| `n` / `p` | the band the trim applies to, next / previous |
+| `y` / `Y` | that band's trim, down / up by 1 dB |
+| `d` / `D` | the dB trim, down / up |
+| `A` | back to the auto-range, and the trim back to its boot value |
+| `X` | force reconnect |
+
+The window is **one** window, so touching the floor or the top switches both
+views to the **fixed** window — the point of setting a floor is to have a
+floor. `s`/`S` is the one control that does not: the span belongs to the auto
+window. The reference offset and the per-band trim are calibration, not
+display settings, so they survive `A`.
+
+---
+
+## Settings
+
+All runtime, under the `AudioReactive` object in the config JSON.
+
+| key | meaning |
+|---|---|
+| `analogmic` / `digitalmic` | the source: type, pins, bits, right-slot, master |
+| `config.squelch` | the gate's margin above the noise floor, dB |
+| `frequency.rtaAuto` | 1 = auto-range, 0 = fixed window |
+| `frequency.rtaRange` | the auto window's span, dB (the analyser's "Scale Range") |
+| `frequency.rtaFloor` | the fixed window's floor, dB |
+| `frequency.rtaTop` | the fixed window's top, dB |
+| `frequency.rtaRef` | the reference offset, dB — one number for the whole installation |
+| `frequency.rtaTau` | the filter bank's detector time constant, ms |
+| `dynamics.limiter` / `rise` / `fall` | the dynamics limiter on the published bars |
+| `sync.port` / `mode` / `check_sequence` | UDP sound sync |
+
+### Removed settings
+
+These are ignored, and are removed from a stored config when it is read, so
+the settings page does not keep rendering them:
+
+| container | removed |
+|---|---|
+| `config` | `gain`, `AGC` |
+| `experiments` | the whole container — `micLev` (deprecated — the floor tracker subsumes it), `Mic_Quality`, `freqDist`, `I2S_FastPath`, `transform`, and the five band-mutating toggles `AutoLevel`, `BandCompress`, `NoiseFloorSub`, `HistogramNorm`, `Band0Lifter` |
+| `frequency` | `scale`, `profile`, `dBtrim`, `dBref`, `dBspan`, `trim`, `rtaTrim`, `target` |
+
+Why they went:
+
+- `scale` and `profile` chose the bar mapping and a per-band gain table.
+  Both re-mapped the measured value; a re-mapped band value is not a
+  measurement.
+- The five experiment toggles each mutated the band values — a per-band
+  gain, a per-band compression, a floor subtraction, a histogram
+  normalisation, a band-0 lift. Same reason.
+- `dBtrim` and `dBspan` were stored settings for the trim and the span. The
+  trim is still a live runtime value (the `d`/`D` keys) and starts at 0 at
+  every boot; the span is `rtaRange` now.
+- `rtaTrim` and `trim` were the per-band trim arrays. The per-band trim is
+  a live runtime value (`n`/`p`/`y`/`Y`), not a stored setting.
+- `target` was the target curve; see above.
+- `transform` — the transform is gone from the usermod.
+- `gain` and `AGC` — the per-band gain and the AGC are gone.
+
+The `experiments` container is removed as a whole, not key by key: an empty
+object still draws a group heading on the settings page, so the heading goes
+with it.
+
+`freqRMS` and `FFT_Window` were already gone before this build and are not
+read; they are not in the removal list above, so a config that still carries
+them keeps them.
+
+---
+
+## Installation
+
+`build_flags` = `-D USERMOD_AUDIOREACTIVE`
+
+All parameters are runtime configurable. Some need a hard reset after
+changing them (I2S microphone or selected GPIOs).
+
+### Compile-time options
+
+| flag | meaning |
+|---|---|
+| `SR_DMTYPE=x` | the audio source type (see below) |
+| `AUDIOPIN=x` | GPIO for the analog microphone / AUX-in (36) |
+| `I2S_SDPIN=x` | GPIO for the I2S SD pin (32) |
+| `I2S_WSPIN=x` | GPIO for the I2S WS pin (15) |
+| `I2S_CKPIN=x` | GPIO for the I2S SCK pin (14) |
+| `MCLK_PIN=x` | GPIO for the master clock on digital line-in boards (−1) |
+| `ES7243_SDAPIN` | GPIO for the ES7243 I2C SDA pin (−1) |
+| `ES7243_SCLPIN` | GPIO for the ES7243 I2C SCL pin (−1) |
+| `UM_AUDIOREACTIVE_ENABLE` | the usermod defaults to enabled |
+| `UM_AUDIOREACTIVE_DYNAMICS_LIMITER_OFF` | the rise/fall limiter defaults off |
+| `SR_SQUELCH=x` | the default gate margin, dB (10) |
+| `I2S_USE_RIGHT_CHANNEL` | use RIGHT instead of LEFT (not recommended) |
+| `I2S_USE_16BIT_SAMPLES` | 16-bit instead of 32-bit buffers — frees RAM, costs quality |
+| `I2S_GRAB_ADC1_COMPLETELY` | experimental; conflicts with any `analogRead()` |
+| `MIC_LOGGER` | debugging: log the samples to serial USB |
+| `SR_DEBUG` | debugging: extra diagnostics on serial USB |
+
+### Source types (`SR_DMTYPE`)
+
+`0` generic analog · `1` generic I2S · `2` ES7243 · `3` SPH0645 ·
+`4` generic I2S with MCLK · `5` generic I2S PDM · `6` ES8388 · `7` WM8978 ·
+`8` AC101 · `9` ES8311 · `10`–`18` the `esp_codec_dev` codecs (ES8311,
+ES8388, ES8374, ZL38063, ES8389, ES7210, ES7243, ES7243E, CJC8910) ·
+`51` legacy I2S PDM.
+
+---
+
+## Supported hardware
+
+Rewritten for **WLED-MM-P4** by @TroyHacks. Some things may be dropped or
+different from upstream, and this code assumes you know what you are doing.
+
+The best results are on the **ESP32-P4** (dual core, PSRAM). The classic
+ESP32 and the ESP32-S3 also work. ESP32-S2 and ESP32-C3 may compile but are
+not tested — the audio path wants more compute than they have. ESP8266 is not
+supported.
+
+Analog audio is only possible on the classic ESP32.
+
+The P4 has no double-precision FPU: the code is float throughout, and the
+heavier working sets are placed in PSRAM deliberately. The analysis task's stack
+is sized on a measurement, not a guess — its high-water mark is published as
+`memory.analysis_task_stack_free`.
+
+---
+
+## Known issues
+
+Open, and worth knowing about:
+
+- **The PDM bandpass is in no calibration.** With a PDM microphone
+  (`dmType` 5 or 51) the live chain runs the PDM bandpass filter *before* the
+  input chain, and no calibration models it — the calibrations measure the DC
+  blocker and the input LPF, which is what the `InputChain` holds. So on the
+  PDM path the bottom eight bands read 6.1–19.0 dB low and the top
+  twenty-three ~4.7 dB low at 126 Hz, rising to 0.18 dB at 2 kHz — a 4.5 dB
+  tilt across them. The self-test cannot see it, because the self-test runs
+  the same chain the calibration measures.
+  It is left alone deliberately: dividing it out would lift the bands the
+  filter exists to quiet by up to 19 dB, putting back the noise it was added
+  to remove. Whether the bottom bands should read as the microphone hears them
+  or as the filtered signal is a choice, not a bug.
+- **A positive display trim saturates the auto window.** The auto-range
+  holds the loudest band exactly at the window's 0 dB, and the trim is a dB
+  offset applied *on top* of that window — so a positive trim pushes the
+  loudest band past the top by exactly the trim amount and the bar pegs at
+  255. The input-level slider spans −14 dB to +6 dB, so only its lower half
+  does anything other than clip. `A` resets the trim to its boot value.
+- The bottom bank's ENBW drifts 0.84983 → 0.84326 across 19.95 – 100 Hz
+  against the top bank's flat 0.85. Worth 0.033 dB at the 7/8 boundary;
+  it feeds the density/peak path, not the bar heights.
+- The bottom bank has no white-noise self-test of its own — only a centred
+  tone and a neighbour-leakage check.
+
+### Fixed
+
+- **The level read 0.87 dB low at full scale.** The RMS discarded samples at
+  the rail and then divided by the number of *survivors* — so the divisor
+  changed with the signal, and the samples it dropped were exactly the
+  loudest ones. A 0 dBFS sine lost 16 % of its samples and read 0.87 dB low;
+  it only bit above about −0.15 dBFS, which is why it went unnoticed.
+  Samples at the rail are now clamped instead, which keeps the divisor
+  honest and leaves a full-scale tone reading 0.06 dB low — the honest
+  number, since a signal clipped by the ADC really does have less RMS.
+- **The calibrations could describe a filter that was not running.** The
+  16- and 31-band calibration and the self-test used one set of chain flags
+  and the bottom bank used another, and they disagreed with the live path on
+  the PDM path (the calibration modelled a DC blocker the PDM path does not
+  run) and on `useInputFilter` 0 and 99 (the bottom bank modelled an input
+  LPF that is not in the path at all). There is now ONE definition of which
+  filters the live chain runs, and the live task, all three calibrations and
+  the self-test use it.
+- The ESP32-P4 I2S DIN not reading external mic data. The IDF v5 driver's
+  `i2s_channel_init_std_mode()` does not disable the GPIO output driver on
+  the DIN pin, so the GPIO output register masked the mic signal.
+  `gpio_set_direction(din, GPIO_MODE_INPUT)` is now called after the call in
+  both `I2SSource::initialize()` and `CodecDevSource::_allocI2sRxChannel()`,
+  gated to `CONFIG_IDF_TARGET_ESP32P4`. **Note:** on the Waveshare
+  ESP32-P4-Nano, GPIO 45 drives the SD-card power-enable circuit
+  ([micropython#19439](https://github.com/micropython/micropython/issues/19439));
+  using it for I2S DIN stops the SD card mounting.
+- The `esp_codec_dev` sources now honour the UI's `bitsPerSample`,
+  `useRightSlot` and `i2sMaster` — they used to be dropped, so those three
+  controls silently did nothing on every codec path.
+- The old `audioSource` was leaked on every source switch, together with its
+  I2S channel. It is now deinitialised and deleted before the switch.
+- The `sqrt` macro hack leaked out of this usermod and into 20-odd other
+  usermod headers, truncating their double math.
+
+---
+
+## Additional documentation
+
+This usermod is an evolution of [SR-WLED](https://github.com/atuline/WLED),
+and a lot of documentation and information can be found in the
+[SR-WLED wiki](https://github.com/atuline/WLED/wiki):
+
 * [getting started with audio](https://github.com/atuline/WLED/wiki/First-Time-Setup#sound)
-* [Sound settings](https://github.com/atuline/WLED/wiki/Sound-Settings) - similar to options on the usemod settings page in WLED.
+* [Sound settings](https://github.com/atuline/WLED/wiki/Sound-Settings)
 * [Digital Audio](https://github.com/atuline/WLED/wiki/Digital-Microphone-Hookup)
 * [Analog Audio](https://github.com/atuline/WLED/wiki/Analog-Audio-Input-Options)
 * [UDP Sound sync](https://github.com/atuline/WLED/wiki/UDP-Sound-Sync)
 
-
-## Supported MCUs
-
-This has mostly been rewritten to suppot WLED-MM-P4 by @TroyHacks - so some things may be dropped or different. This code assumes you know what you're doing. 
-
-This audioreactive usermod works best on "classic ESP32" (dual core), and on ESP32-S3 which also has dual core and hardware floating point support and accellerated FFT, and of course the ESP32-P4 which the latest speed deamon and also has accellerated FFT (so do some other chipsets this could run on, but aren't entirely listed yet.)
-
-It might compile successfully for ESP32-S2 and ESP32-C3, however might not work well, as other WLED functions will become slow. Audio processing requires a lot of computing power, which can be problematic on smaller MCUs like -S2 and -C3. **Not tested below the ESP32-P4.**
-
-Analog audio is only possible on "classic" ESP32, but not on other MCUs like ESP32-S3.
-
-ESP8266 is not supported, don't bother trying to compile this version for that. 
-
-## Installation 
-
-### using Espressif's Accelerated ESP-DSP library
-
-* `build_flags` = `-D USERMOD_AUDIOREACTIVE`
-
-## Configuration
-
-All parameters are runtime configurable. Some may require a hard reset after changing them (I2S microphone or selected GPIOs).
-
-If you want to define default GPIOs during compile time, use the following (default values in parentheses):
-
-- `-D SR_DMTYPE=x` : defines digital microphone type: 0=analog, 1=generic I2S (default), 2=ES7243 I2S, 3=SPH0645 I2S, 4=generic I2S with master clock, 5=PDM I2S, 6=ES8388, 7=WM8978, 8=AC101, 9=ES8311, 10=ES8311-IDF, 11=ES8388-IDF, 12=ES8374-IDF, 13=ZL38063-IDF, 14=ES8389-IDF, 15=ES7210-IDF (rec), 16=ES7243-IDF (rec), 17=ES7243E-IDF (rec), 18=CJC8910-IDF
-- `-D AUDIOPIN=x`  : GPIO for analog microphone/AUX-in (36)
-- `-D I2S_SDPIN=x` : GPIO for SD pin on digital microphone (32)
-- `-D I2S_WSPIN=x` : GPIO for WS pin on digital microphone (15)
-- `-D I2S_CKPIN=x` : GPIO for SCK pin on digital microphone (14)
-- `-D MCLK_PIN=x`  : GPIO for master clock pin on digital Line-In boards (-1)
-- `-D ES7243_SDAPIN` : GPIO for I2C SDA pin on ES7243 microphone (-1)
-- `-D ES7243_SCLPIN` : GPIO for I2C SCL pin on ES7243 microphone (-1)
-
-Other options:
-
-- `-D UM_AUDIOREACTIVE_ENABLE` : makes usermod default enabled (not the same as include into build option!)
-- `-D UM_AUDIOREACTIVE_DYNAMICS_LIMITER_OFF` : disables rise/fall limiter default
-
-### GEQ Level / AGC / Compression Toggles
-
-The `experiments` block in the AudioReactive settings has four runtime
-toggles that adjust how the GEQ (graphic equalizer) bars are scaled.
-All default OFF except `AutoLevel` (default ON). The toggles are:
-
-- **`AutoLevel`** (default ON): per-band slow-decay AGC. Each band
-  tracks its own peak with a slow-decay envelope and applies a per-band
-  gain so the loudest band fills the display. Pink-noise (1/f) sources
-  end up roughly flat in the display because each band settles
-  independently. Combines well with `BandCompress` for a smooth, responsive
-  visualizer.
-
-- **`BandCompress`** (default OFF): per-band log compression. Applies
-  `log(1+x) / log(1+bandMax)` so peaks are softened without boosting
-  the floor. Each band compresses against its own current peak —
-  bands keep their shape but transients don't blow out the display.
-  Use with `AutoLevel` for the most "alive" look; without AGC the
-  compression is barely visible.
-
-- **`NoiseFloorSub`** (default OFF): per-band slow-minimum subtraction.
-  Tracks the noise floor of each band (slowest minimum) and subtracts it,
-  so quiet bands with high residual noise show their actual signal
-  instead of always appearing at the noise level. Most useful with
-  distant or noisy mics.
-
-- **`HistogramNorm`** (default OFF): single global gain via loudest-band
-  peak. Periodically picks a gain that makes the loudest band hit ~85%
-  of the display. Mutually exclusive with `AutoLevel` (skipped when AGC
-  is on, since both would double-correct). A simpler alternative to
-  per-band AGC if you just want a single global gain.
-
-- **`Band0Lifter`** (default OFF): "dance music fixer" — when band 1 is
-  non-zero, add 15% of band 1's value to band 0. Compensates for mics
-  with poor sub-bass response (e.g. the ESP32-P4 EV board's onboard
-  analog MEMS mic) by using band 1 (60-120 Hz, reliably captured) as a
-  weak hint for band 0. Bands stay visually distinct: the additive
-  coupling is small enough that band 0 retains its own shape, just
-  shifted up when band 1 is active.
-
-### Recommended Combinations
-
-Different content types benefit from different combinations:
-
-- **Music playback (default AGC)**: just `AutoLevel`. Music is already
-  mastered with proper levels; AGC rebalances bands to fill the display
-  without changing the relative mix.
-
-- **Live microphone / speech**: `AutoLevel` + `NoiseFloorSub` +
-  `BandCompress`. The mic's noise floor is subtracted, AGC levels the
-  bands, and compression prevents a single loud syllable from blowing
-  out a bar.
-
-- **Quiet environment / distant mic**: `NoiseFloorSub` only (no AGC).
-  AGC would amplify the noise floor along with the signal; the natural
-  variation between bands is informative.
-
-- **Loud environment / clipping**: `AutoLevel` only. Don't subtract
-  the floor (that would remove real signal) and don't compress
-  (transients should still feel alive).
-
-- **Visualizer for a screen / demo**: `AutoLevel` + `BandCompress`.
-  Aggressive AGC + compression makes every band show activity — looks
-  "alive" all the time.
-
-- **Clean / smooth**: `AutoLevel` only. Single control, smooth display.
-
-- **Raw / debugging**: all OFF. Bands show actual values; tune
-  `pinkIndex` (0-10) and other parameters knowing you're seeing the
-  true signal.
-
-**Don't combine `AutoLevel` + `HistogramNorm`** — they're both gain
-adjustments; the code already skips `HistogramNorm` when `AutoLevel` is
-on to avoid double-correction.
-
-**Don't combine `BandCompress` alone without AGC** — without AGC the
-input range is so wide that compression is barely visible.
-
-**Set-and-forget for most users**: `AutoLevel` (default) +
-`NoiseFloorSub` + `BandCompress` handles nearly all content types
-gracefully with no user intervention.
-
-**NOTE** I2S is used for analog audio sampling. Hence, the analog *buttons* (i.e. potentiometers) are disabled when running this usermod with an analog microphone.
-
-### Advanced Compile-Time Options
-You can use the following additional flags in your `build_flags`
-* `-D SR_SQUELCH=x`  : Default "squelch" setting (10)
-* `-D SR_GAIN=x`     : Default "gain" setting (60)
-* `-D I2S_USE_RIGHT_CHANNEL`: Use RIGHT instead of LEFT channel (not recommended unless you strictly need this).
-* `-D I2S_USE_16BIT_SAMPLES`: Use 16bit instead of 32bit for internal sample buffers. Reduces sampling quality, but frees some RAM ressources (not recommended unless you absolutely need this).
-* `-D I2S_GRAB_ADC1_COMPLETELY`: Experimental: continuously sample analog ADC microphone. Only effective on ESP32. WARNING this _will_ cause conflicts(lock-up) with any analogRead() call.
-* `-D MIC_LOGGER`     : (debugging) Logs samples from the microphone to serial USB. Use with serial plotter (Arduino IDE)
-* `-D SR_DEBUG`       : (debugging) Additional error diagnostics and debug info on serial USB.
-
-## Fixes and Known Issues
-
-### Fixes applied
-
-#### 2026-08 — ESP32-P4 I2S DIN not reading external mic data
-
-**Symptom:** on ESP32-P4 with any of the legacy `I2SSource`-derived audio
-sources (Generic I2S, Generic I2S with MCLK, ES8388, etc.) or even with
-the new `CodecDevSource` pointed at the same pins, `i2s_channel_read()`
-returns full blocks but every sample is `0xFFFFFFFF`. Info panel shows
-`I2S digital - quiet`, AGC stays pinned at `1.00x`, GEQ doesn't react.
-Same hardware + same pins worked correctly with the pre-IDFv5 audio code.
-
-**Root cause:** the IDF v5 new I2S driver's
-`i2s_channel_init_std_mode()` does not explicitly disable the GPIO
-output driver on the DIN pin on ESP32-P4. Post-init,
-`gpio_dump_io_configuration()` shows `OutputEn: 1` with
-`SigOut: 256 (simple GPIO output)` on the DIN pin — meaning the GPIO
-output register drives the pin, masking any external mic signal. The
-legacy `i2s_set_pin()` API cleared this implicitly via
-`gpio_set_direction(pin, GPIO_MODE_INPUT)`; the v5 driver does not.
-
-**Fix** (in `audio_source.h`): `gpio_set_direction(din, GPIO_MODE_INPUT)`
-is called immediately after `i2s_channel_init_std_mode()` in both
-`I2SSource::initialize()` and `CodecDevSource::_allocI2sRxChannel()`,
-gated to `CONFIG_IDF_TARGET_ESP32P4`.
-
-**Verified** on Waveshare ESP32-P4-Nano with GPIOs 45/46/47/2
-(SD/WS/BCK/MCLK) and an INMP441-style mic:
-- `OutputEn: 0` after fix (was `1` pre-fix)
-- Raw samples: `min=-1 max=-1` → real audio (`min≈-2.1B max≈2.1B`)
-- Info panel: `I2S digital - peak 78%`, AGC `0.43x`
-- All three source families (cases 4, 6, 10) confirmed working on these pins
-
-**Note on GPIO 45 specifically:** on the Waveshare ESP32-P4-Nano, GPIO 45
-is wired to the SD card power-enable circuit
-([micropython/micropython#19439](https://github.com/micropython/micropython/issues/19439)).
-Using GPIO 45 for I2S DIN disables the SD card power LDO; if you have an
-SD card in the slot, expect it to fail to mount. The same applies on
-GPIO 46 and 47 depending on your board's pinout.
-
-### Known follow-up issues (not yet fixed)
-
-These are real bugs found while diagnosing the P4 issue. They are
-unrelated to the current fix and should be addressed in separate
-commits so they don't get tangled with the regression fix:
-
-- **`audio_source.h` — `_slotMask` clobbered in `I2SSource::initialize()`.**
-  The base-class `initialize()` unconditionally overwrites `_slotMask`
-  with the value derived from the runtime `useRightSlot` parameter,
-  silently discarding whatever value a subclass constructor set (e.g.
-  `ES8388Source` configures a specific slot in its constructor). Dead,
-  misleading code — either remove the redundant assignment or move it to
-  the constructor.
-
-- **`audio_source.h` + `audio_reactive.h` — compile-time `I2S_datatype`
-  vs runtime `bitsPerSample` mismatch.** `I2S_datatype` is hard-wired to
-  `int32_t` (compile-time), but the legacy cases pass the *runtime*
-  `i2sBitsPerSample` (16/24/32) into the driver, while `getSamples()`
-  always reads `num_samples * sizeof(I2S_datatype)` bytes per block.
-  Selecting 16 or 24 bits in the UI yields packed garbage. Either clamp
-  `i2sBitsPerSample` to 32 for the legacy path, or have `getSamples()`
-  honor the runtime setting. At minimum, reject the mismatch with an
-  `ERRORSR_PRINTF` so it's not silent.
-
-- **`audio_reactive.h` — codec cases 10–18 ignore UI audio settings.**
-  Cases 10–18 (the `esp_codec_dev` sources) call `audioSource->initialize()`
-  with only the four pin args, so the UI's `bitsPerSample`,
-  `useRightSlot`, and `i2sMaster` controls silently do nothing for every
-  codec path. Wires up the dropped args.
-
-- **`audio_source.h` — `CodecDevSource::getSamples()` divides by 65536.0f
-  in both `#ifdef` arms.** When `I2S_USE_16BIT_SAMPLES` is defined,
-  `I2S_SAMPLE_DOWNSCALE_TO_16BIT` is *not* defined (see line ~91), but
-  `CodecDevSource::getSamples()` divides by `65536.0f` regardless. A
-  16-bit-sample build would attenuate the signal by 65536×. Compare
-  `I2SSource::getSamples()` which has the correct guard.
-
-- **`audio_source.h` — PDM init returns before `_initialized` on
-  S2/C3/P4.** Cases 5/51 (PDM mics) on `SOC_I2S_SUPPORTS_PDM_RX=false`
-  targets print the error and `return`, but never set `_initialized`.
-  Caller then sees `_initialized=false` and skips `getSamples()` — silent
-  failure. Set `_initialized = true` before returning or restructure.
-
-- **`audio_reactive.h` — `I2SAdcSource` instantiated but class deleted.**
-  Case (analog mic, ESP32 only) instantiates `I2SAdcSource` but the class
-  was removed during the IDFv5 migration. Guarded to classic ESP32 so
-  P4/S3 builds are unaffected, but the dead instantiation should be
-  cleaned up.
-
-- **`audio_reactive.h` `switch (dmType)` — `audioSource` leak on source
-  switch.** `audioSource` is never `delete`d before reassignment in any
-  case except 254/255. Each live source switch leaks the previous object
-  and its I2S channel. Add `if (audioSource) { audioSource->deinitialize();
-  delete audioSource; audioSource = nullptr; }` at the top of the switch.
+---
 
 ## Release notes
 
-* 2026-08 Fix ESP32-P4 I2S DIN not reading external SD data: the IDF v5
-  driver's `i2s_channel_init_std_mode()` does not disable the GPIO output
-  driver on the DIN pin on P4, so the GPIO output register masks the mic
-  signal. Force `gpio_set_direction(din, GPIO_MODE_INPUT)` after the call
-  in both `I2SSource::initialize()` and `CodecDevSource::_allocI2sRxChannel()`,
-  gated to `CONFIG_IDF_TARGET_ESP32P4`. See "Fixes applied" above for
-  details.
-* 2026-06 Moved to pure Espressif IDF v5.5 calls and ESP-DSP FFT accelleration, added esp_codec_dev supported codecs and added AutoLevel experiments - by @TroyHacks
-* 2022-06 Ported from [soundreactive WLED](https://github.com/atuline/WLED) - by @blazoncek (AKA Blaz Kristan) and the [SR-WLED team](https://github.com/atuline/WLED/wiki#sound-reactive-wled-fork-team).
-* 2022-11 Updated to align with "[MoonModules/WLED](https://amg.wled.me)" audioreactive usermod - by @softhack007 (AKA Frank M&ouml;hle).
+* 2026-10 The measurement path was replaced: no transform, no target curve,
+  no AGC. The bands are measured by two filter banks, the 16 display bands
+  are 16 of the 31 RTA bands, and the display is drawn in one window whose
+  top follows the loudest band. See "How the measurement works" above.
+* 2026-08 Fixed the ESP32-P4 I2S DIN not reading external mic data.
+* 2026-06 Moved to pure Espressif IDF v5.5 calls and ESP-DSP FFT
+  acceleration, added the `esp_codec_dev` codecs and the AutoLevel
+  experiments — by @TroyHacks.
+* 2022-11 Aligned with the
+  "[MoonModules/WLED](https://amg.wled.me)" audioreactive usermod — by
+  @softhack007 (AKA Frank M&ouml;hle).
+* 2022-06 Ported from
+  "[soundreactive WLED](https://github.com/atuline/WLED)" — by @blazoncek
+  (AKA Blaz Kristan) and the
+  [SR-WLED team](https://github.com/atuline/WLED/wiki#sound-reactive-wled-fork-team).
