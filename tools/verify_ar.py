@@ -94,9 +94,21 @@ def main():
     check(read > period_us * 0.5,
           "the read blocks - it is the pacer",
           "%.1f us" % read)
-    check(t.get("frames_overran", 0) == 0,
-          "no frame overran its work budget",
-          "%s overran" % t.get("frames_overran"))
+
+    # The overrun counter is CUMULATIVE, and the endpoint's own traffic adds
+    # to it: reading /json/ar costs the analysis task one frame's compute
+    # budget roughly once every seven polls (measured 2026-10-29: 30 polls
+    # -> +3, idle 30 s -> +0, 15 x /json/version -> +0). So "the counter is
+    # zero" is a property of a freshly booted board, not of a healthy one -
+    # a board that has been up for hours fails it however well it is
+    # behaving. What matters is the RATE: a board that is genuinely overrunning
+    # its budget overruns every frame or close to it.
+    overran = t.get("frames_overran", 0)
+    total = t.get("frames_total", 0)
+    rate = (float(overran) / total) if total else 0.0
+    check(rate < 0.001,
+          "the analysis task is not overrunning its budget",
+          "%s of %s frames (%.4f%%)" % (overran, total, rate * 100.0))
 
     h = t.get("health", {})
     for k in ("budget", "pacing", "dma_surplus"):
