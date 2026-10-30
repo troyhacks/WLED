@@ -11,6 +11,9 @@
 */
 
 #include "wled.h"
+// The publish path: ONE lock and ONE published RTA frame, shared with the
+// sound simulator and with the effect that draws the analyser.
+#include "ar_publish.h"
 #include <AsyncUDP.h>
 // #include "esp_dsp.h"
 #include "dsps_biquad.h"
@@ -139,19 +142,10 @@ volatile bool haveNewBandResult = false; // flag to directly inform UDP sound se
 // same back buffer and write two different frames into it, and the two swaps
 // can cancel each other out.
 //
-// The critical section is a 16-byte copy plus a pointer store - a few hundred
-// nanoseconds - so a spinlock is the right tool: neither task can be blocked
-// by the other for longer than that.
-static std::atomic<uint8_t> arPublishLock{0};
-
-// RAII guard for the publish critical section.
-class ArPublishGuard {
-public:
-  ArPublishGuard() { while (arPublishLock.exchange(1, std::memory_order_acquire)) { /* spin */ } }
-  ~ArPublishGuard() { arPublishLock.store(0, std::memory_order_release); }
-  ArPublishGuard(const ArPublishGuard&) = delete;             // not copyable
-  ArPublishGuard& operator=(const ArPublishGuard&) = delete;
-};
+// The lock itself is NOT here: it lives in wled00/ar_publish.h, because the
+// sound simulator publishes an RTA frame from the main loop as well, and the
+// effect that draws an analyser reads one from the LED loop. One lock for the
+// whole publish path, in a place all three can reach.
 
 static uint8_t arBandBuf[2][NUM_GEQ_CHANNELS] = {{0}};  // double buffer: arBandBuf[arBandIdx] is the published one
 static uint8_t  arBandIdx = 0;                          // which buffer is published
@@ -169,9 +163,12 @@ static uint8_t* arBandBytes = arBandBuf[0];               // the published buffe
 // The two sets still get their own buffers, because they are drawn at two
 // different resolutions: sixteen bars for the effects, thirty-one for the
 // analyser. But there is only ONE measurement behind them, and ONE window.
-static uint8_t rtaResultBuf[2][NUM_RTA_CHANNELS] = {{0}};  // double buffer, as above
-static uint8_t  rtaResultIdx = 0;                          // which buffer is published
-static uint8_t* rtaResult = rtaResultBuf[0];               // the published buffer
+//
+// The published RTA frame itself lives in the publish module (ar_publish.h),
+// because it has more than one writer: this usermod, and the sound
+// simulator, which runs on the main loop and had been writing the frame
+// directly - with no lock, while the effect that draws the analyser was
+// reading it.
 
 // The usermod's um_data_t, so that the analysis task - a free function, with no
 // access to the class - can repoint u_data[2] when it swaps buffers. It is
@@ -2989,20 +2986,11 @@ static void arPublishRta(float dtMs) {
   // Publish, the same way as the GEQ bands: fill the buffer the effects are
   // NOT reading, then swap the pointer. A reader that copies NUM_RTA_CHANNELS
   // bytes always gets one whole frame.
-  {
-    ArPublishGuard guard;
-    uint8_t *back = rtaResultBuf[rtaResultIdx ^ 1];
-    memcpy(back, frame, NUM_RTA_CHANNELS);
-    rtaResultIdx ^= 1;
-    rtaResult = rtaResultBuf[rtaResultIdx];
-    // The board-local publication: the effects that draw an analyser read
-    // these. Same shape as the buffer above - fill the frame nobody is
-    // reading, then swap the index - and it stays off the shared um_data
-    // structure, which must not grow.
-    memcpy(arRtaBands[arRtaBandsIdx ^ 1], frame, NUM_RTA_CHANNELS);
-    arRtaBandsIdx ^= 1;
-    arRtaBandsValid = true;
-  }
+  //
+  // It goes through the publish module, which owns the one published RTA
+  // frame and the one lock. The sound simulator publishes through the same
+  // door, so the two writers cannot tear each other's frame.
+  arPublishRtaBands(frame);
 }
 
 // Publish a set of band bytes that came from somewhere else - the UDP sound
@@ -3180,7 +3168,9 @@ static void arPublishFrameSnapshot() {
   // the dB values beside them. This runs after arPublishBands() and
   // arPublishRta(), so the published buffers already hold THIS frame.
   memcpy(arFrameSnap.geqBars, arBandBytes, NUM_GEQ_CHANNELS);
-  memcpy(arFrameSnap.rtaBars, rtaResult, NUM_RTA_CHANNELS);
+  // The published RTA frame, taken under the lock that is already held. The
+  // lock is not recursive, so the in-lock accessor is the one to use.
+  arCopyRtaBandsLocked(arFrameSnap.rtaBars);
 }
 
 // ---------------------------------------------------------------------------
@@ -6262,8 +6252,8 @@ class AudioReactive : public Usermod {
         // 12 entries, and it stays 12. The structure is carried between WLED
         // instances and serialised with its type tags, so a 13th entry
         // invalidates the packet on every instance that does not have this
-        // code. The 31 RTA bands go out board-locally instead - see
-        // arRtaBands in fcn_declare.h.
+        // code. The 31 RTA bands go out board-locally instead - see the
+        // publish module, wled00/ar_publish.h.
         um_data->u_size = 12;
         um_data->u_type = new um_types_t[um_data->u_size];
         um_data->u_data = new void*[um_data->u_size];
@@ -6940,16 +6930,13 @@ class AudioReactive : public Usermod {
         // to happen under the publish lock.
         for (int i = (init ? 0 : 1); i < NUM_GEQ_CHANNELS; i += 2) arBandBytes[i] = 16;
         if (arUmData != nullptr) arUmData->u_data[2] = arBandBytes;
-        // The RTA set, the same way: both halves of the double buffer
-        // cleared, the published pointer back to the first one.
-        memset(rtaResultBuf, 0, sizeof(rtaResultBuf));
-        rtaResultIdx = 0;
-        rtaResult = rtaResultBuf[0];
-        memset(arRtaBands, 0, sizeof(arRtaBands));
-        arRtaBandsIdx = 0;
-        arRtaBandsValid = false;
         memset(arRtaSmth, 0, sizeof(arRtaSmth));
       }
+      // The published RTA frame: cleared and marked unpublished, so a reader
+      // falls back to the GEQ view until the next frame arrives. The publish
+      // lock is NOT recursive, and arResetRtaBands() takes it itself, so this
+      // is deliberately outside the section above.
+      arResetRtaBands();
       // The display's reference starts UNSET: the first signal sets it, and
       // the signal then holds it. Nothing is inherited from before.
       //
