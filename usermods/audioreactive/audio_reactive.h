@@ -210,6 +210,20 @@ constexpr int BLOCK_SIZE = 128;                  // I2S buffer size (samples)
 // globals
 static uint8_t inputLevel = 128;              // UI slider value
 
+// The codec's INPUT GAIN, in dB, on top of the level the source type chose.
+//
+// It is a trim, not an absolute gain: the ES8311 at line level (type 9)
+// starts with its PGA at 0 dB and the same chip at mic level (type 19)
+// starts with it at +30 dB, and this is added on top of whichever is in
+// force. Zero - the default - leaves every codec exactly as it was, so a
+// saved config that has never heard of this setting behaves as before.
+//
+// The number here is what was ASKED for. What the chip could actually do is
+// the codec's business: it quantises the request to its own register and
+// reports back the trim it applied, and that is the number the sound-
+// pressure estimate takes off.
+static float codecGainTrimDb = 0.0f;
+
 // The squelch's DEFAULT.
 //
 // It used to be a plain #ifndef pair, so that the build's -D SR_SQUELCH=x
@@ -5983,6 +5997,15 @@ class AudioReactive : public Usermod {
       if (dmType == 5) offsetDb += 6.02f;   // correction for PDM (x2)
       if (dmType == 4) offsetDb -= 20.0f;  // line-in is not a microphone: it runs hot
       if (dmType == 19) offsetDb -= 30.0f; // the ES8311's PGA adds +30 dB at mic level: it runs hot
+      // The codec's input-gain trim. The user has turned the input up by
+      // this much, so the ADC sees that much MORE of it, and the estimate
+      // has to take it off again - otherwise the sound pressure would grow
+      // with the gain knob, and a sound pressure that depends on the gain
+      // setting is not a measurement of anything.
+      //
+      // It is the APPLIED trim, not the requested one: the codec's register
+      // may not have been able to do exactly what was asked for.
+      if (audioSource) offsetDb -= audioSource->getInputGainTrimDb();
       const float dbSpl = 105.0f + arLevelDb + offsetDb;
       return fminf(fmaxf((dbSpl - 5.0f) * 2.55f, 0.0f), 255.0f);   // 5..105 dB -> 0..255
     }
@@ -6699,7 +6722,7 @@ class AudioReactive : public Usermod {
           // always done - a saved type 9 keeps meaning type 9.
           DEBUGSR_PRINTLN(F("AR: ES8311 Source (line level)"));
           audioSource = new ES8311Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster,
-                                         ES8311Source::LINE_LEVEL);
+                                         ES8311Source::LINE_LEVEL, codecGainTrimDb);
           //useInputFilter = 0; // to disable low-cut software filtering and restore previous behaviour
           delay(100);
           // WLEDMM align global pins
@@ -6720,7 +6743,7 @@ class AudioReactive : public Usermod {
           // are the same; only the PGA code differs.
           DEBUGSR_PRINTLN(F("AR: ES8311 Source (mic level)"));
           audioSource = new ES8311Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster,
-                                         ES8311Source::MIC_LEVEL);
+                                         ES8311Source::MIC_LEVEL, codecGainTrimDb);
           delay(100);
           // WLEDMM align global pins
           if ((sdaPin >= 0) && (i2c_sda < 0)) i2c_sda = sdaPin; // copy usermod prefs into globals (if globals not defined)
@@ -7786,6 +7809,15 @@ class AudioReactive : public Usermod {
           }
           c["mclk_div"] = div;
         }
+        // The codec's INPUT GAIN: what was asked for, and what the chip
+        // could actually do.
+        //
+        // They differ when the request is off the end of the codec's own
+        // register, and the APPLIED one is the number that matters - it is
+        // what the sound-pressure estimate takes off, so it is the number
+        // the estimate and the chip agree on.
+        c["gain_trim_db"]     = (double)codecGainTrimDb;
+        c["gain_applied_db"]  = (double)(audioSource ? audioSource->getInputGainTrimDb() : 0.0f);
         c["ppm"] = gotFs ? (double)((((long long)gotFs - (long long)SAMPLE_RATE) * 1000000LL)
                                     / (long long)SAMPLE_RATE) : 0.0;
       }
@@ -7927,6 +7959,24 @@ class AudioReactive : public Usermod {
         {
           infoArr = user.createNestedArray(F("Active codec"));
           infoArr.add(arCodecName(dmType));
+        }
+
+        // The codec's input gain - the trim that was asked for and the one
+        // the chip actually applied. They differ when the request is off the
+        // end of the codec's register, and the applied one is what the
+        // sound-pressure estimate uses.
+        //
+        // A row only when the gain is not where it started: a trim of 0 dB
+        // means "exactly as before", which needs no saying.
+        if (audioSource) {
+          const float appliedGain = audioSource->getInputGainTrimDb();
+          if ((appliedGain != 0.0f) || (codecGainTrimDb != 0.0f)) {
+            char gainBuf[40];
+            snprintf(gainBuf, sizeof(gainBuf), "%+.1f dB (set %+.1f dB)",
+                     (double)appliedGain, (double)codecGainTrimDb);
+            infoArr = user.createNestedArray(F("Codec input gain"));
+            infoArr.add(gainBuf);
+          }
         }
 
         // The codec's own registers, the clock it is actually fed with, the
@@ -8159,6 +8209,11 @@ class AudioReactive : public Usermod {
         if (d >= 1 && d <= 8) mclkDiv = d;
       }
       usermod[F("mclk_div")] = mclkDiv;
+
+      // The codec's input gain, as the chip actually has it. Published
+      // under the name the diagnostic endpoint publishes it as, so a value
+      // read from one can be compared with the other.
+      usermod[F("codec_gain")] = (double)(audioSource ? audioSource->getInputGainTrimDb() : 0.0f);
     }
 
 
@@ -8249,6 +8304,28 @@ class AudioReactive : public Usermod {
           audioSource->setCodecClockDiv((uint8_t)div);
           USER_PRINTF("AR: codec MCLK pre-divider set to %d.\n", div);
         }
+        // The codec's INPUT GAIN, in dB, on top of the level the source type
+        // chose.
+        //
+        // It is published as "codec_gain" - the name the diagnostic endpoint
+        // publishes it as - and accepted under the same name, so a value
+        // read from the state can be posted straight back.
+        //
+        // The value that comes back is the one the CHIP has, after the
+        // codec's own quantisation, so posting it again changes nothing -
+        // which is why the write is skipped when it already matches.
+        float gainRead = 0.0f;
+        if (arGetRangedNumber(usermod[F("codec_gain")], gainRead, -96.0, 27.0)) {
+          const float appliedGain = audioSource ? audioSource->getInputGainTrimDb() : 0.0f;
+          if (fabsf(gainRead - appliedGain) > 0.01f) {
+            if (audioSource && audioSource->setInputGainTrimDb(gainRead)) {
+              codecGainTrimDb = gainRead;
+              USER_PRINTF("AR: codec input gain set to %+.1f dB.\n", (double)codecGainTrimDb);
+            } else {
+              USER_PRINTLN("AR: this source's codec has no input gain - the setting was not applied.");
+            }
+          }
+        }
       }
     }
 
@@ -8299,6 +8376,10 @@ class AudioReactive : public Usermod {
     #endif
       JsonObject dmic = top.createNestedObject(FPSTR(_digitalmic));
       dmic[F("type")] = dmType;
+      // The codec's input gain, in dB, on top of the level the source type
+      // chose. Written right after the type, so the settings page draws it
+      // under the source type it belongs to.
+      dmic[F("codecGain")] = (double)codecGainTrimDb;
       // WLEDMM: align with globals I2C pins
       if ((dmType == 2) || (dmType == 6) || (dmType >= 10 && dmType <= 18)) {         // ES7243, ES8388, and IDF codecs
         if (i2c_sda >= 0) sdaPin = -1;              // -1 = use global
@@ -8512,6 +8593,30 @@ class AudioReactive : public Usermod {
       i2sMaster = (masterRead != 0);
       if (top[FPSTR(_digitalmic)][F("rightSlot")].is<bool>()) configComplete = false;
       if (top[FPSTR(_digitalmic)][F("master")].is<bool>())    configComplete = false;
+
+      // The codec's input gain, in dB, on top of the level the source type
+      // chose. See codecGainTrimDb.
+      //
+      // It is applied LIVE - the codec is written and its registers are read
+      // back - so this does not need a reboot, unlike the source type
+      // itself. At boot the source does not exist yet (it is created in
+      // setup(), which runs after this), so the value is remembered here and
+      // the source is created with it.
+      float gainTrimRead = codecGainTrimDb;
+      bool haveGain = arGetRangedNumber(top[FPSTR(_digitalmic)][F("codecGain")],
+                                        gainTrimRead, -96.0, 27.0);
+      configComplete &= haveGain;
+      if (haveGain) {
+        codecGainTrimDb = gainTrimRead;
+        if (audioSource) {
+          if (audioSource->setInputGainTrimDb(codecGainTrimDb)) {
+            USER_PRINTF("AR: codec input gain set to %+.1f dB (trim on the source type).\n",
+                        (double)codecGainTrimDb);
+          } else {
+            USER_PRINTLN("AR: this source's codec has no input gain - the setting was not applied.");
+          }
+        }
+      }
 
       // The gate's margin above the noise floor. It is a SETTING now, so it
       // is read into a local and applied through the settings - under the
@@ -8755,6 +8860,8 @@ class AudioReactive : public Usermod {
       #endif
 
       oappend(SET_F("dd=addDropdown(ux,'digitalmic:type');"));
+      oappend(SET_F("ddType=dd;"));   // the source type dropdown, kept for the gain field below
+
       #if SR_DMTYPE==254
         oappend(SET_F("addOption(dd,'None - network receive only (⎌)',254);"));
       #else
@@ -8903,6 +9010,21 @@ class AudioReactive : public Usermod {
           #endif
         #endif
       #endif
+
+      // The codec's INPUT GAIN.
+      //
+      // The field itself is drawn from the config - it is a plain number in
+      // cfg.json - so all that is left here is to say what it means, to give
+      // it its range, and to switch it off for the source types whose codec
+      // has no input gain. A live control that does nothing is worse than no
+      // control: it looks like it is doing something.
+      //
+      // The supported types are the hand-coded ES8311 (9 = line level,
+      // 19 = mic level), which is where the trim is implemented.
+      oappend(SET_F("arGainFn=function(){var gv=document.getElementsByName(ux+':digitalmic:codecGain')[1];if(!gv)return;var ok=ddType&&(ddType.value==9||ddType.value==19);gv.disabled=!ok;gv.style.opacity=ok?'1':'0.4';};"));
+      oappend(SET_F("arv=document.getElementsByName(ux+':digitalmic:codecGain')[1];if(arv){arv.min=-96;arv.max=27;arv.step=0.5;}"));
+      oappend(SET_F("addInfo(ux+':digitalmic:codecGain',1,'<i>dB on top of the source type - 0 is unchanged</i>');"));
+      oappend(SET_F("if(ddType)ddType.addEventListener('change',arGainFn);arGainFn();"));
 
       // I2S sample format (runtime-configurable; replaces legacy I2S_USE_RIGHT_CHANNEL / I2S_USE_16BIT_SAMPLES macros)
       oappend(SET_F("dd=addDropdown(ux,'digitalmic:bits');"));

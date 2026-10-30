@@ -289,6 +289,45 @@ PGA at 0 dB, so a line-level source reaches the ADC as it is instead of
 being amplified into overload first; `19` makes up the 30 dB a microphone
 needs. Choose `9` for a line-level feed, `19` for a microphone.
 
+### The codec's input gain
+
+`digitalmic:codecGain` is the codec's input gain, in dB, **on top of** the
+level the source type chose. It is a trim, not an absolute gain: type `9`
+(line level) starts at 0 dB of PGA and type `19` (mic level) starts at
++30 dB, and the trim is added to whichever is in force. Zero — the default —
+leaves every codec exactly as it was, so a config that has never heard of the
+setting behaves as before.
+
+It is applied **live**: the codec is written and its registers are read back,
+so changing it does not need a reboot (unlike the source type itself).
+
+Where it goes, per codec:
+
+| codec | register | resolution | trim range |
+|---|---|---|---|
+| ES8311 (types `9`, `19`) | `REG17` — the ADC's digital volume | 0.5 dB | −96 … +27 dB (the register itself reaches −100 … +27.5) |
+
+The trim goes into the **digital volume** and not into the PGA, for three
+reasons: the digital volume is half a dB per step against the PGA's 3 dB,
+it can attenuate as well as boost, and the PGA is what "line level" and
+"mic level" mean — so those two source types keep saying exactly what they
+say today.
+
+`REG17` is on the scale Espressif's own ES8311 driver uses: 0.5 dB per code,
+`0xBF` = 0 dB, `0x00` = −95.5 dB, `0xFF` = +32 dB. This driver has always
+written `0xC8` there — +4.5 dB — and the trim is added to that, so a trim of
+0 dB leaves the register byte-for-byte as it was.
+
+The sound-pressure estimate follows the gain: the applied trim is taken off
+the estimate, so turning the input up does not also inflate the estimated
+sound pressure. The number the estimate uses is the **applied** trim, not the
+requested one — the codec's register quantises to its own step and clamps at
+its own ends, so the two differ when the request is off the end of the
+register's range.
+
+The applied trim is published as `codec.gain_applied_db` on `/json/ar` and as
+`codec_gain` in the state object; the requested one is `codec.gain_trim_db`.
+
 ---
 
 ## Supported hardware
