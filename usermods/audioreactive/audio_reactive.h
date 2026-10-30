@@ -345,6 +345,66 @@ static void runMicFilter(uint16_t numSamples, float *sampleBuffer);          // 
 
 static TaskHandle_t AR_Task = nullptr;
 
+///////////////////////////////////////////////////////////////////////////////
+// The park handshake.
+//
+// Stopping the analysis task from the outside is only safe at a point the
+// task picked for itself.
+//
+// It used to be vTaskSuspend(AR_Task), which stops the task wherever it
+// happens to be. A good part of every frame is spent inside a publish
+// critical section, where the task holds the publish spinlock - and a task
+// frozen there keeps the lock FOREVER. Every later publisher then spins
+// against a lock that will never be released, and the board hangs until it
+// is power-cycled. The critical section is short by design (a 16-byte copy
+// and a pointer store), which is exactly why nobody noticed that it could
+// be held across a task stop.
+//
+// So the task parks ITSELF, at the top of its frame, where it holds no lock
+// and is not inside the audio read. The requester asks for the park and
+// waits, with a timeout, for the acknowledgement.
+//
+// The states:
+//   AR_PARK_RUNNING   - the task runs
+//   AR_PARK_REQUESTED - a park was asked for; the task has not parked yet
+//   AR_PARKED         - the task is parked, waiting to be released
+//
+// The state word is the truth; the task notification is only the doorbell
+// that wakes a parked task up. Every release rings the doorbell, even when
+// the task has not parked yet - a parked task drops a stale doorbell when it
+// parks, so a bell that arrives early cannot be mistaken for a release.
+enum ArParkState : uint8_t { AR_PARK_RUNNING = 0, AR_PARK_REQUESTED = 1, AR_PARKED = 2 };
+static std::atomic<uint8_t> arParkState{AR_PARK_RUNNING};
+
+// Release a parked analysis task. Safe to call when the task is not parked:
+// it then only makes sure a request that is still standing is withdrawn.
+static void arReleaseAnalysisTask() {
+  arParkState.store(AR_PARK_RUNNING, std::memory_order_release);
+  if (AR_Task) xTaskNotifyGive(AR_Task);   // the doorbell, even if it is not parked yet
+}
+
+// Ask the analysis task to park, and wait for it to acknowledge that it has.
+// Returns false if the task did not park within the timeout - the caller then
+// has to assume that the task is still running.
+static bool arParkAnalysisTask(uint32_t timeoutMs) {
+  if (!AR_Task) return true;                // no task: nothing to park
+  if (arParkState.load(std::memory_order_acquire) == AR_PARKED) return true;
+  arParkState.store(AR_PARK_REQUESTED, std::memory_order_release);
+  const uint32_t t0 = millis();
+  while (arParkState.load(std::memory_order_acquire) != AR_PARKED) {
+    if ((uint32_t)(millis() - t0) > timeoutMs) {
+      // The task is busy - inside a frame, or blocked in the audio read.
+      // Give up on the park and withdraw the request, so that the task does
+      // not park later on and wait for a release that will never come.
+      ERRORSR_PRINTF("[AR] the analysis task did not park within %u ms.\n", (unsigned)timeoutMs);
+      arReleaseAnalysisTask();
+      return false;
+    }
+    vTaskDelay(1);                          // the park is noticed within one frame
+  }
+  return true;
+}
+
 // The hand-measured frequency profiles are GONE.
 //
 // the old per-microphone profile table held one row of per-band gains per microphone (generic
@@ -647,6 +707,16 @@ constexpr uint32_t AR_TASK_PERIOD_TICKS =
 // largest single free block is under 2 KB, so 16 KB of internal heap given
 // back is worth more than the margin it costs.
 constexpr uint32_t AR_TASK_STACK = 16 * 1024;
+
+// How long a requester waits for the analysis task to acknowledge a park.
+//
+// The task notices a park request at the top of its next frame, so a frame
+// period (10.67 ms) is the normal answer. The timeout covers the case where
+// the task is blocked in the audio read and the audio is not coming: the
+// request is then given up on, the task is left running, and the caller is
+// told so - which is what the old blind vTaskSuspend() did, only without the
+// chance of freezing the task inside a publish critical section.
+constexpr uint32_t AR_PARK_TIMEOUT_MS = 250;
 
 // Global magnitude scale applied to the spectrum before the bands are computed,
 // so the result lands near 4096 at full scale. The sub-bin bands are measured on
@@ -4447,6 +4517,31 @@ void arAnalysisTask(void * parameter)
     // there is nothing here for it to feed.
     const uint64_t tLoopEnterUs = esp_timer_get_time();
 
+    // The park handshake. The task parks ITSELF, here: this is the top of
+    // the frame, outside every publish critical section and before the audio
+    // read, so parking here cannot freeze the task while it holds the
+    // publish lock.
+    //
+    // The compare-and-swap IS the protocol. If a release arrives between the
+    // load and the swap, the swap fails and the task does not park - it would
+    // otherwise park after the release and wait for one that had already been
+    // given.
+    if (arParkState.load(std::memory_order_acquire) == AR_PARK_REQUESTED) {
+      uint8_t expected = AR_PARK_REQUESTED;
+      if (arParkState.compare_exchange_strong(expected, AR_PARKED,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+        // Parked. Drop a doorbell that arrived before the park, then wait for
+        // the real one. The state word is checked after every wake-up, so a
+        // stale bell can only cost a loop, never the release.
+        ulTaskNotifyTake(pdTRUE, 0);
+        while (arParkState.load(std::memory_order_acquire) != AR_PARK_RUNNING) {
+          ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
+        continue;                             // released: start a fresh frame
+      }
+    }
+
     // Don't run the analysis if we're in Receive mode or in realtime mode
     if (disableSoundProcessing || (audioSyncEnabled == AUDIOSYNC_REC)) {
       vTaskDelayUntil( &xLastWakeTime, xFrequency);        // release CPU, and let I2S fill its buffers
@@ -6566,18 +6661,20 @@ class AudioReactive : public Usermod {
       }
       if ((audioSyncEnabled == AUDIOSYNC_REC_PLUS) && useNetworkAudio) disableSoundProcessing = true;   // UDP sound receiving - disable local audio
 
-      // Guarded: the task does not exist unless an audio source was created.
-      // A NULL handle is not a no-op - vTaskSuspend(NULL) suspends the CALLING
-      // task (the loop) and vTaskResume(NULL) trips an assert. With no audio
-      // source (dmType 254/255, "network receive only") the handle is NULL and
-      // this would have frozen the board on the first loop iteration.
-      if (AR_Task) {
-        if (disableSoundProcessing) {
-          vTaskSuspend(AR_Task);
-        } else {
-          vTaskResume(AR_Task);
-        }
-      }
+      // The analysis task gates ITSELF on disableSoundProcessing, at the top
+      // of its frame. Nothing is stopped from out here any more.
+      //
+      // It used to be vTaskSuspend(AR_Task) / vTaskResume(AR_Task) from this
+      // loop, which froze the task wherever it happened to be - including
+      // inside a publish critical section, where the task holds the publish
+      // spinlock. A task frozen there keeps the lock forever, every later
+      // publisher spins on it, and the board hangs until it is power-cycled.
+      // (It also had the other half of the hazard: vTaskSuspend(NULL) would
+      // have suspended THIS loop instead, with no audio source at all.)
+      //
+      // The task's own gate does the same job at a point where stopping is
+      // safe: it checks the flag at the top of a frame, outside every
+      // critical section and before the audio read.
 
       #ifdef SR_DEBUG
       // debug info in case that task stack usage changes
@@ -6739,6 +6836,32 @@ class AudioReactive : public Usermod {
       // gracefully suspend analysis task (if running)
       disableSoundProcessing = true;
 
+      // The analysis task has to stand still while an update runs: it must
+      // not be inside the audio read, and it must not be holding the publish
+      // lock, while the board is being rewritten.
+      //
+      // It used to be delay(25) followed by vTaskSuspend(AR_Task) - which
+      // froze the task wherever it happened to be, and could freeze it inside
+      // a publish critical section, where it holds the publish spinlock.
+      // Every later publisher would then spin on a lock that nobody would
+      // ever release, and the board would hang until it was power-cycled.
+      //
+      // Now the task parks ITSELF, at the top of its frame, and says so. We
+      // wait for that acknowledgement, with a timeout, so that we know for
+      // certain that the task is standing still and holding nothing.
+      //
+      // The park comes BEFORE the buffers are cleared below, so that what the
+      // clear leaves behind is what stays - the task cannot publish over it.
+      //
+      // The park is taken whenever there is a task, not only when init is
+      // true: the clear below wipes the task's own working state as well as
+      // the published buffers, and that state is the task's to write.
+      if (AR_Task) {
+        if (!arParkAnalysisTask(AR_PARK_TIMEOUT_MS)) {
+          ERRORSR_PRINTLN("[AR] onUpdateBegin: the analysis task is still running.");
+        }
+      }
+
       // ... (reset sound data lines remain the same) ...
       volumeRaw = 0; volumeSmth = 0;
       sampleAvg = 0;
@@ -6779,8 +6902,6 @@ class AudioReactive : public Usermod {
       autoResetPeak();
 
       if (init && AR_Task) {
-        delay(25);                 // WLEDMM: give some time for I2S driver to finish sampling
-        vTaskSuspend(AR_Task);    // update is about to begin, disable task to prevent crash
         if (udpSyncConnected) {    // close UDP sync connection (if open)
           udpSyncConnected = false;
           arUdp.close();          // <--- FIXED: changed from stop() to close()
@@ -6790,7 +6911,6 @@ class AudioReactive : public Usermod {
       } else {
         // ... rest of function remains same ...
         if (AR_Task) {
-          vTaskResume(AR_Task);
           connected(); // resume UDP
         } else {
           // ... task creation logic ...
@@ -6798,12 +6918,28 @@ class AudioReactive : public Usermod {
             xTaskCreateUniversal(
               #if defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
               arAnalysisTask, "AudioTask", AR_TASK_STACK, NULL, AR_TASK_PRIORITY, &AR_Task, 1
-              #else 
+              #else
               arAnalysisTask, "AudioTask", 8192, NULL, AR_TASK_PRIORITY, & AR_Task, -1
               #endif
             );
         }
       }
+
+      // Release the analysis task, if it was parked above.
+      //
+      // The park is there to hold the task STILL while the buffers are
+      // cleared - not to stop the analysis. The analysis's own stop is the
+      // disableSoundProcessing gate at the top of the task's frame, which is
+      // a safe place to stop.
+      //
+      // It has to be released here, unconditionally. The old code stopped the
+      // task with vTaskSuspend() and relied on the main loop's vTaskResume()
+      // to start it again - which is why the loop carried that pair at all.
+      // With the park, the release is explicit, and an OTA that was abandoned
+      // half way through (neither a success nor a reported failure) cannot
+      // leave the display dead.
+      if (AR_Task) arReleaseAnalysisTask();
+
       if (enabled && audioSource) disableSoundProcessing = false;
       updateIsRunning = init;
     }
