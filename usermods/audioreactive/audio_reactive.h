@@ -2346,6 +2346,52 @@ static int   rtaTrimBand = 0;            // the band the serial trim works on
 static float arLevelDb   = AR_LEVEL_MIN_DB;   // the fresh hop's level, dB re full scale
 static float arFloorDb   = AR_LEVEL_MIN_DB;   // the noise floor, dB
 static float arRefOffsetDb = 0.0f;              // the reference's offset, dB (the display only)
+
+// ---------------------------------------------------------------------------
+// The auto-range's RESET.
+//
+// The reference, its offset, the frames counted while the reference was unset
+// and the gate's shut time are the ANALYSIS TASK'S state: it writes all four,
+// every frame. A reset that wrote them from another task was a race with the
+// frame that was in flight - and a race over four numbers leaves a state that
+// neither writer can reach on purpose: a reference of UNSET next to an offset
+// of zero, say, which the task would never produce but which the display
+// would happily draw.
+//
+// So the reset is a REQUEST, and the task applies it: at the top of its next
+// frame, before it measures anything, so that the frame it publishes next is
+// built on the reset state and not on the state the reset was meant to
+// replace.
+//
+// The request is a flag and not a counter on purpose. Two resets in quick
+// succession collapse into one - and that is right: the reset is idempotent,
+// and the second one would have found the state already reset.
+// ---------------------------------------------------------------------------
+static std::atomic<bool> arResetAutoRangeRequested{false};
+
+// The four writes of a reset, in ONE place, so that there is only one
+// definition of what "reset" means.
+static inline void arApplyAutoRangeReset() {
+  arRefOffsetDb  = 0.0f;             // the offset back to zero
+  arRefDb        = AR_REF_UNSET;     // and the reference dropped, so the next
+                                     // signal earns the top again
+  arRefSetFrames = 0;                // the frames counted while it was unset
+  arGateShutMs   = 0.0f;             // and the gate's shut time
+}
+
+// Ask for the auto-range to be reset.
+//
+// The analysis task applies the request, at the top of its next frame. With
+// no task there is nobody to apply it, so the request is applied here - and
+// the state is the same either way.
+static void arRequestAutoRangeReset() {
+  arResetAutoRangeRequested.store(true, std::memory_order_release);
+  if (!AR_Task) {
+    arResetAutoRangeRequested.store(false, std::memory_order_release);
+    arApplyAutoRangeReset();
+  }
+}
+
 static float arRtaSmth[NUM_RTA_CHANNELS] = {0.0f};  // the RTA bars' smoothing, dB
 static volatile bool  arGateOpen  = false;   // the gate's state
 static bool  arTrackInit = false;             // the trackers have their first value
@@ -2553,15 +2599,16 @@ static void arJsonBytes(JsonArray arr, const uint8_t *v, int n) {
 // in wled.h, next to the command that changes it, so that half of the reset
 // stays with the commands that make it.
 void audioReactiveResetAutoRange() {
-  arRefOffsetDb    = 0.0f;
-  // And the reference itself is dropped, so the next signal sets it again
-  // rather than the display inheriting the loudest thing it has ever seen.
-  arRefDb          = AR_REF_UNSET;
-  arRefSetFrames   = 0;
-  arGateShutMs     = 0.0f;
+  // The reference state belongs to the analysis task, so the reset is a
+  // REQUEST and not a write - see arResetAutoRangeRequested. The task
+  // applies it at the top of its next frame.
+  arRequestAutoRangeReset();
   // And back to the auto-range as a MODE. The fixed window is a mode, not an
   // offset, so leaving the display in it after a reset would keep showing an
   // absolute window that the user had asked to get rid of.
+  //
+  // The mode is not the task's: it is read by the task and written only from
+  // here, so it needs no handshake.
   arAutoRange = true;
 }
 
@@ -4540,6 +4587,17 @@ void arAnalysisTask(void * parameter)
         }
         continue;                             // released: start a fresh frame
       }
+    }
+
+    // The auto-range's reset, applied HERE - at the top of the frame, before
+    // anything is measured - so that the frame this task publishes next is
+    // built on the reset state and not on the state the reset was meant to
+    // replace.
+    //
+    // It is applied even when the analysis is switched off below: a reset
+    // asked for while the analysis is off must not be lost.
+    if (arResetAutoRangeRequested.exchange(false, std::memory_order_acq_rel)) {
+      arApplyAutoRangeReset();
     }
 
     // Don't run the analysis if we're in Receive mode or in realtime mode
@@ -6891,13 +6949,15 @@ class AudioReactive : public Usermod {
         arRtaBandsIdx = 0;
         arRtaBandsValid = false;
         memset(arRtaSmth, 0, sizeof(arRtaSmth));
-        // The display's reference starts UNSET: the first signal sets it, and
-        // the signal then holds it. Nothing is inherited from before.
-        arRefOffsetDb = 0.0f;
-        arRefDb       = AR_REF_UNSET;
-        arRefSetFrames = 0;
-        arGateShutMs   = 0.0f;
       }
+      // The display's reference starts UNSET: the first signal sets it, and
+      // the signal then holds it. Nothing is inherited from before.
+      //
+      // It is a REQUEST, like every other reset of the reference state: the
+      // analysis task owns those four numbers and writes them every frame.
+      // The task is parked above, so it applies this as soon as it is
+      // released - before it measures anything.
+      arRequestAutoRangeReset();
       inputLevel = 128;
       autoResetPeak();
 
