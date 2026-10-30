@@ -5744,6 +5744,7 @@ class AudioReactive : public Usermod {
     // strings to reduce flash memory usage (used more than twice)
     static const char _name[];
     static const char _enabled[];
+    static const char _on[];
     static const char _inputLvl[];
 #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
     static const char _analogmic[];
@@ -5751,6 +5752,54 @@ class AudioReactive : public Usermod {
     static const char _digitalmic[];
     static const char UDP_SYNC_HEADER[];
     static const char UDP_SYNC_HEADER_v1[];
+
+    // The state object's on/off switch.
+    //
+    // The usermod has always PUBLISHED this as "on" and has always READ it
+    // as "enabled". The two never met, so a client that read the state and
+    // posted it back changed nothing at all: the key it sent was not the key
+    // that was read, and the toggle silently did not toggle. The state was
+    // a dead end - a key nobody could write.
+    //
+    // Both names are spoken now. The state publishes "on" - what it has
+    // always published, so nothing that reads it breaks - and "enabled" -
+    // the name the config uses, and WLED's own spelling - and a POST is
+    // read under either name.
+    //
+    // A POST that carries both is resolved by asking which one CHANGED. A
+    // client that read the state and posted it back has changed one of them
+    // and left the other at what the board already had, so the changed one
+    // is the intent. That is what makes the round trip work whichever key
+    // the client chose to flip.
+    //
+    // `current` is what the switch is NOW, before this POST. `out` is the
+    // new value, and the return says whether this POST set it at all.
+    static bool resolveStateEnabled(JsonObject& usermod, bool current, bool& out) {
+      bool haveOn = false, haveEnabled = false;
+      bool onVal = false, enabledVal = false;
+      haveOn    = arGetBool(usermod[FPSTR(_on)],      onVal);
+      haveEnabled = arGetBool(usermod[FPSTR(_enabled)], enabledVal);
+      if (!haveOn && !haveEnabled) return false;
+      if (haveOn && !haveEnabled)      { out = onVal;      return true; }
+      if (!haveOn && haveEnabled)      { out = enabledVal; return true; }
+      if (onVal == enabledVal)         { out = onVal;      return true; }
+
+      // Both are there and they disagree: one of them was flipped and the
+      // other was left alone.
+      const bool onMoved = (onVal      != current);
+      const bool enMoved = (enabledVal != current);
+      if (onMoved && !enMoved) { out = onVal;      return true; }  // "on" was flipped
+      if (!onMoved && enMoved) { out = enabledVal; return true; }  // "enabled" was flipped
+      if (onMoved && enMoved) {
+        // Both moved and they disagree: the client wants two different
+        // things, and there is no way to tell which one it meant. The
+        // canonical name wins.
+        out = enabledVal;
+        return true;
+      }
+      out = current;                       // neither moved - nothing to do
+      return false;
+    }
 
     // private methods
 
@@ -8010,7 +8059,15 @@ class AudioReactive : public Usermod {
       if (usermod.isNull()) {
         usermod = root.createNestedObject(FPSTR(_name));
       }
-      usermod["on"] = enabled;
+      // Both names, both the same value.
+      //
+      // "on" is what this usermod has always published here, and "enabled"
+      // is the name the config uses and WLED's own spelling. Publishing both
+      // means a client can read either, and the reader accepts either - so
+      // the state can be read and posted back and the switch really does
+      // toggle. See resolveStateEnabled().
+      usermod[FPSTR(_on)]      = enabled;
+      usermod[FPSTR(_enabled)] = enabled;
     }
 
 
@@ -8024,8 +8081,9 @@ class AudioReactive : public Usermod {
       bool prevEnabled = enabled;
       JsonObject usermod = root[FPSTR(_name)];
       if (!usermod.isNull()) {
-        if (usermod[FPSTR(_enabled)].is<bool>()) {
-          enabled = usermod[FPSTR(_enabled)].as<bool>();
+        bool newEnabled = enabled;
+        if (resolveStateEnabled(usermod, prevEnabled, newEnabled)) {
+          enabled = newEnabled;
           if (prevEnabled != enabled) onUpdateBegin(!enabled);
         }
 #ifdef ARDUINO_ARCH_ESP32
@@ -8962,6 +9020,7 @@ class AudioReactive : public Usermod {
 // strings to reduce flash memory usage (used more than twice)
 const char AudioReactive::_name[]       PROGMEM = "AudioReactive";
 const char AudioReactive::_enabled[]    PROGMEM = "enabled";
+const char AudioReactive::_on[]         PROGMEM = "on";
 const char AudioReactive::_inputLvl[]   PROGMEM = "inputLevel";
 #if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
 const char AudioReactive::_analogmic[]  PROGMEM = "analogmic";
