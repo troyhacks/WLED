@@ -178,6 +178,7 @@ key changes one number and prints what it is now.
 | `n` / `p` | the band the trim applies to, next / previous |
 | `y` / `Y` | that band's trim, down / up by 1 dB |
 | `d` / `D` | the dB trim, down / up |
+| `c` / `C` | the codec's input gain, down / up by 0.5 dB |
 | `A` | back to the auto-range, and the trim back to its boot value |
 | `X` | force reconnect |
 

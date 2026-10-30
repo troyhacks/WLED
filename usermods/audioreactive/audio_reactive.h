@@ -2920,6 +2920,35 @@ void audioReactiveRtaCommand(char c) {
                   (double)s.refReleaseMs, (double)AR_REF_ATTACK_MS);
       break;
     }
+    case 'c': case 'C': {
+      // The CODEC's input gain - the trim on top of the level the source
+      // type chose.
+      //
+      // 'c' takes it down, 'C' brings it up, by half a dB each: that is the
+      // ES8311's own step (REG17, the ADC's digital volume), so every press
+      // is a step the chip can actually take.
+      //
+      // The change goes to the CODEC and not to the software. This is the
+      // gain in front of the ADC, and no filter can undo it afterwards -
+      // which is also why the sound-pressure estimate follows it: the
+      // applied trim is taken off the estimate, so the reading stays a
+      // reading of the signal and not a reading of the knob.
+      if (!audioSource) {
+        USER_PRINTLN("No audio source - there is no codec to set the gain on.");
+        break;
+      }
+      float want = codecGainTrimDb + ((c == 'C') ? 0.5f : -0.5f);
+      if (want >  27.0f) want =  27.0f;
+      if (want < -96.0f) want = -96.0f;
+      if (audioSource->setInputGainTrimDb(want)) {
+        codecGainTrimDb = want;
+        USER_PRINTF("codec input gain now %+.1f dB (trim on the source type)\n",
+                    (double)codecGainTrimDb);
+      } else {
+        USER_PRINTLN("This source's codec has no input gain.");
+      }
+      break;
+    }
     default:
       break;
   }

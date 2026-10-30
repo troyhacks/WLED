@@ -276,6 +276,7 @@ void handleSerial() {
     //   y / Y    that band's trim, down / up by 1 dB         (calibration)
     //   k / K    the filter bank's detector, shorter / longer by 5 ms
     //   w / W    the auto-range's release, shorter / longer by 500 ms
+    //   c / C    the codec's input gain, down / up by 0.5 dB
     //
     // Lowercase is the lower number and uppercase the higher one, for every
     // pair. 'X' is NOT in this list: it is the force-reconnect key above.
@@ -322,12 +323,12 @@ void handleSerial() {
                next == 's' || next == 'S' ||
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
                next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
-               next == 'w' || next == 'W') {
+               next == 'w' || next == 'W' || next == 'c' || next == 'C') {
       // The window and the calibration: the floor and the top in absolute dB,
       // the auto window's span, the reference offset that ties our dB to the
       // analyser's, the per-band trim that makes the shapes match, the filter
-      // bank's detector time constant - how fast the bars follow - and the
-      // auto-range's release.
+      // bank's detector time constant - how fast the bars follow - the
+      // auto-range's release, and the codec's input gain.
       audioReactiveRtaCommand(next);
 #endif
     } else if (next == 0xB0) {
