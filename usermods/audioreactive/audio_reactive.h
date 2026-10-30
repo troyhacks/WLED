@@ -758,7 +758,6 @@ constexpr float AR_BIN_SCALE = 1.0f / 16.0f;
 static float* vReal = nullptr;
 static float* vImag = nullptr;
 
-constexpr float pinkcenter = 23.66;                         // sqrt(560) - center freq for scaling is 560 hz.
 constexpr float binWidth = SAMPLE_RATE / (float)scaleWindowSamples; // frequency range of each band
 
 // ---------------------------------------------------------------------------
@@ -3443,21 +3442,32 @@ static void arBankPeak() {
   arBankPeakHz = f;
 
   // The magnitude, on the legacy scale.
+  //
+  // The band's density over the band's own width - so it is flat for white
+  // noise and falls with the centre for pink, which is what the unit says.
   float mag = 0.0f;
   if (estNorm > 0.0f) {
     const float dens = estRta[bestBand] / arBandEnbw(bestBand);
     mag = AR_BIN_SCALE * sqrtf(dens / (2.0f * estNorm));
-
-    // The same pink correction the transform applied to its peak magnitude,
-    // so the shape of the answer is the shape the effects have always seen.
-    if ((f > (binWidth/1.25f)) && (f < (SAMPLE_RATE/2.2f)) && (mag > 4.0f)) {
-      const unsigned peakBin = constrain((int)((f + binWidth/2.0f) / binWidth), 0, scaleWindowSamples - 1);
-      float peakFreq = peakBin * binWidth + binWidth/2.0f;
-      const float fold = SAMPLE_RATE * 0.42f;
-      if (peakFreq > fold) peakFreq = fold - 0.25f * (peakFreq - fold); // suppress noise and aliasing
-      if (peakFreq > 0.0f) mag *= fmaxf(pinkcenter / sqrtf(peakFreq), 1.0f);
-    }
   }
+
+  // There is NO pink correction here, and there is no fold of the peak's
+  // frequency either.
+  //
+  // Both were the transform's, carried over when the transform went. The
+  // correction multiplied the magnitude by pinkcenter / sqrt(peakFreq),
+  // which boosted every peak below 560 Hz by up to 5.3x - 14.5 dB - and
+  // left the peaks above it alone: it was a slope added to a measurement to
+  // make one input look a particular way, which is the same mistake the
+  // calibration's removed "target" curve was.
+  //
+  // The fold took the peak's frequency back above SAMPLE_RATE * 0.42, to
+  // "suppress noise and aliasing". The peak is a band's CENTRE now, taken
+  // from a filter bank whose bands stop at 20 kHz - there is nothing above
+  // the fold to suppress, and the fold was the transform's bin arithmetic
+  // being applied to a frequency that no longer has bins.
+  //
+  // So the magnitude is the magnitude and the frequency is the frequency.
   arBankMagnitude = mag;
 
   AR_MajorPeak = constrain(f, 1.0f, NYQUIST_HZ);
