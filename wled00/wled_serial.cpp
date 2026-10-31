@@ -323,12 +323,14 @@ void handleSerial() {
                next == 's' || next == 'S' ||
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
                next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
-               next == 'w' || next == 'W' || next == 'c' || next == 'C') {
+               next == 'w' || next == 'W' || next == 'c' || next == 'C' ||
+               next == 'z' || next == 'Z') {
       // The window and the calibration: the floor and the top in absolute dB,
       // the auto window's span, the reference offset that ties our dB to the
       // analyser's, the per-band trim that makes the shapes match, the filter
       // bank's detector time constant - how fast the bars follow - the
-      // auto-range's release, and the codec's input gain.
+      // auto-range's release, the codec's input gain, and the pattern - which
+      // sixteen of the thirty-one bands the sixteen bars show.
       audioReactiveRtaCommand(next);
 #endif
     } else if (next == 0xB0) {

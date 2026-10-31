@@ -1018,16 +1018,71 @@ static void layoutISOThirdOctave(BandLayout &L) {
 // The four lowest bars come out of the bottom bank - the transform's 23.49 Hz
 // kernel cannot separate a third-octave band at 40 Hz - and the other twelve
 // out of the top bank.
-static const uint8_t arGeqFromRta[NUM_GEQ_CHANNELS] = {
+//
+// This is the selection for the DEFAULT pattern. The pattern itself can be
+// slid up or down - see arBandPatterns below.
+static const uint8_t arGeqBase[NUM_GEQ_CHANNELS] = {
    3,  5,  6,  8,  9, 11, 13, 14, 16, 17, 19, 20, 22, 24, 25, 27
 };
 
-// The display band k's centre: it is the RTA band it was taken from.
+// The PATTERN: which sixteen of the thirty-one the sixteen bars show.
 //
-// The layout has to be built before this can be asked, so every caller is one
-// that runs after initBandLayout().
-static inline float arGeqCentre(int k) {
-  return lay31.centre[arGeqFromRta[k]];
+// A pattern is the selection above slid up or down by whole RTA bands, so
+// its shape never changes - only where it sits. One band is a third of an
+// octave, so the ends move to the next third-octave centre:
+//
+//   shift   bottom     top     name
+//     -3    20 Hz      5 kHz   Sub Sub - 20Hz
+//     -2    25 Hz      6.3 kHz Sub Bass - 25Hz
+//     -1    31.5 Hz    8 kHz   Sub Bass - 31.5Hz
+//      0    40 Hz     10 kHz   Sub Bass - 40Hz
+//      1    50 Hz    12.5 kHz Low Bass - 50Hz      <- the default
+//      2    63 Hz      16 kHz  Bass - 63Hz
+//      3    80 Hz      20 kHz  Mid Bass - 80Hz
+//
+// Sliding by whole bands keeps the selection inside the thirty-one: the
+// lowest pattern starts at band 0 (20 Hz) and the highest one ends at band
+// 30 (20 kHz), which are the ends of the RTA set.
+//
+// The pattern changes what a BAR MEANS and nothing else. The measurement is
+// the thirty-one bands either way, and the thirty-one do not move: this is
+// which sixteen of them the sixteen bars draw.
+struct ArBandPattern {
+  int8_t      shift;    // whole RTA bands to slide the selection by
+  const char *name;     // what the settings page calls it
+};
+static const ArBandPattern arBandPatterns[] = {
+  { -3, "Sub Sub - 20Hz"    },
+  { -2, "Sub Bass - 25Hz"   },
+  { -1, "Sub Bass - 31.5Hz" },
+  {  0, "Sub Bass - 40Hz"   },
+  {  1, "Low Bass - 50Hz"   },
+  {  2, "Bass - 63Hz"       },
+  {  3, "Mid Bass - 80Hz"   },
+};
+#define AR_BAND_PATTERN_COUNT ((int)(sizeof(arBandPatterns) / sizeof(arBandPatterns[0])))
+
+// The pattern that is RUNNING, as an index into arBandPatterns[].
+//
+// VOLATILE: the settings page and the serial console change it from the main
+// thread, and the analysis task reads it every frame. It is a single byte, so
+// a read cannot tear - and the frame reads it ONCE, so a change that lands
+// mid-frame cannot make one frame half old pattern and half new.
+static volatile uint8_t arGeqPattern = 4;   // "Low Bass - 50Hz"
+
+// The RTA band the display band k shows, for a given pattern index.
+//
+// An index out of range falls back to the default pattern rather than reading
+// past the table: a bad number in a config file must not become a wild read.
+static inline uint8_t arGeqBandOf(int k, uint8_t patternIdx) {
+  const uint8_t idx = (patternIdx < AR_BAND_PATTERN_COUNT) ? patternIdx : 4;
+  return (uint8_t)(arGeqBase[k] + arBandPatterns[idx].shift);
+}
+
+// The pattern's name, for the settings page and the endpoint.
+static inline const char *arGeqPatternName(uint8_t patternIdx) {
+  const uint8_t idx = (patternIdx < AR_BAND_PATTERN_COUNT) ? patternIdx : 4;
+  return arBandPatterns[idx].name;
 }
 
 // Forward declarations: the estimator's self-test below needs both of them,
@@ -1671,6 +1726,7 @@ struct ArFrameSnapshot {
   float rtaTopPowLin[AR_RTA_TOP_BANDS];  // ... and the same, linear
   uint8_t geqBars[NUM_GEQ_CHANNELS];     // the published 16 display bytes
   uint8_t rtaBars[NUM_RTA_CHANNELS];     // the published 31 RTA bytes
+  uint8_t geqPattern;                   // the pattern the 16 bands came from
 };
 
 // The snapshot before there has been a frame: every reading is "no reading".
@@ -1687,6 +1743,7 @@ static ArFrameSnapshot arFrameSnapshotInit() {
   for (int k = 0; k < AR_RTA_TOP_BANDS; k++)   { s.rtaTopPowDb[k] = -99.0f; s.rtaTopPowLin[k] = 0.0f; }
   memset(s.geqBars, 0, sizeof(s.geqBars));    // a bar of height 0: no reading
   memset(s.rtaBars, 0, sizeof(s.rtaBars));
+  s.geqPattern = 4;                          // the default pattern
   return s;
 }
 
@@ -2951,6 +3008,28 @@ void audioReactiveRtaCommand(char c) {
       }
       break;
     }
+    case 'z': case 'Z': {
+      // The PATTERN: which sixteen of the thirty-one the sixteen display
+      // bars show.
+      //
+      // 'z' slides it DOWN (the bands get lower), 'Z' slides it UP. One press
+      // is one whole third-octave band, so the shape of the display never
+      // changes - only where it sits.
+      //
+      // The change is immediate: the bars move to the new bands on the next
+      // frame. Nothing is recalculated, because nothing has to be - the
+      // measurement is the thirty-one bands either way, and the pattern only
+      // chooses which sixteen of them are drawn.
+      int idx = (int)arGeqPattern + ((c == 'Z') ? 1 : -1);
+      if (idx < 0) idx = 0;
+      if (idx >= AR_BAND_PATTERN_COUNT) idx = AR_BAND_PATTERN_COUNT - 1;
+      arGeqPattern = (uint8_t)idx;
+      USER_PRINTF("pattern %d of %d: %s - the 16 bars now show %.1f Hz to %.1f Hz\n",
+                  idx, AR_BAND_PATTERN_COUNT - 1, arGeqPatternName((uint8_t)idx),
+                  (double)lay31.centre[arGeqBandOf(0, (uint8_t)idx)],
+                  (double)lay31.centre[arGeqBandOf(NUM_GEQ_CHANNELS - 1, (uint8_t)idx)]);
+      break;
+    }
     default:
       break;
   }
@@ -3296,8 +3375,13 @@ static void estFinalise() {
   // There is no display bank any more: it measured a different quantity in a
   // different unit, at the old half-octave centres, so it did not describe
   // what is drawn. It has been removed.
+  //
+  // The pattern is read ONCE here, for the whole frame: a change that lands
+  // while the frame is being made would otherwise give one frame with some
+  // bands from the old pattern and some from the new.
+  const uint8_t pattern = arGeqPattern;
   for (int k = 0; k < NUM_GEQ_CHANNELS; k++) {
-    estBandDb[k] = estRtaDb[arGeqFromRta[k]];
+    estBandDb[k] = estRtaDb[arGeqBandOf(k, pattern)];
   }
 
   // Publish the RTA values for the serial plot.
@@ -3347,8 +3431,11 @@ static void arPublishFrameSnapshot() {
     // calibration, the reference offset and the trim go on. It is the RTA
     // band's own number - the display bands ARE RTA bands - so the two are
     // the same measurement seen from two sides.
-    arFrameSnap.rawDb[k] = estRtaPowDb[arGeqFromRta[k]];
+    arFrameSnap.rawDb[k] = estRtaPowDb[arGeqBandOf(k, arGeqPattern)];
   }
+  // The pattern this frame's bands came from. It is in the snapshot so the
+  // endpoint's centres and names belong to the SAME frame as the values.
+  arFrameSnap.geqPattern = arGeqPattern;
   for (int k = 0; k < AR_MAX_BANDS; k++) {
     arFrameSnap.rtaPowDb[k]   = estRtaPowDb[k];
     arFrameSnap.rtaLevelDb[k] = estRtaDb[k];
@@ -7514,7 +7601,7 @@ class AudioReactive : public Usermod {
         // The sixteen trims that belong to the sixteen bands that are shown -
         // the RTA's own trim, read at the sixteen bands the display draws.
         JsonArray gt = d.createNestedArray("geq_trim_db");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gt.add((double)st.trimDb[arGeqFromRta[k]]);
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gt.add((double)st.trimDb[arGeqBandOf(k, snap.geqPattern)]);
       }
 
       // ---- the 16 display bands ----------------------------------------
@@ -7523,18 +7610,26 @@ class AudioReactive : public Usermod {
       // third-octave centre to each of the old half-octave ones - so the
       // values here ARE the RTA's values, and the rta_band array says which
       // RTA band each one is.
+      //
+      // WHICH sixteen is the PATTERN, and it is slid up or down in whole
+      // third-octave bands. The pattern comes from the frame's own snapshot,
+      // so the centres, the names and the values below all belong to the same
+      // frame.
       {
         JsonObject g = ar.createNestedObject("geq");
         g["count"]     = NUM_GEQ_CHANNELS;
         g["layout"]    = "1/3-octave (subset of the 31)";
-        g["f_low_hz"]  = (double)lay31.edgeLo[arGeqFromRta[0]];
-        g["f_high_hz"] = (double)lay31.edgeHi[arGeqFromRta[NUM_GEQ_CHANNELS - 1]];
+        g["pattern"]      = (int)snap.geqPattern;                    // the index the config stores
+        g["pattern_name"] = arGeqPatternName(snap.geqPattern);
+        g["pattern_shift"] = (int)arBandPatterns[snap.geqPattern < AR_BAND_PATTERN_COUNT ? snap.geqPattern : 4].shift;
+        g["f_low_hz"]  = (double)lay31.edgeLo[arGeqBandOf(0, snap.geqPattern)];
+        g["f_high_hz"] = (double)lay31.edgeHi[arGeqBandOf(NUM_GEQ_CHANNELS - 1, snap.geqPattern)];
         JsonArray gc = g.createNestedArray("centres_hz");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gc.add((double)arGeqCentre(k));
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gc.add((double)lay31.centre[arGeqBandOf(k, snap.geqPattern)]);
         // Which RTA band each display band is. It is the link between the two
         // views: bar 3 here is bar 8 there, same number, same height.
         JsonArray gb = g.createNestedArray("rta_band");
-        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gb.add((int)arGeqFromRta[k]);
+        for (int k = 0; k < NUM_GEQ_CHANNELS; k++) gb.add((int)arGeqBandOf(k, snap.geqPattern));
         // The published bytes, from the frame's own snapshot - so they are the
         // same frame as the dB values below.
         JsonArray ba = g.createNestedArray("bars");
@@ -8112,6 +8207,19 @@ class AudioReactive : public Usermod {
                    (double)TROYHACKS_DBREF, (double)st.windowRangeDb);
           infoArr.add(lvlBuf);
 
+          // The PATTERN: which sixteen of the thirty-one the sixteen bars
+          // show. The thirty-one RTA bars are the same measurement and they do
+          // not move - this only says which of them the display draws.
+          {
+            char patBuf[72];
+            snprintf(patBuf, sizeof(patBuf), "%s (%.0f Hz to %.0f Hz)",
+                     arGeqPatternName(arGeqPattern),
+                     (double)lay31.centre[arGeqBandOf(0, arGeqPattern)],
+                     (double)lay31.centre[arGeqBandOf(NUM_GEQ_CHANNELS - 1, arGeqPattern)]);
+            infoArr = user.createNestedArray(F("Band pattern"));
+            infoArr.add(patBuf);
+          }
+
           // The 31 RTA band levels are NOT a row here any more. They are a
           // wall of thirty-one numbers, and the info pane is for the short
           // facts - the machine detail belongs on /json/ar, where the same
@@ -8245,6 +8353,12 @@ class AudioReactive : public Usermod {
       // under the name the diagnostic endpoint publishes it as, so a value
       // read from one can be compared with the other.
       usermod[F("codec_gain")] = (double)(audioSource ? audioSource->getInputGainTrimDb() : 0.0f);
+
+      // Which sixteen of the thirty-one the sixteen display bars show, as
+      // the pattern's index. It is published so a client can read what is
+      // running, and post a different one back - the change takes effect on
+      // the next frame, with no reboot.
+      usermod[F("pattern")] = (int)arGeqPattern;
     }
 
 
@@ -8279,6 +8393,18 @@ class AudioReactive : public Usermod {
         }
         if (levelRead >= 0) inputLevel = (uint8_t)levelRead;
 #endif
+        // Which sixteen of the thirty-one the sixteen display bars show.
+        //
+        // The pattern's index, the same number the config stores and the
+        // settings page shows. A number that is out of range is refused and
+        // the pattern keeps what it has - a wild index would be a wild read
+        // of the band table.
+        {
+          int patternRead = -1;
+          if (arGetRangedNumber(usermod[F("pattern")], patternRead, 0, AR_BAND_PATTERN_COUNT - 1)) {
+            arGeqPattern = (uint8_t)patternRead;
+          }
+        }
         // The calibration's target curve is GONE. It was the point unit's
         // correction applied to an integrated-unit measurement, which added
         // the very slope it was meant to remove - see the note on the
@@ -8520,6 +8646,13 @@ class AudioReactive : public Usermod {
       //            + this. One number for the whole installation.
       // "rtaTau"   the filter bank's detector time constant, in ms: how fast
       //            the bottom 8 bars follow the signal.
+      // "pattern"  which sixteen of the thirty-one the sixteen display bars
+      //            show, as an index into arBandPatterns[]. The pattern is
+      //            slid up or down in whole third-octave bands, so the
+      //            shape of the display never changes - only where it sits.
+      //            It changes what a BAR MEANS and nothing else: the
+      //            measurement is the thirty-one bands either way, and the
+      //            thirty-one do not move.
       //
       // There is no "rtaTrim" array: the per-band trim is a live runtime
       // value (the serial 'n'/'p'/'y'/'Y' keys move it), not a stored
@@ -8532,6 +8665,9 @@ class AudioReactive : public Usermod {
       freqScale[F("rtaTop")]   = st.windowTopDb;
       freqScale[F("rtaRef")]   = st.rtaRefDb;
       freqScale[F("rtaTau")]   = st.bankTauMs;
+      // Which sixteen of the thirty-one the sixteen bars show. The running
+      // pattern is written, so a save keeps what is running.
+      freqScale[F("pattern")]  = (int)arGeqPattern;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -8802,6 +8938,26 @@ class AudioReactive : public Usermod {
           if (tauRead < AR_BANK_TAU_MIN_MS) tauRead = AR_BANK_TAU_MIN_MS;
           if (tauRead > AR_BANK_TAU_MAX_MS) tauRead = AR_BANK_TAU_MAX_MS;
           arSettingsEdit([tauRead](ArLiveSettings& st) { st.bankTauMs = tauRead; });
+        } else {
+          configComplete = false;
+        }
+
+        // Which sixteen of the thirty-one the sixteen display bars show.
+        //
+        // It is applied to the RUNNING pattern, so the change takes effect
+        // at once - the bars move to the new bands on the next frame and
+        // nothing has to be rebuilt, because a pattern is only a choice of
+        // which measured bands to draw. The measurement itself, the thirty-one
+        // bands, the calibration and the per-band trim do not move.
+        //
+        // The index is checked against the table's length: a number that is
+        // out of range keeps the pattern that is running rather than
+        // becoming a wild read.
+        int patternRead = (int)arGeqPattern;
+        if (arGetNumber(top["frequency"][F("pattern")], patternRead)) {
+          if (patternRead >= 0 && patternRead < AR_BAND_PATTERN_COUNT) {
+            arGeqPattern = (uint8_t)patternRead;
+          }
         } else {
           configComplete = false;
         }
@@ -9189,6 +9345,26 @@ class AudioReactive : public Usermod {
       oappend(SET_F("addInfo(ux+':frequency:rtaRef',1,'dB <i>our dB = the reference dB + this</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:rtaTau',1,'ms <i>the filter bank detector time constant</i>');"));
 
+      // Which sixteen of the thirty-one the sixteen display bars show.
+      //
+      // The options are the PATTERNS - the sixteen bands slid up or down in
+      // whole third-octave bands. The value posted is the pattern's index,
+      // which is what the config stores.
+      //
+      // Changing it moves the bars to the new bands on the next frame: the
+      // measurement is the thirty-one bands either way, so nothing is
+      // recalculated and nothing has to be rebuilt. The thirty-one-band view
+      // does not move at all.
+      oappend(SET_F("dd=addDropdown(ux,'frequency:pattern');"));
+      for (int i = 0; i < AR_BAND_PATTERN_COUNT; i++) {
+        oappend(SET_F("addOption(dd,'"));
+        oappend(arBandPatterns[i].name);
+        oappend(SET_F("',"));
+        oappendi(i);
+        oappend(");");
+      }
+      oappend(SET_F("addInfo(ux+':frequency:pattern',1,'<i>which sixteen of the 31 RTA bands the 16 bars show - the pattern is slid up or down in whole third-octave bands</i>');"));
+
       // The values that are actually RUNNING.
       //
       // Six of these settings are also tuned from the serial console: 'b'/'B'
@@ -9223,6 +9399,12 @@ class AudioReactive : public Usermod {
           oappend(num);
           oappend(";");
         }
+        // The pattern is a number, not a measurement, so it is patched on its
+        // own: the page shows the pattern that is RUNNING, and a save then
+        // stores that one.
+        oappend(SET_F("arv=document.getElementsByName(ux+':frequency:pattern')[1];if(arv)arv.value="));
+        oappendi((int)arGeqPattern);
+        oappend(";");
       }
 #endif
       oappend(SET_F("dd=addDropdown(ux,'sync:mode');"));

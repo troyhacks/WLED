@@ -50,6 +50,29 @@ the nearest third-octave centre to each of the old half-octave bands. They
 are not a second measurement and not a re-scaling: same audio, same frame,
 same unit, same window, same height.
 
+**Which sixteen is the pattern.** A pattern is that selection slid up or down
+in whole third-octave bands, so its shape never changes — only where it sits:
+
+| pattern | bottom | top |
+|---|---|---|
+| Sub Sub - 20Hz | 20 Hz | 5 kHz |
+| Sub Bass - 25Hz | 25 Hz | 6.3 kHz |
+| Sub Bass - 31.5Hz | 31.5 Hz | 8 kHz |
+| Sub Bass - 40Hz | 40 Hz | 10 kHz |
+| **Low Bass - 50Hz** *(the default)* | 50 Hz | 12.5 kHz |
+| Bass - 63Hz | 63 Hz | 16 kHz |
+| Mid Bass - 80Hz | 80 Hz | 20 kHz |
+
+The pattern changes **what a bar means** and nothing else. The measurement is
+the thirty-one bands either way, and the thirty-one do not move: this is
+which sixteen of them the sixteen bars draw. The calibration and the per-band
+trim belong to the RTA band, so they follow the band to wherever it is shown.
+
+The pattern takes effect **immediately** — the bars move to the new bands on
+the next frame, with no reboot and nothing recalculated. It is a setting
+(`frequency.pattern`), a dropdown on the usermod settings page, and the
+serial `z`/`Z` keys.
+
 ### The calibration
 
 The input chain (DC blocker, input LPF, and the source's own filtering) is a
@@ -133,6 +156,9 @@ holds the cycle at the frame period from below.
   `timing_us` (with `parts`, `analysis_breakdown` and `health`), `calibration`,
   `codec`, `memory`, `self_test`, `udp_sync`. Scalars: `enabled`, `source`,
   `processing`, `input_level`, `input_gain_pct`, `peak_pct`, `init_ms`.
+  `geq` carries `pattern`, `pattern_name` and `pattern_shift` — which sixteen
+  of the thirty-one the sixteen bars show — and `rta_band`, which says which
+  RTA band each of the sixteen is.
 - **`/json/info`** — the brief, human-facing rows. Failures only.
 
 `tools/verify_ar.py` checks the whole table and exits 0 only if every row
@@ -179,6 +205,7 @@ key changes one number and prints what it is now.
 | `y` / `Y` | that band's trim, down / up by 1 dB |
 | `d` / `D` | the dB trim, down / up |
 | `c` / `C` | the codec's input gain, down / up by 0.5 dB |
+| `z` / `Z` | the 16-band pattern, down / up by one third-octave band |
 | `A` | back to the auto-range, and the trim back to its boot value |
 | `X` | force reconnect |
 
@@ -204,6 +231,7 @@ All runtime, under the `AudioReactive` object in the config JSON.
 | `frequency.rtaTop` | the fixed window's top, dB |
 | `frequency.rtaRef` | the reference offset, dB — one number for the whole installation |
 | `frequency.rtaTau` | the filter bank's detector time constant, ms |
+| `frequency.pattern` | which sixteen of the thirty-one the sixteen bars show, 0…6 |
 | `dynamics.limiter` / `rise` / `fall` | the dynamics limiter on the published bars |
 | `sync.port` / `mode` / `check_sequence` | UDP sound sync |
 
