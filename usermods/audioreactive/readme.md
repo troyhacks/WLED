@@ -307,6 +307,9 @@ Where it goes, per codec:
 | codec | register | resolution | trim range |
 |---|---|---|---|
 | ES8311 (types `9`, `19`) | `REG17` — the ADC's digital volume | 0.5 dB | −96 … +27 dB (the register itself reaches −100 … +27.5) |
+| ES8311 via `esp_codec_dev` (type `10`) | the same `REG17`, written through the library's register access | 0.5 dB | the same |
+| ES8388 (type `6`) | registers `16`/`17` — the ADC's digital volume, whose code is an **attenuation** | 0.5 dB | −64 … +32 dB in the line-in setup, −96 … 0 dB in the mic one (the register itself is 0 dB … −96 dB) |
+| ES8388 via `esp_codec_dev` (type `11`) | the same registers | 0.5 dB | around its own baseline, which is read from the register when the codec opens |
 
 The trim goes into the **digital volume** and not into the PGA, for three
 reasons: the digital volume is half a dB per step against the PGA's 3 dB,
@@ -319,12 +322,28 @@ say today.
 written `0xC8` there — +4.5 dB — and the trim is added to that, so a trim of
 0 dB leaves the register byte-for-byte as it was.
 
+The ES8388 counts the other way: its ADC volume code is an attenuation, so
+its zero is the code the driver leaves there (0x40 = −32 dB in the line-in
+setup, 0x00 = 0 dB in the mic setup) and the trim moves down from there —
+which is why the mic setup can only be turned down and the line-in setup can
+be turned down or up, by 32 dB.
+
+The other codecs — the ES8374, the ES8389, the ES7210, the ES7243, the
+WM8978, the AC101 — have no digital input-gain register that this driver
+knows, so the trim does nothing for them: the field is greyed out in the
+settings page and the API says so instead of pretending.
+
 The sound-pressure estimate follows the gain: the applied trim is taken off
 the estimate, so turning the input up does not also inflate the estimated
 sound pressure. The number the estimate uses is the **applied** trim, not the
 requested one — the codec's register quantises to its own step and clamps at
 its own ends, so the two differ when the request is off the end of the
 register's range.
+
+For the same reason the knob follows the chip: a trim that is set to a value
+the register cannot reach is stored back as the value the register could
+reach, so the settings page and the saved config always say what the codec
+is actually doing.
 
 The applied trim is published as `codec.gain_applied_db` on `/json/ar` and as
 `codec_gain` in the state object; the requested one is `codec.gain_trim_db`.

@@ -2938,10 +2938,12 @@ void audioReactiveRtaCommand(char c) {
         break;
       }
       float want = codecGainTrimDb + ((c == 'C') ? 0.5f : -0.5f);
-      if (want >  27.0f) want =  27.0f;
+      if (want >  32.0f) want =  32.0f;
       if (want < -96.0f) want = -96.0f;
       if (audioSource->setInputGainTrimDb(want)) {
-        codecGainTrimDb = want;
+        // The chip's own value: at the ends of the register the step is
+        // bigger than the 0.5 dB the key asks for.
+        codecGainTrimDb = audioSource->getInputGainTrimDb();
         USER_PRINTF("codec input gain now %+.1f dB (trim on the source type)\n",
                     (double)codecGainTrimDb);
       } else {
@@ -6702,7 +6704,7 @@ class AudioReactive : public Usermod {
         #else
           DEBUGSR_PRINTLN(F("AR: ES8388 Source (Line-In)"));
         #endif
-          audioSource = new ES8388Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster);
+          audioSource = new ES8388Source(SAMPLE_RATE, BLOCK_SIZE, 1.0f, i2sMaster, codecGainTrimDb);
           //useInputFilter = 0; // to disable low-cut software filtering and restore previous behaviour
           delay(100);
           // WLEDMM align global pins
@@ -6786,7 +6788,7 @@ class AudioReactive : public Usermod {
         #ifdef CONFIG_CODEC_ES8311_SUPPORT
         case 10:
           DEBUGSR_PRINTLN(F("AR: ES8311 IDF (esp_codec_dev)"));
-          audioSource = new ES8311IDFSource(SAMPLE_RATE, BLOCK_SIZE, 1.0f);
+          audioSource = new ES8311IDFSource(SAMPLE_RATE, BLOCK_SIZE, 1.0f, codecGainTrimDb);
           delay(100);
           if ((sdaPin >= 0) && (i2c_sda < 0)) i2c_sda = sdaPin;
           if ((sclPin >= 0) && (i2c_scl < 0)) i2c_scl = sclPin;
@@ -6799,7 +6801,7 @@ class AudioReactive : public Usermod {
         #ifdef CONFIG_CODEC_ES8388_SUPPORT
         case 11:
           DEBUGSR_PRINTLN(F("AR: ES8388 IDF (esp_codec_dev)"));
-          audioSource = new ES8388IDFSource(SAMPLE_RATE, BLOCK_SIZE, 1.0f);
+          audioSource = new ES8388IDFSource(SAMPLE_RATE, BLOCK_SIZE, 1.0f, codecGainTrimDb);
           delay(100);
           if ((sdaPin >= 0) && (i2c_sda < 0)) i2c_sda = sdaPin;
           if ((sclPin >= 0) && (i2c_scl < 0)) i2c_scl = sclPin;
@@ -8344,11 +8346,15 @@ class AudioReactive : public Usermod {
         // codec's own quantisation, so posting it again changes nothing -
         // which is why the write is skipped when it already matches.
         float gainRead = 0.0f;
-        if (arGetRangedNumber(usermod[F("codec_gain")], gainRead, -96.0, 27.0)) {
+        if (arGetRangedNumber(usermod[F("codec_gain")], gainRead, -96.0, 32.0)) {
           const float appliedGain = audioSource ? audioSource->getInputGainTrimDb() : 0.0f;
           if (fabsf(gainRead - appliedGain) > 0.01f) {
             if (audioSource && audioSource->setInputGainTrimDb(gainRead)) {
-              codecGainTrimDb = gainRead;
+              // The APPLIED trim, not the requested one: the codec's register
+              // quantises to its own step and stops at its own ends, so the
+              // knob has to show what the chip has - otherwise the next post
+              // of the same number would look like a change.
+              codecGainTrimDb = audioSource->getInputGainTrimDb();
               USER_PRINTF("AR: codec input gain set to %+.1f dB.\n", (double)codecGainTrimDb);
             } else {
               USER_PRINTLN("AR: this source's codec has no input gain - the setting was not applied.");
@@ -8633,12 +8639,15 @@ class AudioReactive : public Usermod {
       // the source is created with it.
       float gainTrimRead = codecGainTrimDb;
       bool haveGain = arGetRangedNumber(top[FPSTR(_digitalmic)][F("codecGain")],
-                                        gainTrimRead, -96.0, 27.0);
+                                        gainTrimRead, -96.0, 32.0);
       configComplete &= haveGain;
       if (haveGain) {
         codecGainTrimDb = gainTrimRead;
         if (audioSource) {
           if (audioSource->setInputGainTrimDb(codecGainTrimDb)) {
+            // Keep the knob on the chip's value: the register quantises and
+            // clamps, so the requested number and the applied one can differ.
+            codecGainTrimDb = audioSource->getInputGainTrimDb();
             USER_PRINTF("AR: codec input gain set to %+.1f dB (trim on the source type).\n",
                         (double)codecGainTrimDb);
           } else {
@@ -9048,11 +9057,13 @@ class AudioReactive : public Usermod {
       // has no input gain. A live control that does nothing is worse than no
       // control: it looks like it is doing something.
       //
-      // The supported types are the hand-coded ES8311 (9 = line level,
-      // 19 = mic level), which is where the trim is implemented.
-      oappend(SET_F("arGainFn=function(){var gv=document.getElementsByName(ux+':digitalmic:codecGain')[1];if(!gv)return;var ok=ddType&&(ddType.value==9||ddType.value==19);gv.disabled=!ok;gv.style.opacity=ok?'1':'0.4';};"));
+      // The supported types are the ones whose codec has a digital input-gain
+      // register to trim: the ES8311 (9 = line level, 19 = mic level, and 10
+      // through esp_codec_dev) and the ES8388 (6 = hand-coded, 11 = through
+      // esp_codec_dev).
+      oappend(SET_F("arGainFn=function(){var gv=document.getElementsByName(ux+':digitalmic:codecGain')[1];if(!gv)return;var t=ddType?parseInt(ddType.value,10):-1;var ok=(t==9||t==19||t==10||t==6||t==11);gv.disabled=!ok;gv.style.opacity=ok?'1':'0.4';if(ok){var e8=(t==6||t==11);gv.min=e8?-64:-96;gv.max=e8?32:27;gv.step=0.5;}};"));
       oappend(SET_F("arv=document.getElementsByName(ux+':digitalmic:codecGain')[1];if(arv){arv.min=-96;arv.max=27;arv.step=0.5;}"));
-      oappend(SET_F("addInfo(ux+':digitalmic:codecGain',1,'<i>dB on top of the source type - 0 is unchanged</i>');"));
+      oappend(SET_F("addInfo(ux+':digitalmic:codecGain',1,'<i>dB on top of the source type - 0 is unchanged (ES8311, ES8388)</i>');"));
       oappend(SET_F("if(ddType)ddType.addEventListener('change',arGainFn);arGainFn();"));
 
       // I2S sample format (runtime-configurable; replaces legacy I2S_USE_RIGHT_CHANNEL / I2S_USE_16BIT_SAMPLES macros)

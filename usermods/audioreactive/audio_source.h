@@ -256,6 +256,50 @@ static bool arReadP4I2SClock(uint32_t &mclkHz, uint32_t &fsHz) {
 // max number of samples for a single i2s_read --> size of global buffer.
 #define I2S_SAMPLES_MAX 512  // same as the frame's hop size
 
+/* The codec's input-gain trim - one description for every codec that has one.
+
+   Each codec that can be trimmed has a DIGITAL gain control that comes after
+   the analog one. The analog gain (the PGA) is what the source TYPE means -
+   line level, mic level - and the trim never touches it; the digital control
+   is the fine one, half a dB a step on both chips here, and it can attenuate
+   as well as boost.
+
+   The trim is RELATIVE: the register's value when the codec was initialised
+   is the trim's zero. So a trim of 0 dB leaves the codec exactly as the
+   driver had it, and the source type keeps saying what it says.
+
+   The codes run in opposite directions on the two chips, which is why stepDb
+   is signed: the ES8311's volume register counts UP with gain, and the
+   ES8388's counts DOWN - its code is an attenuation. */
+struct CodecTrimReg {
+  uint8_t regL;      // the register that carries the left channel's gain
+  uint8_t regR;      // ... and the right one (the same register for mono)
+  uint8_t baseCode;  // the code the driver left there - the trim's zero
+  uint8_t minCode;   // the register's ends
+  uint8_t maxCode;
+  float   stepDb;    // dB per code, signed
+};
+
+// The code that carries a trim: quantised to the register's step and clamped
+// to the register's ends.
+static inline uint8_t codecTrimCode(const CodecTrimReg &r, float trimDb) {
+  if (r.stepDb == 0.0f) return r.baseCode;
+  float steps = trimDb / r.stepDb;
+  // Round half away from zero, so +0.25 dB is one code up and -0.25 dB is
+  // one code down. (No lroundf: this file does not include math.h on every
+  // target, and this is the only rounding it needs.)
+  long code = (long)r.baseCode + (long)(steps + (steps >= 0.0f ? 0.5f : -0.5f));
+  if (code < (long)r.minCode) code = (long)r.minCode;
+  if (code > (long)r.maxCode) code = (long)r.maxCode;
+  return (uint8_t)code;
+}
+
+// The trim a code is worth - what the chip really got, as opposed to what
+// was asked for.
+static inline float codecTrimDb(const CodecTrimReg &r, uint8_t code) {
+  return ((float)((int)code - (int)r.baseCode)) * r.stepDb;
+}
+
 /* Interface class
    AudioSource serves as base class for all microphone types
    This enables accessing all microphones with one single interface
@@ -1034,9 +1078,15 @@ class ES8388Source : public I2SSource {
     }
 
   public:
-    ES8388Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster=true) :
+    ES8388Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f, bool i2sMaster=true,
+                 float gainTrimDb = 0.0f) :
       I2SSource(sampleRate, blockSize, sampleScale, i2sMaster) {
       _slotMask = I2S_STD_SLOT_LEFT;
+      _gainTrimDb = gainTrimDb;
+      // The trim's zero is the code the driver leaves in the ADC volume
+      // register: 0x40 (-32 dB) for the line-in setup, 0x00 (0 dB) for the
+      // mic setup. Which one is decided by the compile-time switch below, so
+      // it is set when the codec is initialised.
     };
 
     void initialize(int8_t i2swsPin, int8_t i2ssdPin, int8_t i2sckPin, int8_t mclkPin,
@@ -1059,6 +1109,9 @@ class ES8388Source : public I2SSource {
 
       // First route mclk, then configure ADC over I2C, then configure I2S
       _es8388InitAdc();
+      // The trim is relative to the code the driver just wrote, so it needs
+      // to be applied after the initialisation.
+      setInputGainTrimDb(_gainTrimDb);
       I2SSource::initialize(i2swsPin, i2ssdPin, i2sckPin, mclkPin, bitsPerSample, useRightSlot, i2sMaster);
     }
 
@@ -1067,7 +1120,47 @@ class ES8388Source : public I2SSource {
       _codec = nullptr;
     }
 
+    /* The ES8388's ADC digital volume - registers 16 (left) and 17 (right).
+
+       The code is an ATTENUATION: 0x00 = 0 dB, 0x40 = -32 dB, 0xC0 = -96 dB,
+       half a dB a step. That is Espressif's own scale for the chip
+       (esp_codec_dev's es8388 driver carries the same range, 0xC0 = -96 dB),
+       and it is the register the driver already uses to set the input level.
+
+       So the count runs DOWN with gain, which is why stepDb is negative. */
+    // Set the input-gain trim, in dB, on top of the level the driver chose.
+    //
+    // It can be called before the codec is up: the value is remembered and
+    // written when the codec is initialised.
+    bool setInputGainTrimDb(float trimDb) override {
+      _gainTrimDb = trimDb;
+      if (!_codec) return false;
+      const CodecTrimReg reg = _trimReg();
+      const uint8_t code = codecTrimCode(reg, trimDb);
+      _es8388I2cWrite(reg.regL, code);
+      _es8388I2cWrite(reg.regR, code);
+      _appliedTrimDb = codecTrimDb(reg, code);
+      return true;
+    }
+
+    // The trim the chip actually has, after the register's quantisation.
+    float getInputGainTrimDb(void) override { return _appliedTrimDb; }
+
     audioreactive_I2CDevice *_codec = nullptr;
+
+  private:
+    // The trim register with the right zero for this build: the mic setup
+    // leaves the ADC volume at 0 dB, the line-in setup at -32 dB.
+    CodecTrimReg _trimReg() const {
+      #ifdef use_es8388_mic
+        return CodecTrimReg{ 16, 17, 0x00, 0x00, 0xC0, -0.5f };
+      #else
+        return CodecTrimReg{ 16, 17, 0x40, 0x00, 0xC0, -0.5f };
+      #endif
+    }
+
+    float _gainTrimDb    = 0.0f;   // what was asked for
+    float _appliedTrimDb = 0.0f;   // what the register could do
 
 };
 
@@ -1135,36 +1228,21 @@ class ES8311Source : public I2SSource {
     // difference between the chip's 0 dB and the level this driver has run
     // at. The trim is added to THAT, so a trim of 0 dB leaves the register
     // byte-for-byte as it was.
-    static constexpr uint8_t ES8311_ADCVOL_BASE = 0xC8;  // +4.5 dB - the driver's own baseline
-    static constexpr uint8_t ES8311_ADCVOL_MIN  = 0x00;  // -95.5 dB
-    static constexpr uint8_t ES8311_ADCVOL_MAX  = 0xFF;  // +32.0 dB
-    static constexpr float   ES8311_ADCVOL_STEP = 0.5f;  // dB per code
-
-    // The register code for a trim, quantised to what REG17 can do.
-    static uint8_t _es8311GainCode(float trimDb) {
-      // Round half away from zero, so +0.25 dB is one code up and -0.25 dB
-      // is one code down. (No lroundf: this file does not include math.h on
-      // every target, and this is the only rounding it needs.)
-      float stepsF = trimDb / ES8311_ADCVOL_STEP;
-      long steps = (long)(stepsF + (stepsF >= 0.0f ? 0.5f : -0.5f));
-      long code = steps + (long)ES8311_ADCVOL_BASE;
-      if (code < (long)ES8311_ADCVOL_MIN) code = ES8311_ADCVOL_MIN;
-      if (code > (long)ES8311_ADCVOL_MAX) code = ES8311_ADCVOL_MAX;
-      return (uint8_t)code;
-    }
-
-    // The trim a code is worth, in dB - what the chip really got, as opposed
-    // to what was asked for.
-    static float _es8311TrimOf(uint8_t code) {
-      return ((float)((int)code - (int)ES8311_ADCVOL_BASE)) * ES8311_ADCVOL_STEP;
-    }
+    static constexpr CodecTrimReg ES8311_TRIM = {
+      0x17,   // regL    - REG17, the ADC's digital volume
+      0x17,   // regR    - mono: the same register
+      0xC8,   // baseCode- +4.5 dB, the driver's own baseline
+      0x00,   // minCode - -95.5 dB
+      0xFF,   // maxCode - +32.0 dB
+      0.5f    // stepDb  - dB per code
+    };
 
     // Write the trim into REG17 and remember what the chip actually got.
     bool _es8311WriteGain(audioreactive_I2CDevice *dev) {
       if (!dev) return false;
-      const uint8_t code = _es8311GainCode(_gainTrimDb);
-      _i2cWrite(dev, 0x17, code);
-      _appliedTrimDb = _es8311TrimOf(code);
+      const uint8_t code = codecTrimCode(ES8311_TRIM, _gainTrimDb);
+      _i2cWrite(dev, ES8311_TRIM.regL, code);
+      _appliedTrimDb = codecTrimDb(ES8311_TRIM, code);
       return true;
     }
 
@@ -1465,7 +1543,7 @@ public:
     _slotMask = I2S_STD_SLOT_LEFT;
     _micLevel = (level == MIC_LEVEL);
     _gainTrimDb = gainTrimDb;
-    _appliedTrimDb = _es8311TrimOf(_es8311GainCode(gainTrimDb));
+    _appliedTrimDb = codecTrimDb(ES8311_TRIM, codecTrimCode(ES8311_TRIM, gainTrimDb));
   };
 
   void initialize(int8_t i2swsPin, int8_t i2ssdPin, int8_t i2sckPin, int8_t mclkPin,
@@ -1537,7 +1615,7 @@ public:
   // mean nothing.
   bool setInputGainTrimDb(float trimDb) override {
     _gainTrimDb = trimDb;
-    _appliedTrimDb = _es8311TrimOf(_es8311GainCode(trimDb));
+    _appliedTrimDb = codecTrimDb(ES8311_TRIM, codecTrimCode(ES8311_TRIM, trimDb));
     if (!_es8311 || _es7210Active) {
       if (_es7210Active) _appliedTrimDb = 0.0f;
       return false;
@@ -1870,7 +1948,12 @@ class CodecDevSource : public AudioSource {
       // muted for the on-board analog MEMS mic). The legacy ES8311Source
       // explicitly writes register 0x17 = 0b10111111 (+30 dB PGA gain) and
       // keeps the ADC unmuted (reg 0x1B = 0b00000101). Mirror that here.
-      esp_codec_dev_set_in_gain(_codecDev, 30.0f);    // +30 dB mic PGA (reg 0x17)
+      //
+      // set_in_gain is the codec's ANALOG input gain - the library's ES8311
+      // driver puts it in REG16, the MIC gain scale, in 6 dB steps (and the
+      // ES8388's in its PGA, in 3 dB steps). It is the level the source type
+      // means, so the trim does not go here - see the trim register below.
+      esp_codec_dev_set_in_gain(_codecDev, 30.0f);    // +30 dB analog input gain
       esp_codec_dev_set_in_mute(_codecDev, false);    // unmute (reg 0x1B = 1)
 
       // Some IDF v5.3 + P4 combinations don't actually power up the analog
@@ -1885,6 +1968,11 @@ class CodecDevSource : public AudioSource {
       // 0x00 bits [2:0] = 0b000 = standby; 0b101 = ADC + DAC running.
       // The legacy code ends with 0x00 = 0b10000000 (RESET+start).
       esp_codec_dev_write_reg(_codecDev, 0x00, 0x80);
+
+      // Now that the codec is up, the codec's own class can put its registers
+      // where it wants them - and tell this class where its gain register is,
+      // so the trim can be applied.
+      _postOpenInit();
 
       // ── DEBUG: read back key ES8311 registers + canonical state values
       float inGain = -99.0f;
@@ -1916,6 +2004,39 @@ class CodecDevSource : public AudioSource {
     }
 
     void deinitialize() override { _deinitialize(); }
+
+    /* The codec's INPUT GAIN TRIM, in dB, on top of the level the source
+       type chose.
+
+       The trim goes into the codec's DIGITAL gain register - the fine one
+       that comes after the analog gain - so it can attenuate as well as
+       boost and it leaves the analog gain (the PGA, the level the type
+       means) alone. A codec class that has such a register says so in
+       _postOpenInit(); the rest refuse the change.
+
+       The value that comes back is what the register could actually do:
+       the request is quantised to the register's step and clamped to its
+       ends, and the sound-pressure estimate uses the applied value. */
+    bool setInputGainTrimDb(float trimDb) override {
+      _gainTrimDb = trimDb;
+      if (!_hasTrim || !_codecDev) return false;
+      const uint8_t code = codecTrimCode(_trimReg, trimDb);
+      int err = esp_codec_dev_write_reg(_codecDev, _trimReg.regL, code);
+      if (_trimReg.regR != _trimReg.regL) {
+        const int err2 = esp_codec_dev_write_reg(_codecDev, _trimReg.regR, code);
+        if (err2 == ESP_CODEC_DEV_OK) err = err2;
+      }
+      if (err != ESP_CODEC_DEV_OK) {
+        ERRORSR_PRINTF("AR: codec gain register write failed (err=%d).\n", err);
+        return false;
+      }
+      _appliedTrimDb = codecTrimDb(_trimReg, code);
+      DEBUGSR_PRINTF("CodecDevSource: input gain trim %+.1f dB (code 0x%02X).\n",
+                     (double)_appliedTrimDb, code);
+      return true;
+    }
+
+    float getInputGainTrimDb(void) override { return _appliedTrimDb; }
 
     void getSamples(float *buffer, uint16_t num_samples) override {
       // The destination is defined before anything else happens - see the
@@ -1958,6 +2079,22 @@ class CodecDevSource : public AudioSource {
     virtual const audio_codec_if_t *_createCodecInterface() = 0;
     virtual const audio_codec_data_if_t *_createDataInterface() = 0;
 
+    /* Called once the codec is open and the common register writes are done.
+
+       This is where a codec class puts its own registers where it wants them
+       and, if it has a digital gain register, tells this class where it is
+       (with _setTrimReg) so the trim can be applied. */
+    virtual void _postOpenInit() {}
+
+    /* The codec's digital input-gain register, and the code that means a
+       trim of 0 dB. Called by a codec class from _postOpenInit(). */
+    void _setTrimReg(const CodecTrimReg &reg) {
+      _trimReg = reg;
+      _hasTrim = true;
+      // Apply whatever trim was asked for before the codec came up.
+      setInputGainTrimDb(_gainTrimDb);
+    }
+
     CodecDevSource(SRate_t sampleRate, int blockSize, float sampleScale, bool i2sMaster = true)
       : AudioSource(sampleRate, blockSize, sampleScale, i2sMaster)
       , _codecDev(nullptr)
@@ -1974,6 +2111,13 @@ class CodecDevSource : public AudioSource {
     int8_t _dinPin = I2S_GPIO_UNUSED;
     int8_t _bckPin = I2S_GPIO_UNUSED;
     int8_t _mclkPin = I2S_GPIO_UNUSED;
+
+    // The input-gain trim: what was asked for, what the register could do,
+    // and where the register is.
+    float         _gainTrimDb    = 0.0f;
+    float         _appliedTrimDb = 0.0f;
+    CodecTrimReg  _trimReg       = { 0, 0, 0, 0, 0, 0.0f };
+    bool          _hasTrim       = false;
 
     /* Pre-allocate the I²S RX channel with the user-requested bit-width and
        slot. Mirrors I2SSource::initialize() but kept local to CodecDevSource
@@ -2129,8 +2273,11 @@ class CodecDevSource : public AudioSource {
 #ifdef CONFIG_CODEC_ES8311_SUPPORT
 class ES8311IDFSource : public CodecDevSource {
   public:
-    ES8311IDFSource(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f)
-      : CodecDevSource(sampleRate, blockSize, sampleScale) {}
+    ES8311IDFSource(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f,
+                    float gainTrimDb = 0.0f)
+      : CodecDevSource(sampleRate, blockSize, sampleScale) {
+      _gainTrimDb = gainTrimDb;
+    }
 
     ~ES8311IDFSource() override {
       // The ctrl_if shim was calloc()'d in _createCodecInterface().
@@ -2147,6 +2294,21 @@ class ES8311IDFSource : public CodecDevSource {
   protected:
     esp_codec_dev_type_t _codecDevType() const override {
       return ESP_CODEC_DEV_TYPE_IN;
+    }
+
+    /* The ES8311's ADC digital volume - REG17 - is where the trim goes, the
+       same register the hand-coded path uses and the same scale: half a dB
+       a step, 0x00 = -95.5 dB, 0xBF = 0 dB, 0xFF = +32 dB.
+
+       The library's open() writes 0xBF there, but this driver's own register
+       sequence (in _createCodecInterface) writes 0xC8 = +4.5 dB, which is
+       the level the hand-coded path has always run at - and the library's
+       open() overwrites it. So the baseline is put back here, after open,
+       and the trim is relative to it: a trim of 0 dB leaves REG17 exactly
+       where the hand-coded path would have it. */
+    void _postOpenInit() override {
+      esp_codec_dev_write_reg(_codecDev, 0x17, 0xC8);
+      _setTrimReg(CodecTrimReg{ 0x17, 0x17, 0xC8, 0x00, 0xFF, 0.5f });
     }
 
     const audio_codec_if_t *_createCodecInterface() override {
@@ -2283,12 +2445,32 @@ class ES8311IDFSource : public CodecDevSource {
 #ifdef CONFIG_CODEC_ES8388_SUPPORT
 class ES8388IDFSource : public CodecDevSource {
   public:
-    ES8388IDFSource(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f)
-      : CodecDevSource(sampleRate, blockSize, sampleScale) {}
+    ES8388IDFSource(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f,
+                    float gainTrimDb = 0.0f)
+      : CodecDevSource(sampleRate, blockSize, sampleScale) {
+      _gainTrimDb = gainTrimDb;
+    }
 
   protected:
     esp_codec_dev_type_t _codecDevType() const override {
       return ESP_CODEC_DEV_TYPE_IN;
+    }
+
+    /* The ES8388's ADC digital volume - registers 16 (left) and 17 (right).
+
+       The code is an ATTENUATION: 0x00 = 0 dB, 0x40 = -32 dB, 0xC0 = -96 dB,
+       half a dB a step - Espressif's own scale for the chip, and the one the
+       hand-coded path uses as well. The count runs DOWN with gain, so the
+       step is negative.
+
+       The library's setup leaves the volume where it wants it, so the trim's
+       zero is whatever is in the register when the codec is open. */
+    void _postOpenInit() override {
+      int code = 0;
+      if (esp_codec_dev_read_reg(_codecDev, 16, &code) != ESP_CODEC_DEV_OK) code = 0;
+      if (code < 0) code = 0;
+      if (code > 0xC0) code = 0xC0;
+      _setTrimReg(CodecTrimReg{ 16, 17, (uint8_t)code, 0x00, 0xC0, -0.5f });
     }
 
     const audio_codec_if_t *_createCodecInterface() override {
