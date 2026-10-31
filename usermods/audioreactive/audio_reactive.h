@@ -3272,6 +3272,14 @@ static void arPublishRta(float dtMs) {
 // The snapshot's bytes follow, so the endpoint publishes the bytes the
 // effects are seeing. The dB values in the snapshot stay as they are: these
 // bytes are not an analysed frame.
+//
+// The PATTERN comes with them. These bytes are the SENDER's sixteen bands,
+// so the pattern does not apply to them - but the endpoint must not report a
+// stale pattern: the pattern that is running on THIS board is what the
+// endpoint says, and a change made on this board has to be visible at once.
+// Without this, a board that is receiving (and so never publishes a frame of
+// its own) would keep reporting the pattern it booted with, and a change
+// made on it would look like it had not happened.
 static void arPublishRaw(const uint8_t *src) {
   ArPublishGuard guard;
   uint8_t *back = arBandBuf[arBandIdx ^ 1];
@@ -3280,6 +3288,7 @@ static void arPublishRaw(const uint8_t *src) {
   arBandBytes = arBandBuf[arBandIdx];
   if (arUmData != nullptr) arUmData->u_data[2] = arBandBytes;
   memcpy(arFrameSnap.geqBars, src, NUM_GEQ_CHANNELS);
+  arFrameSnap.geqPattern = arGeqPattern;
 }
 
 // The normalisation constant: 1/(fs * sum(w^2)).
