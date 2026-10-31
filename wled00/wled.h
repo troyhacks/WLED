@@ -150,6 +150,13 @@
 #include <Wire.h>
 #include <SPI.h>
 
+// The IDF v5 I2C master driver. Everything on the board's SDA/SCL pins - the
+// audio codec, the HDMI bridge, the touch controller - talks through it.
+#if defined(ARDUINO_ARCH_ESP32) && __has_include(<driver/i2c_master.h>)
+  #include "driver/i2c_master.h"
+  #define WLED_SHARED_I2C 1
+#endif
+
 #ifndef TCM_IRAM_ATTR
 #define TCM_IRAM_ATTR
 #endif
@@ -318,6 +325,35 @@ using PSRAMDynamicJsonDocument = BasicJsonDocument<PSRAM_Allocator<char>>;
 #define STRINGIFY(X) #X
 #define TOSTRING(X) STRINGIFY(X)
 
+#if defined(WLED_SHARED_I2C)
+// The board's I2C bus.
+//
+// Every I2C device on the board's SDA/SCL pins - the audio codec, the HDMI
+// bridge, the touch controller - sits behind one pair of pins, and the IDF's
+// new I2C master driver allows only ONE controller per port and ONE owner per
+// pin pair. Two buses on the same pins fight: the second one to be installed
+// takes the GPIO routing away from the first one, and the first one's
+// transactions then NACK forever (the line is driven by the other controller,
+// so it never sees an ACK).
+//
+// So: one bus per pin pair, installed on demand, and everybody who needs
+// those pins adds their devices to it. globalI2cBusEnsure() hands out that
+// bus - it is the only way to get an I2C bus in this firmware.
+WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL); // the primary bus
+WLED_GLOBAL int8_t global_i2c_sda _INIT(-1);                           // its pins
+WLED_GLOBAL int8_t global_i2c_scl _INIT(-1);
+WLED_GLOBAL i2c_port_t global_i2c_port _INIT(I2C_NUM_0);              // its controller
+
+// Returns the board's bus on the given pins, installing it if it is not there
+// yet. Returns NULL if it could not be installed (no free controller, or the
+// pins are unusable). The bus is never deleted - it belongs to the board.
+i2c_master_bus_handle_t globalI2cBusEnsure(int8_t sda, int8_t scl);
+
+// The controller a bus of ours runs on (for logging and for the codec
+// libraries, which want a port number next to the handle).
+i2c_port_t globalI2cBusPort(i2c_master_bus_handle_t bus);
+#endif // WLED_SHARED_I2C
+
 #ifndef WLED_VERSION
   #define WLED_VERSION "dev"
 #endif
@@ -367,8 +403,6 @@ WLED_GLOBAL uint8_t touchscreen_cnt _INIT(0);
 WLED_GLOBAL bool touchpad_pressed _INIT(false);
 WLED_GLOBAL bool update_screen _INIT(true);
 WLED_GLOBAL bool update_screen_background _INIT(true);
-WLED_GLOBAL i2c_port_t GLOBAL_I2C_PORT _INIT(I2C_NUM_0);
-WLED_GLOBAL i2c_master_bus_handle_t global_i2c_bus_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);

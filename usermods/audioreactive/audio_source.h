@@ -383,15 +383,18 @@ class AudioSource {
    handle — making it impossible for the esp_codec_dev library (which
    needs the handle) to share the bus.
 
-   audioreactive_I2C instead installs its own dedicated i2c_master_bus on a
-   configurable port (default port 0 on chips with one I2C controller, port 1
-   on chips like ESP32-P4 with two — leaving Wire on port 0 for the rest of
-   WLED). Codec classes acquire their device handle via addDevice() and
-   perform register r/w via writeReg()/readReg() — no Wire dependency.
+   So the usermod talks to the IDF's new driver directly. But it does NOT
+   install a bus of its own: the board's SDA/SCL pins carry the audio codec,
+   the display bridge and the touch controller at the same time, and the
+   driver allows only one controller per port and one owner per pin pair.
+   Two buses on the same pins fight, and the loser's transactions NACK
+   forever.
+
+   Instead, audioreactive_I2C joins the board's shared bus (globalI2cBusEnsure)
+   and adds its own devices to it. Codec classes acquire their device handle
+   via addDevice() and perform register r/w via writeReg()/readReg() — no Wire
+   dependency.
 */
-#ifndef SR_I2C_PORT
-  #define SR_I2C_PORT 0        // default to port 0 — share with Wire; we'll tear Wire down first
-#endif
 #ifndef SR_I2C_FREQUENCY_HZ
 #define SR_I2C_FREQUENCY_HZ 50000    // 50 kHz — conservative default; some ESP codec libs
                                      // (e.g. esp_codec_dev's es8311_codec_new on P4)
@@ -413,7 +416,7 @@ class audioreactive_I2CDevice {
 
 class audioreactive_I2C {
   public:
-    audioreactive_I2C() : _bus_handle(nullptr), _bus_port((i2c_port_t)SR_I2C_PORT), _sda_io(-1), _scl_io(-1) {}
+    audioreactive_I2C() : _bus_handle(nullptr), _bus_port(I2C_NUM_0), _sda_io(-1), _scl_io(-1) {}
 
     /* Returns true if the bus is installed and ready. */
     bool isReady() const { return _bus_handle != nullptr; }
@@ -423,21 +426,28 @@ class audioreactive_I2C {
     i2c_port_t port() const { return _bus_port; }
     i2c_master_bus_handle_t busHandle() const { return _bus_handle; }
 
-    /* Install the i2c_master_bus on the configured port, on the given SDA/SCL
-       GPIO pins. Idempotent: if the bus is already installed on the same port+pins,
-       it's reused. Returns true on success.
+    /* Join the board's I2C bus on the given SDA/SCL GPIO pins, installing it
+       if it is not there yet. Idempotent: if we are already on those pins,
+       nothing happens. Returns true on success.
 
-       On arduino-esp32 v3.x Wire.begin() installs an i2c_master_bus_handle_t on
-       the same port (default 0) and refuses to share. To take over, we first
-       call Wire.end() to release Wire's claim on the peripheral — the rest
-       of WLED's Wire-based code (the I2C scan in setup()) will silently no-op
-       thereafter, which is acceptable on builds that have moved to the new driver. */
+       There is exactly ONE bus per pin pair on the board - the display bridge
+       and the I2C scan share it with us. A bus of our own on the same pins
+       would take the pins away from them (and theirs would take them away
+       from us): the IDF's I2C master driver gives the GPIO routing to the
+       last controller that installs itself, and the other one's transactions
+       then NACK forever.
+
+       On arduino-esp32 v3.x Wire.begin() installs an i2c_master_bus_handle_t
+       of its own and refuses to share. To take the pins over, we first call
+       Wire.end() to release Wire's claim on the peripheral — the rest of
+       WLED's Wire-based code will silently no-op thereafter, which is
+       acceptable on builds that have moved to the new driver. */
     bool begin(int8_t sda_io, int8_t scl_io) {
       if (sda_io < 0 || scl_io < 0) return false;
       if (_bus_handle && _sda_io == sda_io && _scl_io == scl_io) return true;  // already installed
-      if (_bus_handle) end();  // tear down old bus if ports/pins changed
+      if (_bus_handle) end();  // drop our devices if the pins changed
 
-      // Release Wire's bus on the same port before we install ours.
+      // Release Wire's bus before we take the pins over.
       Wire.end();
 
       // Some chips (notably ESP32-P4) need a brief delay after Wire.end() before
@@ -445,30 +455,21 @@ class audioreactive_I2C {
       // and subsequent I²C transactions NACK with a phantom slave.
       delay(10);
 
-      i2c_master_bus_config_t bus_cfg = {};
-      bus_cfg.i2c_port          = _bus_port;
-      bus_cfg.sda_io_num        = (gpio_num_t)sda_io;
-      bus_cfg.scl_io_num        = (gpio_num_t)scl_io;
-      bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
-      bus_cfg.glitch_ignore_cnt = 7;
-      bus_cfg.flags.enable_internal_pullup = true;
-      bus_cfg.flags.allow_pd             = false;
-
-      esp_err_t err = i2c_new_master_bus(&bus_cfg, &_bus_handle);
-      if (err != ESP_OK || _bus_handle == nullptr) {
-        DEBUGSR_PRINTF("audioreactive_I2C: i2c_new_master_bus failed on port %d (sda=%d scl=%d): %d\n",
-                       (int)_bus_port, sda_io, scl_io, err);
-        _bus_handle = nullptr;
+      _bus_handle = globalI2cBusEnsure(sda_io, scl_io);
+      if (_bus_handle == nullptr) {
+        DEBUGSR_PRINTF("audioreactive_I2C: no I2C bus for sda=%d scl=%d\n", sda_io, scl_io);
         return false;
       }
       _sda_io = sda_io;
       _scl_io = scl_io;
-      DEBUGSR_PRINTF("audioreactive_I2C: installed i2c_master_bus on port %d (sda=%d scl=%d)\n",
+      _bus_port = globalI2cBusPort(_bus_handle);
+      DEBUGSR_PRINTF("audioreactive_I2C: on the board's I2C bus, port %d (sda=%d scl=%d)\n",
                      (int)_bus_port, sda_io, scl_io);
       return true;
     }
 
-    /* Tear down the bus and all attached devices. */
+    /* Detach our devices from the bus. The bus itself belongs to the board -
+       the display bridge and the I2C scan are on it too - so it stays. */
     void end() {
       for (int i = 0; i < _device_count; i++) {
         if (_devices[i]._dev_handle) {
@@ -477,10 +478,7 @@ class audioreactive_I2C {
         }
       }
       _device_count = 0;
-      if (_bus_handle) {
-        i2c_del_master_bus(_bus_handle);
-        _bus_handle = nullptr;
-      }
+      _bus_handle = nullptr;
       _sda_io = _scl_io = -1;
     }
 
@@ -1796,8 +1794,8 @@ class CodecDevSource : public AudioSource {
         return;
       }
 
-      // Join I2C bus if not already started (via the audioreactive_I2C class —
-      // installs an i2c_master_bus on AR_I2C_PORT, never touches Arduino Wire).
+      // Join the board's I2C bus if not already joined (via the
+      // audioreactive_I2C class — the same bus the display bridge uses).
       int8_t sda = -1, scl = -1;
       if (i2c_sda >= 0 && i2c_scl >= 0) { sda = i2c_sda; scl = i2c_scl; }
       #ifdef HW_PIN_SDA

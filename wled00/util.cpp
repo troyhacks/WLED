@@ -5,6 +5,91 @@
 #include <sys/stat.h>
 #include <driver/i2c_master.h>
 
+#if defined(WLED_SHARED_I2C)
+/* The board's I2C buses - one per pin pair, installed on demand, never
+   deleted. See the comment on global_i2c_bus_handle in wled.h for why there
+   must not be two buses on the same pins. */
+#define WLED_I2C_MAX_BUSES 3
+struct WledI2cBus {
+  int8_t sda;
+  int8_t scl;
+  i2c_port_t port;
+  i2c_master_bus_handle_t handle;
+};
+static WledI2cBus _wledI2cBuses[WLED_I2C_MAX_BUSES] = {};
+static uint8_t _wledI2cBusCount = 0;
+
+i2c_master_bus_handle_t globalI2cBusEnsure(int8_t sda, int8_t scl) {
+  if (sda < 0 || scl < 0) return nullptr;
+
+  // Is the bus for these pins already there?
+  for (uint8_t i = 0; i < _wledI2cBusCount; i++) {
+    if (_wledI2cBuses[i].sda == sda && _wledI2cBuses[i].scl == scl) {
+      return _wledI2cBuses[i].handle;
+    }
+  }
+  if (_wledI2cBusCount >= WLED_I2C_MAX_BUSES) return nullptr;
+
+  // Which controller is free? The IDF allows one bus per port. Port 1 is
+  // preferred: the display bridge and the I2C scan have always lived there,
+  // and it leaves port 0 - Wire's port - alone.
+  i2c_port_t order[2];
+  uint8_t tries = 0;
+  #if SOC_HP_I2C_NUM > 1
+    order[tries++] = (i2c_port_t)1;
+  #endif
+  order[tries++] = (i2c_port_t)0;
+
+  i2c_master_bus_handle_t bus = nullptr;
+  i2c_port_t port = I2C_NUM_0;
+  esp_err_t err = ESP_ERR_INVALID_STATE;
+  for (uint8_t p = 0; p < tries; p++) {
+    i2c_master_bus_config_t bus_cfg = {};
+    bus_cfg.i2c_port          = order[p];
+    bus_cfg.sda_io_num        = (gpio_num_t)sda;
+    bus_cfg.scl_io_num        = (gpio_num_t)scl;
+    bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
+    bus_cfg.glitch_ignore_cnt = 7;
+    bus_cfg.flags.enable_internal_pullup = true;
+    bus_cfg.flags.allow_pd             = false;
+
+    err = i2c_new_master_bus(&bus_cfg, &bus);
+    if (err == ESP_OK && bus != nullptr) {
+      port = order[p];
+      break;
+    }
+    bus = nullptr;  // this port is taken - try the next one
+    USER_PRINTF("I2C: port %d not available (err %d)\n", (int)order[p], (int)err);
+  }
+  if (bus == nullptr) {
+    USER_PRINTF("I2C: no bus for SDA=%d SCL=%d (err %d)\n", (int)sda, (int)scl, (int)err);
+    return nullptr;
+  }
+
+  WledI2cBus &slot = _wledI2cBuses[_wledI2cBusCount++];
+  slot.sda = sda;
+  slot.scl = scl;
+  slot.port = port;
+  slot.handle = bus;
+
+  if (global_i2c_bus_handle == nullptr) {  // the first bus is the primary one
+    global_i2c_bus_handle = bus;
+    global_i2c_sda = sda;
+    global_i2c_scl = scl;
+    global_i2c_port = port;
+  }
+  USER_PRINTF("I2C: bus installed on port %d, SDA=%d SCL=%d\n", (int)port, (int)sda, (int)scl);
+  return bus;
+}
+
+i2c_port_t globalI2cBusPort(i2c_master_bus_handle_t bus) {
+  for (uint8_t i = 0; i < _wledI2cBusCount; i++) {
+    if (_wledI2cBuses[i].handle == bus) return _wledI2cBuses[i].port;
+  }
+  return global_i2c_port;
+}
+#endif // WLED_SHARED_I2C
+
 void scanI2C() {
   struct I2CDevice { uint8_t addr; const char* name; };
   static const I2CDevice knownDevices[] = {
@@ -63,11 +148,9 @@ void scanI2C() {
   Serial.println(F("\n--- I2C Scan ---"));
   int found = 0;
 
-  // Install a transient i2c_master_bus on port 1 — leaves port 0 free
-  // for the audioreactive usermod (AR_I2C) or any legacy Wire bus. Port
-  // 1 is available on chips like the ESP32-P4 which have SOC_HP_I2C_NUM=2.
-  // On single-port chips (SOC_HP_I2C_NUM=1) this may fail — in that case
-  // we log a friendly message and return.
+  // The scan runs on the board's shared I2C bus - the same one the audio
+  // codec and the display bridge use. A bus of its own would take the pins
+  // away from them and everything would NACK from then on.
   int8_t sda = i2c_sda, scl = i2c_scl;
   #ifdef HW_PIN_SDA
   if (sda < 0) sda = HW_PIN_SDA;
@@ -78,18 +161,9 @@ void scanI2C() {
     return;
   }
 
-  i2c_master_bus_config_t bus_cfg = {};
-  bus_cfg.i2c_port          = (i2c_port_t)1;
-  bus_cfg.sda_io_num        = (gpio_num_t)sda;
-  bus_cfg.scl_io_num        = (gpio_num_t)scl;
-  bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
-  bus_cfg.glitch_ignore_cnt = 7;
-  bus_cfg.flags.enable_internal_pullup = true;
-
-  i2c_master_bus_handle_t bus = NULL;
-  esp_err_t err = i2c_new_master_bus(&bus_cfg, &bus);
-  if (err != ESP_OK || bus == NULL) {
-    Serial.printf("  (i2c_new_master_bus port=1 failed: %d)\n", err);
+  i2c_master_bus_handle_t bus = globalI2cBusEnsure(sda, scl);
+  if (!bus) {
+    Serial.println(F("  (no I2C bus available)"));
     return;
   }
 
@@ -101,7 +175,6 @@ void scanI2C() {
       Serial.println(name ? name : "Unknown");
     }
   }
-  i2c_del_master_bus(bus);
 
   Serial.printf("--- %d device(s) found ---\n\n", found);
   if (ES7210_present) USER_PRINTLN("ES7210_present == true");

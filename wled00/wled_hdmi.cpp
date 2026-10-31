@@ -675,23 +675,16 @@ void hdmi_setup() {
     }
   }
 
-  // WLEDMM: ensure our dedicated I2C master bus is up before the HDMI bridge
-  // needs it.  The LT8912B communicates via I2C at 0x48/0x49/0x4A (register
-  // spaces) and 0x50 (DDC EDID proxy).  We create our own port-1 master bus
-  // here so we don't have to coordinate with whatever the rest of WLED does
-  // (or doesn't do) to populate global_i2c_bus_handle.
+  // WLEDMM: the LT8912B bridge talks I2C at 0x48/0x49/0x4A (register spaces)
+  // and 0x50 (DDC EDID proxy) - on the same SDA/SCL pins as the audio codec.
+  // There can only be ONE bus on those pins: a second controller would take
+  // the pins away from the first one and both would stop working. So the
+  // bridge joins the board's shared bus.
   if (!hdmi_i2c_bus) {
-    USER_PRINTLN("HDMI: initializing I2C bus for LT8912B bridge");
-    i2c_master_bus_config_t bus_cfg = {};
-    bus_cfg.i2c_port          = (i2c_port_t)1;     // port 1 — leaves util.cpp's transient scan and audioreactive alone
-    bus_cfg.sda_io_num        = (gpio_num_t)HW_PIN_SDA;
-    bus_cfg.scl_io_num        = (gpio_num_t)HW_PIN_SCL;
-    bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
-    bus_cfg.flags.enable_internal_pullup = true;
-    esp_err_t br = i2c_new_master_bus(&bus_cfg, &hdmi_i2c_bus);
-    if (br != ESP_OK || hdmi_i2c_bus == NULL) {
-      USER_PRINTF("HDMI: i2c_new_master_bus failed (err %d) — HDMI disabled\n", br);
+    USER_PRINTLN("HDMI: joining the board's I2C bus for LT8912B bridge");
+    hdmi_i2c_bus = globalI2cBusEnsure((int8_t)HW_PIN_SDA, (int8_t)HW_PIN_SCL);
+    if (!hdmi_i2c_bus) {
+      USER_PRINTLN("HDMI: no I2C bus available - HDMI disabled");
       return;
     }
   }
