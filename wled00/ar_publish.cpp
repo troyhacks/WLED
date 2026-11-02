@@ -28,6 +28,9 @@ ArPublishGuard::~ArPublishGuard() {
 static uint8_t arRtaBuf[2][NUM_RTA_CHANNELS] = {{0}};
 static uint8_t  arRtaIdx = 0;                 // which buffer is published
 static bool     arRtaValid = false;           // false until the first frame
+// True while the published frame is a live measurement - see
+// arSetRtaLive(). The frame is then stale, and may not be used.
+static bool     arRtaLive = false;
 
 void arPublishRtaBands(const uint8_t* bands) {
   ArPublishGuard guard;
@@ -44,10 +47,26 @@ void arCopyRtaBandsLocked(uint8_t* dest) {
   memcpy(dest, arRtaBuf[arRtaIdx], NUM_RTA_CHANNELS);
 }
 
+bool arRtaUsable(void) {
+  ArPublishGuard guard;
+  return arRtaValid && arRtaLive;
+}
+
 bool arCopyRtaBands(uint8_t* dest) {
   ArPublishGuard guard;
-  arCopyRtaBandsLocked(dest);
-  return arRtaValid;
+  if (!arRtaValid || !arRtaLive) {
+    // Not a live measurement: the caller may not use it, so it gets nothing
+    // to misuse. The copy is not made at all.
+    memset(dest, 0, NUM_RTA_CHANNELS);
+    return false;
+  }
+  memcpy(dest, arRtaBuf[arRtaIdx], NUM_RTA_CHANNELS);
+  return true;
+}
+
+void arSetRtaLive(bool live) {
+  ArPublishGuard guard;
+  arRtaLive = live;
 }
 
 void arResetRtaBands() {

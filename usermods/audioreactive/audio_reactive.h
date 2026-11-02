@@ -7089,6 +7089,11 @@ class AudioReactive : public Usermod {
 
       if (!enabled) {
         disableSoundProcessing = true;   // keep processing suspended (analysis task)
+        // The usermod is off, so it has no opinion on the RTA frame: whatever
+        // published it (the sound simulator, say) owns it, and the "is it
+        // live" question is theirs to answer. Nothing here publishes, so an
+        // empty frame stays empty and cannot be used.
+        arSetRtaLive(true);
         lastUMRun = millis();            // update time keeping
         return;
       }
@@ -7140,6 +7145,27 @@ class AudioReactive : public Usermod {
         if (audioSyncEnabled > AUDIOSYNC_SEND) useNetworkAudio = true;
       }
       if ((audioSyncEnabled == AUDIOSYNC_REC_PLUS) && useNetworkAudio) disableSoundProcessing = true;   // UDP sound receiving - disable local audio
+
+      // THE RTA VIEW IS A LOCAL MEASUREMENT.
+      //
+      // The thirty-one third-octave bands come from this board's own analysis
+      // of its own input. The UDP sound sync packets carry the SIXTEEN display
+      // bands and nothing else, so while the sound on this board is the
+      // network's there is no 31-band measurement here - and the frame that
+      // was published before the network took over is stale. The same is true
+      // of a realtime input (E131, ArtNet): the local analysis is suspended,
+      // so the frame is not being refreshed.
+      //
+      // The publish module is told, so the effect that draws an analyser stays
+      // on the sixteen display bands - the ones the packets DO carry - instead
+      // of drawing a stale (or empty) thirty-one band view.
+      //
+      // disableSoundProcessing is the one flag that says whether the local
+      // analysis is running, and it is set above for every case that stops it:
+      // the network's sound, a realtime input, no input at all. The RTA view
+      // is therefore offered exactly while this board is measuring it - and it
+      // comes back by itself when the local analysis resumes.
+      arSetRtaLive(!disableSoundProcessing);
 
       // The analysis task gates ITSELF on disableSoundProcessing, at the top
       // of its frame. Nothing is stopped from out here any more.
@@ -7695,6 +7721,12 @@ class AudioReactive : public Usermod {
         r["layout"]    = "1/3-octave (ISO 266)";
         r["f_low_hz"]  = (double)lay31.fLow;
         r["f_high_hz"] = (double)lay31.fHigh;
+        // May this view be drawn? False when this board is not measuring its
+        // own input: the RTA bands are a local measurement, and the UDP sound
+        // sync packets carry the sixteen display bands and nothing else. The
+        // effect that draws an analyser stays on the sixteen while this is
+        // false.
+        r["usable"]    = arRtaUsable();
         JsonArray c = r.createNestedArray("centres_hz");
         for (int k = 0; k < rtaBands; k++) c.add((double)lay31.centre[k]);
         uint8_t bars[NUM_RTA_CHANNELS];

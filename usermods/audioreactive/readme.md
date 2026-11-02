@@ -43,6 +43,22 @@ Two filter banks do the work:
 Both report in the same unit and on the same scale: white noise steps
 +1.00 dB per third-octave band across the boundary, and pink reads flat.
 
+**The 31 bands are a local measurement.** They come from this board's own
+analysis of its own input, and they are only a live measurement while this
+board is measuring its own input. The UDP sound sync packets do not carry
+them: a packet holds the **sixteen** display bands and nothing else. So while
+the sound on a board is the network's, there is no 31-band measurement on it
+at all — the frame published before the network took over is stale. The same
+holds for a realtime input (E131, ArtNet), where the local analysis is
+suspended too.
+
+The effect that draws an analyser (**GEQ PPA**, and any other that asks for
+the RTA view) therefore stays on the **sixteen** while the board is not
+measuring its own input: its "RTA Mode" setting is ignored, and it draws the
+sixteen the packets do carry. When the network sound stops and the board goes
+back to its own input, the 31 bands come back with it. `/json/ar` says which
+of the two is in force, in `rta.usable`.
+
 ### The 16 display bands
 
 The sixteen bars the WLED effects read **are sixteen of the thirty-one** —

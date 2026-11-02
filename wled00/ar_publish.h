@@ -51,9 +51,32 @@ public:
 void arPublishRtaBands(const uint8_t* bands);
 
 // Copy the published frame of RTA bars into dest (NUM_RTA_CHANNELS bytes).
-// Returns false if nothing has been published yet, in which case dest is
-// filled with zeros.
+// Returns whether the frame may be USED - false if nothing has been published
+// yet, or if the frame is not a live measurement (see arSetRtaLive below).
+// When it returns false, dest is filled with zeros.
 bool arCopyRtaBands(uint8_t* dest);
+
+// May the published frame of RTA bars be used? The same answer arCopyRtaBands
+// gives, without the copy.
+bool arRtaUsable(void);
+
+// Is the published frame of RTA bars a LIVE measurement?
+//
+// The thirty-one third-octave bands are a LOCAL measurement: they come from
+// this board's own analysis of its own input. The UDP sound sync packets
+// carry the SIXTEEN display bands and nothing else, so a board that is
+// receiving has no 31-band measurement at all - and the frame that was
+// published before the network took over is stale. The same holds for a
+// realtime input (E131, ArtNet): the local analysis is suspended, so the
+// frame is not being refreshed.
+//
+// While the frame is not live, it may not be used, and the effect that draws
+// an analyser stays on the sixteen display bands - the ones the packets DO
+// carry - instead of drawing a stale (or empty) thirty-one band view.
+//
+// The AudioReactive usermod sets this; it is the one that knows whether
+// this board is measuring its own input.
+void arSetRtaLive(bool live);
 
 // The same, for a caller that ALREADY holds the publish lock. Taking the lock
 // again would deadlock.

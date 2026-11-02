@@ -9781,9 +9781,17 @@ uint16_t mode_GEQPPA() {
   //
   // If the usermod is not there (or has not published a frame yet), the
   // effect stays on the GEQ view rather than drawing nothing.
+  //
+  // It stays on the GEQ view for one more reason: the 31 bands are a LOCAL
+  // measurement, and they are only a live one while this board is measuring
+  // its own input. While the sound is the NETWORK's (the UDP sound sync
+  // packets) there is no 31-band measurement here at all - the packets carry
+  // the sixteen display bands and nothing else. The RTA Mode setting is then
+  // ignored, and the effect draws the sixteen it does have.
   uint8_t rtaResult[NUM_RTA_CHANNELS] = {0};
   // The copy is taken under the publish lock, so the frame cannot be
-  // recycled while it is being read.
+  // recycled while it is being read. The call also answers whether the frame
+  // may be used at all.
   const bool rtaMode = SEGMENT.check2 && arCopyRtaBands(rtaResult);
 
   const int bars = rtaMode ? NUM_RTA_CHANNELS : NUM_GEQ_CHANNELS;
