@@ -79,6 +79,25 @@ volatile float    prolink_beat_progress_public = 0.0f;
 volatile uint32_t prolink_track_id_public = 0;
 volatile uint32_t prolink_track_duration_ms = 0;
 
+// The deck's beat clock, and the counters that say where it came from.
+//
+// The deck sends TWO streams and they are independent:
+//   * the BEAT packet (0x28) carries the rate and TICKS the beat - it
+//     arrives on the beat, so it is the anchor the clock wants;
+//   * the STATUS packet (0x0A) carries the beat-in-measure (the position
+//     in the bar) and arrives every ~200 ms.
+//
+// Only ONE of them has to arrive for the clock to run, and the old code
+// anchored on the STATUS one - so on a link where the status packets did
+// not arrive, the rate stayed at zero even though the beat packets were
+// coming in, and every consumer (the strobe effect, the AudioReactive
+// deck reference) saw "no deck".  The counters below are published so the
+// first question when the clock is not running - "which stream is
+// missing?" - has an answer without a serial console.
+volatile uint32_t prolink_beat_packets_public = 0;    // beat packets parsed
+volatile uint32_t prolink_status_packets_public = 0;  // status packets parsed
+volatile uint32_t prolink_beat_elapsed_ms_public = 0; // ms since the deck's last beat
+
 // Pitch slider
 volatile float prolink_pitchPercent = 0.0f;
 
@@ -535,6 +554,8 @@ private:
     uint8_t* data = packet.data();
     if (packet.length() < 0x11F || data[0x0A] != TYPE_STATUS) return;
 
+    prolink_status_packets_public++;
+
     uint8_t playerID = data[0x21];
     bool isMaster = (data[0x89] & 0x20) != 0;
 
@@ -585,15 +606,22 @@ private:
     // Beat in measure (0xA6)
     if (packet.length() > 0xA6) {
       uint8_t newBeat = data[0xA6];
-      if (newBeat != linkState.beatInMeasure) {
-        // Beat changed — reset progress in lockstep so the consumer never sees
-        // (new beat, stale progress). The usermod loop's lastBeatTime /
-        // lastBeatInMeasure will catch up on its next iteration; meanwhile this
-        // write is the one the effect actually reads.
-        prolink_beat_progress_public = 0.0f;
-      }
+      // The progress clock is NOT reset here.
+      //
+      // It used to be, and that was wrong in a way that showed up as a
+      // 40 ms phase error: the status packet arrives up to ~100 ms AFTER
+      // the beat it reports, so zeroing the progress there re-zeroed it
+      // late - the deck's phase was then short by that delay for the rest
+      // of the beat.  The clock's anchor is the BEAT packet, which
+      // ARRIVES ON THE BEAT, so the status packet has no business
+      // touching it.
       linkState.beatInMeasure = newBeat;
-      prolink_beat_public = newBeat;
+      // The bar position is published from the beat packet, whose clock the
+      // progress uses.  The status packet carries the same value - MEASURED,
+      // they agree beat for beat - but it arrives later, and a bar position
+      // that lags the progress puts the flash in the wrong subinterval.
+      // It is the fallback for a link that sends status but no beats.
+      if (prolink_beat_packets_public == 0) prolink_beat_public = newBeat;
     }
 
     // Beats elapsed (0xA0-0xA3)
@@ -623,6 +651,8 @@ private:
     uint8_t* data = packet.data();
     if (packet.length() < 60 || data[0x0A] != TYPE_BEAT) return;
 
+    prolink_beat_packets_public++;
+
     uint8_t playerID = data[0x21];
     if (playerID != linkState.activePlayerID) return;
 
@@ -645,6 +675,16 @@ private:
     linkState.beatNumber = data[0x5C];
 
     prolink_beat_number_public = linkState.beatNumber;
+    // The bar position, from the clock the progress uses.
+    //
+    // This packet ARRIVES ON THE BEAT, and its byte 0x5C is the beat's
+    // place in the bar (1..4) - MEASURED to agree with the status packet's
+    // 0xA6, beat for beat.  Publishing it here means the position and the
+    // progress that resets on the same event come from the same clock, so
+    // a consumer that adds them lands on the beat.
+    if (linkState.beatNumber >= 1 && linkState.beatNumber <= 4) {
+      prolink_beat_public = linkState.beatNumber;
+    }
     linkState.pitchPercent = (speedRatio - 1.0f) * 100.0f;
     prolink_pitchPercent = linkState.pitchPercent;
   }
@@ -1666,6 +1706,18 @@ public:
   void loop() {
     if (!enabled) return;
 
+    // The connection flag is LIVE, and it is published from here and not
+    // from setup().
+    //
+    // It used to be assigned at the end of setup() - which runs ONCE, at
+    // boot, before any deck has had a chance to link.  So the flag said
+    // "not connected" for the whole session, and every consumer that
+    // gates on it - the strobe effect and the AudioReactive deck
+    // reference - saw "no deck" even though the deck was there, its
+    // packets were arriving, and the info page (which reads
+    // linkState.isMaster directly) was showing it as connected.
+    prolink_connected_public = linkState.isMaster;
+
     bool startupComplete = (esp_timer_get_time() >= startupTime + STARTUP_DELAY_US);
 
     // Keepalives must always run - CDJs need these every 1.5s
@@ -1694,13 +1746,18 @@ public:
     static unsigned long beatFlashStart = 0;
 
     if (linkState.beatNumber != lastBeatNumber && linkState.beatNumber > 0) {
-      // Note: do NOT reset lastBeatTime here. The beat packet and the status
-      // packet (which carries beatInMeasure / prolink_beat_public) arrive on
-      // independent streams, so resetting from beatNumber creates a window
-      // where the visible beat number lags the progress reset. The progress
-      // clock is anchored to beatInMeasure changes below; this branch only
-      // drives the flash, which is fine to fire on the more frequent packet.
+      // The BEAT packet IS the beat: it arrives on the beat.  So it is the
+      // anchor the clock wants, and the status packet's beatInMeasure - which
+      // arrives up to 200 ms later - is only the POSITION IN THE BAR.
+      //
+      // The old code anchored on beatInMeasure and only drove the flash from
+      // beatNumber.  On a link where the status packets do not arrive that
+      // meant the clock never started: lastBeatTime stayed 0, so the rate was
+      // never published, and every consumer - the strobe effect, the
+      // AudioReactive deck reference - saw "no deck" while the beat packets
+      // were arriving perfectly well.
       lastBeatNumber = linkState.beatNumber;
+      lastBeatTime = millis();
 
       if (enableBeatFlash) {
         beatFlashStart = millis();
@@ -1710,10 +1767,12 @@ public:
     }
 
     // The visible beat number (beatInMeasure) comes from the status packet
-    // on a different stream than beatNumber (beat packet). Anchor lastBeatTime
-    // to whichever one the consumer is reading so progress and beat stay in sync.
+    // on a different stream than beatNumber (beat packet).  It is the
+    // position in the bar, NOT the anchor - so it only moves the clock when
+    // there is no beat packet to anchor it (a link that sends status but no
+    // beats).
     if (linkState.beatInMeasure != lastBeatInMeasure && linkState.beatInMeasure > 0) {
-      lastBeatTime = millis();
+      if (prolink_beat_packets_public == 0) lastBeatTime = millis();
       lastBeatInMeasure = linkState.beatInMeasure;
     }
 
@@ -1728,12 +1787,19 @@ public:
       }
     }
 
+    // The rate is known as soon as a beat packet carries it.  It does NOT
+    // wait for the clock's anchor: a rate with no phase is still a rate,
+    // and publishing it is what tells a consumer that a deck is there.
+    // It is published UNCONDITIONALLY, so a deck that goes away takes its
+    // rate with it instead of leaving a stale one behind.
+    prolink_bpm_public = linkState.bpm;
+
     // Beat progress calculation
     if (linkState.bpm > 0 && lastBeatTime > 0) {
       float effectiveBpm = linkState.bpm;
-      prolink_bpm_public = effectiveBpm;
       float beatDurationMs = 60000.0f / effectiveBpm;
       unsigned long timeSinceBeat = millis() - lastBeatTime;
+      prolink_beat_elapsed_ms_public = timeSinceBeat;
 
       float progress = timeSinceBeat / beatDurationMs;
       if (progress >= 1.0f) {
@@ -1751,7 +1817,8 @@ public:
     // Update bar counters from half-bars
     prolink_bars_elapsed_public = linkState.halfBarsElapsed / 2;
     prolink_bars_remaining_public = linkState.halfBarsRemaining / 2;
-    prolink_connected_public = linkState.isMaster;
+    // NOTE: prolink_connected_public is published from loop(), not from
+    // here - setup() runs once at boot, before any deck can have linked.
   }
 
   void addToConfig(JsonObject& root) {
@@ -1836,6 +1903,16 @@ public:
       status = "Listening...";
     }
     infoArr.add(status);
+
+    // The clock's own diagnosis: which streams arrived, what the deck's own
+    // beat number reads, and how long ago its last beat was.  This is the
+    // row to look at when the beat is not running.
+    infoArr.add("<br />clock: " + String(prolink_beat_packets_public) + " beat pkt, " +
+                String(prolink_status_packets_public) + " status, num " +
+                String(prolink_beat_number_public) + " / inbar " +
+                String(prolink_beat_public) + ", +" +
+                String(prolink_beat_elapsed_ms_public) + " ms, prog " +
+                String(prolink_beat_progress_public * 100.0f, 0) + "%");
 
     if (prolink_phrase_name_public.length() > 0 && linkState.isMaster) {
       infoArr.add("<br />" + prolink_mood_public + " " + prolink_phrase_name_public);
