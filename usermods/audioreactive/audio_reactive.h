@@ -5434,6 +5434,12 @@ void arAnalysisTask(void * parameter)
       tf.beatInMeasure = arTempoBeatInMeasure();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatT    = arTempoDownbeatT();
+      tf.refBpm       = arTempoRefBpm();
+      tf.refErrMs     = arTempoRefErrMs();
+      tf.refBeat      = arTempoRefBeat();
+      tf.refOurBeat   = arTempoRefOurBeat();
+      tf.refCount     = arTempoRefCount();
+      tf.refAgree     = arTempoRefAgree();
       arPublishTempo(tf);
     }
 
@@ -7738,6 +7744,19 @@ class AudioReactive : public Usermod {
         t["bpm_low"]      = (double)AR_TEMPO_BPM_LO;
         t["bpm_high"]     = (double)AR_TEMPO_BPM_HI;
         t["min_score"]    = (double)AR_TEMPO_MIN_SCORE;
+        // The ProLink reference: the deck's grid measured against ours.  Zero
+        // when no deck is connected.
+        //
+        // "ref_err_ms" is our beat minus the deck's, in milliseconds - a
+        // positive number means we are late.  "ref_agree" of "ref_count" is
+        // how many beats had the same place in the bar, which is the downbeat
+        // question: the deck knows its downbeat and we do not.
+        t["ref_bpm"]      = (double)tf.refBpm;
+        t["ref_err_ms"]   = (double)tf.refErrMs;
+        t["ref_beat"]     = (int)tf.refBeat;
+        t["ref_our_beat"] = (int)tf.refOurBeat;
+        t["ref_count"]    = (int)tf.refCount;
+        t["ref_agree"]    = (int)tf.refAgree;
       }
 
       // ---- the peak ------------------------------------------------------
@@ -8388,6 +8407,25 @@ class AudioReactive : public Usermod {
             }
             infoArr = user.createNestedArray(F("Tempo"));
             infoArr.add(tempoBuf);
+          }
+
+          // The ProLink reference: our beat against the deck's.  This is the
+          // instrument that says whether the audio-only tracker is right.
+          {
+            ArTempoFrame tf;
+            const bool tempoOk = arCopyTempo(&tf);
+            char refBuf[96];
+            if (!tempoOk || tf.refBpm <= 0.0f) {
+              snprintf(refBuf, sizeof(refBuf), "no deck");
+            } else {
+              snprintf(refBuf, sizeof(refBuf),
+                       "deck %.1f BPM, ours %+.0f ms, bar %u/%u, agree %u/%u",
+                       (double)tf.refBpm, (double)tf.refErrMs,
+                       (unsigned)tf.refOurBeat, (unsigned)tf.refBeat,
+                       (unsigned)tf.refAgree, (unsigned)tf.refCount);
+            }
+            infoArr = user.createNestedArray(F("Deck reference"));
+            infoArr.add(refBuf);
           }
 
           infoArr = user.createNestedArray(F("Display offset (dB)"));

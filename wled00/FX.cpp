@@ -672,6 +672,7 @@ uint16_t mode_bpm_strobe(void) {
   uint8_t  srcBeat     = 0;         // 1..4, 1 = downbeat; 0 = unknown
   float    srcProgress = 0.0f;      // 0..1 through the current beat
   bool     srcLive     = false;
+  bool     srcDownbeat = false;     // the downbeat is KNOWN, not a convention
 
   #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // ProLink v3 globals — file-scope volatile in usermods_list.cpp.
@@ -688,6 +689,7 @@ uint16_t mode_bpm_strobe(void) {
     srcBeat     = prolink_beat_public;
     srcProgress = prolink_beat_progress_public;
     srcLive     = true;
+    srcDownbeat = true;      // a CDJ knows its own downbeat
   }
   #endif
 
@@ -706,6 +708,11 @@ uint16_t mode_bpm_strobe(void) {
       srcBeat     = tf.beatInBar;
       srcProgress = tf.beatProgress;
       srcLive     = true;
+      // The estimator's downbeat is a MEASUREMENT or it is nothing: if the
+      // profile has not found one, the numbering is a convention and the
+      // effect must not paint a beat as the downbeat - claiming a downbeat
+      // that is not known is worse than not having one.
+      srcDownbeat = (tf.downbeatKnown != 0);
     }
   }
   #endif
@@ -752,6 +759,7 @@ uint16_t mode_bpm_strobe(void) {
   if (bpm < 60.0f) bpm = 60.0f;                                       // sane floor, same as prior impl
   const float subintervalMs = (60000.0f * 4.0f) / (bpm * (float)flashesPerBar);
   const float minFlashMs   = 50.0f;                                   // ~3 frames at 30 fps
+  const float maxFlashMs   = 250.0f;                                  // ~7 frames at 30 fps
   const float minFlashPct  = minFlashMs / subintervalMs;               // expressed as a fraction of subinterval
   const float maxDur       = 0.25f;                                   // each slider caps at 25%
 
@@ -760,8 +768,16 @@ uint16_t mode_bpm_strobe(void) {
   // the floor would push decayDur past 25% — clamp to maxDur instead so
   // attackDur stays valid.
   const float minFlashFloor = (minFlashPct < maxDur) ? minFlashPct : maxDur;
-  const float decayDur  = min(max(decayStrength  * maxDur, minFlashFloor), maxDur);
-  const float attackDur = attackStrength * maxDur;                      // already ≤ maxDur
+  // The cap: a rate that is wrong must not make the flash LONG.  The flash
+  // is a fraction of the subinterval, and the subinterval is four beats over
+  // the rate: at 60 BPM with one flash a bar that is four seconds, and a
+  // quarter of it is a SECOND of light.  A confused tempo shows up as a
+  // long flash, and a long flash reads as broken.  250 ms is about seven
+  // frames at 30 fps - long enough to be seen, short enough to be a strobe.
+  const float maxFlashPct  = maxFlashMs / subintervalMs;
+  const float durCap       = (maxFlashPct < maxDur) ? maxFlashPct : maxDur;
+  const float decayDur  = min(max(decayStrength  * maxDur, minFlashFloor), durCap);
+  const float attackDur = min(attackStrength * maxDur, durCap);        // already ≤ maxDur
 
   float intensity;
   if (decayDur > 0.0f && withinTick < decayDur) {
@@ -780,8 +796,11 @@ uint16_t mode_bpm_strobe(void) {
   if (intensity == 0.0f) {
     peakColor = SEGCOLOR(1);
     DEBUG_PRINTLN("Color Picked: OFF");
-  } else if ((downbeatColor && tickIdx == 0 && subBarPos < decayDur) || (downbeatColor && tickIdx + 1 == flashesPerBar && withinTick >= 1.0f - attackDur)) {
-    peakColor = SEGCOLOR(2);   
+  } else if (srcDownbeat && downbeatColor && tickIdx == 0 && subBarPos < decayDur) {
+    peakColor = SEGCOLOR(2);
+    DEBUG_PRINTLN("Color Picked: DOWNBEAT");                           // 3rd color slot for the downbeat (beat 1 of bar)
+  } else if (srcDownbeat && downbeatColor && tickIdx + 1 == flashesPerBar && withinTick >= 1.0f - attackDur) {
+    peakColor = SEGCOLOR(2);
     DEBUG_PRINTLN("Color Picked: DOWNBEAT");                           // 3rd color slot for the downbeat (beat 1 of bar)
   } else {
     peakColor = SEGCOLOR(0);                              // regular flash

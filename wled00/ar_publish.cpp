@@ -95,6 +95,9 @@ void arCopyTempoLocked(ArTempoFrame* dest) {
     dest->bpm = 0.0f; dest->beatProgress = 0.0f; dest->score = 0.0f;
     dest->beatInBar = 0; dest->valid = 0;
     dest->beatInMeasure = 0; dest->downbeatKnown = 0; dest->downbeatT = 0.0f;
+    dest->refBpm = 0.0f; dest->refErrMs = 0.0f;
+    dest->refBeat = 0; dest->refOurBeat = 0;
+    dest->refCount = 0; dest->refAgree = 0;
     return;
   }
   *dest = arTempoFrame;
@@ -132,5 +135,11 @@ void arResetTempo() {
   arTempoFrame.beatInMeasure = 0;
   arTempoFrame.downbeatKnown = 0;
   arTempoFrame.downbeatT = 0.0f;
+  arTempoFrame.refBpm = 0.0f;
+  arTempoFrame.refErrMs = 0.0f;
+  arTempoFrame.refBeat = 0;
+  arTempoFrame.refOurBeat = 0;
+  arTempoFrame.refCount = 0;
+  arTempoFrame.refAgree = 0;
   arTempoValid = false;
 }

@@ -104,6 +104,14 @@ struct ArTempoFrame {
   uint8_t  beatInMeasure;   // 1..16; 1 is the measure's own beat
   uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
   float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
+  // The ProLink reference: the deck's grid, measured against ours.  All zero
+  // when no deck is connected.
+  float    refBpm;          // the deck's rate
+  float    refErrMs;        // our beat minus the deck's beat, ms
+  uint8_t  refBeat;         // the deck's beat in the bar, 1..4
+  uint8_t  refOurBeat;      // our beat in the bar at the same moment
+  uint16_t refCount;        // how many beats have been compared
+  uint16_t refAgree;        // ... and how many agreed on the bar
 };
 
 // Publish one whole tempo frame.

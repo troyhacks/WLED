@@ -165,6 +165,16 @@
 #include <atomic>
 #include <math.h>
 
+// The ProLink usermod's published grid - the deck's own beat, which is the
+// reference this tracker can be measured against.  The definitions live in the
+// usermod's header; these are the externs for them.
+#if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+extern volatile float   prolink_bpm_public;              // beats per minute (0 = unknown)
+extern volatile uint8_t prolink_beat_public;            // beat in the bar, 1..4 (1 = downbeat); 0 = no packet yet
+extern volatile float   prolink_beat_progress_public;    // 0..1 through the deck's current beat
+extern volatile bool    prolink_connected_public;        // true while following a master CDJ
+#endif
+
 // ---------------------------------------------------------------------------
 // The constants.
 //
@@ -563,21 +573,26 @@ static constexpr uint16_t AR_TEMPO_DOWNBEAT_MAX = 512;
 // The score is how far the strongest position's mean stands above the
 // bar's mean, in standard errors, and it is measured against a NULL: the
 // same beats with the bar's alignment rolled by a random amount, which is
-// the same statistic on data with no bar structure in it.  Over sixty
-// windows of real house music the null's median was 1.95 and its 95th
-// percentile 5.86, and the OBSERVED score was above the null in 43 % of
-// the windows - chance.
+// the same statistic on data with no bar structure in it.
+//
+// MEASURED over sixty windows of real house music (tools/ar_sim/_fw_downnull.py):
+// the null's median is 1.96, its 90th percentile 4.93 and its 95th 5.93,
+// and the OBSERVED score sits on the null - it is above the null's mean in
+// 50 % of the windows (chance) and it passes 5.0 in 11.7 % of the windows
+// against the null's 10.0 %.
 //
 // That is the honest answer for four-on-the-floor music: the four beats of
-// a bar are alike, and there is no downbeat to be found.  A threshold
-// below the null's 95th percentile would be claiming a downbeat out of
-// noise, so the threshold is above it, and a track that really does mark
-// its downbeat - a crash, a sub drop, a reversed cymbal - will sail past
-// it.
+// a bar are alike, and there is no downbeat to be found.  So the threshold
+// is where the null is at its 90th percentile - the bar's alignment has to
+// beat nine random alignments in ten - and it is NOT above the null's 95th
+// percentile, so it is a threshold that the noise itself crosses one time
+// in ten.  A track that really does mark its downbeat - a crash, a sub
+// drop, a reversed cymbal - will sail past it.
 static constexpr float AR_TEMPO_DOWNBEAT_T = 5.0f;
 
 // The same, for the measure's profile - sixteen positions, so its null is
-// a little lower (its 95th percentile was 4.36).
+// a little lower (MEASURED: its median 2.33, its 90th percentile 3.88 and
+// its 95th 4.43).
 static constexpr float AR_TEMPO_MEASURE_T = 4.5f;
 
 // Fewer onsets than this in the window and there is no search at all.
@@ -662,6 +677,19 @@ static constexpr uint32_t AR_TEMPO_REBASE_FRAMES = 65536;
 // The gate has been shut this many frames (1 s) and the music has changed:
 // the tracker starts again.
 static constexpr int AR_TEMPO_GATE_SHUT_FRAMES = 94;
+
+// How long the grid holds on with no music before the tempo is called gone.
+//
+// The GRID is the cadence: it free-runs, and it does not stop when the music
+// does.  A breakdown - the beat dropping out for effect - is a few seconds,
+// and a grid that restarts on every gap STUTTERS, and a stutter is worse
+// than a beat that is a little wrong.  So the grid holds through the gap.
+//
+// But a track that has ENDED is not a breakdown, and a strobe that flashes
+// forever at a rate nobody is playing is worse than a strobe that stops.
+// Sixteen seconds is longer than any breakdown and short enough that the
+// end of a set is not strobing into the next one.
+static constexpr uint16_t AR_TEMPO_HOLD_FRAMES = 1500;   // 16 s at 93.75 fps
 
 // The comb's tolerance: Ellis' F1 tolerance, 70 ms. It is a live setting,
 // because it is a TRADE and not a constant - a tighter tolerance makes the
@@ -787,9 +815,27 @@ struct ArTempoState {
   bool     downbeatKnown;                 // the score is above the threshold
   bool     measureKnown;
   uint32_t downbeatEvalIndex;             // the beat the profiles were scored at
+  uint32_t downbeatApplyAt;               // the beat the numbering shifts at
+  uint32_t measureApplyAt;                // ... and the measure's, over sixteen
 
   // ---- the gate ----
   uint16_t gateShutFrames;                // how long the gate has been shut
+
+  // ---- the ProLink reference ----
+  //
+  // The deck knows its own beat grid EXACTLY: it is the thing that made the
+  // music.  When it is connected, the board can measure this tracker against
+  // it - how far the beat is off in milliseconds, whether the rate agrees,
+  // and whether the bar's numbering agrees.  That is the instrument that says
+  // whether the audio-only tracker is right, and it is the only reference
+  // that can say whether the downbeat is knowable from the sound at all.
+  float    refBpm;                        // the deck's rate, 0 = no deck
+  float    refErrMs;                      // our beat minus the deck's, ms
+  uint8_t  refBeat;                       // the deck's beat in the bar, 1..4
+  uint8_t  refOurBeat;                    // our beat in the bar at that moment
+  uint16_t refCount;                      // how many beats have been compared
+  uint16_t refAgree;                      // ... and how many agreed on the bar
+  bool     refHaveErr;                    // the error's mean has a sample
 
   bool     init;                          // the coefficients are baked
 };
@@ -1150,8 +1196,39 @@ static void arTempoReset(void) {
   arTempo.downbeatKnown = false;
   arTempo.measureKnown  = false;
   arTempo.downbeatEvalIndex = 0;
+  arTempo.downbeatApplyAt = 0;
+  arTempo.measureApplyAt = 0;
   arTempo.locked      = false;
   arTempo.gateShutFrames = 0;
+  arTempo.refBpm      = 0.0f;
+  arTempo.refErrMs    = 0.0f;
+  arTempo.refBeat     = 0;
+  arTempo.refOurBeat  = 0;
+  arTempo.refCount    = 0;
+  arTempo.refAgree    = 0;
+  arTempo.refHaveErr  = false;
+}
+
+// Throw the EVIDENCE away and keep the grid.
+//
+// The grid is the CADENCE: the period, the phase and the beat counter.  It
+// free-runs, and it does not stop when the music does - a breakdown drops
+// the beat out for a few seconds, and a grid that restarts on every gap
+// STUTTERS.  A stutter is worse than a beat that is a little wrong, because
+// the eye reads a stutter as broken and reads a wrong beat as a wrong beat.
+//
+// What is thrown away is the evidence: the onsets, the sweep and the score,
+// so the music that comes back is measured afresh.  The grid keeps running
+// meanwhile, and the search that runs when the music returns re-anchors it.
+static void arTempoHold(void) {
+  arTempo.peakCount = 0;
+  arTempo.peakHead = 0;
+  arTempo.prevPeakFrame = -1000;
+  arTempo.prevPeakStr = 0.0f;
+  arTempo.sweepActive = false;
+  arTempo.needFullSearch = false;
+  arTempo.fullSearchFailed = false;
+  arTempo.collapseCount = 0;
 }
 
 // Throw the grid away and wait for the next search.
@@ -1195,6 +1272,8 @@ static void arTempoAdopt(float bpm, float phase, float now) {
     arTempo.downbeatKnown = false;
     arTempo.measureKnown  = false;
     arTempo.downbeatEvalIndex = 0;
+    arTempo.downbeatApplyAt = 0;
+    arTempo.measureApplyAt = 0;
   } else {
     arTempo.period += AR_TEMPO_PLL_GAIN * (P - arTempo.period);
     const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
@@ -1722,6 +1801,12 @@ static float arTempoProfileT(const float *sum, const float *sq,
 // Score the profiles, once a measure.  A downbeat that has been found is
 // KEPT - it is not re-decided every measure, because a decision that
 // flickers would move the bar's numbering under the effect's feet.
+//
+// The first time a downbeat is found, the numbering does NOT shift there and
+// then: it shifts at the next beat the measurement says is the downbeat.
+// A shift in the middle of the bar moves the bar's position by up to three
+// beats, and the beat strobe's flash jumps with it - a long flash in the
+// middle of a bar, which reads as a stutter.
 static void arTempoScoreDownbeat(void) {
   int p4 = 0, p16 = 0;
   const float t4  = arTempoProfileT(arTempo.barSum, arTempo.barSq, arTempo.barCnt, 4, &p4);
@@ -1729,13 +1814,88 @@ static void arTempoScoreDownbeat(void) {
   arTempo.downbeatT = t4;
   arTempo.measureT  = t16;
   if (t4 >= AR_TEMPO_DOWNBEAT_T) {
-    arTempo.downbeatPos   = (uint8_t)p4;
-    arTempo.downbeatKnown = true;
+    if (!arTempo.downbeatKnown) {
+      arTempo.downbeatPos    = (uint8_t)p4;
+      arTempo.downbeatKnown  = true;
+      // The next beat whose position in the bar is p4 - that is where the
+      // numbering shifts to, so the shift lands on a bar boundary.
+      uint32_t at = (arTempo.beatIndex - (arTempo.beatIndex % 4u)) + (uint32_t)p4;
+      if (at <= arTempo.beatIndex) at += 4u;
+      arTempo.downbeatApplyAt = at;
+    }
   }
   if (t16 >= AR_TEMPO_MEASURE_T) {
-    arTempo.measurePos   = (uint8_t)p16;
-    arTempo.measureKnown = true;
+    if (!arTempo.measureKnown) {
+      arTempo.measurePos   = (uint8_t)p16;
+      arTempo.measureKnown = true;
+      uint32_t at = (arTempo.beatIndex - (arTempo.beatIndex % 16u)) + (uint32_t)p16;
+      if (at <= arTempo.beatIndex) at += 16u;
+      arTempo.measureApplyAt = at;
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE PROLINK REFERENCE
+//
+// (arTempoBeatInBar is defined with the other published numbers, below; it
+// is declared here because the reference needs it.)
+//
+// The deck's beat grid is EXACT: it is the thing that made the music.  When
+// it is connected, the board can measure this tracker against it, and that
+// is the only reference that says whether the audio-only estimate is right.
+//
+// The deck publishes the fraction of a beat since its last beat packet.  At
+// OUR beat, that fraction says how much of a beat ago the deck's beat was,
+// so it is our error: positive means we are LATE.
+//
+// The error is wrapped into half a beat, so a beat that is early is not read
+// as a beat that is very late, and it is averaged, so one late packet does
+// not move the number.
+//
+// The bar's numbering is only compared when the error is small: when we are
+// more than 40 ms off, the deck's last beat is not our beat, and comparing
+// the two positions would be comparing two different beats.
+//
+// It is called AT OUR BEAT, and not every frame: the deck's position in the
+// bar belongs to its last beat, and it only means anything next to ours.
+// ---------------------------------------------------------------------------
+static uint8_t arTempoBeatInBar(void);
+
+static void arTempoProLinkReference(void) {
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+  if (!prolink_connected_public || prolink_bpm_public <= 0.0f) {
+    arTempo.refBpm = 0.0f;
+    return;
+  }
+  arTempo.refBpm = prolink_bpm_public;
+  const float beatMs = 60000.0f / prolink_bpm_public;
+  float err = prolink_beat_progress_public * beatMs;
+  if (err > beatMs * 0.5f) err -= beatMs;
+  if (!arTempo.locked) return;
+  if (!arTempo.refHaveErr) {
+    arTempo.refErrMs   = err;
+    arTempo.refHaveErr = true;
+  } else {
+    arTempo.refErrMs += 0.1f * (err - arTempo.refErrMs);
+  }
+  const uint8_t deckBeat = prolink_beat_public;
+  const uint8_t ourBeat  = arTempoBeatInBar();
+  // The bar's position is compared only when the two beats are close enough
+  // to be the SAME beat.  A quarter of a beat is the window: at 120 BPM that
+  // is 125 ms, which is wider than the error the tracker normally has (the
+  // deck's clock leads the audio the board hears, and the onset is detected
+  // a frame or two after it).  A tighter window counted almost nothing.
+  if (deckBeat >= 1 && deckBeat <= 4 && ourBeat >= 1 && ourBeat <= 4
+      && fabsf(err) < 120.0f) {
+    arTempo.refBeat    = deckBeat;
+    arTempo.refOurBeat = ourBeat;
+    if (arTempo.refCount < 65535) arTempo.refCount++;
+    if (deckBeat == ourBeat && arTempo.refAgree < 65535) arTempo.refAgree++;
+  }
+  #else
+  (void)0;
+  #endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1761,9 +1921,23 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
 
   // The gate.
   if (!gateOpen) {
-    if (++arTempo.gateShutFrames >= AR_TEMPO_GATE_SHUT_FRAMES) {
-      // The music has stopped or changed: start again from nothing.
-      arTempoReset();
+    // The counter saturates: it is compared against a frame count, and it
+    // must not wrap into a short value and look like a new episode.
+    if (arTempo.gateShutFrames < 60000) arTempo.gateShutFrames++;
+    // Once per episode - the exact test, not ">=", so the hold happens when
+    // the gate shuts and not on every frame after it.
+    if (arTempo.gateShutFrames == AR_TEMPO_GATE_SHUT_FRAMES) {
+      // The music has stopped or changed: the EVIDENCE is thrown away, but
+      // the GRID is not.  The grid is the cadence - it free-runs - and a
+      // breakdown drops the beat out for a few seconds.  A grid that starts
+      // again from nothing on every gap STUTTERS, and a stutter is worse
+      // than a beat that is a little wrong.
+      //
+      // The tempo itself goes invalid if the music stays gone for
+      // AR_TEMPO_HOLD_FRAMES: a track that has ENDED is not a breakdown, and
+      // a strobe that flashes forever at a rate nobody is playing is worse
+      // than a strobe that stops.
+      arTempoHold();
     }
     // No search while the gate is shut. The ODF still runs - it is cheap -
     // but there is nothing to search.
@@ -1870,6 +2044,8 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         const int lag = (int)((float)arTempo.frameIndex - beatFrame + 0.5f);
         arTempoAccumulateBeat(arTempo.beatIndex,
                               arTempoOdfPeakAround(lag, AR_TEMPO_DOWNBEAT_WIN));
+        // The deck's grid, if there is one: our beat against the deck's.
+        arTempoProLinkReference();
       }
       // The profiles are scored once a measure.  A downbeat that has been
       // found is kept, so the bar's numbering cannot flicker.
@@ -1975,9 +2151,17 @@ static float arTempoScore(void) {
 // house music - the numbering is the CONVENTION: the first beat after the
 // lock is beat 1.  The confidence is published either way, so a reader can
 // tell a measurement from a convention.
+//
+// The numbering shifts at a BAR BOUNDARY, not the moment the downbeat is
+// found.  Shifting it the moment it is found moves the bar's position by up
+// to three beats, and the beat strobe's flash jumps with it - a long flash
+// in the middle of the bar, which reads as a stutter.  So the shift waits
+// for the next beat that the measurement says is the downbeat.
 static uint8_t arTempoBeatInBar(void) {
   if (!arTempo.locked) return 0;
-  const uint32_t base = arTempo.downbeatKnown
+  const bool applied = arTempo.downbeatKnown
+                    && arTempo.beatIndex >= arTempo.downbeatApplyAt;
+  const uint32_t base = applied
                       ? (arTempo.beatIndex - (uint32_t)arTempo.downbeatPos)
                       : arTempo.beatIndex;
   return (uint8_t)((base % 4) + 1);
@@ -1987,7 +2171,9 @@ static uint8_t arTempoBeatInBar(void) {
 // sixteen that is different marks the measure.
 static uint8_t arTempoBeatInMeasure(void) {
   if (!arTempo.locked) return 0;
-  const uint32_t base = arTempo.measureKnown
+  const bool applied = arTempo.measureKnown
+                    && arTempo.beatIndex >= arTempo.measureApplyAt;
+  const uint32_t base = applied
                       ? (arTempo.beatIndex - (uint32_t)arTempo.measurePos)
                       : arTempo.beatIndex;
   return (uint8_t)((base % 16) + 1);
@@ -2014,18 +2200,39 @@ static float arTempoBeatProgress(void) {
   return p;
 }
 
+// The reference, for the publisher.
+static float arTempoRefBpm(void)      { return arTempo.refBpm; }
+static float arTempoRefErrMs(void)    { return arTempo.refErrMs; }
+static uint8_t arTempoRefBeat(void)   { return arTempo.refBeat; }
+static uint8_t arTempoRefOurBeat(void){ return arTempo.refOurBeat; }
+static uint16_t arTempoRefCount(void) { return arTempo.refCount; }
+static uint16_t arTempoRefAgree(void) { return arTempo.refAgree; }
+
 // Is there a usable estimate?
 //
-// The grid is usable while it is ALIVE, and it stays alive through a dip:
-// the score goes under the floor on a fraction of a percent of the frames of
-// real music, and an effect that drops out of the beat on one of them is
-// worse than an effect that strobes on a grid that is about to move.
+// The grid is usable while it is RUNNING, and it stays running through a
+// dip: the score goes under the floor on a fraction of a percent of the
+// frames of real music, and an effect that drops out of the beat on one of
+// them is worse than an effect that strobes on a grid that is about to move.
 //
 // The score itself is published as it is measured - the dip is visible there
-// - and the death is judged the same way it is acted on: four searches in a
-// row under the floor.
+// - and the search is judged the same way it is acted on: four searches in a
+// row under the floor, and then it looks everywhere.
 static bool arTempoValid(void) {
-  return arTempo.locked && arTempo.collapseCount < AR_TEMPO_COLLAPSE_COUNT;
+  // The GRID is what is valid - not the score.
+  //
+  // The score dips under the floor on 1.3 % of the frames of real music,
+  // and it stays under it for whole BREAKDOWNS, where the beat drops out
+  // for effect.  A grid that calls itself invalid on those frames STUTTERS:
+  // the effect goes dark and comes back, and the flash lands in the wrong
+  // place.  A stutter is worse than a beat that is a little wrong, so the
+  // grid keeps running and the rate keeps being published; the SCORE is
+  // published next to it, so the confidence is visible to whoever is
+  // reading.
+  //
+  // The one thing that does stop the tempo is the music being gone for
+  // AR_TEMPO_HOLD_FRAMES: a track that has ended is not a breakdown.
+  return arTempo.locked && arTempo.gateShutFrames < AR_TEMPO_HOLD_FRAMES;
 }
 
 // ---------------------------------------------------------------------------
