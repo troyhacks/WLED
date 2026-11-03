@@ -652,6 +652,94 @@ static uint8_t bpmStrobeFlashesPerBarFromSlider(uint8_t v) {
   return 16;               // 204..255
 }
 
+// ---------------------------------------------------------------------------
+// The BPM readout - the Beat Strobe's third option.
+//
+// The tempo is drawn as a transparent LovyanGFX sprite and blended over the
+// background with the PPA, which is how the Pro Link effect puts its text
+// on the screen.  The sprite is written straight into the bus buffer, so
+// the text lands on the screen (the bus canvas) the way it looks there and
+// not mirrored the way the segment's own pixels are.
+//
+// White, in the middle of the screen, about a tenth of its height tall.
+// ---------------------------------------------------------------------------
+#if defined(SOC_PPA_SUPPORTED)
+static void bpmStrobeDrawBpm(float bpm) {
+  Bus* bus = busses.getBus(0);
+  if (!bus || !bus->isOk()) return;
+  uint8_t* busPixelData = bus->getPixelData();
+  const uint32_t busPixelSize = bus->getPixelDataSize();
+  const int32_t scrW = (int32_t)SEGMENT.maxWidth;          // the screen: the bus canvas
+  const int32_t scrH = (int32_t)SEGMENT.maxHeight;
+  if (!busPixelData || scrW < 16 || scrH < 16) return;
+  if ((uint64_t)scrW * scrH * 3 > (uint64_t)busPixelSize) return;   // not an RGB888 canvas
+
+  // Font0 is 8 px tall, so this scale makes the text a tenth of the screen high.
+  const float scale = ((float)scrH / 10.0f) / 8.0f;
+  if (scale < 1.0f) return;
+
+  static LGFX_Sprite bpmSprite;
+  static int32_t sprW = 0, sprH = 0;
+  static bool    sprOk = false;
+
+  bpmSprite.setFont(&fonts::Font0);
+  bpmSprite.setTextSize(scale, scale);
+
+  char txt[16];
+  snprintf(txt, sizeof(txt), "%.1f", (double)bpm);
+
+  // The sprite is sized for the widest readout and never changes, so the
+  // text can be centred inside it and the buffer is allocated only once.
+  const int32_t needW = bpmSprite.textWidth("999.9");
+  const int32_t needH = bpmSprite.fontHeight();
+  if (needW < 1 || needH < 1) return;
+  if (!sprOk || sprW != needW || sprH != needH) {
+    bpmSprite.setPsram(true);
+    bpmSprite.setColorDepth(32);                            // ARGB8888 - the PPA can blend it
+    sprOk = bpmSprite.createSprite(needW, needH) != nullptr;
+    bpmSprite.setFont(&fonts::Font0);
+    bpmSprite.setTextSize(scale, scale);
+    bpmSprite.setTextColor(TFT_WHITE);
+    sprW = needW;
+    sprH = needH;
+  }
+  if (!sprOk) return;
+
+  bpmSprite.fillScreen(TFT_TRANSPARENT);
+  bpmSprite.drawString(txt, (sprW - bpmSprite.textWidth(txt)) / 2, 0);
+
+  // Blend the sprite over the background, in the middle of the screen.
+  const int32_t x = (scrW - sprW) / 2;
+  const int32_t y = (scrH - sprH) / 2;
+  ppa_blend_oper_config_t blend_config = {};
+  blend_config.in_bg.buffer = busPixelData;
+  blend_config.in_bg.pic_w = scrW;
+  blend_config.in_bg.pic_h = scrH;
+  blend_config.in_bg.block_w = sprW;
+  blend_config.in_bg.block_h = sprH;
+  blend_config.in_bg.block_offset_x = x;
+  blend_config.in_bg.block_offset_y = y;
+  blend_config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+
+  blend_config.in_fg.buffer = (uint8_t*)bpmSprite.getBuffer();
+  blend_config.in_fg.pic_w = sprW;
+  blend_config.in_fg.pic_h = sprH;
+  blend_config.in_fg.block_w = sprW;
+  blend_config.in_fg.block_h = sprH;
+  blend_config.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_ARGB8888;
+
+  blend_config.out.buffer = busPixelData;
+  blend_config.out.buffer_size = busPixelSize;
+  blend_config.out.pic_w = scrW;
+  blend_config.out.pic_h = scrH;
+  blend_config.out.block_offset_x = x;
+  blend_config.out.block_offset_y = y;
+  blend_config.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+  blend_config.mode = PPA_TRANS_MODE_BLOCKING;
+  ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_blend(ppa_blend_handle, &blend_config));
+}
+#endif // SOC_PPA_SUPPORTED
+
 uint16_t mode_bpm_strobe(void) {
   // ---- the beat source -------------------------------------------------
   //
@@ -832,13 +920,24 @@ uint16_t mode_bpm_strobe(void) {
   for (uint32_t i = 0; i < SEGLEN; i++) {                              // uint32_t matches setPixelColor(uint32_t, uint32_t) unambiguously
     SEGMENT.setPixelColor(i, fillColor);
   }
+
+  // ---- The BPM readout (the third option) --------------------------------
+  //
+  // The tempo is drawn as a transparent LovyanGFX sprite and blended over
+  // the flash with the PPA - the same trick the Pro Link effect uses for
+  // its text.  White, in the middle of the screen, and about a tenth of
+  // the screen's height tall.
+  #if defined(SOC_PPA_SUPPORTED)
+  if (SEGMENT.check3) bpmStrobeDrawBpm(srcBpm);
+  #endif
+
   return FRAMETIME;
 }
 
 // The second group is the COLOUR-SLIDER labels - the effect's three colour
 // slots: the flash, the off colour and the downbeat.  The third group is
 // the palette list (none) and the fourth the default palette.
-static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link;Flash,Off,Downbeat;;01;ix=255,c1=255,o1=0,o2=0";
+static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link,Show BPM;Flash,Off,Downbeat;;01;ix=255,c1=255,o1=0,o2=0,o3=0";
 
 
 /*
