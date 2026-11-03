@@ -71,6 +71,15 @@ static constexpr uint32_t PROLINK_CLOCK_POS_SHIFT = 30;
 static constexpr uint32_t PROLINK_CLOCK_ANC_MASK  = 0x3FFFFFFFu;
 static constexpr uint32_t PROLINK_CLOCK_STALE_MS  = 0x20000000u;  // 6.2 days
 
+// How old the clock's anchor may get before the grid is declared dead.
+//
+// The anchor is re-stamped by every beat packet, so its age grows by one
+// beat between packets.  Four beats is three dropped packets of slack;
+// past that the deck is not beating, and a grid that keeps running off an
+// old anchor is worse than no grid at all - it beats at a tempo nobody is
+// playing, and paints a downbeat that is a bar out of place.
+static constexpr uint8_t PROLINK_ANCHOR_MAX_BEATS = 4;
+
 static constexpr uint32_t WAVEFORM_COLLECT_MS = 1500;
 static constexpr uint32_t ARTWORK_COLLECT_MS = 5000;
 static constexpr uint32_t METADATA_COLLECT_MS = 500;
@@ -304,11 +313,28 @@ private:
   // board hears instead of ~40 ms behind it.  See the constant above.
   int32_t phaseOffsetMs = PROLINK_PHASE_OFFSET_DEFAULT_MS;
 
+  // How old the clock's anchor may get, in BEATS, before the deck's grid is
+  // declared dead.  Live-tunable, because the right number depends on how
+  // the deck behaves on the night: four beats is three dropped packets of
+  // slack, and a deck that drops more than that needs more.
+  //
+  // Zero means "never use the deck's grid" - the deck's tempo is published
+  // (it is still the deck's tempo) but its grid is not run, so the effect
+  // falls back to the AudioReactive model.
+  uint8_t anchorMaxBeats = PROLINK_ANCHOR_MAX_BEATS;
+
   // The deck's OWN phase: 0..1 through the beat as the DECK counts it,
   // measured from the beat packet's arrival.  It is the grid the deck's
   // beat counter runs on, so anything that adds the counter to a phase -
   // the phrase progress - uses this one and not the shifted phase.
   float deckRawPhase = 0.0f;
+
+  // True when the clock's anchor has aged out and the grid is therefore
+  // NOT running: the deck is linked but its beat clock has stopped (paused,
+  // or its beat packets stopped arriving).  The consumers see no bar
+  // position and fall back to their own models; this is only for the
+  // info page's diagnosis.
+  bool gridStale = false;
 
   // The clock's anchor, stamped WHERE THE PACKET ARRIVES, and the bar
   // position OF THAT ANCHOR - IN ONE WORD.
@@ -354,6 +380,7 @@ private:
   static const char _effectPlaylist[];
   static const char _fillPlaylist[];
   static const char _phaseOffset[];
+  static const char _anchorMaxBeats[];
 
   // Protocol constants
   const uint8_t DBSERVER_MAGIC[5] = { 0x11, 0x87, 0x23, 0x49, 0xae };
@@ -1969,6 +1996,7 @@ public:
     bool     haveAnchor = false;
 
     const uint32_t packed = prolinkClockPacked;
+    bool     anchorPacked = false;
     if (packed != 0) {
       const uint32_t anchor29 = packed & PROLINK_CLOCK_ANC_MASK;
       const uint32_t now29    = millis() & PROLINK_CLOCK_ANC_MASK;
@@ -1977,6 +2005,7 @@ public:
         elapsedSinceAnchor = elapsed;
         rawPos   = (uint8_t)((packed >> PROLINK_CLOCK_POS_SHIFT) & 3u) + 1u;
         haveAnchor = true;
+        anchorPacked = true;
       }
     }
     if (!haveAnchor && lastBeatTime > 0) {
@@ -1986,9 +2015,61 @@ public:
       haveAnchor = true;
     }
 
-    if (linkState.bpm > 0 && haveAnchor) {
+    // The grid runs only while the anchor is FRESH.
+    //
+    // A deck that stops sending beat packets - paused, or a 50001-only
+    // outage - used to leave the grid running for as long as the LINK stayed
+    // up: the anchor was never invalidated, so the phase and the bar
+    // position free-ran off it, the strobe kept beating at the deck's tempo
+    // in silence, and the downbeat colour painted a beat that was a bar out
+    // of place.  The peer timeout does NOT catch this case, because a paused
+    // deck keeps sending its announce and status packets - it has only
+    // stopped its beat clock.
+    //
+    // So the anchor has an AGE: the limit is a live setting
+    // (Anchor_Max_Beats, four beats by default - three dropped packets of
+    // slack), and past it the grid is declared dead.  The consumers then
+    // see no bar position (0) and fall back to their own models - the
+    // effect's gate wants a position of 1..4, and the AudioReactive
+    // reference drops the deck entirely.
+    bool gridLive = haveAnchor && (linkState.bpm > 0.0f);
+    if (anchorMaxBeats == 0) {
+      // "Never use the deck's grid": the tempo is still the deck's, but
+      // the grid is not run at all.
+      gridLive = false;
+    } else if (gridLive) {
       const float beatMs = 60000.0f / linkState.bpm;
+      uint32_t maxAnchorAgeMs;
+      if (anchorPacked) {
+        // The beat packet re-stamps the anchor every beat, so its age grows
+        // by one beat between packets.
+        maxAnchorAgeMs = (uint32_t)(beatMs * (float)anchorMaxBeats);
+      } else {
+        // The fallback anchor comes from the STATUS stream, whose rate is
+        // not the beat rate, so it gets the link's own liveness window
+        // instead of a beat count.
+        maxAnchorAgeMs = PEER_TIMEOUT_MS;
+      }
+      if (elapsedSinceAnchor > maxAnchorAgeMs) {
+        gridLive = false;
+        // A resume must not look like a phase crossing: the phase restarts
+        // from the top of a beat, and a stale phase of 0.999 would fire a
+        // flash on top of the packet's own backstop flash.
+        lastGridPhase = 0.0f;
+        // And the beat must not be left marked as already flashed, or the
+        // packet's own backstop flash would be suppressed for the first
+        // beat after the deck comes back - the beat that ends the outage
+        // would be silent.
+        flashedOnGrid = false;
+      }
+    }
+    // Stale means: the deck is still linked and still claiming a tempo, but
+    // its beat clock has stopped.  A deck that has gone away entirely (no
+    // rate at all) is not stale, it is gone.
+    gridStale = (linkState.bpm > 0.0f) && haveAnchor && !gridLive;
 
+    if (gridLive) {
+      const float beatMs = 60000.0f / linkState.bpm;
       // The offset, constrained: half a beat or more would fold the grid
       // onto itself and the bar would run backwards.
       int32_t off = phaseOffsetMs;
@@ -2067,10 +2148,10 @@ public:
         prolink_beat_public = 0;
       }
     } else {
-      // No deck, or no clock: the grid is not running.  The OFFSET is still
-      // published, because it is the SETTING - the info page shows it as the
-      // number to change, and a page that read 0 with no deck would look
-      // like the offset had been lost.
+      // No deck, no clock, or a DEAD anchor: the grid is not running.  The
+      // OFFSET is still published, because it is the SETTING - the info page
+      // shows it as the number to change, and a page that read 0 with no deck
+      // would look like the offset had been lost.
       prolink_beat_progress_public = 0.0f;
       deckRawPhase = 0.0f;
       prolink_beat_elapsed_ms_public = 0;
@@ -2100,6 +2181,7 @@ public:
     top[FPSTR(_effectPlaylist)] = prolinkEffectPlaylistId_cfg;
     top[FPSTR(_fillPlaylist)]   = prolinkFillPlaylistId_cfg;
     top[FPSTR(_phaseOffset)]    = phaseOffsetMs;
+    top[FPSTR(_anchorMaxBeats)] = anchorMaxBeats;
   }
 
   bool readFromConfig(JsonObject& root) {
@@ -2144,6 +2226,29 @@ public:
       if (off < -250) off = -250;
       if (off >  250) off =  250;
       phaseOffsetMs = off;
+    }
+
+    // How many beats the clock's anchor may be old before the deck's grid is
+    // declared dead.  Read the same safe way as the offset above: a value
+    // that arrives as a string would be read as 0 by ArduinoJson, and 0 here
+    // means "never use the deck's grid" - a silent, total change of
+    // behaviour rather than a rounding error.
+    {
+      int beats = (int)anchorMaxBeats;
+      JsonVariant beatsVar = top[FPSTR(_anchorMaxBeats)];
+      if (beatsVar.is<int>()) {
+        beats = beatsVar.as<int>();
+      } else if (beatsVar.is<const char*>()) {
+        const char* txt = beatsVar.as<const char*>();
+        if (txt != nullptr) {
+          char* end = nullptr;
+          long parsed = strtol(txt, &end, 10);
+          if (end != nullptr && end != txt && *end == '\0') beats = (int)parsed;
+        }
+      }
+      if (beats < 0)    beats = 0;
+      if (beats > 64)   beats = 64;
+      anchorMaxBeats = (uint8_t)beats;
     }
 
     // Effect / fill playlist ids. Default to 0 (off — legacy cycling/fill
@@ -2210,7 +2315,15 @@ public:
                 String(prolink_beat_public) + ", +" +
                 String(prolink_beat_elapsed_ms_public) + " ms, prog " +
                 String(prolink_beat_progress_public * 100.0f, 0) + "%" +
-                ", grid " + String(prolink_loop_rate_hz_public) + " Hz");
+                ", grid " + String(prolink_loop_rate_hz_public) + " Hz" +
+                (gridStale ? ", STALE (grid stopped)" : ""));
+
+    // The anchor's age limit: how many beats the clock's anchor may be old
+    // before the deck's grid is declared dead.  This is the number to raise
+    // when the deck's beat packets are being dropped, and it is live.
+    String anchorRow = String(anchorMaxBeats) + " beats";
+    if (anchorMaxBeats == 0) anchorRow += " (the deck's grid is NOT used)";
+    infoArr.add("<br />anchor max: " + anchorRow);
 
     // The phase offset: how far the deck's grid was moved back so the flash
     // lands on the audible beat.  This is the number to change when the
@@ -2384,3 +2497,4 @@ const char ProLinkUsermodV3::_altcolors[] PROGMEM = "Use_Alt_Waveform_Colors";
 const char ProLinkUsermodV3::_effectPlaylist[] PROGMEM = "Effect_Playlist_Id";
 const char ProLinkUsermodV3::_fillPlaylist[] PROGMEM = "Fill_Playlist_Id";
 const char ProLinkUsermodV3::_phaseOffset[] PROGMEM = "Phase_Offset_ms";
+const char ProLinkUsermodV3::_anchorMaxBeats[] PROGMEM = "Anchor_Max_Beats";

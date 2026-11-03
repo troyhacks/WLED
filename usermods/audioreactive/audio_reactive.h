@@ -8436,6 +8436,12 @@ class AudioReactive : public Usermod {
             char refBuf[128];
             if (!tempoOk || tf.refBpm <= 0.0f) {
               snprintf(refBuf, sizeof(refBuf), "no deck");
+            } else if (!tf.refValid) {
+              // The deck is there and it is playing, but its GRID is not
+              // running - the beat packets stopped, or the clock's anchor
+              // aged out - so there is nothing to measure against.  The last
+              // residual is not shown: a stale number reads as a live one.
+              snprintf(refBuf, sizeof(refBuf), "deck %.1f BPM, no grid", (double)tf.refBpm);
             } else {
               snprintf(refBuf, sizeof(refBuf),
                        "deck %.1f BPM, ours %+.0f ms, bar %u/%u, offset %u, locked %u/%u, slips %u",
