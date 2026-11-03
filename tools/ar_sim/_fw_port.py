@@ -44,7 +44,7 @@ DEC = 16                     # AR_TEMPO_DEC
 RATE = 93.75                 # AR_TEMPO_RATE
 FS = 3000.0                  # AR_TEMPO_FS
 HOP = 32                     # AR_TEMPO_HOP
-BAND_LO = 80.0               # AR_TEMPO_BAND_LO_HZ
+BAND_LO = 90.0               # AR_TEMPO_BAND_LO_HZ
 BAND_HI = 320.0              # AR_TEMPO_BAND_HI_HZ
 Q = 0.70710678               # AR_TEMPO_Q
 
@@ -75,7 +75,8 @@ PRIOR_BPM = 125.0            # AR_TEMPO_PRIOR_BPM
 PRIOR_SIGMA = 0.35           # AR_TEMPO_PRIOR_SIGMA
 PRIOR_WEIGHT = 0.6           # AR_TEMPO_PRIOR_WEIGHT
 
-MIN_SCORE = 0.10             # AR_TEMPO_MIN_SCORE
+MIN_SCORE = 0.35             # AR_TEMPO_MIN_SCORE
+COLLAPSE_COUNT = 4           # AR_TEMPO_COLLAPSE_COUNT
 MIN_PEAKS = 8                # AR_TEMPO_MIN_PEAKS
 PLL_GAMMA = 0.35             # AR_TEMPO_PLL_GAMMA
 PLL_SLEW = 0.005             # AR_TEMPO_PLL_SLEW
@@ -235,6 +236,7 @@ class Tracker(object):
         # A whole-band search that found nothing: the narrow search must not
         # ask for another one, or the sweep runs every ninth frame.
         self.full_search_failed = False
+        self.collapse_count = 0
 
         # The prior's weight is a KNOB, because the prior is a tie-breaker
         # and not evidence - and a tie-breaker that can outvote a real
@@ -247,7 +249,7 @@ class Tracker(object):
         # can outvote a real score difference is an attractor, not a
         # tie-breaker.  The whole-band search is where the prior belongs:
         # that is the search that has to choose a rate from nothing.
-        self.prior_in_narrow = True
+        self.prior_in_narrow = False
 
         # The knobs the cost experiment turns. The defaults are the C++'s.
         self.delta = PEAK_DELTA
@@ -342,7 +344,7 @@ class Tracker(object):
         # STRICTLY WORSE than the local one.  The port used to switch the
         # veto off entirely at a margin of zero, which is a different rule,
         # so a margin sweep measured the wrong thing.
-        self.net_margin = 0.20
+        self.net_margin = 0.70
         self.net_vetoes = 0
         self.net_far = 0
         # A record of every whole-band sweep's decision, for the diagnostic.
@@ -372,7 +374,28 @@ class Tracker(object):
         # PLL_SLEW of the period per adopt); > 0 = proportional, the rate
         # moves that fraction of the way to the target.
         # The default is the firmware's: AR_TEMPO_PLL_GAIN.
-        self.pll_gain = 0.10
+        self.pll_gain = 0.20
+
+        # THE KERNEL'S POLICY - see comb_scores_all().  'time' is the
+        # firmware's own, and it is the one the shipped measurements were
+        # made with.
+        self.kernel_policy = 'minfrac'
+        self.plateau = 'centre'        # 'lead' or 'centre'
+        self.min_score = MIN_SCORE
+        # The collapse rule: how many searches in a row under the floor it
+        # takes to call the grid dead, and how much better the far rate has
+        # to be before a DEAD local rate gives up the grid to it.
+        #
+        # The margin is the load-bearing part.  The rule used to be "the
+        # local rate is under the floor, so take the far rate" - and it took
+        # the far rate even when the far rate was WORSE.  MEASURED on a
+        # DJ-style mix of twelve tracks: 20.4 % of the mix above 140 BPM
+        # (the music never is) became 0.0 %, and the mean error against
+        # the truth went from 6.60 to 2.11 BPM.
+        self.collapse_count_max = COLLAPSE_COUNT
+        self.dead_margin = 0.05
+        self.kernel_frac = 0.14          # 'frac': the half-width, as a
+                                          # fraction of the period
 
     # ---- the comb ------------------------------------------------------
 
@@ -439,6 +462,35 @@ class Tracker(object):
         # and the two fractional edge bins are added on.
         tol_frames = f32((TOL_MS * 0.001) * RATE)
         wf = (tol_frames / periods * f32(COMB_BINS)).astype(f32)
+        # THE KERNEL'S POLICY - what the box's half-width means.
+        #
+        # 'time' (the firmware today) is a box of a FIXED WIDTH IN TIME, so
+        # a fast candidate's box covers a larger FRACTION of its period.
+        # That is a bias, and it is measured: on 25 real house tracks the
+        # raw score's argmax is at 169 BPM median while the music is at 128.
+        #
+        # 'frac'  the box is a fixed FRACTION of the period - it can never
+        #         merge two beat clusters, because the closest they can get
+        #         is a third of a period apart.
+        # 'min'   the tolerance, but never wider than a sixth of the period
+        #         (the same no-merge rule, but it keeps the tolerance
+        #         wherever the tolerance fits).
+        # 'dens'  the box's MEAN per bin instead of its sum: the score stops
+        #         rewarding a candidate for having a wider box.
+        # 'exc'   the capture above the capture a uniform phase would give.
+        pol = self.kernel_policy
+        if pol == 'frac':
+            wf = np.full(len(periods), self.kernel_frac * COMB_BINS, dtype=f32)
+        elif pol == 'min':
+            wf = np.minimum(wf, f32(COMB_BINS) / f32(6.0))
+        elif pol == 'minfrac':
+            wf = np.minimum(wf, f32(self.kernel_frac * COMB_BINS))
+        elif pol == 'dens':
+            pass
+        elif pol == 'exc':
+            pass
+        else:
+            pass
         # the rolling window, by the same cumsum trick the C++'s rolling sum
         # is equivalent to
         h3 = np.concatenate((h, h, h), axis=1)
@@ -500,15 +552,66 @@ class Tracker(object):
             win = win + sgn * amt * (h_lo + h_hi)
         j = np.argmax(win, axis=1)
         best = win[np.arange(c), j]
+        centre_bin = j.astype(np.float64)
+        if self.plateau == 'centre':
+            # THE PLATEAU'S CENTRE, not its leading edge.
+            #
+            # The box is 2*w+1 bins wide, so a cluster NARROWER than the
+            # box produces a plateau of equal values, and the argmax returns
+            # the FIRST of them - up to a whole tolerance BEFORE the
+            # cluster's centre.  The grid is anchored on that phase, so
+            # every beat would be up to 70 ms early, and a constant offset
+            # is invisible to a metric that removes the offset.
+            #
+            # The array is tripled so the plateau can wrap round the circle:
+            # a run that leaves bin 63 continues into bin 0.
+            #
+            # The plateau is the run of equal values that CONTAINS the
+            # argmax, so it is found by the last bin below the peak BEFORE
+            # the argmax and the first one after it.  (A prefix product
+            # finds the first near bin in the array, not the first near bin
+            # of the run, and it silently returns the argmax - which is
+            # exactly the bug this is here to fix.)
+            #
+            # The comparison is RELATIVE, like the firmware's 1e-5, because
+            # the rolling sum is float32 and the plateau's values drift in
+            # the last bits.
+            mx = best[:, None]
+            near = win >= (mx - np.maximum(1e-12, mx * 1e-5))
+            near3 = np.concatenate((near, near, near), axis=1)
+            ar = np.arange(near3.shape[1])
+            isfalse = ~near3
+            last_false = np.maximum.accumulate(np.where(isfalse, ar, -1), axis=1)
+            rev = np.where(isfalse, ar, near3.shape[1])
+            next_false = np.minimum.accumulate(rev[:, ::-1], axis=1)[:, ::-1]
+            rows = np.arange(c)
+            mid = COMB_BINS + j
+            a = last_false[rows, mid] + 1
+            b = next_false[rows, mid] - 1
+            # the plateau's centre, in bin units: the bins' LEFT edges are
+            # the positions, and the box is centred on a bin's CENTRE, so a
+            # plateau of bins a..b has its centre at (a+b)/2 + 1/2
+            centre_bin = (a + b) / 2.0 + 0.5 - COMB_BINS
+        if pol == 'dens':
+            # the box's MEAN per bin, over the total: a candidate with a
+            # wide box no longer gets credit for the width
+            wbins = np.maximum(1.0, 2.0 * wf + 1.0)
+            score = best / (wbins * total)
+        elif pol == 'exc':
+            # the capture ABOVE the capture a uniform phase would give
+            chance = np.minimum(1.0, 2.0 * wf / f32(COMB_BINS))
+            score = (best - chance * total) / np.maximum(1e-6, (1.0 - chance) * total)
+        else:
+            score = best / total
         # The PHASE VALUE is float32 too.  The firmware computes it as
         # (float)bestBin / (float)AR_TEMPO_COMB_BINS * period, and the phase
         # is what the grid is anchored on, so a float64 phase here and a
         # float32 phase there can put the port's beat a whole period away
         # from the board's.
-        phase = (j.astype(np.float32) / np.float32(COMB_BINS)).astype(np.float32) \
+        phase = (centre_bin.astype(np.float32) / np.float32(COMB_BINS)).astype(np.float32) \
             * periods.astype(np.float32)
         phase = phase.astype(np.float64)
-        return best / total, phase
+        return score, phase
 
     @staticmethod
     def _cint(h3, pre, x):
@@ -731,10 +834,18 @@ class Tracker(object):
                 # whose score is below the minimum is one the tracker has
                 # already declared dead, and it has no evidence to veto
                 # with.
-                local_alive = self.sweep_narrow_score >= MIN_SCORE
-                far_alive = self.sweep_far_score >= MIN_SCORE
+                # The local rate is ALIVE while its collapse is young.  A
+                # single search under the floor is a dip, not a collapse:
+                # the score falls under the floor on 0.7 % of the frames
+                # of real house music, and handing the grid to the far
+                # candidate on one of them is how a good rate turns into
+                # 160.
+                local_alive = self.collapse_count < self.collapse_count_max
+                far_alive = self.sweep_far_score >= self.min_score
                 if not local_alive:
-                    take_far = far_alive
+                    take_far = (far_alive
+                                and self.sweep_far_score
+                                >= self.sweep_narrow_score * (1.0 + self.dead_margin))
                 else:
                     take_far = (self.sweep_far_score
                                 >= self.sweep_narrow_score * (1.0 + self.net_margin))
@@ -778,8 +889,9 @@ class Tracker(object):
         if self.sweep_index < total:
             return
         self.score = self.sweep_best_score
-        if self.sweep_best_score >= MIN_SCORE:
+        if self.sweep_best_score >= self.min_score:
             self.full_search_failed = False
+            self.collapse_count = 0
             self.adopt(self.sweep_best_bpm, self.sweep_best_phase, self.sweep_now,
                        hard=(self.hard_far and self.sweep_took_far))
         elif self.sweep_was_narrow:
@@ -792,13 +904,16 @@ class Tracker(object):
             # beat appear, and the sweep would run every ninth frame for
             # the price of 341 candidates.  The safety net still looks,
             # once every `full_every` frames - that is what it is for.
-            if self.collapse_trigger and not self.full_search_failed:
+            self.collapse_count = min(255, self.collapse_count + 1)
+            if (self.collapse_trigger and not self.full_search_failed
+                    and self.collapse_count >= self.collapse_count_max):
                 self.need_full = True
                 self.need_full_reason = 'collapse'
         else:
             # A whole-band search that found nothing.  It has already
             # looked everywhere, so the narrow search must not ask it to.
             self.full_search_failed = True
+            self.collapse_count = min(255, self.collapse_count + 1)
         # The narrow search that ran out of room: the winner is at the edge
         # of the window, so the next search is a whole-band one.  The grid
         # itself is not thrown away.  An edge that is the BAND's edge is not

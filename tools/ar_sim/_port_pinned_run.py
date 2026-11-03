@@ -1,0 +1,853 @@
+#!/usr/bin/env python3
+"""THE C++ TRACKER, PORTED LINE BY LINE.  A check on ar_tempo.h.
+
+Every constant below is the constant in usermods/audioreactive/ar_tempo.h, and
+every step is the step the C++ takes.  The point is that the corpus numbers
+that decided the design were measured on a PYTHON approximation; this runs the
+actual algorithm's shape and compares the two bands that the approximation was
+ambiguous about.
+
+THE BAND QUESTION
+-----------------
+The offline work used _device_odf.py, which applies the 3 kHz-DESIGNED band
+filters to the 6 kHz cache and then decimates by two.  The corners therefore
+land at 20 Hz and 80 Hz, not 40 Hz and 160 Hz.
+
+The firmware does the opposite order: it decimates 48 kHz to 3 kHz FIRST and
+then runs the 3 kHz-designed band on the 3 kHz stream, so its corners really
+are 40 Hz and 160 Hz.
+
+So the two are not the same measurement, and the corpus numbers that chose
+this algorithm were measured on the wrong band.  This script measures both.
+
+    python tools/ar_sim/_fw_port.py --limit 300
+"""
+
+import argparse
+import math
+import os
+import sys
+import time
+
+import numpy as np
+from scipy.signal import lfilter
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _cache                                      # noqa: E402
+from _diag_phase import kick_onsets                # noqa: E402
+
+# --------------------------------------------------------------------------
+# The constants, from ar_tempo.h.
+# --------------------------------------------------------------------------
+
+DEC = 16                     # AR_TEMPO_DEC
+RATE = 93.75                 # AR_TEMPO_RATE
+FS = 3000.0                  # AR_TEMPO_FS
+HOP = 32                     # AR_TEMPO_HOP
+BAND_LO = 40.0               # AR_TEMPO_BAND_LO_HZ
+BAND_HI = 160.0              # AR_TEMPO_BAND_HI_HZ
+Q = 0.70710678               # AR_TEMPO_Q
+
+PEAK_PRE = 3                 # AR_TEMPO_PEAK_PRE
+PEAK_POST = 3                # AR_TEMPO_PEAK_POST
+PEAK_DELTA = 0.35            # AR_TEMPO_PEAK_DELTA
+PEAK_MEAN_HALF = 33          # AR_TEMPO_PEAK_MEAN_HALF
+PEAK_FLOOR = 0.06            # AR_TEMPO_PEAK_FLOOR
+PEAK_MIN_GAP = 5             # AR_TEMPO_PEAK_MIN_GAP
+HIST_LEN = 37                # AR_TEMPO_HIST_LEN
+HIST_RING = 64               # AR_TEMPO_HIST_RING
+
+MAX_DECAY = math.exp(-1.0 / (5.0 * RATE))     # AR_TEMPO_MAX_DECAY
+
+# The picker's sliding window, as an index array - so the window is ONE
+# numpy gather instead of a 37-step Python loop.  This is the port's own
+# speed-up; it does not change a single result.
+_HIST_I = np.arange(HIST_LEN)
+
+BPM_LO, BPM_HI = 90.0, 175.0                   # AR_TEMPO_BPM_LO/HI
+CAND_STEP = 0.25             # AR_TEMPO_CAND_STEP
+CAND_COUNT = 341             # AR_TEMPO_CAND_COUNT
+COMB_BINS = 64               # AR_TEMPO_COMB_BINS
+CAND_PER_FRAME = 44          # AR_TEMPO_CAND_PER_FRAME
+COMB_FRAMES = 1125           # AR_TEMPO_COMB_FRAMES (12 s)
+
+PRIOR_BPM = 125.0            # AR_TEMPO_PRIOR_BPM
+PRIOR_SIGMA = 0.35           # AR_TEMPO_PRIOR_SIGMA
+PRIOR_WEIGHT = 0.6           # AR_TEMPO_PRIOR_WEIGHT
+
+MIN_SCORE = 0.10             # AR_TEMPO_MIN_SCORE
+MIN_PEAKS = 8                # AR_TEMPO_MIN_PEAKS
+PLL_GAMMA = 0.35             # AR_TEMPO_PLL_GAMMA
+PLL_SLEW = 0.005             # AR_TEMPO_PLL_SLEW
+PEAK_RING = 256              # AR_TEMPO_PEAK_RING
+TOL_MS = 70.0                # AR_TEMPO_TOL_DEFAULT_MS
+
+
+# --------------------------------------------------------------------------
+# The filters, as the C++ has them.
+# --------------------------------------------------------------------------
+
+def rbj_hpf(f0, fs, q):
+    w0 = 2.0 * math.pi * f0 / fs
+    cw = math.cos(w0)
+    alpha = math.sin(w0) / (2.0 * q)
+    a0 = 1.0 + alpha
+    return [(1.0 + cw) * 0.5 / a0, -(1.0 + cw) / a0, (1.0 + cw) * 0.5 / a0,
+            -2.0 * cw / a0, (1.0 - alpha) / a0]
+
+
+def rbj_lpf(f0, fs, q):
+    w0 = 2.0 * math.pi * f0 / fs
+    cw = math.cos(w0)
+    alpha = math.sin(w0) / (2.0 * q)
+    a0 = 1.0 + alpha
+    return [(1.0 - cw) * 0.5 / a0, (1.0 - cw) / a0, (1.0 - cw) * 0.5 / a0,
+            -2.0 * cw / a0, (1.0 - alpha) / a0]
+
+
+def band_sections(fs):
+    """The C++'s band: hp40 x2 then lp160 x2, designed at `fs`."""
+    return [rbj_hpf(BAND_LO, fs, Q), rbj_hpf(BAND_LO, fs, Q),
+            rbj_lpf(BAND_HI, fs, Q), rbj_lpf(BAND_HI, fs, Q)]
+
+
+def apply_sections(x, sections):
+    """The transposed DF-II the AR uses, applied as one cascade."""
+    y = x.astype(np.float64)
+    for b0, b1, b2, a1, a2 in sections:
+        y = lfilter([b0, b1, b2], [1.0, a1, a2], y)
+    return y
+
+
+# --------------------------------------------------------------------------
+# The ODF, the two ways.
+# --------------------------------------------------------------------------
+
+def odf_from_cache(x6k, band_fs):
+    """The device's ODF from the 6 kHz cache, for a band designed at band_fs.
+
+    band_fs is the rate the band filters are DESIGNED for.  The cache is at
+    6 kHz, so:
+      band_fs = 6000 -> the band's corners are 40 and 160 Hz (the firmware)
+      band_fs = 3000 -> the band's corners are 20 and 80 Hz  (the offline one)
+    Either way the stream is decimated by two to 3 kHz and framed at 32.
+    """
+    y = apply_sections(x6k, band_sections(band_fs))
+    y = y[::2]                                   # 6 kHz -> 3 kHz
+    n = (len(y) // HOP) * HOP
+    if n == 0:
+        return np.zeros(0)
+    p = (y[:n].reshape(-1, HOP) ** 2).mean(axis=1)
+    db = 10.0 * np.log10(p + 1e-12)
+    return np.maximum(np.diff(db, prepend=db[0]), 0.0)
+
+
+# --------------------------------------------------------------------------
+# The tracker.
+# --------------------------------------------------------------------------
+
+def narrow_window(bpm, half_bpm=2.0):
+    """The narrow window, in candidate indices - arTempoNarrowWindow().
+
+    The window is arithmetic in the CANDIDATE GRID, not in the BPM: the
+    published rate is a float and it is rarely exactly on a candidate, so a
+    window computed by rounding the two BPM edges loses a candidate at one
+    end and comes out asymmetric - 124.9999 gave sixteen candidates where
+    it should have given seventeen.  Snapping the centre to the grid and
+    counting outwards gives the same window every time.
+    """
+    half = int(round(half_bpm / CAND_STEP))
+    centre = int(round((bpm - BPM_LO) / CAND_STEP))
+    f = centre - half
+    c = 2 * half + 1
+    if f < 0:
+        c += f
+        f = 0
+    if f + c > CAND_COUNT:
+        c = CAND_COUNT - f
+    if f < 0:
+        f = 0
+    if c < 1:
+        c = 1
+    return f, c
+
+
+class Tracker(object):
+    """ar_tempo.h, in Python."""
+
+    def __init__(self):
+        self.hist = np.zeros(HIST_RING)
+        self.hist_idx = 0
+        self.hist_filled = 0
+
+        self.peak_frame = []          # newest last
+        self.prev_peak_frame = -1000
+        self.prev_peak_str = 0.0
+
+        self.odf_max = 0.0
+
+        self.period = 0.0
+        self.next_beat = 0.0
+        self.beat_index = 0
+        self.locked = False
+        self.bpm = 0.0
+        self.score = 0.0
+        self.frame_index = 0
+        self.beats = []
+
+        # The rate, frame by frame.  The re-lock experiment reads it.
+        self.bpm_log = []
+
+        # The work: how many candidates the comb has scored.  The C++ pays
+        # for each one, so this is the CPU.
+        self.cand_total = 0
+        self.search_narrow = 0
+        self.search_full = 0
+
+        self.sweep_frames = None
+        self.sweep_str = None
+        self.sweep_index = 0
+        self.sweep_now = 0.0
+        self.sweep_active = False
+        self.sweep_best_value = -1e9
+        self.sweep_best_score = 0.0
+        self.sweep_best_bpm = 0.0
+        self.sweep_best_phase = 0.0
+        # The FAR candidate: the best EVIDENCE outside the narrow window.
+        # It is nominated by the RAW score, so the prior cannot choose which
+        # far rate argues with the local one.
+        self.sweep_far_score = -1e9
+        self.sweep_far_bpm = 0.0
+        self.sweep_far_phase = 0.0
+        # A whole-band search that found nothing: the narrow search must not
+        # ask for another one, or the sweep runs every ninth frame.
+        self.full_search_failed = False
+
+        self.prior = np.array([
+            PRIOR_WEIGHT * (math.log((BPM_LO + i * CAND_STEP) / PRIOR_BPM)
+                            / PRIOR_SIGMA) ** 2
+            for i in range(CAND_COUNT)])
+
+        # The knobs the cost experiment turns. The defaults are the C++'s.
+        self.delta = PEAK_DELTA
+        self.floor = PEAK_FLOOR
+        self.top_n = 0            # 0 = every peak in the window
+        self.cand_step = CAND_STEP
+        self.cand_count = CAND_COUNT
+
+        # The narrow search: once the grid is running, the search does not
+        # have to look at the whole band again.  It looks at the rate it
+        # believes, plus or minus `narrow_bpm`, and it looks every
+        # `search_every` frames.  The whole-band search is then only needed
+        # to ACQUIRE, and after a track change.
+        #
+        # narrow_bpm = 0 turns it off: every search is a whole-band search.
+        self.narrow_bpm = 0.0
+        # The kernel's half-width: INTEGER (what the firmware does) or
+        # CONTINUOUS (the same box with no rounding).
+        # The EXACT box - no rounding of the half-width.  This is what the
+        # firmware does; setting it False reproduces the OLD rounded box,
+        # which is kept only so the two can be compared.
+        self.exact_kernel = True
+        self.search_every = 4
+        self.last_sweep_frame = -1000
+        # The safety net has its OWN clock.  Sharing the narrow search's
+        # clock would mean the narrow search resets it every four frames
+        # and the net is never due - which is exactly the bug the first
+        # version of this file had, and exactly the bug the C++ avoided by
+        # keeping `lastFullFrame` separate.
+        self.last_full_frame = -1000
+        self.sweep_bpms = None
+        self.sweep_best_index = 0
+        self.need_full = False
+        self.sweep_clipped_lo = False
+        self.sweep_clipped_hi = False
+        self.sweep_was_narrow = False
+
+        # The three ways a narrow search can be told to look everywhere
+        # instead.  Which one is right is measured, not guessed.
+        #
+        # EDGE: the narrow search's winner sits at the edge of the window,
+        #       so the rate it is tracking may be beyond it.
+        # COLLAPSE: the narrow search cannot find the beat any more - its
+        #       score fell below the minimum - so the music changed.
+        # SAFETY NET: a whole-band search every `full_every` frames,
+        #       whatever the score says.
+        self.edge_rule = True
+        self.collapse_trigger = False
+        self.full_every = 0
+        # WHY the next search has to be a whole-band one: None, 'net' (the
+        # safety net) or 'collapse' (the narrow search lost the beat).
+        self.need_full_reason = None
+        self.sweep_reason = None
+
+        # THE VETO.  The whole-band safety net finds the best rate in the
+        # whole band; the narrow search finds the best rate around the grid.
+        # They disagree sometimes, and when they do the grid is dragged
+        # between them - which is what the board was doing, answering 125.00
+        # and then 131.00.
+        #
+        # So the far rate may only move the grid if it is CLEARLY better
+        # evidence than the local rate.  The two are measured on the SAME
+        # onset snapshot, and on the RAW score: the prior is a tie-breaker,
+        # not evidence, and letting it decide the fight is what made the
+        # prior's centre (125.00) into an attractor.
+        #
+        # The margin is RELATIVE - a fraction of the local score, not an
+        # absolute one.  MEASURED, on real house music:
+        #
+        #   two rates that are really the same music   1.00 .. 1.13
+        #   two rates where the far one is really better 1.26 .. 1.50
+        #   the music has changed and the window has turned over  1.23 .. 1.34
+        #
+        # so 0.20 sits in the gap: the near-ties are refused and the real
+        # change is taken.
+        #
+        # 0 turns the veto off (the whole band always wins).
+        # AR_TEMPO_NET_MARGIN.  The firmware has no "veto off" switch: at a
+        # margin of zero the far rate is still refused unless it is
+        # STRICTLY WORSE than the local one.  The port used to switch the
+        # veto off entirely at a margin of zero, which is a different rule,
+        # so a margin sweep measured the wrong thing.
+        self.net_margin = 0.20
+        self.net_vetoes = 0
+        self.net_far = 0
+        # A record of every whole-band sweep's decision, for the diagnostic.
+        # Empty unless somebody asks for it.
+        self.trace = []
+
+        # Does the veto apply to the COLLAPSE whole-band search as well as
+        # to the safety net's?  The two are different animals:
+        #
+        #   SAFETY NET  the grid is happy, the music may have changed.
+        #                The far rate is a near-tie and the grid gets
+        #                dragged - the 125/131 fight.  The veto is for this.
+        #   COLLAPSE    the narrow search cannot find the beat any more.
+        #                That is a STATEMENT that the old rate is gone, not
+        #                a near-tie, and the far rate is the only evidence
+        #                left.  The veto here can refuse a real change and
+        #                leave the grid stuck on a dead rate.
+        self.veto_on_collapse = True
+
+        # The PLL's rate response.  0 = the clamp the C++ has (at most
+        # PLL_SLEW of the period per adopt); > 0 = proportional, the rate
+        # moves that fraction of the way to the target.
+        self.pll_gain = 0.0
+
+    # ---- the comb ------------------------------------------------------
+
+    def comb_score(self, frames, strengths, bpm):
+        """(score, phase in frames) - arTempoCombScore()."""
+        s, p = self.comb_scores_all(frames, strengths, np.array([bpm]))
+        return float(s[0]), float(p[0])
+
+    def comb_scores_all(self, frames, strengths, bpms):
+        """The comb at MANY candidate rates at once.  (scores, phases).
+
+        The C++ scores 44 candidates a frame so the cost is flat; the RESULT
+        is the same set of scores, so the port can take them all at once.
+
+        The PHASE is computed in float32, because the firmware computes it in
+        float32 and the difference is not academic: the phase decides which
+        bin an onset lands in, and an onset that sits within a thousandth of
+        a bin edge lands in a DIFFERENT bin on the P4 than it does here.
+        One onset moved between neighbouring bins moves the score by up to
+        1.7 % - which is a tenth of the veto's margin.
+
+        The histogram and the box stay in float64.  Their rounding is a
+        hundredth of that, and the firmware's own arithmetic there is a
+        rolling float32 sum, which no vectorised form reproduces exactly
+        anyway.
+        """
+        n = len(frames)
+        total = float(np.sum(strengths))
+        c = len(bpms)
+        if total <= 0 or n == 0:
+            return np.zeros(c), np.zeros(c)
+        f32 = np.float32
+        # the firmware's own arithmetic: the period, its reciprocal, and
+        # the phase offset, all in float32
+        periods = (f32(60.0) * f32(RATE)
+                   / np.asarray(bpms, dtype=f32)).astype(f32)
+        inv = (f32(1.0) / periods).astype(f32)
+        fr = np.asarray(frames, dtype=f32)
+        # the C++'s phase: a FLOOR of the quotient, not a truncation, and
+        # then the two corrections for a multiply that rounded across an
+        # integer
+        k = np.floor(fr[None, :] * inv[:, None]).astype(f32)
+        u = (fr[None, :] - k * periods[:, None]).astype(f32)
+        u = np.where(u < f32(0.0), u + periods[:, None], u).astype(f32)
+        u = np.where(u >= periods[:, None], u - periods[:, None], u).astype(f32)
+        bin_scale = (f32(COMB_BINS) * inv).astype(f32)
+        bins = np.clip((u * bin_scale[:, None]).astype(np.int64), 0, COMB_BINS - 1)
+        # the histogram, one row per candidate
+        flat = (np.repeat(np.arange(c), n) * COMB_BINS + bins.ravel())
+        h = np.bincount(flat, weights=np.tile(strengths, c),
+                        minlength=c * COMB_BINS).reshape(c, COMB_BINS)
+        # The kernel's half-width, in bins.
+        #
+        # It used to be ROUNDED to a whole number of bins, and a bin is
+        # period/64 wide - 7 ms at 128 BPM - so the tolerance the tracker
+        # actually applied moved by up to half a bin from one candidate to
+        # the next.  A WIDER box catches more of the smear of a wrong
+        # period, so the candidate that happened to round up scored
+        # higher, and the score profile had a sawtooth on it.
+        #
+        # With `exact_kernel` the rounding is gone: the box is the EXACT
+        # integral of the histogram over the requested half-width.  The
+        # integer rolling sum is still there - it is the box's whole part -
+        # and the two fractional edge bins are added on.
+        tol_frames = f32((TOL_MS * 0.001) * RATE)
+        wf = (tol_frames / periods * f32(COMB_BINS)).astype(f32)
+        # the rolling window, by the same cumsum trick the C++'s rolling sum
+        # is equivalent to
+        h3 = np.concatenate((h, h, h), axis=1)
+        pre = np.concatenate((np.zeros((c, 1)), np.cumsum(h3, axis=1)), axis=1)
+        i = np.arange(COMB_BINS)
+        if not self.exact_kernel:
+            # the OLD, rounded box - kept so the two can be compared
+            w = np.clip(np.rint(wf).astype(int), 1, COMB_BINS // 2 - 1)
+            hi = COMB_BINS + i[None, :] + w[:, None] + 1
+            lo = COMB_BINS + i[None, :] - w[:, None]
+            win = (np.take_along_axis(pre, hi, axis=1)
+                   - np.take_along_axis(pre, lo, axis=1))
+        else:
+            # The EXACT box.
+            #
+            # The box is centred on the BIN's CENTRE, (i + 1/2), because
+            # the integer box of half-width k covers bins i-k .. i+k, and
+            # that is the continuous interval [i-k, i+k+1), whose centre
+            # is i+1/2.  Write the requested half-width as wf = k + f:
+            #
+            #   f < 0.5   the exact box is the integer one MINUS (0.5+f)
+            #             of each of its two edge bins - it is narrower
+            #   f > 0.5   the exact box is the integer one PLUS (f-0.5)
+            #             of each of the bins just OUTSIDE it - it is
+            #             wider
+            #
+            # At f = 0.5 the two agree, and that is the point where the
+            # integer box IS the exact box.
+            # The half-width is clamped BEFORE it is split, so the
+            # remainder is always in [0,1).  Clamping the integer part
+            # instead would leave the remainder above 1 whenever the
+            # clamp bit, and the edge rule - which assumes a remainder
+            # of less than one bin - would add more than a whole bin's
+            # worth of the bins outside the box.
+            wf = np.clip(wf, f32(1.0), f32(COMB_BINS // 2 - 2)).astype(f32)
+            k = np.floor(wf).astype(int)
+            f = (wf - k.astype(f32)).astype(f32)
+            hi = COMB_BINS + i[None, :] + k[:, None] + 1
+            lo = COMB_BINS + i[None, :] - k[:, None]
+            win = (np.take_along_axis(pre, hi, axis=1)
+                   - np.take_along_axis(pre, lo, axis=1))
+            kk = k[:, None]
+            ff = f[:, None]
+            narrow = (ff < 0.5)
+            idx_lo = COMB_BINS + i[None, :] - kk
+            idx_hi = COMB_BINS + i[None, :] + kk
+            # narrow -> the box's own edge bins; wide -> the ones just out
+            lo_i = np.where(narrow, idx_lo, idx_lo - 1)
+            hi_i = np.where(narrow, idx_hi, idx_hi + 1)
+            h_lo = np.take_along_axis(h3, np.clip(lo_i, 0, h3.shape[1] - 1), axis=1)
+            h_hi = np.take_along_axis(h3, np.clip(hi_i, 0, h3.shape[1] - 1), axis=1)
+            # how much of each edge bin the box drops (narrow) or takes up
+            # (wide).  For the narrow case the box gives back (0.5-f) of
+            # each of its own edge bins: the integer box covers bins
+            # i-k .. i+k, and the exact box stops half a bin short of
+            # each end.
+            amt = np.where(narrow, 0.5 - ff, ff - 0.5)
+            sgn = np.where(narrow, -1.0, 1.0)
+            win = win + sgn * amt * (h_lo + h_hi)
+        j = np.argmax(win, axis=1)
+        best = win[np.arange(c), j]
+        phase = j.astype(float) / COMB_BINS * periods
+        return best / total, phase
+
+    @staticmethod
+    def _cint(h3, pre, x):
+        """The integral of the piecewise-constant histogram up to x."""
+        j = np.floor(x).astype(int)
+        f = x - j
+        rows = np.arange(h3.shape[0])[:, None]
+        return (np.take_along_axis(pre, j, axis=1)
+                + f * h3[rows, j])
+
+    # ---- the picker ----------------------------------------------------
+
+    def pick_peak(self, odf, frame):
+        self.hist[self.hist_idx] = odf
+        self.hist_idx = (self.hist_idx + 1) % HIST_RING
+        if self.hist_filled < HIST_RING:
+            self.hist_filled += 1
+        if self.hist_filled < HIST_LEN + PEAK_POST + 1:
+            return
+        head = (self.hist_idx + HIST_RING - HIST_LEN) % HIST_RING
+        h = self.hist[(head + _HIST_I) & (HIST_RING - 1)]
+        base = HIST_LEN - 1 - PEAK_POST
+        oj = h[base]
+        if oj <= 0.0:
+            return
+        if oj < h[base - PEAK_PRE: base + PEAK_POST + 1].max():
+            return
+        mean = float(h[base - PEAK_MEAN_HALF: base + 1].mean())
+        if oj < (1.0 + self.delta) * mean:
+            return
+        on = (oj / self.odf_max) if self.odf_max > 0 else 0.0
+        if on < self.floor:
+            return
+        j = frame - PEAK_POST
+        if (j - self.prev_peak_frame) < PEAK_MIN_GAP:
+            if on > self.prev_peak_str:
+                self.prev_peak_frame = j
+                self.prev_peak_str = on
+                self.peak_frame[-1] = (j, on)
+            return
+        self.prev_peak_frame = j
+        self.prev_peak_str = on
+        self.peak_frame.append((j, on))
+        if len(self.peak_frame) > PEAK_RING:
+            self.peak_frame.pop(0)
+
+    # ---- the PLL -------------------------------------------------------
+
+    def adopt(self, bpm, phase, now):
+        P = 60.0 * RATE / bpm
+        if not self.locked:
+            self.period = P
+            self.next_beat = phase + round((now - phase) / P) * P
+            self.locked = True
+            self.beat_index = 0
+        else:
+            if self.pll_gain > 0.0:
+                # PROPORTIONAL.  The rate moves a fraction of the way to the
+                # target, so a comb winner that flips between two candidates
+                # a quarter of a BPM apart moves the rate by a quarter of
+                # that - and a real change is taken in a handful of adopts.
+                self.period += self.pll_gain * (P - self.period)
+            else:
+                # The clamp: at most PLL_SLEW of the period per adopt.
+                lim = PLL_SLEW * self.period
+                d = P - self.period
+                self.period += lim if d > lim else (-lim if d < -lim else d)
+            k = round((self.next_beat - phase) / self.period)
+            anchor = phase + k * self.period
+            self.next_beat += PLL_GAMMA * (anchor - self.next_beat)
+        self.bpm = 60.0 * RATE / self.period
+
+    # ---- the sweep -----------------------------------------------------
+
+    def sweep_start(self):
+        cutoff = self.frame_index - COMB_FRAMES
+        keep = [(f, s) for (f, s) in self.peak_frame if f >= cutoff]
+        # The cap: the STRONGEST peaks in the window. The comb does not care
+        # about the order - the modulo is order-independent - so the cap is
+        # just a sort.
+        if self.top_n and len(keep) > self.top_n:
+            keep = sorted(keep, key=lambda t: -t[1])[:self.top_n]
+        self.sweep_frames = np.array([f for f, _ in keep], dtype=float)
+        self.sweep_str = np.array([s for _, s in keep], dtype=float)
+        self.sweep_index = 0
+        self.sweep_now = float(self.frame_index)
+        self.last_sweep_frame = self.frame_index
+        # The flag is read BEFORE it is cleared: it is the narrow search's
+        # way of saying "the next search has to be a whole-band one".
+        narrow = (self.locked and not self.need_full
+                  and self.narrow_bpm > 0.0)
+        self.sweep_reason = self.need_full_reason
+        self.need_full = False
+        self.need_full_reason = None
+        self.sweep_was_narrow = narrow
+        if not narrow:
+            self.last_full_frame = self.frame_index
+        self.sweep_best_value = -1e9
+        self.sweep_best_score = 0.0
+        self.sweep_best_bpm = 0.0
+        self.sweep_best_phase = 0.0
+        # the narrow window's best, measured on the SAME snapshot as the
+        # whole band, so the two are comparable
+        self.sweep_narrow_first = -1
+        self.sweep_narrow_count = 0
+        self.sweep_narrow_score = -1e9
+        self.sweep_narrow_bpm = 0.0
+        self.sweep_narrow_phase = 0.0
+        # the far candidate: the best evidence OUTSIDE the window
+        self.sweep_far_score = -1e9
+        self.sweep_far_bpm = 0.0
+        self.sweep_far_phase = 0.0
+        self.sweep_active = len(keep) >= MIN_PEAKS
+        # The candidate set.  Locked and the narrow search is on, the search
+        # looks only at the rate the grid believes, plus or minus the
+        # half-width: the whole band is only for ACQUIRING.
+        if narrow:
+            lo = max(BPM_LO, self.bpm - self.narrow_bpm)
+            hi = min(BPM_HI, self.bpm + self.narrow_bpm)
+            self.sweep_clipped_lo = (lo <= BPM_LO)
+            self.sweep_clipped_hi = (hi >= BPM_HI)
+            # The C++'s candidates are on the GLOBAL grid - the index is
+            # rounded to the step - so the narrow window is a set of whole
+            # candidates and not a window with a fractional edge.
+            f, c = narrow_window(self.bpm, self.narrow_bpm)
+            bpms = BPM_LO + np.arange(f, f + c) * self.cand_step
+        else:
+            self.sweep_clipped_lo = False
+            self.sweep_clipped_hi = False
+            bpms = BPM_LO + np.arange(self.cand_count) * self.cand_step
+        self.sweep_bpms = bpms
+        # All the candidates, scored at once from the snapshot. The C++ scores
+        # 44 a frame so the cost is flat; the RESULT is the same set of
+        # scores, so the port can take them together.
+        self.cand_total += len(bpms)
+        if narrow:
+            self.search_narrow += 1
+        else:
+            self.search_full += 1
+        if self.sweep_active:
+            if narrow:
+                pen = np.array([
+                    PRIOR_WEIGHT * (math.log(b / PRIOR_BPM) / PRIOR_SIGMA) ** 2
+                    for b in bpms])
+            else:
+                pen = self.prior
+            scores, phases = self.comb_scores_all(self.sweep_frames,
+                                                  self.sweep_str, bpms)
+            values = scores - pen
+            j = int(np.argmax(values))
+            # THE VETO.  A whole-band search while the grid is running has
+            # to find the best rate INSIDE the narrow window AND the best
+            # rate OUTSIDE it - the same snapshot, so the two are
+            # comparable - and the far one may only move the grid if it is
+            # clearly better evidence than the local one.
+            if (not narrow) and self.locked and self.narrow_bpm > 0.0 \
+                    and (self.veto_on_collapse
+                         or self.sweep_reason != 'collapse'):
+                lo = max(BPM_LO, self.bpm - self.narrow_bpm)
+                hi = min(BPM_HI, self.bpm + self.narrow_bpm)
+                f, c = narrow_window(self.bpm, self.narrow_bpm)
+                self.sweep_narrow_first = f
+                self.sweep_narrow_count = c
+                idx = np.arange(f, f + c)
+                # The local reference is the best EVIDENCE in the window -
+                # the raw score - and not the best value.  The prior is a
+                # tie-breaker and it stays out of this fight.
+                jn = int(idx[np.argmax(scores[idx])])
+                self.sweep_narrow_score = float(scores[jn])
+                self.sweep_narrow_bpm = float(bpms[jn])
+                self.sweep_narrow_phase = float(phases[jn])
+                # The FAR candidate: the best EVIDENCE outside the window,
+                # nominated by the RAW score.  The prior used to choose it,
+                # and that is what made 125.00 an attractor: a rate a long
+                # way off never got to argue, because the prior had already
+                # decided it was not worth mentioning.
+                outside = np.ones(len(bpms), dtype=bool)
+                outside[idx] = False
+                jf = -1
+                if outside.any():
+                    jf = int(np.argmax(np.where(outside, scores, -1.0)))
+                    self.sweep_far_score = float(scores[jf])
+                    self.sweep_far_bpm = float(bpms[jf])
+                    self.sweep_far_phase = float(phases[jf])
+                # THE FIGHT.  Both sides are the raw score, on the same
+                # snapshot, with the same kernel.
+                #
+                # The local rate has to be ALIVE to defend itself: a rate
+                # whose score is below the minimum is one the tracker has
+                # already declared dead, and it has no evidence to veto
+                # with.
+                local_alive = self.sweep_narrow_score >= MIN_SCORE
+                far_alive = self.sweep_far_score >= MIN_SCORE
+                if not local_alive:
+                    take_far = far_alive
+                else:
+                    take_far = (self.sweep_far_score
+                                >= self.sweep_narrow_score * (1.0 + self.net_margin))
+                if take_far and jf >= 0:
+                    self.net_far += 1
+                    j = jf
+                else:
+                    self.net_vetoes += 1
+                    j = jn
+                if self.trace is not None:
+                    self.trace.append({
+                        "frame": self.frame_index,
+                        "reason": self.sweep_reason,
+                        "bpm": self.bpm,
+                        "local_bpm": self.sweep_narrow_bpm,
+                        "local_score": self.sweep_narrow_score,
+                        "far_bpm": self.sweep_far_bpm,
+                        "far_score": self.sweep_far_score,
+                        "ratio": (self.sweep_far_score
+                                  / max(self.sweep_narrow_score, 1e-9)),
+                        "took_far": bool(take_far and jf >= 0),
+                        "peaks": len(self.sweep_frames),
+                    })
+            self.sweep_best_value = float(values[j])
+            self.sweep_best_score = float(scores[j])
+            self.sweep_best_bpm = float(bpms[j])
+            self.sweep_best_phase = float(phases[j])
+            self.sweep_best_index = j
+
+    def sweep_step(self):
+        if not self.sweep_active:
+            return
+        # The C++ counts CANDIDATES PER FRAME in `i` and the candidates done
+        # in `sweepIndex` - they are different counters, and conflating them
+        # means the sweep never finishes.
+        total = len(self.sweep_bpms) if self.sweep_bpms is not None \
+            else self.cand_count
+        self.sweep_index = min(total, self.sweep_index + CAND_PER_FRAME)
+        if self.sweep_index < total:
+            return
+        self.score = self.sweep_best_score
+        if self.sweep_best_score >= MIN_SCORE:
+            self.full_search_failed = False
+            self.adopt(self.sweep_best_bpm, self.sweep_best_phase, self.sweep_now)
+        elif self.sweep_was_narrow:
+            # The narrow search cannot find the beat any more.  Its score
+            # fell below the minimum, so the music it was tracking is not
+            # there: ask for a whole-band search.
+            #
+            # Unless a WHOLE-BAND search has already looked everywhere and
+            # found nothing.  Then looking everywhere again will not make a
+            # beat appear, and the sweep would run every ninth frame for
+            # the price of 341 candidates.  The safety net still looks,
+            # once every `full_every` frames - that is what it is for.
+            if self.collapse_trigger and not self.full_search_failed:
+                self.need_full = True
+                self.need_full_reason = 'collapse'
+        else:
+            # A whole-band search that found nothing.  It has already
+            # looked everywhere, so the narrow search must not ask it to.
+            self.full_search_failed = True
+        # The narrow search that ran out of room: the winner is at the edge
+        # of the window, so the next search is a whole-band one.  The grid
+        # itself is not thrown away.  An edge that is the BAND's edge is not
+        # the search's fault and does not ask for one.
+        if self.edge_rule and total < self.cand_count:
+            at_lo = (self.sweep_best_index == 0) and not self.sweep_clipped_lo
+            at_hi = (self.sweep_best_index == total - 1) \
+                and not self.sweep_clipped_hi
+            if at_lo or at_hi:
+                self.need_full = True
+        self.sweep_active = False
+
+    # ---- the frame -----------------------------------------------------
+
+    def frame(self, odf):
+        self.frame_index += 1
+        if odf > self.odf_max:
+            self.odf_max = odf
+        else:
+            self.odf_max *= MAX_DECAY
+        self.pick_peak(odf, self.frame_index)
+        if self.locked:
+            while self.frame_index >= self.next_beat:
+                self.beats.append(self.next_beat)
+                self.next_beat += self.period
+                self.beat_index += 1
+        self.bpm_log.append(self.bpm)
+        if not self.sweep_active:
+            # The safety net: a whole-band search every so often, whatever
+            # the score says.  It is the belt to the narrow search's braces:
+            # a music change that does not collapse the score would
+            # otherwise never be noticed.
+            if (self.full_every
+                    and self.frame_index - self.last_full_frame >= self.full_every):
+                self.need_full = True
+                self.need_full_reason = 'net'
+            # Unlocked, the search runs as soon as the last one finished: it
+            # is looking for the rate and there is no rate to look around.
+            # Locked, it runs every `search_every` frames - the estimate is
+            # good enough to be searched around.
+            if (not self.locked
+                    or self.need_full
+                    or self.frame_index - self.last_sweep_frame >= self.search_every):
+                self.sweep_start()
+        self.sweep_step()
+
+    def run(self, odf):
+        """The whole tracker over one ODF."""
+        for i in range(len(odf)):
+            self.frame(float(odf[i]))
+        return self
+
+
+# --------------------------------------------------------------------------
+# The metric.
+# --------------------------------------------------------------------------
+
+def hit_with_offset(beats, onsets, span=0.15, step=0.005):
+    if not len(beats) or not len(onsets):
+        return 0.0, 0.0
+    best = (0.0, 0.0)
+    for off in np.arange(-span, span + 1e-9, step):
+        d = np.abs(onsets[:, None] - (beats + off)[None, :]).min(axis=1)
+        f = float((d <= 0.070).mean())
+        if f > best[0]:
+            best = (f, float(off))
+    return best
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=300)
+    ap.add_argument("--show", type=int, default=14)
+    args = ap.parse_args()
+
+    keys = _cache.keys()[:args.limit]
+    res = {"fw": [], "off": []}
+    rows = []
+    t0 = time.time()
+    for k in keys:
+        x = _cache.load(k)
+        if x is None:
+            continue
+        ons = kick_onsets(x, _cache.CACHE_RATE, _cache.CACHE_HOP)
+        if len(ons) < 4:
+            continue
+        row = [k]
+        for tag, band_fs in (("fw", 6000.0), ("off", 3000.0)):
+            odf = odf_from_cache(x, band_fs)
+            if len(odf) < 1200:
+                row.append(0.0)
+                row.append(0.0)
+                continue
+            t = Tracker()
+            t.run(odf)
+            f, off = hit_with_offset(np.array(t.beats) / RATE, ons)
+            res[tag].append(f)
+            row += [f, t.bpm]
+        rows.append(row)
+        if len(rows) % 20 == 0:
+            print("  %d/%d  (%.0f s)" % (len(rows), len(keys), time.time() - t0),
+                  flush=True)
+
+    a = np.array(res["fw"])
+    b = np.array(res["off"])
+    n = min(len(a), len(b))
+    a, b = a[:n], b[:n]
+    print()
+    print("%d windows   %.0f s" % (len(rows), time.time() - t0))
+    print()
+    print("THE C++'S BAND (40-160 Hz, designed at 6 kHz then decimated)")
+    print("  median %5.3f   >=0.5: %5.1f%%   >=0.8: %5.1f%%"
+          % (float(np.median(a)), 100.0 * float((a >= 0.5).mean()),
+             100.0 * float((a >= 0.8).mean())))
+    print("THE OFFLINE BAND (20-80 Hz - the filters designed at 3 kHz)")
+    print("  median %5.3f   >=0.5: %5.1f%%   >=0.8: %5.1f%%"
+          % (float(np.median(b)), 100.0 * float((b >= 0.5).mean()),
+             100.0 * float((b >= 0.8).mean())))
+    d = a - b
+    print()
+    print("the firmware band is better on %d of %d windows (%.1f%%)"
+          % (int((d > 0).sum()), n, 100.0 * float((d > 0).mean())))
+
+    rows.sort(key=lambda r: r[1])
+    print()
+    print("the worst windows, by the firmware band's hit rate:")
+    for r in rows[:args.show]:
+        print("  %-42s  fw %5.3f (%7.2f)   off %5.3f (%7.2f)"
+              % (r[0][:42], r[1], r[2], r[3], r[4]))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

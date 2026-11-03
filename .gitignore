@@ -32,3 +32,15 @@ flash.log
 .vscode/extensions.json
 managed_components
 BUILD.md
+
+# the AudioReactive simulation's data: the audio cache, the ODF cache and
+# the ground-truth onsets are hundreds of megabytes and are rebuilt by the
+# scripts that use them.
+tools/ar_sim/_cache/
+tools/ar_sim/_odfcache/
+tools/ar_sim/_oracle/
+tools/ar_sim/_survey/
+tools/ar_sim/__pycache__/
+tools/ar_sim/_rev_odf_cache/
+tools/ar_sim/*.out
+tools/ar_sim/*.log

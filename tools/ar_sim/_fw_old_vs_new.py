@@ -143,7 +143,8 @@ def main():
           % ("", "vs the KICK onsets", "vs the WIDE onsets",
              "vs librosa's beats", "the RATE vs librosa"))
     print("%-22s | %8s %8s | %8s %8s | %8s | %8s %8s"
-          % ("", "median", "mean", "median", "mean", "median", "mean err"))
+          % ("", "median", "mean", "median", "mean", "median", "median",
+             "mean err"))
     print("-" * 104)
     for c, label in (("old", "OLD, 40-160 Hz"),
                      ("new40", "NEW, 40-160 Hz"),

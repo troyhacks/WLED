@@ -93,8 +93,8 @@ def aa_sections():
     return _AA_CACHE["c"]
 
 
-def firmware_odf(x6k, lo, hi):
-    """The firmware's ODF, faithfully: anti-alias, decimate, band at 3 kHz."""
+def firmware_db(x6k, lo, hi):
+    """The band's level in dB, per frame: the firmware's front end."""
     y = np.asarray(x6k, dtype=np.float64)
     for c in aa_sections():
         b0, b1, b2, a1, a2 = c
@@ -107,7 +107,12 @@ def firmware_odf(x6k, lo, hi):
     if n == 0:
         return np.zeros(0)
     p = (y[:n].reshape(-1, P.HOP) ** 2).mean(axis=1)
-    db = 10.0 * np.log10(p + 1e-12)
+    return 10.0 * np.log10(p + 1e-12)
+
+
+def firmware_odf(x6k, lo, hi):
+    """The firmware's ODF, faithfully: anti-alias, decimate, band at 3 kHz."""
+    db = firmware_db(x6k, lo, hi)
     return np.maximum(np.diff(db, prepend=db[0]), 0.0)
 
 
