@@ -1705,7 +1705,13 @@ static volatile bool  rtaTopReady = false;
 // It is its own number because it is the one that could grow: the comb
 // sweep scores 341 candidates, spread over eight frames so the cost is
 // flat rather than a spike.
+//
+// `tempoTimeMax` is the recent worst frame, decaying with a seven-second
+// half-life.  The mean hides the interesting frame: the sweep frames are
+// the expensive ones and they are one in eight, so a mean that looks
+// affordable can still be a frame that overruns the period.
 static float tempoTime = 0.0f;
+static float tempoTimeMax = 0.0f;
 
 // The RTA top bank's detector coefficient.
 //
@@ -5249,8 +5255,12 @@ void arAnalysisTask(void * parameter)
       const uint64_t rTempoUs = esp_timer_get_time() - tTempo0;
       const float tempoUnits = (float)((rTempoUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
       tempoTime = (tempoUnits * 3.0f + tempoTime * 7.0f) / 10.0f;
+      // The recent worst frame: the mean hides the sweep frames.
+      tempoTimeMax = (tempoUnits > tempoTimeMax) ? tempoUnits
+                                                 : (tempoTimeMax * 0.999f);
     } else {
       tempoTime = 0.0f;
+      tempoTimeMax = 0.0f;
     }
 
     // timing measurement
@@ -5421,6 +5431,9 @@ void arAnalysisTask(void * parameter)
       tf.score        = arTempoScore();
       tf.beatInBar    = arTempoBeatInBar();
       tf.valid        = arTempoValid() ? 1 : 0;
+      tf.beatInMeasure = arTempoBeatInMeasure();
+      tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
+      tf.downbeatT    = arTempoDownbeatT();
       arPublishTempo(tf);
     }
 
@@ -7683,13 +7696,26 @@ class AudioReactive : public Usermod {
       //
       // "score" is the comb score: the fraction of the onset strength that
       // sits under the grid's best phase. It is what says whether the
-      // estimate is to be believed - a score below 0.1 means the onsets do not
-      // fit a beat grid and the rate is not published as valid.
+      // estimate is to be believed - a score below the floor means the
+      // onsets do not fit a beat grid and the rate is not published as
+      // valid.
       //
-      // "beat_in_bar" is a LOCAL counter, modulo four, restarted at every
-      // lock. An audio-only estimator cannot know the true downbeat - a
-      // four-on-the-floor kick has no audible one - so it is a convention and
-      // not a measurement.
+      // "beat_in_bar" is the beat in the bar, 1..4.  It is a MEASUREMENT
+      // when "downbeat_known" is true: the tracker looked for a beat in the
+      // bar that is regularly different from the other three and found one,
+      // and that one is beat 1.  When it is false the numbering is a
+      // CONVENTION - the first beat after the lock is beat 1 - because the
+      // music does not mark its downbeat.  That was measured over sixty
+      // windows of real house music: the bar profile's t-score sat ON its
+      // null in forty-three per cent of them, which is chance, so there is
+      // nothing there to find and the tracker says so.
+      //
+      // "downbeat_t" is that t-score: the null's median is about two and
+      // its 95th percentile about six, so a reader can tell "no idea" from
+      // "a little" from "a lot".
+      //
+      // "beat_in_measure" is the same over sixteen beats: one beat in
+      // sixteen that is different marks the measure.
       {
         ArTempoFrame tf;
         const bool usable = arCopyTempo(&tf);
@@ -7700,6 +7726,9 @@ class AudioReactive : public Usermod {
         t["beat_in_bar"]  = (int)tf.beatInBar;
         t["beat_progress"] = (double)tf.beatProgress;
         t["score"]        = (double)tf.score;
+        t["beat_in_measure"] = (int)tf.beatInMeasure;
+        t["downbeat_known"] = tf.downbeatKnown != 0;
+        t["downbeat_t"]   = (double)tf.downbeatT;
         // The tracker's own settings, so the numbers can be read against the
         // tolerance that produced them.
         t["tolerance_ms"] = (double)st.tempoTolMs;
@@ -7985,6 +8014,7 @@ class AudioReactive : public Usermod {
         t["bank"]          = (double)(bankTime * TIMING_UNIT_US);
         t["rtatopbank"]    = (double)(rtaTime * TIMING_UNIT_US);
         t["tempo"]         = (double)(tempoTime * TIMING_UNIT_US);
+        t["tempo_max"]     = (double)(tempoTimeMax * TIMING_UNIT_US);
         t["dma_surplus_ms"] = (double)(FRAME_PERIOD_MS - (sampleTime * TIMING_UNIT_US / 1000.0));
         t["frames_total"]   = (unsigned long)arFramesTotal;
         t["frames_overran"] = (unsigned long)arFramesOverran;
@@ -8345,15 +8375,16 @@ class AudioReactive : public Usermod {
           {
             ArTempoFrame tf;
             const bool tempoOk = arCopyTempo(&tf);
-            char tempoBuf[64];
+            char tempoBuf[96];
             if (!tempoOk) {
               snprintf(tempoBuf, sizeof(tempoBuf), "no estimate");
             } else if (!tf.valid) {
               snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, score %.2f, not locked",
                        (double)tf.bpm, (double)tf.score);
             } else {
-              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, score %.2f",
-                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.score);
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, score %.2f%s",
+                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.score,
+                       tf.downbeatKnown ? ", downbeat measured" : "");
             }
             infoArr = user.createNestedArray(F("Tempo"));
             infoArr.add(tempoBuf);

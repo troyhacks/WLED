@@ -99,8 +99,11 @@ struct ArTempoFrame {
   float    bpm;             // beats per minute; 0 when there is no estimate
   float    beatProgress;    // 0..1 through the current beat
   float    score;           // the comb score, 0..1: how well the onsets fit the grid
-  uint8_t  beatInBar;       // 1..4; 1 is the downbeat of the LOCAL bar counter
+  uint8_t  beatInBar;       // 1..4; 1 is the downbeat
   uint8_t  valid;           // 1 when the estimate is a real measurement
+  uint8_t  beatInMeasure;   // 1..16; 1 is the measure's own beat
+  uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
+  float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
 };
 
 // Publish one whole tempo frame.

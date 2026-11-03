@@ -120,6 +120,50 @@ def main():
         check(b.get("ready") is True, "%s ready" % name)
     check(d.get("rtatopbank", {}).get("healthy") is True, "rtatopbank healthy")
 
+    # The tempo tracker.  It is audio-only by construction: a board that
+    # RECEIVES its sound over the network has no audio to measure, so the
+    # estimate must not be published there at all - not a stale one, none.
+    tmp = d.get("tempo", {})
+    check(isinstance(tmp.get("usable"), bool), "tempo.usable is published")
+    if d.get("source") == "udp":
+        check(tmp.get("usable") is False,
+              "no tempo on a board that receives its sound over the network")
+    lo = tmp.get("bpm_low", 0.0)
+    hi = tmp.get("bpm_high", 0.0)
+    check(lo < hi, "the tempo's band is published",
+          "%s - %s BPM" % (lo, hi))
+    if tmp.get("valid"):
+        check(lo <= tmp.get("bpm", 0.0) <= hi,
+              "a valid rate is inside the band",
+              "%.2f BPM" % tmp.get("bpm", 0.0))
+        # The score is the MEASUREMENT and it is published as it is: it goes
+        # under the floor on a dip, and the grid survives a dip.  What has to
+        # hold is the floor itself - it is the line between "a real beat" and
+        # "no beat at all", and it cannot be below the score's own noise.
+        check(tmp.get("min_score", 0.0) >= 0.2,
+              "the score's floor is above the score's own noise",
+              "%.3f" % tmp.get("min_score", 0.0))
+        # The cadence.  The beat's place in the bar is 1..4, always, and the
+        # beat's place in the measure is 1..16 - and the downbeat is a
+        # MEASUREMENT with a confidence, not a convention wearing one.
+        b = tmp.get("beat_in_bar", 0)
+        check(b in (1, 2, 3, 4), "the beat's place in the bar is 1..4",
+              "%s" % b)
+        m = tmp.get("beat_in_measure", 0)
+        check(0 <= m <= 16, "the beat's place in the measure is 0..16",
+              "%s" % m)
+        check(isinstance(tmp.get("downbeat_known"), bool),
+              "the downbeat's certainty is published")
+        check(isinstance(tmp.get("downbeat_t"), (int, float)),
+              "the downbeat's confidence is published")
+    # The tracker's cost.  The mean hides the sweep frames, so the RECENT
+    # WORST frame is published too, and it has to fit in the frame.
+    tmax = t.get("tempo_max", 0.0)
+    check("tempo_max" in t, "the tempo's worst frame is published")
+    check(tmax < period_us,
+          "the tempo's worst frame fits in the frame",
+          "%.1f us of %.1f us" % (tmax, period_us))
+
     print()
     print("%d checks failed" % len(failed) if failed else "all checks passed")
     return 1 if failed else 0

@@ -80,7 +80,7 @@ void arResetRtaBands() {
 //
 // It is ONE struct and not a double buffer, because the payload is twelve
 // bytes and the copy is made under the lock: a reader cannot see half of it.
-static ArTempoFrame arTempoFrame = {0.0f, 0.0f, 0.0f, 0, 0};
+static ArTempoFrame arTempoFrame = {0.0f, 0.0f, 0.0f, 0, 0, 0, 0, 0.0f};
 static bool arTempoValid = false;   // false until the first frame
 static bool arTempoLive = false;     // true while the frame is a live measurement
 
@@ -94,6 +94,7 @@ void arCopyTempoLocked(ArTempoFrame* dest) {
   if (!arTempoValid) {
     dest->bpm = 0.0f; dest->beatProgress = 0.0f; dest->score = 0.0f;
     dest->beatInBar = 0; dest->valid = 0;
+    dest->beatInMeasure = 0; dest->downbeatKnown = 0; dest->downbeatT = 0.0f;
     return;
   }
   *dest = arTempoFrame;
@@ -128,5 +129,8 @@ void arResetTempo() {
   arTempoFrame.score = 0.0f;
   arTempoFrame.beatInBar = 0;
   arTempoFrame.valid = 0;
+  arTempoFrame.beatInMeasure = 0;
+  arTempoFrame.downbeatKnown = 0;
+  arTempoFrame.downbeatT = 0.0f;
   arTempoValid = false;
 }
