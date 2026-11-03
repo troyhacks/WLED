@@ -5438,8 +5438,11 @@ void arAnalysisTask(void * parameter)
       tf.refErrMs     = arTempoRefErrMs();
       tf.refBeat      = arTempoRefBeat();
       tf.refOurBeat   = arTempoRefOurBeat();
+      tf.refValid     = arTempoRefValid() ? 1 : 0;
       tf.refCount     = arTempoRefCount();
-      tf.refAgree     = arTempoRefAgree();
+      tf.refLocked    = arTempoRefLocked();
+      tf.refSlips     = arTempoRefSlips();
+      tf.refOffset    = arTempoRefOffset();
       arPublishTempo(tf);
     }
 
@@ -7748,15 +7751,31 @@ class AudioReactive : public Usermod {
         // when no deck is connected.
         //
         // "ref_err_ms" is our beat minus the deck's, in milliseconds - a
-        // positive number means we are late.  "ref_agree" of "ref_count" is
-        // how many beats had the same place in the bar, which is the downbeat
-        // question: the deck knows its downbeat and we do not.
+        // positive number means we are late.
+        //
+        // "ref_valid" is 0 when there is no deck grid to measure against: the
+        // residual is then not a measurement, and a residual of zero would
+        // read as "in sync" when there is nothing to be in sync with.
+        //
+        // THE BAR POSITIONS.  The deck's position in the bar is the real one
+        // and ours is a CONVENTION - an audio-only tracker cannot know the
+        // downbeat - so the two are not expected to be equal and "ref_offset"
+        // (the deck's minus ours, 0..3) is a constant number.  What matters
+        // is that it does not MOVE: "ref_locked" counts the beats on which
+        // the two counters advanced together and "ref_slips" the beats on
+        // which one of them skipped, which is the deck dropping a packet or
+        // our grid double-advancing.  A locked count that tracks the
+        // comparison count and a slip count of zero means the two grids
+        // advance together, beat for beat.
         t["ref_bpm"]      = (double)tf.refBpm;
+        t["ref_valid"]    = (int)tf.refValid;
         t["ref_err_ms"]   = (double)tf.refErrMs;
         t["ref_beat"]     = (int)tf.refBeat;
         t["ref_our_beat"] = (int)tf.refOurBeat;
         t["ref_count"]    = (int)tf.refCount;
-        t["ref_agree"]    = (int)tf.refAgree;
+        t["ref_locked"]   = (int)tf.refLocked;
+        t["ref_slips"]    = (int)tf.refSlips;
+        t["ref_offset"]   = (int)tf.refOffset;
       }
 
       // ---- the peak ------------------------------------------------------
@@ -8414,15 +8433,17 @@ class AudioReactive : public Usermod {
           {
             ArTempoFrame tf;
             const bool tempoOk = arCopyTempo(&tf);
-            char refBuf[96];
+            char refBuf[128];
             if (!tempoOk || tf.refBpm <= 0.0f) {
               snprintf(refBuf, sizeof(refBuf), "no deck");
             } else {
               snprintf(refBuf, sizeof(refBuf),
-                       "deck %.1f BPM, ours %+.0f ms, bar %u/%u, agree %u/%u",
+                       "deck %.1f BPM, ours %+.0f ms, bar %u/%u, offset %u, locked %u/%u, slips %u",
                        (double)tf.refBpm, (double)tf.refErrMs,
                        (unsigned)tf.refOurBeat, (unsigned)tf.refBeat,
-                       (unsigned)tf.refAgree, (unsigned)tf.refCount);
+                       (unsigned)tf.refOffset,
+                       (unsigned)tf.refLocked, (unsigned)tf.refCount,
+                       (unsigned)tf.refSlips);
             }
             infoArr = user.createNestedArray(F("Deck reference"));
             infoArr.add(refBuf);

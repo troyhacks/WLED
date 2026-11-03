@@ -830,11 +830,13 @@ struct ArTempoState {
   // whether the audio-only tracker is right, and it is the only reference
   // that can say whether the downbeat is knowable from the sound at all.
   float    refBpm;                        // the deck's rate, 0 = no deck
-  float    refErrMs;                      // our beat minus the deck's, ms
+  float    refErrMs;                      // our beat minus the deck's AUDIBLE grid, ms
   uint8_t  refBeat;                       // the deck's beat in the bar, 1..4
   uint8_t  refOurBeat;                    // our beat in the bar at that moment
   uint16_t refCount;                      // how many beats have been compared
-  uint16_t refAgree;                      // ... and how many agreed on the bar
+  uint16_t refLocked;                     // ... and how many advanced TOGETHER
+  uint16_t refSlips;                      // ... and how many times one of them skipped
+  uint8_t  refOffset;                     // the deck's position minus ours, 0..3
   bool     refHaveErr;                    // the error's mean has a sample
 
   bool     init;                          // the coefficients are baked
@@ -1205,7 +1207,9 @@ static void arTempoReset(void) {
   arTempo.refBeat     = 0;
   arTempo.refOurBeat  = 0;
   arTempo.refCount    = 0;
-  arTempo.refAgree    = 0;
+  arTempo.refLocked   = 0;
+  arTempo.refSlips    = 0;
+  arTempo.refOffset   = 0;
   arTempo.refHaveErr  = false;
 }
 
@@ -1845,17 +1849,48 @@ static void arTempoScoreDownbeat(void) {
 // it is connected, the board can measure this tracker against it, and that
 // is the only reference that says whether the audio-only estimate is right.
 //
-// The deck publishes the fraction of a beat since its last beat packet.  At
-// OUR beat, that fraction says how much of a beat ago the deck's beat was,
-// so it is our error: positive means we are LATE.
+// The deck publishes the fraction of a beat since the last boundary of ITS
+// grid - and its grid is the SHIFTED one: the ProLink usermod moves the
+// deck's grid EARLIER by its phase offset so that the boundary lands on the
+// beat the board HEARS, not on the beat the deck announces (the deck's
+// packet arrives after the beat it announces).
 //
-// The error is wrapped into half a beat, so a beat that is early is not read
-// as a beat that is very late, and it is averaged, so one late packet does
-// not move the number.
+// So the reading here is a RESIDUAL, not the tracker's raw error: it is
+// what is left of the difference between our detected beat and the audible
+// grid once the offset has been applied.  At zero the two grids coincide;
+// the phase offset setting moves this number one-for-one, which makes it
+// the tuning readout - the number to watch while the offset is being set.
 //
-// The bar's numbering is only compared when the error is small: when we are
-// more than 40 ms off, the deck's last beat is not our beat, and comparing
-// the two positions would be comparing two different beats.
+// The sign is unchanged: positive means our beat is LATE with respect to
+// the grid.  It is wrapped into half a beat, so a beat that is early is not
+// read as a beat that is very late, and it is averaged, so one late packet
+// does not move the number.
+//
+// The bar's numbering is compared only when the two positions can be
+// compared at all, and that is a ONE-SIDED window.
+//
+// What the comparison then measures is not "do the positions match" - they
+// are not expected to, because our numbering is a convention and the deck's
+// is the truth - but "did the two counters advance together".  The offset
+// between them is expected to be a CONSTANT; a constant offset is a
+// constant non-zero number, and it is the SLIPS that mean something has
+// come apart.
+//
+// The deck's published position is the position of the grid cell that
+// CONTAINS the reading instant.  Our beat is the beat we just detected.
+// They are the same beat only if the deck's shifted boundary for OUR beat
+// has already been crossed - that is, if err >= 0.  A negative err means the
+// boundary has NOT been crossed: the deck is still on the PREVIOUS beat, and
+// comparing the two positions would be comparing two different beats.
+//
+// So a comparison that would be wrong is SKIPPED rather than scored as a
+// mismatch.  Skipping matters: a scored mismatch says the two grids
+// disagree, and a grid that is right must not be reported as wrong.
+//
+// The upper bound (120 ms) is the other half of the same idea: past a
+// quarter of a beat the two grids are too far apart for their bar positions
+// to mean anything to each other.  A phase offset set too far therefore
+// stops the comparison, and that is right too.
 //
 // It is called AT OUR BEAT, and not every frame: the deck's position in the
 // bar belongs to its last beat, and it only means anything next to ours.
@@ -1870,6 +1905,17 @@ static void arTempoProLinkReference(void) {
   }
   arTempo.refBpm = prolink_bpm_public;
   const float beatMs = 60000.0f / prolink_bpm_public;
+
+  // The residual is only meaningful while the deck's GRID is running.  When
+  // it is not - no deck, or the beat packets stopped - the usermod publishes
+  // a phase of zero, and a residual of zero would read as "in sync", which
+  // is a lie: there is nothing to be in sync WITH.  So the readout is
+  // marked invalid instead, and the tuning number is not published.
+  if (prolink_beat_public < 1 || prolink_beat_public > 4) {
+    arTempo.refHaveErr = false;
+    return;
+  }
+
   float err = prolink_beat_progress_public * beatMs;
   if (err > beatMs * 0.5f) err -= beatMs;
   if (!arTempo.locked) return;
@@ -1881,17 +1927,67 @@ static void arTempoProLinkReference(void) {
   }
   const uint8_t deckBeat = prolink_beat_public;
   const uint8_t ourBeat  = arTempoBeatInBar();
-  // The bar's position is compared only when the two beats are close enough
-  // to be the SAME beat.  A quarter of a beat is the window: at 120 BPM that
-  // is 125 ms, which is wider than the error the tracker normally has (the
-  // deck's clock leads the audio the board hears, and the onset is detected
-  // a frame or two after it).  A tighter window counted almost nothing.
+  // The bar's position is compared only when the two positions can mean the
+  // same thing - and that is a ONE-SIDED window, because of what the deck's
+  // position actually IS.
+  //
+  // The deck's published position is the position of the grid cell that
+  // contains the reading, not "the deck's beat".  The deck's grid is the
+  // SHIFTED one - the usermod moves it by its phase offset so that it lands
+  // on the beat the board hears - so its boundaries fall on the AUDIBLE
+  // beats.  Our beat is the beat we just detected.
+  //
+  // They are the same beat only if the deck's boundary for our beat has
+  // already been crossed, which is err >= 0.  A negative err means it has
+  // NOT: the deck is still on the previous beat, and the two positions are
+  // two different beats.  Those comparisons are SKIPPED, not counted as
+  // mismatches - a grid that is right must not be reported as wrong.
+  //
+  // The upper bound is the other half: past 120 ms - a quarter of a beat at
+  // 120 BPM - the grids are too far apart for their bar positions to mean
+  // anything to each other.
+  //
+  // (Before the shift the comparison was meaningless for a different reason:
+  // the deck's position arrived with the packet, ~40 ms after the audible
+  // beat, while our beat was placed at the audible beat - so the two were a
+  // beat apart and the agreement sat BELOW the 25 % that chance gives.)
+  //
+  // The AGE of the published grid is covered by the same one-sided window.
+  // The grid is published from the usermod's main loop, so a reading can be
+  // up to one loop period old; a reading taken just BEFORE a boundary
+  // carries a phase of ~1.0, which wraps to an err of ~0 MINUS - so the cell
+  // that has already turned over is skipped instead of compared.  The
+  // ProLink info page's "grid N Hz" row says how old a reading can be.
   if (deckBeat >= 1 && deckBeat <= 4 && ourBeat >= 1 && ourBeat <= 4
-      && fabsf(err) < 120.0f) {
-    arTempo.refBeat    = deckBeat;
-    arTempo.refOurBeat = ourBeat;
+      && err >= 0.0f && err < 120.0f) {
+    // The OFFSET: the deck's position in the bar minus ours, modulo four.
+    //
+    // It is NOT expected to be zero, and that is the whole point of reading
+    // it.  Our numbering is a CONVENTION - the first beat after the lock is
+    // beat 1 - because an audio-only tracker cannot know the downbeat, and
+    // the deck's numbering is the real one.  So the offset's VALUE says
+    // nothing about the sync; what matters is that it does not MOVE.
+    //
+    // A constant offset means the two counters advance together, beat for
+    // beat: the deck's grid and ours are the same grid, and our bar
+    // numbering is simply rotated against the deck's.  A CHANGING offset
+    // means one of the two skipped a beat - the deck dropped a packet, or
+    // our grid double-advanced - and the two grids have come apart.
+    //
+    // (The old counter asked whether the two positions were EQUAL, which is
+    // a coin that lands the same way for every beat: with a constant offset
+    // it reads 0 % or 100 % and with a slipping one it reads about a
+    // quarter, and neither number says anything about the sync.)
+    const uint8_t offset = (uint8_t)((deckBeat + 4u - ourBeat) & 3u);
+    if (arTempo.refCount > 0 && offset != arTempo.refOffset) {
+      if (arTempo.refSlips < 65535) arTempo.refSlips++;
+    } else {
+      if (arTempo.refLocked < 65535) arTempo.refLocked++;
+    }
+    arTempo.refOffset   = offset;
+    arTempo.refBeat     = deckBeat;
+    arTempo.refOurBeat  = ourBeat;
     if (arTempo.refCount < 65535) arTempo.refCount++;
-    if (deckBeat == ourBeat && arTempo.refAgree < 65535) arTempo.refAgree++;
   }
   #else
   (void)0;
@@ -2206,7 +2302,10 @@ static float arTempoRefErrMs(void)    { return arTempo.refErrMs; }
 static uint8_t arTempoRefBeat(void)   { return arTempo.refBeat; }
 static uint8_t arTempoRefOurBeat(void){ return arTempo.refOurBeat; }
 static uint16_t arTempoRefCount(void) { return arTempo.refCount; }
-static uint16_t arTempoRefAgree(void) { return arTempo.refAgree; }
+static bool     arTempoRefValid(void) { return arTempo.refHaveErr; }
+static uint16_t arTempoRefLocked(void){ return arTempo.refLocked; }
+static uint16_t arTempoRefSlips(void) { return arTempo.refSlips; }
+static uint8_t  arTempoRefOffset(void){ return arTempo.refOffset; }
 
 // Is there a usable estimate?
 //

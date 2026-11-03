@@ -620,27 +620,25 @@ static const char _data_FX_MODE_STROBE_RAINBOW[] PROGMEM = "Strobe Rainbow@!;,!;
  *     attack=255, decay=0  → dark gap 75%, then linear ramp into the beat
  *     attack=255, decay=255 → 25% up, peak at beat, 25% down (50% total)
  *
- *   Beat-anchor architecture — the CDJ sends TWO different beat fields:
- *     * `prolink_beat_public` (packet 0xA6, status) — beat-in-measure 1..4.
- *       Updates only when a status packet arrives (~every 200 ms), so it
- *       can lag the actual beat moment by up to one packet interval.
- *     * `prolink_beat_progress_public` (locally computed) — 0..1 within
- *       the current beat, resets to 0 when a beat packet (0x5C) ticks
- *       the usermod's beat counter. Updates synchronously with the beat.
+ *   Beat-anchor architecture — the source publishes TWO fields, and they
+ *   come from the SAME clock, so a consumer that adds them lands on the
+ *   beat:
+ *     * `prolink_beat_public` — the bar position, 1..4, 1 = downbeat.
+ *     * `prolink_beat_progress_public` — 0..1 through the current beat.
  *
- *   If we drive phase from `prolink_beat_public`, a 200 ms lag at low
- *   flash rates (1/bar = 2000 ms/bar at 120 BPM; 2/bar = 1000 ms/bar)
- *   is on the same order as the flash window itself (~16-33 ms), so the
- *   flash visibly drifts relative to the beat. At 4+/bar the subinterval
- *   shrinks below the lag, so each tick absorbs the jitter fine.
+ *   Both are in the SHIFTED grid: the ProLink usermod moves the deck's
+ *   grid by its phase offset so that 0 is the beat the board HEARS rather
+ *   than the beat the deck ANNOUNCES.  MEASURED, the deck's beat packet
+ *   reaches the board ~40 ms after the audible beat, so without the shift
+ *   the flash lands a frame and a half late.
  *
- *   Fix: derive the in-bar beat position LOCALLY by tracking the wrap
- *   edge of `beatProgress` (which is sample-accurate), and use
- *   `prolink_beat_public` only as a "is data valid" gate and a one-shot
- *   initial seed. SEGENV.aux0 = previous beatProgress in Q16.16;
- *   SEGENV.aux1 = monotonic beat counter (low 2 bits = in-bar beat 0..3).
- *   This keeps the flash locked to the beat even at 1/bar where the
- *   status packet lag is comparable to the flash duration.
+ *   The shift moves the bar position with the phase.  A raw position next
+ *   to a shifted phase is a whole beat out for the length of the offset,
+ *   and the downbeat colour lands on the wrong beat.
+ *
+ *   The estimator's own fields (`tf.beatInBar`, `tf.beatProgress`) are the
+ *   same two quantities, from the same grid - the AudioReactive tracker's
+ *   grid.  So the effect does not care which source it has.
  */
 static uint8_t bpmStrobeFlashesPerBarFromSlider(uint8_t v) {
   // five monotonic buckets covering 0..255 ~ 51 slider units each.
@@ -674,17 +672,26 @@ uint16_t mode_bpm_strobe(void) {
   bool     srcLive     = false;
   bool     srcDownbeat = false;     // the downbeat is KNOWN, not a convention
 
+  // "Ignore Pro Link": ignore the deck and drive the effect from the
+  // AudioReactive tempo model instead.
+  //
+  // It is a DEBUG switch, and it exists for one reason: to hear the two
+  // tempo models on the same wall.  The deck's grid is exact and survives a
+  // breakdown; the estimator is a measurement of the sound and does not.
+  // With a deck connected the estimator is otherwise never heard at all.
+  const bool ignoreProLink = SEGMENT.check2;
+
   #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // ProLink v3 globals — file-scope volatile in usermods_list.cpp.
   // This is the canonical read pattern for future ProLink-aware effects.
   extern volatile float   prolink_bpm_public;              // beats per minute (0 = unknown)
-  extern volatile uint8_t prolink_beat_public;            // beat-in-measure: 0 = no data, 1..4 = bar position (1 = downbeat) — STATUS packet only, lags up to ~200 ms
-  extern volatile float   prolink_beat_progress_public;    // 0..1 within the current beat — sample-accurate (resets on each beat packet)
+  extern volatile uint8_t prolink_beat_public;            // beat-in-measure: 0 = no data, 1..4 = bar position (1 = downbeat) — in the SHIFTED grid, so it is the audible bar
+  extern volatile float   prolink_beat_progress_public;    // 0..1 within the current beat — in the SHIFTED grid, so 0 is the AUDIBLE beat
   extern volatile bool    prolink_connected_public;        // true while following a master CDJ
 
   // The beatInMeasure sentinel 0 ("no packet yet, see #BEAT at FX.cpp:7412")
   // falls through here too, so we don't strobe before the first CDJ hello.
-  if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
+  if (!ignoreProLink && prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
     srcBpm      = prolink_bpm_public;
     srcBeat     = prolink_beat_public;
     srcProgress = prolink_beat_progress_public;
@@ -708,11 +715,20 @@ uint16_t mode_bpm_strobe(void) {
       srcBeat     = tf.beatInBar;
       srcProgress = tf.beatProgress;
       srcLive     = true;
-      // The estimator's downbeat is a MEASUREMENT or it is nothing: if the
-      // profile has not found one, the numbering is a convention and the
-      // effect must not paint a beat as the downbeat - claiming a downbeat
-      // that is not known is worse than not having one.
-      srcDownbeat = (tf.downbeatKnown != 0);
+      // The downbeat colour is the DECK's to give.
+      //
+      // The estimator's downbeat is not used, even when it believes it has
+      // one.  The sound does not know where the downbeat is: MEASURED over
+      // sixty windows of real music, the bar profile's t-score sat ON its
+      // null in forty-three per cent of them - chance - so there is nothing
+      // there to find (audio_reactive.h).  The estimator's bar position also
+      // drifts against the deck's, because its rate is a measurement and not
+      // a clock, so it cannot be trusted to name the downbeat either.
+      //
+      // So the "Downbeat" option is ignored without ProLink data: a
+      // downbeat that is wrong more often than right is worse than none.
+      // The debug line below says whether the downbeat colour is in force.
+      srcDownbeat = false;
     }
   }
   #endif
@@ -792,7 +808,7 @@ uint16_t mode_bpm_strobe(void) {
   }
 
   uint32_t peakColor;
-  DEBUG_PRINTF("srcBeat: %d srcProgress: %0.3f tickIdx: %d subBarPos: %0.3f attackDur: %0.3f decayDur: %0.3f withinTick: %0.3f downbeatColor: %d intensity: %0.3f flashesPerBar: %d ", barBeat, beatProg, tickIdx, subBarPos, attackDur, decayDur, withinTick, downbeatColor, intensity, flashesPerBar);
+  DEBUG_PRINTF("srcBeat: %d srcProgress: %0.3f tickIdx: %d subBarPos: %0.3f attackDur: %0.3f decayDur: %0.3f withinTick: %0.3f downbeatColor: %d downbeatKnown: %d intensity: %0.3f flashesPerBar: %d ", barBeat, beatProg, tickIdx, subBarPos, attackDur, decayDur, withinTick, downbeatColor, srcDownbeat, intensity, flashesPerBar);
   if (intensity == 0.0f) {
     peakColor = SEGCOLOR(1);
     DEBUG_PRINTLN("Color Picked: OFF");
@@ -819,7 +835,10 @@ uint16_t mode_bpm_strobe(void) {
   return FRAMETIME;
 }
 
-static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat;On,Off,Downbeat;;01;ix=255,c1=255,o1=0";
+// The second group is the COLOUR-SLIDER labels - the effect's three colour
+// slots: the flash, the off colour and the downbeat.  The third group is
+// the palette list (none) and the fourth the default palette.
+static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link;Flash,Off,Downbeat;;01;ix=255,c1=255,o1=0,o2=0";
 
 
 /*

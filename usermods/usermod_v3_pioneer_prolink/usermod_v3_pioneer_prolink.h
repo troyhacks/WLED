@@ -51,6 +51,26 @@ static constexpr uint32_t PEER_CHECK_INTERVAL_MS = 2000;
 static constexpr uint32_t BEAT_FLASH_DURATION_MS = 300;
 static constexpr uint32_t STARTUP_DELAY_US = 10 * 1000000;  // 10 seconds in microseconds
 
+// The phase offset: how far the deck's grid is moved to land on the beat the
+// board HEARS rather than on the beat the deck ANNOUNCES.
+//
+// MEASURED live (2026-11-03, a CDJ at ~118 BPM): the board's own
+// audio-derived beat fires ~40 ms BEFORE the deck's ProLink beat packet
+// reaches it.  The deck's grid, used exactly as it arrives, therefore
+// flashes ~40 ms AFTER the music - late, by more than a frame at 30 fps.
+//
+// The SIGN is the whole content of this constant.  POSITIVE means the deck's
+// grid is moved BACK in time, so the flash lands on the audible beat.
+//
+// It is a default, not a law: it depends on the deck's output latency, the
+// network and the audio path, and it is live-tunable (Phase_Offset_ms).
+static constexpr int32_t PROLINK_PHASE_OFFSET_DEFAULT_MS = 40;
+
+// The clock word's layout - see the member's comment.
+static constexpr uint32_t PROLINK_CLOCK_POS_SHIFT = 30;
+static constexpr uint32_t PROLINK_CLOCK_ANC_MASK  = 0x3FFFFFFFu;
+static constexpr uint32_t PROLINK_CLOCK_STALE_MS  = 0x20000000u;  // 6.2 days
+
 static constexpr uint32_t WAVEFORM_COLLECT_MS = 1500;
 static constexpr uint32_t ARTWORK_COLLECT_MS = 5000;
 static constexpr uint32_t METADATA_COLLECT_MS = 500;
@@ -96,7 +116,20 @@ volatile uint32_t prolink_track_duration_ms = 0;
 // missing?" - has an answer without a serial console.
 volatile uint32_t prolink_beat_packets_public = 0;    // beat packets parsed
 volatile uint32_t prolink_status_packets_public = 0;  // status packets parsed
-volatile uint32_t prolink_beat_elapsed_ms_public = 0; // ms since the deck's last beat
+volatile uint32_t prolink_beat_elapsed_ms_public = 0; // ms into the current AUDIBLE beat
+
+// The phase offset in force, in ms: how far the deck's grid was moved to
+// land on the audible beat.  Published so a consumer - and the info page -
+// can see what the deck's grid was shifted by, and so the shift can be
+// reasoned about from outside the usermod.
+volatile int32_t prolink_phase_offset_ms_public = 0;
+
+// How often the usermod's loop runs, in Hz.  The deck's grid is PUBLISHED
+// from that loop, so this is also how often the published phase and bar
+// position are refreshed - and therefore how old a consumer's reading of
+// them can be.  It is the number that says whether a consumer can trust a
+// reading taken at a beat, so it is published rather than guessed at.
+volatile uint16_t prolink_loop_rate_hz_public = 0;
 
 // Pitch slider
 volatile float prolink_pitchPercent = 0.0f;
@@ -266,6 +299,48 @@ private:
   String playerIPOverride = "";
   uint8_t virtualDeckNumber = WLED_DEVICE_ID_DEFAULT;
 
+  // The phase offset: the deck's grid, shifted onto the audible beat.
+  // Positive moves the deck's grid EARLIER, so a flash lands on the beat the
+  // board hears instead of ~40 ms behind it.  See the constant above.
+  int32_t phaseOffsetMs = PROLINK_PHASE_OFFSET_DEFAULT_MS;
+
+  // The deck's OWN phase: 0..1 through the beat as the DECK counts it,
+  // measured from the beat packet's arrival.  It is the grid the deck's
+  // beat counter runs on, so anything that adds the counter to a phase -
+  // the phrase progress - uses this one and not the shifted phase.
+  float deckRawPhase = 0.0f;
+
+  // The clock's anchor, stamped WHERE THE PACKET ARRIVES, and the bar
+  // position OF THAT ANCHOR - IN ONE WORD.
+  //
+  // It used to be stamped in the main loop, when the loop noticed that the
+  // beat number had changed.  That put the main loop's own jitter into the
+  // deck's phase - MEASURED at up to ~30 ms under a 30 fps effect - and the
+  // error against the audio then swung by tens of milliseconds, so no single
+  // offset could line the two grids up.  The packet callback is the only
+  // place that knows when the beat actually was.
+  //
+  // The anchor and the position have to be read TOGETHER: the position only
+  // means anything next to the beat it was measured at.  Two variables
+  // cannot promise that - a reader that caught the callback between its two
+  // stores would pair the OLD anchor with the NEW position, and that is a
+  // whole beat of error for one frame (the flash in the wrong place, or the
+  // downbeat colour on the wrong beat).  The tear is STABLE, so no amount
+  // of re-reading detects it.  One 32-bit store cannot be read half-updated
+  // on this CPU, so the pair travels in one word:
+  //
+  //   bits 30..31 : the bar position of the anchor packet, 1..4 as 0..3
+  //   bits  0..29 : the anchor, ms since boot, modulo 2^30 (12.4 days)
+  //
+  // The anchor is always seconds old at most - it is re-stamped on every
+  // beat - so the 30-bit wrap never bites, and the elapsed time is recovered
+  // with a masked subtraction.
+  volatile uint32_t prolinkClockPacked = 0;
+  // The change detection for the anchor.  Written by the packet callback and
+  // cleared by the main loop when the deck goes away, so it is touched from
+  // two tasks: it is volatile, and a single byte's write is atomic here.
+  volatile uint8_t  lastPacketBeatNo = 0;
+
   // Config strings
   static const char _name[];
   static const char _enabled[];
@@ -278,6 +353,7 @@ private:
   static const char _altcolors[];
   static const char _effectPlaylist[];
   static const char _fillPlaylist[];
+  static const char _phaseOffset[];
 
   // Protocol constants
   const uint8_t DBSERVER_MAGIC[5] = { 0x11, 0x87, 0x23, 0x49, 0xae };
@@ -616,12 +692,17 @@ private:
       // ARRIVES ON THE BEAT, so the status packet has no business
       // touching it.
       linkState.beatInMeasure = newBeat;
-      // The bar position is published from the beat packet, whose clock the
-      // progress uses.  The status packet carries the same value - MEASURED,
-      // they agree beat for beat - but it arrives later, and a bar position
-      // that lags the progress puts the flash in the wrong subinterval.
-      // It is the fallback for a link that sends status but no beats.
-      if (prolink_beat_packets_public == 0) prolink_beat_public = newBeat;
+      // The bar position is NOT published from here.
+      //
+      // It used to be, and it was published RAW - the deck's position as it
+      // arrives - while the progress clock was shifted onto the audible
+      // beat.  A raw position next to a shifted phase is a beat out for the
+      // length of the offset, and the downbeat colour lands on the wrong
+      // beat.  Both are published together now, in the loop, from the same
+      // shifted grid.
+      //
+      // This value stays as the FALLBACK for a link that sends status but
+      // no beat packets.
     }
 
     // Beats elapsed (0xA0-0xA3)
@@ -675,16 +756,37 @@ private:
     linkState.beatNumber = data[0x5C];
 
     prolink_beat_number_public = linkState.beatNumber;
-    // The bar position, from the clock the progress uses.
+
+    // The anchor, stamped HERE - at the packet - and not in the main loop.
     //
-    // This packet ARRIVES ON THE BEAT, and its byte 0x5C is the beat's
-    // place in the bar (1..4) - MEASURED to agree with the status packet's
-    // 0xA6, beat for beat.  Publishing it here means the position and the
-    // progress that resets on the same event come from the same clock, so
-    // a consumer that adds them lands on the beat.
-    if (linkState.beatNumber >= 1 && linkState.beatNumber <= 4) {
-      prolink_beat_public = linkState.beatNumber;
+    // This packet announces a beat, and the moment it lands is where the
+    // deck's beat IS as the board sees it - which is ~40 ms after the beat
+    // the board HEARS.  The grid is anchored here and then shifted back
+    // onto the audible beat by the phase offset.
+    //
+    // Stamping it later (in the main loop, when the loop noticed the beat
+    // number change) put the main loop's own jitter into the deck's phase -
+    // MEASURED at up to ~30 ms under a 30 fps effect - and the error against
+    // the audio then swung by tens of milliseconds, so no single phase
+    // offset could line the two grids up.
+    //
+    // The anchor AND its bar position go into ONE word, in ONE store.
+    //
+    // They have to travel together: the position is only meaningful next to
+    // the beat it was measured at, and a reader that caught this callback
+    // between two separate stores would pair the OLD anchor with the NEW
+    // position - a whole beat of error for one frame, and a tear that no
+    // amount of re-reading would detect.  See the member's comment.
+    //
+    // A beat-in-bar byte outside 1..4 is not a position at all, so it does
+    // not move the clock: the previous packet's anchor and position stay.
+    if (linkState.beatNumber != lastPacketBeatNo &&
+        linkState.beatNumber >= 1 && linkState.beatNumber <= 4) {
+      lastPacketBeatNo = linkState.beatNumber;
+      prolinkClockPacked = (millis() & PROLINK_CLOCK_ANC_MASK) |
+                           ((uint32_t)(linkState.beatNumber - 1u) << PROLINK_CLOCK_POS_SHIFT);
     }
+
     linkState.pitchPercent = (speedRatio - 1.0f) * 100.0f;
     prolink_pitchPercent = linkState.pitchPercent;
   }
@@ -1608,7 +1710,15 @@ private:
       prolink_phrase_beats_public = phrases[activeIdx].count;
 
       uint32_t beatsIntoPhrase = currentBeat - phrases[activeIdx].startBeat;
-      float totalProgress = (float)beatsIntoPhrase + prolink_beat_progress_public;
+      // The deck's OWN phase - the fraction of the beat since the packet
+      // that announced it.  Not the shifted one.
+      //
+      // The deck's beat COUNTER turns over when the beat packet lands, so
+      // the count and the phase have to turn over together: adding the
+      // shifted phase (which turns over on the AUDIBLE beat, ~40 ms before
+      // the packet) to a count that turns over later would saw the phrase
+      // progress down by a whole beat and then jump back up, every beat.
+      float totalProgress = (float)beatsIntoPhrase + deckRawPhase;
       if (phrases[activeIdx].count > 0) {
         prolink_phrase_progress_public = totalProgress / (float)phrases[activeIdx].count;
       }
@@ -1640,6 +1750,13 @@ private:
         linkState.beatNumber = 0;
         linkState.beatsElapsed = 0;
         linkState.currentTrackId = 0;
+
+        // The clock's anchor goes with the deck, and so does the change
+        // detection that stamps it - otherwise a deck that comes back with
+        // the SAME beat number would not re-stamp the anchor, and the clock
+        // would still be running off the old deck's arrival.
+        prolinkClockPacked = 0;
+        lastPacketBeatNo   = 0;
 
         phrases.clear();
         lastAnalyzedTrackId = 0;
@@ -1706,6 +1823,19 @@ public:
   void loop() {
     if (!enabled) return;
 
+    // How often this loop runs.  The grid below is published from here, so
+    // this rate is the age of the published phase - the number that says how
+    // stale a consumer's reading can be.  It is measured, not assumed.
+    static uint32_t loopTicks = 0;
+    static uint32_t loopStamp = 0;
+    loopTicks++;
+    const uint32_t nowMs = millis();
+    if (nowMs - loopStamp >= 1000) {
+      prolink_loop_rate_hz_public = (uint16_t)(loopTicks * 1000UL / (nowMs - loopStamp));
+      loopTicks = 0;
+      loopStamp = nowMs;
+    }
+
     // The connection flag is LIVE, and it is published from here and not
     // from setup().
     //
@@ -1744,11 +1874,22 @@ public:
     static uint32_t lastBeatNumber = 0;
     static uint8_t  lastBeatInMeasure = 0;
     static unsigned long beatFlashStart = 0;
+    // The shifted phase as it was last seen, and whether the GRID has
+    // already flashed for the beat that is in flight.  The grid's phase
+    // crossing is the AUDIBLE beat, so it is what the flash follows.
+    static float lastGridPhase = 0.0f;
+    static bool  flashedOnGrid  = false;
 
     if (linkState.beatNumber != lastBeatNumber && linkState.beatNumber > 0) {
-      // The BEAT packet IS the beat: it arrives on the beat.  So it is the
-      // anchor the clock wants, and the status packet's beatInMeasure - which
-      // arrives up to 200 ms later - is only the POSITION IN THE BAR.
+      // The BEAT packet announces a beat, and it arrives shortly AFTER the
+      // beat it announces - MEASURED, the board's own audio-derived beat
+      // fires ~40 ms before the packet reaches it.  So the packet is not
+      // the audible beat; it is the deck's beat as the board sees it, LATE.
+      // That is why the grid is anchored HERE and then SHIFTED back onto
+      // the audible beat by the phase offset - see the clock block below.
+      //
+      // The status packet's beatInMeasure arrives up to 200 ms later still,
+      // so it is only the POSITION IN THE BAR.
       //
       // The old code anchored on beatInMeasure and only drove the flash from
       // beatNumber.  On a link where the status packets do not arrive that
@@ -1759,11 +1900,18 @@ public:
       lastBeatNumber = linkState.beatNumber;
       lastBeatTime = millis();
 
-      if (enableBeatFlash) {
+      if (enableBeatFlash && !flashedOnGrid) {
+        // The BACKSTOP.  The grid's phase crossing is the audible beat and
+        // it is what the flash normally follows (see the grid block), but
+        // a loop that stalled over a beat misses the crossing - and then the
+        // packet is the only thing that knows a beat happened.  So the
+        // packet flashes only when the grid has not already flashed for
+        // this beat.
         beatFlashStart = millis();
         prolink_beat_flash_active = true;
         prolink_beat_flash_brightness = 255;
       }
+      flashedOnGrid = false;   // the next beat starts unarmed
     }
 
     // The visible beat number (beatInMeasure) comes from the status packet
@@ -1794,22 +1942,140 @@ public:
     // rate with it instead of leaving a stale one behind.
     prolink_bpm_public = linkState.bpm;
 
-    // Beat progress calculation
-    if (linkState.bpm > 0 && lastBeatTime > 0) {
-      float effectiveBpm = linkState.bpm;
-      float beatDurationMs = 60000.0f / effectiveBpm;
-      unsigned long timeSinceBeat = millis() - lastBeatTime;
-      prolink_beat_elapsed_ms_public = timeSinceBeat;
+    // ---- The clock, and the phase offset ---------------------------------
+    //
+    // The deck's grid is shifted by `phaseOffsetMs` so that it lands on the
+    // beat the board HEARS, not on the beat the deck ANNOUNCES.
+    //
+    // The shift moves the WHOLE grid: the phase AND the bar position.
+    // Moving only the phase would leave the bar a beat behind for the
+    // length of the offset, and the downbeat colour would land on the wrong
+    // beat.
+    //
+    // The anchor and the position come out of ONE word, so they cannot be
+    // read half-updated.  The word holds the anchor in ms since boot and the
+    // bar position of that anchor; the elapsed time is the masked
+    // difference, which is exact because the anchor is always seconds old at
+    // most (it is re-stamped on every beat).
+    //
+    // The grid RUNS FREE between the packets: the phase and the bar
+    // position advance on their own, and each packet re-anchors them.  That
+    // is what makes the shift possible - a grid that only moved when a
+    // packet arrived could not be moved onto the audible beat, because the
+    // packet arrives after it - and it is why the anchor has to be stamped
+    // where the packet LANDS rather than where the loop notices it.
+    uint32_t elapsedSinceAnchor = 0;
+    uint8_t  rawPos   = 0;
+    bool     haveAnchor = false;
 
-      float progress = timeSinceBeat / beatDurationMs;
-      if (progress >= 1.0f) {
-        // Don't roll over locally — let the next beat packet reset it.
-        // Cap so consumers see "almost a beat" until the real one lands.
-        progress = 0.999f;
+    const uint32_t packed = prolinkClockPacked;
+    if (packed != 0) {
+      const uint32_t anchor29 = packed & PROLINK_CLOCK_ANC_MASK;
+      const uint32_t now29    = millis() & PROLINK_CLOCK_ANC_MASK;
+      const uint32_t elapsed  = (now29 - anchor29) & PROLINK_CLOCK_ANC_MASK;
+      if (elapsed < PROLINK_CLOCK_STALE_MS) {
+        elapsedSinceAnchor = elapsed;
+        rawPos   = (uint8_t)((packed >> PROLINK_CLOCK_POS_SHIFT) & 3u) + 1u;
+        haveAnchor = true;
       }
+    }
+    if (!haveAnchor && lastBeatTime > 0) {
+      // The fallback: a link that sends status packets but no beat packets.
+      elapsedSinceAnchor = millis() - lastBeatTime;
+      rawPos   = linkState.beatInMeasure;
+      haveAnchor = true;
+    }
+
+    if (linkState.bpm > 0 && haveAnchor) {
+      const float beatMs = 60000.0f / linkState.bpm;
+
+      // The offset, constrained: half a beat or more would fold the grid
+      // onto itself and the bar would run backwards.
+      int32_t off = phaseOffsetMs;
+      const int32_t maxOff = (int32_t)(beatMs * 0.5f);
+      if (off >  maxOff) off =  maxOff;
+      if (off < -maxOff) off = -maxOff;
+
+      // The shifted clock.  `wholeBeats` is how many shifted beats have
+      // passed since the anchor packet's own beat, and the phase is where we
+      // are inside the current one.
+      //
+      // A NEGATIVE shifted time is not an error, it is the previous beat:
+      // the anchor is stamped where the packet LANDED, so with the grid
+      // moved LATE (a negative offset) the shifted grid's beat has not
+      // started yet and we are still inside the one before it.  Borrowing a
+      // beat keeps the phase and the bar position CONTINUOUS across the
+      // packet arrival; clamping to zero would snap the phase back to the
+      // start of the beat on every packet and leave the bar position stuck
+      // on the deck's raw announced value for the whole beat.
+      float shiftedMs = (float)elapsedSinceAnchor + (float)off;
+      int32_t wholeBeats;
+      float progress;
+      if (shiftedMs < 0.0f) {
+        wholeBeats = -1;
+        progress = (shiftedMs + beatMs) / beatMs;
+      } else {
+        const float beatIndex = shiftedMs / beatMs;
+        wholeBeats = (int32_t)beatIndex;
+        progress = beatIndex - (float)wholeBeats;
+      }
+      if (progress < 0.0f) progress = 0.0f;
+      if (progress >= 1.0f) progress = 0.999f;
+
+      // The deck's OWN phase, from the same anchor but WITHOUT the shift:
+      // the fraction of the beat since the packet that announced it.  This
+      // is the grid the deck's beat counter runs on, so the phrase progress
+      // uses it - the shifted phase above turns over on the AUDIBLE beat,
+      // ~40 ms before the counter turns over, and adding the two together
+      // would saw the progress down by a beat every beat.
+      {
+        const float rawIndex = (float)elapsedSinceAnchor / beatMs;
+        deckRawPhase = rawIndex - floorf(rawIndex);
+      }
+
       prolink_beat_progress_public = progress;
+      prolink_beat_elapsed_ms_public = (uint32_t)(shiftedMs - (float)wholeBeats * beatMs);
+      prolink_phase_offset_ms_public = off;
+
+      // The beat flash, on the AUDIBLE beat.
+      //
+      // The beat packet lands ~40 ms AFTER the beat it announces, so a
+      // flash driven by the packet is late by more than a frame.  The grid
+      // knows where the audible beat is: the phase crossing zero IS it -
+      // that is what the phase offset bought.  So the flash follows the
+      // grid, and the packet is only the backstop for a loop that stalled
+      // over a beat and missed the crossing.
+      if (enableBeatFlash && progress < lastGridPhase) {
+        beatFlashStart = nowMs;
+        prolink_beat_flash_active = true;
+        prolink_beat_flash_brightness = 255;
+        flashedOnGrid = true;
+      }
+      lastGridPhase = progress;
+
+      // The bar position, in the SHIFTED grid: the anchor's own position
+      // plus the number of shifted beats since it.  A 4/4 bar advances one
+      // beat at a time, so the position follows the shifted grid exactly -
+      // and the downbeat lands on the audible downbeat.
+      //
+      // The +4 keeps the wrap positive: `wholeBeats` is -1 while we are still
+      // inside the beat before the anchor's, and a negative value masked with
+      // 3 would be a two's-complement accident.
+      if (rawPos >= 1 && rawPos <= 4) {
+        prolink_beat_public = (uint8_t)(1 + ((((int32_t)(rawPos - 1) + wholeBeats) + 4) & 3));
+      } else {
+        prolink_beat_public = 0;
+      }
     } else {
+      // No deck, or no clock: the grid is not running.  The OFFSET is still
+      // published, because it is the SETTING - the info page shows it as the
+      // number to change, and a page that read 0 with no deck would look
+      // like the offset had been lost.
       prolink_beat_progress_public = 0.0f;
+      deckRawPhase = 0.0f;
+      prolink_beat_elapsed_ms_public = 0;
+      prolink_phase_offset_ms_public = phaseOffsetMs;
+      prolink_beat_public = 0;
     }
 
     updatePhraseState();
@@ -1833,6 +2099,7 @@ public:
     top[FPSTR(_altcolors)] = altWaveformColors;
     top[FPSTR(_effectPlaylist)] = prolinkEffectPlaylistId_cfg;
     top[FPSTR(_fillPlaylist)]   = prolinkFillPlaylistId_cfg;
+    top[FPSTR(_phaseOffset)]    = phaseOffsetMs;
   }
 
   bool readFromConfig(JsonObject& root) {
@@ -1848,6 +2115,36 @@ public:
     playerIPOverride = top[FPSTR(_ipOverride)] | "";
     virtualDeckNumber = top[FPSTR(_deckNumber)] | WLED_DEVICE_ID_DEFAULT;
     virtualDeckNumber = constrain(virtualDeckNumber, 1, 127);
+
+    // The phase offset: how far the deck's grid is moved back so the flash
+    // lands on the audible beat.  Constrained to a quarter of a second
+    // either way - beyond half a beat the shifted grid would fold onto
+    // itself, and the bar would run backwards.
+    //
+    // The value is read the SAFE way, and not with `|` alone.  A settings
+    // field that arrives as a string (a POST whose type twin did not arrive)
+    // would be read by ArduinoJson's `as<int>()` as 0 - SILENTLY - and an
+    // offset of 0 is not a no-op: it puts the deck's grid back where it
+    // started, half a beat out from the music.  So a string is accepted only
+    // if it really is a number, and anything else leaves the measured default
+    // standing.
+    {
+      int off = (int)phaseOffsetMs;
+      JsonVariant offVar = top[FPSTR(_phaseOffset)];
+      if (offVar.is<int>()) {
+        off = offVar.as<int>();
+      } else if (offVar.is<const char*>()) {
+        const char* txt = offVar.as<const char*>();
+        if (txt != nullptr) {
+          char* end = nullptr;
+          long parsed = strtol(txt, &end, 10);
+          if (end != nullptr && end != txt && *end == '\0') off = (int)parsed;
+        }
+      }
+      if (off < -250) off = -250;
+      if (off >  250) off =  250;
+      phaseOffsetMs = off;
+    }
 
     // Effect / fill playlist ids. Default to 0 (off — legacy cycling/fill
     // behavior). Cached pools are rebuilt only when the configured id changes,
@@ -1912,7 +2209,24 @@ public:
                 String(prolink_beat_number_public) + " / inbar " +
                 String(prolink_beat_public) + ", +" +
                 String(prolink_beat_elapsed_ms_public) + " ms, prog " +
-                String(prolink_beat_progress_public * 100.0f, 0) + "%");
+                String(prolink_beat_progress_public * 100.0f, 0) + "%" +
+                ", grid " + String(prolink_loop_rate_hz_public) + " Hz");
+
+    // The phase offset: how far the deck's grid was moved back so the flash
+    // lands on the audible beat.  This is the number to change when the
+    // flash is late or early - it is live-tunable, so the fix does not
+    // need a rebuild.
+    //
+    // The SETTING and the offset IN FORCE are both shown when they differ:
+    // the offset in force is clamped to half a beat (a bigger shift would
+    // fold the grid onto itself), and a setting past that clamp is not
+    // what the grid is actually doing.
+    String offsetRow = String(phaseOffsetMs) + " ms set";
+    if (prolink_phase_offset_ms_public != phaseOffsetMs) {
+      offsetRow += ", " + String(prolink_phase_offset_ms_public) + " ms in force";
+    }
+    infoArr.add("<br />phase offset: " + offsetRow +
+                " (deck grid moved back onto the audible beat)");
 
     if (prolink_phrase_name_public.length() > 0 && linkState.isMaster) {
       infoArr.add("<br />" + prolink_mood_public + " " + prolink_phrase_name_public);
@@ -2069,3 +2383,4 @@ const char ProLinkUsermodV3::_deckNumber[] PROGMEM = "Virtual_Deck_Number";
 const char ProLinkUsermodV3::_altcolors[] PROGMEM = "Use_Alt_Waveform_Colors";
 const char ProLinkUsermodV3::_effectPlaylist[] PROGMEM = "Effect_Playlist_Id";
 const char ProLinkUsermodV3::_fillPlaylist[] PROGMEM = "Fill_Playlist_Id";
+const char ProLinkUsermodV3::_phaseOffset[] PROGMEM = "Phase_Offset_ms";

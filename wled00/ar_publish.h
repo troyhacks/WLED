@@ -110,8 +110,11 @@ struct ArTempoFrame {
   float    refErrMs;        // our beat minus the deck's beat, ms
   uint8_t  refBeat;         // the deck's beat in the bar, 1..4
   uint8_t  refOurBeat;      // our beat in the bar at the same moment
+  uint8_t  refValid;        // 1 when refErrMs is a real measurement
   uint16_t refCount;        // how many beats have been compared
-  uint16_t refAgree;        // ... and how many agreed on the bar
+  uint16_t refLocked;       // ... and how many advanced together
+  uint16_t refSlips;        // ... and how many times one of them skipped
+  uint8_t  refOffset;       // the deck's bar position minus ours, 0..3
 };
 
 // Publish one whole tempo frame.
