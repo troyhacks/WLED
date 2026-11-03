@@ -10,15 +10,19 @@ ambiguous about.
 THE BAND QUESTION
 -----------------
 The offline work used _device_odf.py, which applies the 3 kHz-DESIGNED band
-filters to the 6 kHz cache and then decimates by two.  The corners therefore
-land at 20 Hz and 80 Hz, not 40 Hz and 160 Hz.
+filters (hp40 x2 then lp160 x2) to the 6 kHz cache and then decimates by
+two.  A filter designed for a corner f at a rate r lands at f*(run_rate/r)
+on the stream it is actually run on, so those corners land at 80 Hz and
+320 Hz.
 
 The firmware does the opposite order: it decimates 48 kHz to 3 kHz FIRST and
-then runs the 3 kHz-designed band on the 3 kHz stream, so its corners really
-are 40 Hz and 160 Hz.
+then runs the 3 kHz-designed band (90-320 Hz) on the 3 kHz stream, so its
+corners really are 90 Hz and 320 Hz.
 
-So the two are not the same measurement, and the corpus numbers that chose
-this algorithm were measured on the wrong band.  This script measures both.
+So the two are close but not the same measurement - 90 Hz at the bottom
+against the corpus's 80 Hz - and the corpus numbers that chose this
+algorithm were measured on a band the board does not quite run.  This
+script measures both.
 
     python tools/ar_sim/_fw_port.py --limit 300
 """
@@ -106,10 +110,14 @@ def rbj_lpf(f0, fs, q):
             -2.0 * cw / a0, (1.0 - alpha) / a0]
 
 
-def band_sections(fs):
-    """The C++'s band: hp40 x2 then lp160 x2, designed at `fs`."""
-    return [rbj_hpf(BAND_LO, fs, Q), rbj_hpf(BAND_LO, fs, Q),
-            rbj_lpf(BAND_HI, fs, Q), rbj_lpf(BAND_HI, fs, Q)]
+def band_sections(fs, lo=BAND_LO, hi=BAND_HI):
+    """The band's filters: hp x2 then lp x2, designed at `fs`.
+
+    `lo` and `hi` are the corners as DESIGNED.  What corner they land on
+    depends on the rate the filters are actually run at - see odf_from_cache.
+    """
+    return [rbj_hpf(lo, fs, Q), rbj_hpf(lo, fs, Q),
+            rbj_lpf(hi, fs, Q), rbj_lpf(hi, fs, Q)]
 
 
 def apply_sections(x, sections):
@@ -124,16 +132,17 @@ def apply_sections(x, sections):
 # The ODF, the two ways.
 # --------------------------------------------------------------------------
 
-def odf_from_cache(x6k, band_fs):
+def odf_from_cache(x6k, band_fs, lo=BAND_LO, hi=BAND_HI):
     """The device's ODF from the 6 kHz cache, for a band designed at band_fs.
 
-    band_fs is the rate the band filters are DESIGNED for.  The cache is at
-    6 kHz, so:
-      band_fs = 6000 -> the band's corners are 40 and 160 Hz (the firmware)
-      band_fs = 3000 -> the band's corners are 20 and 80 Hz  (the offline one)
+    band_fs is the rate the band filters are DESIGNED for, and the cache is
+    at 6 kHz.  A filter designed for a corner f at a rate r lands at
+    f*(run_rate/r) on the stream it runs on, so:
+      band_fs = 6000, corners 90/320 -> 90 and 320 Hz  (the firmware)
+      band_fs = 3000, corners 40/160 -> 80 and 320 Hz  (the corpus's)
     Either way the stream is decimated by two to 3 kHz and framed at 32.
     """
-    y = apply_sections(x6k, band_sections(band_fs))
+    y = apply_sections(x6k, band_sections(band_fs, lo, hi))
     y = y[::2]                                   # 6 kHz -> 3 kHz
     n = (len(y) // HOP) * HOP
     if n == 0:
@@ -1002,8 +1011,9 @@ def main():
         if len(ons) < 4:
             continue
         row = [k]
-        for tag, band_fs in (("fw", 6000.0), ("off", 3000.0)):
-            odf = odf_from_cache(x, band_fs)
+        for tag, band_fs, lo, hi in (("fw", 6000.0, BAND_LO, BAND_HI),
+                                     ("off", 3000.0, 40.0, 160.0)):
+            odf = odf_from_cache(x, band_fs, lo, hi)
             if len(odf) < 1200:
                 row.append(0.0)
                 row.append(0.0)
@@ -1025,11 +1035,11 @@ def main():
     print()
     print("%d windows   %.0f s" % (len(rows), time.time() - t0))
     print()
-    print("THE C++'S BAND (40-160 Hz, designed at 6 kHz then decimated)")
+    print("THE C++'S BAND (90-320 Hz, designed at 6 kHz then decimated)")
     print("  median %5.3f   >=0.5: %5.1f%%   >=0.8: %5.1f%%"
           % (float(np.median(a)), 100.0 * float((a >= 0.5).mean()),
              100.0 * float((a >= 0.8).mean())))
-    print("THE OFFLINE BAND (20-80 Hz - the filters designed at 3 kHz)")
+    print("THE OFFLINE BAND (80-320 Hz - the filters designed at 3 kHz)")
     print("  median %5.3f   >=0.5: %5.1f%%   >=0.8: %5.1f%%"
           % (float(np.median(b)), 100.0 * float((b >= 0.5).mean()),
              100.0 * float((b >= 0.8).mean())))
