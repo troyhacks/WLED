@@ -75,3 +75,58 @@ void arResetRtaBands() {
   arRtaIdx = 0;
   arRtaValid = false;
 }
+
+// The published tempo frame.
+//
+// It is ONE struct and not a double buffer, because the payload is twelve
+// bytes and the copy is made under the lock: a reader cannot see half of it.
+static ArTempoFrame arTempoFrame = {0.0f, 0.0f, 0.0f, 0, 0};
+static bool arTempoValid = false;   // false until the first frame
+static bool arTempoLive = false;     // true while the frame is a live measurement
+
+void arPublishTempo(const ArTempoFrame& t) {
+  ArPublishGuard guard;
+  arTempoFrame = t;
+  arTempoValid = true;
+}
+
+void arCopyTempoLocked(ArTempoFrame* dest) {
+  if (!arTempoValid) {
+    dest->bpm = 0.0f; dest->beatProgress = 0.0f; dest->score = 0.0f;
+    dest->beatInBar = 0; dest->valid = 0;
+    return;
+  }
+  *dest = arTempoFrame;
+}
+
+bool arTempoUsable(void) {
+  ArPublishGuard guard;
+  return arTempoValid && arTempoLive;
+}
+
+bool arCopyTempo(ArTempoFrame* dest) {
+  ArPublishGuard guard;
+  if (!arTempoValid || !arTempoLive) {
+    // Not a live measurement: the caller may not use it, so it gets nothing
+    // to misuse. The copy is not made at all.
+    memset(dest, 0, sizeof(*dest));
+    return false;
+  }
+  *dest = arTempoFrame;
+  return true;
+}
+
+void arSetTempoLive(bool live) {
+  ArPublishGuard guard;
+  arTempoLive = live;
+}
+
+void arResetTempo() {
+  ArPublishGuard guard;
+  arTempoFrame.bpm = 0.0f;
+  arTempoFrame.beatProgress = 0.0f;
+  arTempoFrame.score = 0.0f;
+  arTempoFrame.beatInBar = 0;
+  arTempoFrame.valid = 0;
+  arTempoValid = false;
+}

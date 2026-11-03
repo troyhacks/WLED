@@ -871,6 +871,8 @@ struct ArLiveSettings {
   int     trimBand;              // the band the serial trim works on
   float   trimDb[AR_MAX_BANDS];  // the per-band trim, dB
   float   bankTauMs;             // the bank's detector time constant
+  bool    tempoEnabled;          // the tempo tracker runs?
+  float   tempoTolMs;            // the comb score's tolerance, ms
 };
 
 // The settings as they are on boot.
@@ -1462,6 +1464,22 @@ static void bankMeasureAaDb() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE TEMPO TRACKER.
+//
+// It is here, and not at the top of the file, because it needs the AR's own
+// Butterworth builder (bankButterLowpass, above) and the live settings
+// (arFrameSettings, above) and nothing that comes later. The gate's state
+// (arGateOpen) is LATER in the file, so the gate is passed IN as an argument
+// rather than read from here - the tracker must not depend on a variable that
+// has not been declared yet.
+//
+// It is its own header because it is a self-contained instrument: an onset
+// detection function, a phase-locked comb that estimates the rate, and a PLL
+// that places the beats. Everything it needs is passed in or is above.
+// ---------------------------------------------------------------------------
+#include "ar_tempo.h"
+
 // The bank's calibration: the chain's response and the anti-alias filter's
 // response, both divided out.
 //
@@ -1681,6 +1699,13 @@ static float rtaWidthHz[AR_RTA_TOP_BANDS];   // the measured -3 dB width, Hz
 static float rtaRespMs[AR_RTA_TOP_BANDS];    // the measured 63% response time, ms
 static float rtaTime = 0.0f;                 // its own cost, in TIMING_UNIT_US
 static volatile bool  rtaTopReady = false;
+
+// The tempo tracker's own cost, in TIMING_UNIT_US.
+//
+// It is its own number because it is the one that could grow: the comb
+// sweep scores 341 candidates, spread over eight frames so the cost is
+// flat rather than a spike.
+static float tempoTime = 0.0f;
 
 // The RTA top bank's detector coefficient.
 //
@@ -2505,6 +2530,8 @@ static ArLiveSettings arSettingsBoot() {
   s.trimBand       = 0;
   for (int k = 0; k < AR_MAX_BANDS; k++) s.trimDb[k] = 0.0f;
   s.bankTauMs      = AR_BANK_TAU_DEFAULT_MS;
+  s.tempoEnabled   = true;
+  s.tempoTolMs     = AR_TEMPO_TOL_DEFAULT_MS;
   return s;
 }
 
@@ -4762,6 +4789,15 @@ void arAnalysisTask(void * parameter)
   // asserted against the contract they were built on.
   if (arBootSelfTests) rtaTopSelfTest();
 
+  // The tempo tracker: its coefficients baked and its state cleared.
+  //
+  // It has no self-test of its own yet - the corpus measurement is the
+  // verification, and it is a measurement of the ALGORITHM against real
+  // music rather than of the implementation against a contract. What it does
+  // have is a live readout: /json/ar carries the rate, the score and the
+  // beat's place in the bar, and that is how it is watched.
+  arTempoInit();
+
   // The banks' health, from their own self-tests.
   //
   // A bank that failed its test is not a measurement - its numbers do not
@@ -5193,6 +5229,30 @@ void arAnalysisTask(void * parameter)
       arTrackLevel(arLevelDb);
     }
 
+    // THE TEMPO TRACKER.
+    //
+    // It runs here, after the level and the gate, because the gate is what
+    // says whether there is music at all: a shut gate means a track change or
+    // silence, and the tracker starts again from nothing.
+    //
+    // It reads the SAME samples the banks read - the chain's output, so the
+    // DC blocker and the input LPF are already applied - and it does not
+    // write them. Its filters are transposed direct form II with their own
+    // delay lines, so it cannot disturb the banks.
+    //
+    // The cost is inside the frame's budget and it is reported on its own
+    // row, because it is the number that says whether the tracker is
+    // affordable next to everything else.
+    if (arFrameSettings.tempoEnabled) {
+      const uint64_t tTempo0 = esp_timer_get_time();
+      arTempoProcess(samplesStart, sampleCount, arGateOpen);
+      const uint64_t rTempoUs = esp_timer_get_time() - tTempo0;
+      const float tempoUnits = (float)((rTempoUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
+      tempoTime = (tempoUnits * 3.0f + tempoTime * 7.0f) / 10.0f;
+    } else {
+      tempoTime = 0.0f;
+    }
+
     // timing measurement
     if (start < esp_timer_get_time()) { // filter out overflows
       const uint64_t rFilterUs = esp_timer_get_time() - start;
@@ -5343,6 +5403,25 @@ void arAnalysisTask(void * parameter)
       // lock so the JSON endpoint cannot read a mix of two frames. It is
       // LAST, because everything above is what it copies.
       arPublishFrameSnapshot();
+    }
+
+    // The tempo, published on its own.
+    //
+    // It is OUTSIDE the block above because arPublishFrameSnapshot() takes
+    // the publish lock, and the lock is not recursive: taking it again from
+    // the same task would deadlock.
+    //
+    // The frame it publishes is the tracker's own state, read here by the
+    // analysis task - the only writer of that state - and copied under the
+    // lock by the publisher.
+    {
+      ArTempoFrame tf;
+      tf.bpm          = arTempoBpm();
+      tf.beatProgress = arTempoBeatProgress();
+      tf.score        = arTempoScore();
+      tf.beatInBar    = arTempoBeatInBar();
+      tf.valid        = arTempoValid() ? 1 : 0;
+      arPublishTempo(tf);
     }
 
     probe(dFinal);
@@ -7167,6 +7246,16 @@ class AudioReactive : public Usermod {
       // comes back by itself when the local analysis resumes.
       arSetRtaLive(!disableSoundProcessing);
 
+      // The tempo is a LOCAL measurement for the same reason the thirty-one
+      // bands are: it comes from this board's own analysis of its own input.
+      // A board receiving its sound over the network has no audio to measure
+      // and therefore no tempo, and the tempo that was published before the
+      // network took over is stale.
+      //
+      // The effect that strobes to the beat reads this: ProLink first if it
+      // is there, the estimator second, and NEITHER when neither is live.
+      arSetTempoLive(!disableSoundProcessing);
+
       // The analysis task gates ITSELF on disableSoundProcessing, at the top
       // of its frame. Nothing is stopped from out here any more.
       //
@@ -7395,6 +7484,10 @@ class AudioReactive : public Usermod {
       // lock is NOT recursive, and arResetRtaBands() takes it itself, so this
       // is deliberately outside the section above.
       arResetRtaBands();
+      // The published tempo: cleared for the same reason, and by the same
+      // rule - the reset takes the lock itself, so it is outside the section
+      // above.
+      arResetTempo();
       // The display's reference starts UNSET: the first signal sets it, and
       // the signal then holds it. Nothing is inherited from before.
       //
@@ -7574,6 +7667,48 @@ class AudioReactive : public Usermod {
         // drawn in the same window at the same scale. The key is kept because
         // a script may be reading it, and it is the same number.
         l["rta_range_db"]   = (double)arRefOffsetDb;
+      }
+
+      // ---- the tempo ------------------------------------------------------
+      //
+      // The beat rate, the beat's place in the bar and the progress through
+      // the current beat - the numbers an effect that strobes to the beat
+      // reads.
+      //
+      // "usable" is the same question the RTA view asks: is this a LIVE
+      // measurement? The tempo comes from this board's own analysis of its
+      // own input, so a board receiving its sound over the network has no
+      // tempo at all, and the number that was published before the network
+      // took over is stale.
+      //
+      // "score" is the comb score: the fraction of the onset strength that
+      // sits under the grid's best phase. It is what says whether the
+      // estimate is to be believed - a score below 0.1 means the onsets do not
+      // fit a beat grid and the rate is not published as valid.
+      //
+      // "beat_in_bar" is a LOCAL counter, modulo four, restarted at every
+      // lock. An audio-only estimator cannot know the true downbeat - a
+      // four-on-the-floor kick has no audible one - so it is a convention and
+      // not a measurement.
+      {
+        ArTempoFrame tf;
+        const bool usable = arCopyTempo(&tf);
+        JsonObject t = ar.createNestedObject("tempo");
+        t["usable"]       = usable;
+        t["valid"]        = tf.valid != 0;
+        t["bpm"]          = (double)tf.bpm;
+        t["beat_in_bar"]  = (int)tf.beatInBar;
+        t["beat_progress"] = (double)tf.beatProgress;
+        t["score"]        = (double)tf.score;
+        // The tracker's own settings, so the numbers can be read against the
+        // tolerance that produced them.
+        t["tolerance_ms"] = (double)st.tempoTolMs;
+        t["enabled"]      = st.tempoEnabled;
+        // The band the estimator searches, and the score below which the
+        // estimate is not published as valid.
+        t["bpm_low"]      = (double)AR_TEMPO_BPM_LO;
+        t["bpm_high"]     = (double)AR_TEMPO_BPM_HI;
+        t["min_score"]    = (double)AR_TEMPO_MIN_SCORE;
       }
 
       // ---- the peak ------------------------------------------------------
@@ -7849,6 +7984,7 @@ class AudioReactive : public Usermod {
         t["analysis"]           = (double)(arAnalysisTime * TIMING_UNIT_US);
         t["bank"]          = (double)(bankTime * TIMING_UNIT_US);
         t["rtatopbank"]    = (double)(rtaTime * TIMING_UNIT_US);
+        t["tempo"]         = (double)(tempoTime * TIMING_UNIT_US);
         t["dma_surplus_ms"] = (double)(FRAME_PERIOD_MS - (sampleTime * TIMING_UNIT_US / 1000.0));
         t["frames_total"]   = (unsigned long)arFramesTotal;
         t["frames_overran"] = (unsigned long)arFramesOverran;
@@ -8199,6 +8335,29 @@ class AudioReactive : public Usermod {
           snprintf(lvlBuf, sizeof(lvlBuf), "%s, %+.1f dB over floor",
                    arGateOpen ? "open" : "shut", (double)(arLevelDb - arFloorDb));
           infoArr.add(lvlBuf);
+
+          // The tempo tracker: the rate, the beat in the bar and the score.
+          //
+          // It is brief on purpose - the machine's version of this is the
+          // "tempo" object on /json/ar, and the pane is for reading at a
+          // glance. The beat in the bar is a LOCAL counter, so it says "beat"
+          // and not "downbeat".
+          {
+            ArTempoFrame tf;
+            const bool tempoOk = arCopyTempo(&tf);
+            char tempoBuf[64];
+            if (!tempoOk) {
+              snprintf(tempoBuf, sizeof(tempoBuf), "no estimate");
+            } else if (!tf.valid) {
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, score %.2f, not locked",
+                       (double)tf.bpm, (double)tf.score);
+            } else {
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, score %.2f",
+                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.score);
+            }
+            infoArr = user.createNestedArray(F("Tempo"));
+            infoArr.add(tempoBuf);
+          }
 
           infoArr = user.createNestedArray(F("Display offset (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)arRefOffsetDb);
@@ -8709,6 +8868,22 @@ class AudioReactive : public Usermod {
       // Which sixteen of the thirty-one the sixteen bars show. The running
       // pattern is written, so a save keeps what is running.
       freqScale[F("pattern")]  = (int)arGeqPattern;
+
+      // The tempo tracker.
+      //
+      // "enabled" 1 = the tracker runs, 0 = it does not. It is a 0/1 NUMBER
+      //            and not a boolean, for the same reason "limiter" is: the
+      //            settings page draws a boolean as a checkbox, and
+      //            addDropdown() does nothing on a checkbox.
+      // "tol_ms"  the comb score's tolerance, in ms. How far an onset may
+      //            sit from the grid and still count towards the score. It
+      //            is a TRADE and not a constant - a tighter tolerance makes
+      //            the score pickier about the rate and about nothing else -
+      //            and it is live: the serial 'e'/'E' keys move it, and the
+      //            tracker reads it every frame.
+      JsonObject tempo = top.createNestedObject("tempo");
+      tempo[F("enabled")] = st.tempoEnabled ? 1 : 0;
+      tempo[F("tol_ms")]  = st.tempoTolMs;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -9002,6 +9177,32 @@ class AudioReactive : public Usermod {
         } else {
           configComplete = false;
         }
+      }
+
+      // The tempo tracker's settings.
+      //
+      // Read one at a time and applied in ONE change, like the window's: a
+      // missing key leaves its number alone rather than undoing the keys that
+      // were there.
+      {
+        const ArLiveSettings before = arSettingsSnapshot();
+
+        uint8_t tempoOnRead = before.tempoEnabled ? 1 : 0;
+        const bool haveTempo = arGetNumber(top["tempo"][F("enabled")], tempoOnRead);
+        if (!haveTempo) configComplete = false;   // the key is missing - the config gets rewritten
+
+        float tolRead = before.tempoTolMs;
+        if (arGetNumber(top["tempo"][F("tol_ms")], tolRead)) {
+          if (tolRead < AR_TEMPO_TOL_MIN_MS) tolRead = AR_TEMPO_TOL_MIN_MS;
+          if (tolRead > AR_TEMPO_TOL_MAX_MS) tolRead = AR_TEMPO_TOL_MAX_MS;
+        } else {
+          configComplete = false;
+        }
+
+        arSettingsEdit([haveTempo, tempoOnRead, tolRead](ArLiveSettings& st) {
+          if (haveTempo) st.tempoEnabled = (tempoOnRead != 0);
+          st.tempoTolMs = tolRead;
+        });
       }
 
       // ---- keys that are gone ----

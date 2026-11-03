@@ -599,6 +599,7 @@ void audioReactiveSelfTest();
 void audioReactiveRtaPlot();
 void audioReactiveResetAutoRange();
 void audioReactiveRtaCommand(char c);
+void audioReactiveTempoCommand(char c);
 #endif
 
 // User Interface CONFIG

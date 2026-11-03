@@ -655,6 +655,24 @@ static uint8_t bpmStrobeFlashesPerBarFromSlider(uint8_t v) {
 }
 
 uint16_t mode_bpm_strobe(void) {
+  // ---- the beat source -------------------------------------------------
+  //
+  // TWO sources, and the order is the design: ProLink first if it is there,
+  // the estimator second, and NEITHER when neither is live.
+  //
+  // The ProLink usermod gets the tempo from a Pioneer deck's network
+  // packets: it is a master clock, and it is exact. The AudioReactive
+  // estimator gets it from the sound: it is a measurement, and it is only as
+  // good as the music. So when a deck is connected the deck wins - and when
+  // it is not, the estimate is better than nothing.
+  //
+  // What is NOT allowed is a fabricated rate. If neither source is live the
+  // effect is inert, because the user wants the strobe locked to real music.
+  float    srcBpm      = 0.0f;      // beats per minute
+  uint8_t  srcBeat     = 0;         // 1..4, 1 = downbeat; 0 = unknown
+  float    srcProgress = 0.0f;      // 0..1 through the current beat
+  bool     srcLive     = false;
+
   #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // ProLink v3 globals — file-scope volatile in usermods_list.cpp.
   // This is the canonical read pattern for future ProLink-aware effects.
@@ -663,11 +681,36 @@ uint16_t mode_bpm_strobe(void) {
   extern volatile float   prolink_beat_progress_public;    // 0..1 within the current beat — sample-accurate (resets on each beat packet)
   extern volatile bool    prolink_connected_public;        // true while following a master CDJ
 
-  // No live ProLink data → effect is intentionally inert. Don't fabricate
-  // a default BPM — the user wants the strobe locked to real music. The
-  // beatInMeasure sentinel 0 ("no packet yet, see #BEAT at FX.cpp:7412")
+  // The beatInMeasure sentinel 0 ("no packet yet, see #BEAT at FX.cpp:7412")
   // falls through here too, so we don't strobe before the first CDJ hello.
-  if (!prolink_connected_public || prolink_bpm_public <= 0.0f || prolink_beat_public == 0u) {
+  if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
+    srcBpm      = prolink_bpm_public;
+    srcBeat     = prolink_beat_public;
+    srcProgress = prolink_beat_progress_public;
+    srcLive     = true;
+  }
+  #endif
+
+  #if defined(USERMOD_AUDIOREACTIVE)
+  // The estimator, when ProLink has not answered.
+  //
+  // arCopyTempo() returns false when the published frame is not a LIVE
+  // measurement - which is what a board receiving its sound over the network
+  // publishes, because it has no audio to measure. The effect is then inert
+  // rather than strobing to a stale number.
+  if (!srcLive) {
+    ArTempoFrame tf;
+    if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
+        tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+      srcBpm      = tf.bpm;
+      srcBeat     = tf.beatInBar;
+      srcProgress = tf.beatProgress;
+      srcLive     = true;
+    }
+  }
+  #endif
+
+  if (!srcLive) {
     SEGMENT.fill(SEGCOLOR(1));                             // off-color
     SEGENV.aux0 = 0;                                       // reset beat tracking so the
     SEGENV.aux1 = 0;                                       // counter restarts cleanly on reconnect
@@ -680,18 +723,15 @@ uint16_t mode_bpm_strobe(void) {
   const bool     downbeatColor  = SEGMENT.check1;                      // SEGCOLOR(2) on beat 1
 
   // ---- Beat classification & phase ----
-  // The usermod publishes `prolink_beat_public` (1..4 beat-in-measure, 1 =
-  // downbeat — same convention as the `#BEAT` macro at FX.cpp:7471) and
-  // `prolink_beat_progress_public` (0..1 within the current beat, derived
-  // from `lastBeatTime` at usermod_v3_pioneer_prolink.h:1716). Both are
-  // updated in the usermod's main loop whenever the corresponding packet
-  // arrives, so they're realtime — no status-packet lag to worry about.
+  // The source publishes the beat-in-measure (1..4, 1 = downbeat — the same
+  // convention as the `#BEAT` macro at FX.cpp:7471) and the progress through
+  // the current beat (0..1).
   //
   // `barBeat - 1` puts beat 1 at position 0, beat 2 at 1, ..., beat 4 at 3.
   // Adding beatProg (0..1) gives a continuous bar position in [0, 4) that
   // we map to the requested number of flashes per bar.
-  const uint8_t  barBeat   = prolink_beat_public;                       // 1..4, 1 = downbeat (usermod convention)
-  const float    beatProg  = prolink_beat_progress_public;
+  const uint8_t  barBeat   = srcBeat;                                // 1..4, 1 = downbeat
+  const float    beatProg  = srcProgress;
   const float    barPos    = (float)(barBeat - 1u) + beatProg;          // [0, 4)
   const float    subBarPos = barPos * ((float)flashesPerBar / 4.0f);     // [0, flashesPerBar)
   const uint16_t tickIdx   = (uint16_t)subBarPos;                        // which subinterval we're in
@@ -708,7 +748,7 @@ uint16_t mode_bpm_strobe(void) {
   // and the dark gap is also 50%. This keeps "1/bar" strobes from
   // spanning half the bar (2 beats) with a single flash, which is more
   // "fade" than "strobe".
-  float    bpm            = prolink_bpm_public;
+  float    bpm            = srcBpm;
   if (bpm < 60.0f) bpm = 60.0f;                                       // sane floor, same as prior impl
   const float subintervalMs = (60000.0f * 4.0f) / (bpm * (float)flashesPerBar);
   const float minFlashMs   = 50.0f;                                   // ~3 frames at 30 fps
@@ -736,7 +776,7 @@ uint16_t mode_bpm_strobe(void) {
   }
 
   uint32_t peakColor;
-  DEBUG_PRINTF("prolink_beat_public: %d prolink_beat_progress_public: %0.3f tickIdx: %d subBarPos: %0.3f attackDur: %0.3f decayDur: %0.3f withinTick: %0.3f downbeatColor: %d intensity: %0.3f flashesPerBar: %d ", barBeat, prolink_beat_progress_public, tickIdx, subBarPos, attackDur, decayDur, withinTick, downbeatColor, intensity, flashesPerBar);
+  DEBUG_PRINTF("srcBeat: %d srcProgress: %0.3f tickIdx: %d subBarPos: %0.3f attackDur: %0.3f decayDur: %0.3f withinTick: %0.3f downbeatColor: %d intensity: %0.3f flashesPerBar: %d ", barBeat, beatProg, tickIdx, subBarPos, attackDur, decayDur, withinTick, downbeatColor, intensity, flashesPerBar);
   if (intensity == 0.0f) {
     peakColor = SEGCOLOR(1);
     DEBUG_PRINTLN("Color Picked: OFF");
@@ -758,15 +798,9 @@ uint16_t mode_bpm_strobe(void) {
     SEGMENT.setPixelColor(i, fillColor);
   }
   return FRAMETIME;
-
-  #else
-  // ProLink usermod not compiled in. The effect has nothing to lock to.
-  SEGMENT.fill(SEGCOLOR(1));
-  return FRAMETIME;
-  #endif
 }
 
-static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Pro Link Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat;On,Off,Downbeat;;01;ix=255,c1=255,o1=0";
+static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat;On,Off,Downbeat;;01;ix=255,c1=255,o1=0";
 
 
 /*
@@ -14578,7 +14612,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_GEQPPA, &mode_GEQPPA, _data_FX_MODE_GEQPPA); // audio
   addEffect(FX_MODE_PPA_IMAGEPLAYER, &mode_PPA_IMAGEPLAYER, _data_FX_MODE_PPA_IMAGEPLAYER); // audio
   addEffect(FX_MODE_PRO_LINK, &mode_PRO_LINK, _data_FX_MODE_PRO_LINK); // audio
-  addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // not PPA yet but needs PRO_LINK 
+  addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // beats: ProLink if a deck is connected, the AR's estimator otherwise
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   #endif

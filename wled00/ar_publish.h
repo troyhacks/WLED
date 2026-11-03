@@ -86,4 +86,53 @@ void arCopyRtaBandsLocked(uint8_t* dest);
 // told there is nothing to read.
 void arResetRtaBands();
 
+// The tempo frame: the beat rate, the beat's place in the bar, the progress
+// through the current beat and the score.
+//
+// It is published the same way as the RTA bands - under the ONE lock - so a
+// reader never sees a BPM from one frame and a beat index from another. A
+// strobe that flashes on the beat needs both to be from the same instant.
+//
+// The AudioReactive usermod writes it, from its own analysis of its own
+// input. The effect that strobes to the beat reads it.
+struct ArTempoFrame {
+  float    bpm;             // beats per minute; 0 when there is no estimate
+  float    beatProgress;    // 0..1 through the current beat
+  float    score;           // the comb score, 0..1: how well the onsets fit the grid
+  uint8_t  beatInBar;       // 1..4; 1 is the downbeat of the LOCAL bar counter
+  uint8_t  valid;           // 1 when the estimate is a real measurement
+};
+
+// Publish one whole tempo frame.
+void arPublishTempo(const ArTempoFrame& t);
+
+// Copy the published tempo frame into dest. Returns whether the frame may be
+// USED - false if nothing has been published yet, or if the frame is not a
+// live measurement (see arSetTempoLive below). When it returns false, dest
+// is zeroed.
+bool arCopyTempo(ArTempoFrame* dest);
+
+// May the published tempo frame be used? The same answer arCopyTempo gives,
+// without the copy.
+bool arTempoUsable(void);
+
+// Is the published tempo frame a LIVE measurement?
+//
+// The tempo is a LOCAL measurement: it comes from this board's own analysis
+// of its own input. A board that is RECEIVING the sound over the network
+// runs no local analysis, so it has no tempo at all - and the frame that was
+// published before the network took over is stale. The same holds for a
+// realtime input (E131, ArtNet).
+//
+// The AudioReactive usermod sets this; it is the one that knows whether this
+// board is measuring its own input.
+void arSetTempoLive(bool live);
+
+// The same, for a caller that ALREADY holds the publish lock. Taking the
+// lock again would deadlock.
+void arCopyTempoLocked(ArTempoFrame* dest);
+
+// Forget the published tempo frame.
+void arResetTempo();
+
 #endif // WLED_AR_PUBLISH_H
