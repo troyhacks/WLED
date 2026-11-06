@@ -299,6 +299,54 @@ static constexpr float AR_TEMPO_BPM_HI = 175.0f;
 static constexpr float AR_TEMPO_CAND_STEP  = 0.25f;
 static constexpr int   AR_TEMPO_CAND_COUNT = (int)((AR_TEMPO_BPM_HI - AR_TEMPO_BPM_LO) / AR_TEMPO_CAND_STEP) + 1;  // 341
 
+// ---------------------------------------------------------------------------
+// THE LATTICE.
+//
+// The candidate grid is a QUARTER of a BPM wide, so a tracker that has
+// settled on 128.0 has 127.75 and 128.25 to wobble to - and it wobbles,
+// because the comb's evidence for those two is nearly the same as for
+// 128.0.  That is the "it locks on 128.0 and then reads 127.8, then 128.2"
+// wander, and it is a property of the GRID, not of the music.
+//
+// The lattice throws the quarter-BPM points away: only multiples of 0.5 BPM
+// are candidates at all.  A tempo of 128.0 then has nothing to wobble to,
+// and a tempo of 122.5 - a real one - is still a candidate, because a half
+// is on the lattice.
+//
+// The whole-number PREFERENCE is a flat penalty on the HALF integers, so
+// that 128.0 beats 127.5 in a near-tie and 122.5 does not lose to 122.0
+// unless the evidence says so.  It is flat over the whole band - no
+// centre, no attractor - so, unlike the prior, it is safe inside the
+// narrow search too.
+//
+// MEASURED on the corpus (23 windows, the firmware's own band and comb):
+// the settled rate's wander fell from a median of 0.067 BPM to 0.000, the
+// fraction of the settled rate sitting on a whole BPM rose from 81 % to
+// 97 %, and the hit rate against the ground truth's kick onsets held
+// (0.718 median, 82.6 % of the windows at 0.5 or better).
+//
+// The SIZE OF THE BONUS is measured on a synthetic click track, because
+// the corpus has no half tempos in it and the bonus's whole job is to
+// decide what happens to one:
+//
+//   bonus   122.5 BPM track    126.5 BPM track
+//   0.00    122.50  correct      126.50  correct
+//   0.01    122.50  correct      126.45  correct
+//   0.02    122.61  dragged      126.00  WRONG - the whole won
+//   0.04    122.68  dragged      126.00  WRONG - the whole won
+//
+// So 0.01 is the LAST bonus that keeps a real half, and it is the shipped
+// one.  Troy saw a set running at 122.5 for a while and confirmed it was
+// 122.5, not an error: the lattice has to be able to hold that.
+// ---------------------------------------------------------------------------
+static constexpr float AR_TEMPO_QUANT_BONUS = 0.01f;   // the half integers' penalty, in score units
+
+// The lattice's default mode: 2 = the half-BPM lattice with the whole
+// numbers preferred.  It is a live setting ("quant" in the tempo object),
+// so it can be turned off from the serial console's config or the settings
+// page without a rebuild.
+static constexpr uint8_t AR_TEMPO_QUANT_DEFAULT = 2;
+
 // The phase histogram's bins. 64 is enough: the kernel's width in PHASE is
 // the same for every rate, so the bin count changes the histogram's
 // resolution and not the score.  Measured: 64 and 256 give the same score.
@@ -426,6 +474,27 @@ static constexpr int AR_TEMPO_FULL_EVERY = 32;
 // identical), because at the moment the narrow search collapses the comb's
 // twelve-second window is still full of the OLD music: the far rate cannot
 // win yet, so there is nothing for the veto to refuse.  One rule, then.
+//
+// MEASURED, on a click track that changes tempo half way through (the
+// offline twin, the firmware's own band and comb):
+//
+//   the change                 the re-lock
+//   140 -> 120                   13.1 s
+//   128 -> 124                   11.0 s
+//   128 -> 130                   10.2 s
+//   124 -> 128                    8.1 s
+//
+// The size of the change does not matter much - a two BPM change takes as
+// long as a twenty BPM one - and the number is suspiciously close to the
+// comb's TWELVE SECOND WINDOW.  That is what it is: after the music
+// changes, the window is still full of the OLD music, which still lines up
+// with the OLD rate, so the old rate keeps winning the veto until the
+// window has flushed.  The confusion time is the comb's memory.
+//
+// Lowering the margin does NOT help: at 0.45 the corpus is unchanged (the
+// same-music far/local ratio almost never reaches 1.45), and at 0.30 the
+// wander comes back - the p90 went from 0.124 BPM to 0.668 and the jumps
+// from 46 to 93.  The margin is the price of the wander, and it stays.
 static constexpr float AR_TEMPO_NET_MARGIN = 0.70f;
 
 // How much history the comb score looks at: 12 s.
@@ -749,6 +818,10 @@ struct ArTempoState {
   uint16_t sweepFirst;                    // the first candidate's index
   uint16_t sweepN;                        // how many candidates this search has
   uint16_t sweepPerFrame;                 // how many are scored in one frame
+  uint8_t  sweepStride;                   // 1 = every candidate, 2 = the lattice (every other one)
+  uint8_t  quantMode;                     // 0 = the plain grid, 1 = the lattice, 2 = the lattice + the whole numbers
+  float    sweepBonus;                    // the whole-number penalty, in score units
+  uint16_t sweepNarrowSpan;               // the narrow window's span, in candidate indices
   uint32_t lastSweepFrame;                // when the last search started
   uint32_t lastFullFrame;                 // ... and the last WHOLE-BAND one
   float    sweepNow;                      // the frame the sweep STARTED at
@@ -765,6 +838,7 @@ struct ArTempoState {
   uint16_t sweepNarrowCount;              // ... and how many it has
   float    sweepNarrowValue;
   float    sweepNarrowScore;
+  float    sweepNarrowPick;               // the fight's value: the score less the lattice preference
   float    sweepNarrowBpm;
   float    sweepNarrowPhase;
   uint16_t sweepNarrowIdx;                // ... and which candidate that was
@@ -776,6 +850,7 @@ struct ArTempoState {
   // was not worth mentioning, and 125.00 became an attractor.
   float    sweepFarScore;
   float    sweepFarValue;
+  float    sweepFarPick;                  // the fight's value, as above
   float    sweepFarBpm;
   float    sweepFarPhase;
   uint16_t sweepFarIdx;                   // ... and which candidate that was
@@ -1147,6 +1222,8 @@ static void arTempoReset(void) {
   arTempo.sweepFirst  = 0;
   arTempo.sweepN      = AR_TEMPO_CAND_COUNT;
   arTempo.sweepPerFrame = AR_TEMPO_CAND_PER_FRAME;
+  arTempo.sweepStride = 1;
+  arTempo.sweepNarrowSpan = 0;
   arTempo.lastSweepFrame = 0;
   arTempo.lastFullFrame = 0;
   arTempo.sweepActive = false;
@@ -1162,10 +1239,12 @@ static void arTempoReset(void) {
   arTempo.sweepNarrowCount = 0;
   arTempo.sweepNarrowValue = -1e9f;
   arTempo.sweepNarrowScore = -1e9f;
+  arTempo.sweepNarrowPick  = -1e9f;
   arTempo.sweepNarrowBpm   = 0.0f;
   arTempo.sweepNarrowPhase = 0.0f;
   arTempo.sweepNarrowIdx   = 0;
   arTempo.sweepFarScore = -1e9f;
+  arTempo.sweepFarPick  = -1e9f;
   arTempo.sweepFarValue = -1e9f;
   arTempo.sweepFarBpm   = 0.0f;
   arTempo.sweepFarPhase = 0.0f;
@@ -1320,6 +1399,35 @@ static void arTempoNarrowWindow(float bpm, int *first, int *count) {
 }
 
 // ---------------------------------------------------------------------------
+// The narrow window ON THE LATTICE.
+//
+// The same span - AR_TEMPO_NARROW_BPM either side - with half as many
+// candidates in it: the lattice's points are every OTHER index of the
+// 0.25 BPM grid.
+//
+// The CENTRE is snapped to the lattice, so the window is the same window
+// every time: it only moves when the rate crosses a half of a BPM, which
+// is half as often as it used to.
+// ---------------------------------------------------------------------------
+static void arTempoNarrowWindowLattice(float bpm, int *first, int *count) {
+  const int half = (int)lroundf(AR_TEMPO_NARROW_BPM / (AR_TEMPO_CAND_STEP * 2.0f));   // four lattice steps
+  int centre = ((int)lroundf((bpm - AR_TEMPO_BPM_LO) / (AR_TEMPO_CAND_STEP * 2.0f))) * 2;  // an EVEN index
+  int f = centre - half * 2;
+  int c = 2 * half + 1;
+  if (f < 0) {                                     // the window ran off the bottom
+    c -= ((-f + 1) / 2);                           // ... and lost that many lattice points
+    f = 0;
+  }
+  const int last = f + (c - 1) * 2;
+  if (last > AR_TEMPO_CAND_COUNT - 1) {            // ... or off the top
+    c = (AR_TEMPO_CAND_COUNT - 1 - f) / 2 + 1;
+  }
+  if (c < 1) c = 1;
+  *first = f;
+  *count = c;
+}
+
+// ---------------------------------------------------------------------------
 // The sweep.
 //
 // Two searches, and they cost very different amounts.
@@ -1357,11 +1465,18 @@ static void arTempoSweepStart(void) {
   // The candidate set.  Locked, the search looks around the rate the grid
   // believes; unlocked, it looks at the whole band, because that is the
   // search that FINDS a rate in the first place.
+  //
+  // On the LATTICE the candidates are every other index of the 0.25 BPM
+  // grid - the multiples of half a BPM - so the stride is two and the
+  // whole band is 171 candidates instead of 341.
+  const bool lattice = (arTempo.quantMode != 0);
+  const int stride = lattice ? 2 : 1;
   int first = 0;
-  int count = AR_TEMPO_CAND_COUNT;
+  int count = lattice ? ((AR_TEMPO_CAND_COUNT + 1) / 2) : AR_TEMPO_CAND_COUNT;
   bool narrow = false;
   if (arTempo.locked && !arTempo.needFullSearch && arTempo.bpm > 0.0f) {
-    arTempoNarrowWindow(arTempo.bpm, &first, &count);
+    if (lattice) arTempoNarrowWindowLattice(arTempo.bpm, &first, &count);
+    else         arTempoNarrowWindow(arTempo.bpm, &first, &count);
     narrow = true;
   }
   arTempo.needFullSearch = false;
@@ -1378,21 +1493,26 @@ static void arTempoSweepStart(void) {
   arTempo.sweepHasNarrow   = false;
   arTempo.sweepNarrowFirst = 0;
   arTempo.sweepNarrowCount = 0;
+  arTempo.sweepNarrowSpan  = 0;
   arTempo.sweepNarrowValue = -1e9f;
   arTempo.sweepNarrowScore = -1e9f;
+  arTempo.sweepNarrowPick  = -1e9f;
   arTempo.sweepNarrowBpm   = 0.0f;
   arTempo.sweepNarrowPhase = 0.0f;
   arTempo.sweepNarrowIdx   = 0;
   arTempo.sweepFarScore = -1e9f;
   arTempo.sweepFarValue = -1e9f;
+  arTempo.sweepFarPick  = -1e9f;
   arTempo.sweepFarBpm   = 0.0f;
   arTempo.sweepFarPhase = 0.0f;
   arTempo.sweepFarIdx   = 0;
   if (!narrow && arTempo.locked && arTempo.bpm > 0.0f) {
     int f = 0, c = 0;
-    arTempoNarrowWindow(arTempo.bpm, &f, &c);
+    if (lattice) arTempoNarrowWindowLattice(arTempo.bpm, &f, &c);
+    else         arTempoNarrowWindow(arTempo.bpm, &f, &c);
     arTempo.sweepNarrowFirst = (uint16_t)f;
     arTempo.sweepNarrowCount = (uint16_t)c;
+    arTempo.sweepNarrowSpan  = (uint16_t)((c - 1) * stride + 1);
     arTempo.sweepHasNarrow   = true;
   }
 
@@ -1400,6 +1520,7 @@ static void arTempoSweepStart(void) {
   arTempo.sweepIndex     = 0;
   arTempo.sweepFirst     = (uint16_t)first;
   arTempo.sweepN         = (uint16_t)count;
+  arTempo.sweepStride    = (uint8_t)stride;
   arTempo.sweepPerFrame  = (count > AR_TEMPO_CAND_PER_FRAME)
                          ? (uint16_t)AR_TEMPO_CAND_PER_FRAME : (uint16_t)count;
   arTempo.lastSweepFrame = arTempo.frameIndex;
@@ -1419,7 +1540,7 @@ static void arTempoSweepStep(void) {
   const int first = arTempo.sweepFirst;
   const int total = arTempo.sweepN;
   for (int i = 0; i < arTempo.sweepPerFrame && arTempo.sweepIndex < total; i++) {
-    const int idx = first + arTempo.sweepIndex++;
+    const int idx = first + (int)arTempo.sweepStride * arTempo.sweepIndex++;
     const float bpm = AR_TEMPO_BPM_LO + (float)idx * AR_TEMPO_CAND_STEP;
     float phase = 0.0f;
     const float score = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
@@ -1448,8 +1569,18 @@ static void arTempoSweepStep(void) {
     // The whole-band search is where the prior belongs: that is the search
     // that has to choose a rate out of nothing, and the prior is what keeps
     // it off the four-thirds harmonic, whose score is only a little better.
-    const float value = arTempo.sweepWasNarrow ? score
-                                               : (score - arTempoPriorPen[idx]);
+    // The whole-number preference: a flat penalty on the HALF integers, so
+    // that 128.00 beats 127.50 in a near-tie.  It is flat over the whole
+    // band - no centre, no attractor - so, unlike the prior, it votes in
+    // the narrow search too, and in the veto's fight.
+    const float bonus = ((arTempo.quantMode >= 2) && (idx & 3) == 2)
+                      ? arTempo.sweepBonus : 0.0f;
+    // The FIGHT's value: the evidence, less the lattice preference.  The
+    // prior is NOT in it - the prior is a tie-breaker and it must not be
+    // allowed to choose which far rate gets to argue with the local one.
+    const float pick = score - bonus;
+    const float value = arTempo.sweepWasNarrow ? pick
+                                               : (pick - arTempoPriorPen[idx]);
     if (value > arTempo.sweepBestValue) {
       arTempo.sweepBestValue = value;
       arTempo.sweepBestScore = score;
@@ -1469,9 +1600,10 @@ static void arTempoSweepStep(void) {
     // the first of those is evidence.
     const bool inWindow = arTempo.sweepHasNarrow
         && idx >= (int)arTempo.sweepNarrowFirst
-        && idx < (int)arTempo.sweepNarrowFirst + (int)arTempo.sweepNarrowCount;
+        && idx < (int)arTempo.sweepNarrowFirst + (int)arTempo.sweepNarrowSpan;
     if (inWindow) {
-      if (score > arTempo.sweepNarrowScore) {
+      if (pick > arTempo.sweepNarrowPick) {
+        arTempo.sweepNarrowPick  = pick;
         arTempo.sweepNarrowScore = score;
         arTempo.sweepNarrowValue = value;
         arTempo.sweepNarrowBpm   = bpm;
@@ -1485,7 +1617,8 @@ static void arTempoSweepStep(void) {
       // a tie-breaker that also gets to choose the opponent is not a
       // tie-breaker: it chose 125.00's opponent every time, and the grid
       // could never be argued out of 125.00.
-      if (score > arTempo.sweepFarScore) {
+      if (pick > arTempo.sweepFarPick) {
+        arTempo.sweepFarPick   = pick;
         arTempo.sweepFarScore = score;
         arTempo.sweepFarValue = value;
         arTempo.sweepFarBpm   = bpm;
@@ -1997,6 +2130,12 @@ static void arTempoProLinkReference(void) {
 // ---------------------------------------------------------------------------
 static void arTempoProcess(const float *samples, int n, bool gateOpen) {
   if (!arTempo.init) return;
+
+  // The LATTICE's mode is a live setting, read every frame like the
+  // tolerance is: 0 = the plain quarter-BPM grid, 1 = the half-BPM
+  // lattice, 2 = the lattice with the whole numbers preferred.
+  arTempo.quantMode   = arFrameSettings.tempoQuant;
+  arTempo.sweepBonus  = AR_TEMPO_QUANT_BONUS;
 
   // The re-lock request, applied here because the grid belongs to this task.
   if (arTempoRelockRequested.exchange(false, std::memory_order_relaxed)) {

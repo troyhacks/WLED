@@ -873,6 +873,7 @@ struct ArLiveSettings {
   float   bankTauMs;             // the bank's detector time constant
   bool    tempoEnabled;          // the tempo tracker runs?
   float   tempoTolMs;            // the comb score's tolerance, ms
+  uint8_t tempoQuant;            // the candidate lattice: 0 = a quarter BPM, 1 = a half BPM, 2 = half BPM, whole preferred
 };
 
 // The settings as they are on boot.
@@ -2538,6 +2539,7 @@ static ArLiveSettings arSettingsBoot() {
   s.bankTauMs      = AR_BANK_TAU_DEFAULT_MS;
   s.tempoEnabled   = true;
   s.tempoTolMs     = AR_TEMPO_TOL_DEFAULT_MS;
+  s.tempoQuant     = AR_TEMPO_QUANT_DEFAULT;
   return s;
 }
 
@@ -7742,6 +7744,11 @@ class AudioReactive : public Usermod {
         // tolerance that produced them.
         t["tolerance_ms"] = (double)st.tempoTolMs;
         t["enabled"]      = st.tempoEnabled;
+        // The candidate lattice: 0 = a quarter BPM, 1 = a half BPM, 2 = a
+        // half BPM with the whole numbers preferred.  It is published so the
+        // rate can be read against the grid that produced it - and so the
+        // mode can be changed and seen to change.
+        t["quant"]        = (int)st.tempoQuant;
         // The band the estimator searches, and the score below which the
         // estimate is not published as valid.
         t["bpm_low"]      = (double)AR_TEMPO_BPM_LO;
@@ -8980,6 +8987,13 @@ class AudioReactive : public Usermod {
       JsonObject tempo = top.createNestedObject("tempo");
       tempo[F("enabled")] = st.tempoEnabled ? 1 : 0;
       tempo[F("tol_ms")]  = st.tempoTolMs;
+      // "quant"   the candidate LATTICE: 0 = a quarter of a BPM (the plain
+      //            grid, which wobbles by a quarter of a BPM around a whole
+      //            number), 1 = a half of a BPM (the lattice: a tempo of
+      //            128.00 has nothing to wobble to, and a tempo of 122.5
+      //            is still a candidate), 2 = the lattice with the WHOLE
+      //            numbers preferred over the halves.
+      tempo[F("quant")]   = st.tempoQuant;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -9295,9 +9309,18 @@ class AudioReactive : public Usermod {
           configComplete = false;
         }
 
-        arSettingsEdit([haveTempo, tempoOnRead, tolRead](ArLiveSettings& st) {
+        // The candidate lattice.  It is a NUMBER and not a boolean for the
+        // same reason "enabled" is: the settings page draws a boolean as a
+        // checkbox, and addDropdown() does nothing on a checkbox.
+        uint8_t quantRead = before.tempoQuant;
+        const bool haveQuant = arGetRangedNumber(top["tempo"][F("quant")],
+                                                 quantRead, 0, 2);
+        if (!haveQuant) configComplete = false;   // the key is missing - the config gets rewritten
+
+        arSettingsEdit([haveTempo, tempoOnRead, tolRead, haveQuant, quantRead](ArLiveSettings& st) {
           if (haveTempo) st.tempoEnabled = (tempoOnRead != 0);
           st.tempoTolMs = tolRead;
+          if (haveQuant) st.tempoQuant = quantRead;
         });
       }
 

@@ -260,6 +260,25 @@ class Tracker(object):
         # that is the search that has to choose a rate from nothing.
         self.prior_in_narrow = False
 
+        # THE LATTICE.  A candidate grid of 0.25 BPM has three points in
+        # every whole BPM, so a tracker sitting on 128.0 has 127.75 and
+        # 128.25 to wobble to - and it wobbles, because the comb's evidence
+        # for those two is nearly the same as for 128.0.  That is the
+        # 127.8 / 128.2 wander, and it is a property of the GRID, not of
+        # the music.
+        #
+        # The lattice throws the quarter-BPM points away: only multiples of
+        # 0.5 BPM are candidates at all.  A tempo of 128.0 then has nothing
+        # to wobble to, and a tempo of 122.5 - a real one - is still a
+        # candidate, because a half is on the lattice.
+        #
+        # `whole_bonus` is how much a HALF-integer candidate is penalised
+        # against a whole one.  It is a flat penalty over the whole band -
+        # no centre, no attractor - so unlike the prior it is safe to
+        # apply inside the narrow search too.
+        self.quant = 0                 # 0 = off, 1 = the half-BPM lattice
+        self.whole_bonus = 0.0         # the penalty on a half-integer
+
         # The knobs the cost experiment turns. The defaults are the C++'s.
         self.delta = PEAK_DELTA
         self.floor = PEAK_FLOOR
@@ -291,6 +310,7 @@ class Tracker(object):
         # keeping `lastFullFrame` separate.
         self.last_full_frame = -1000
         self.sweep_bpms = None
+        self.sweep_gidx = None
         self.sweep_best_index = 0
         self.need_full = False
         self.sweep_clipped_lo = False
@@ -773,11 +793,17 @@ class Tracker(object):
             # rounded to the step - so the narrow window is a set of whole
             # candidates and not a window with a fractional edge.
             f, c = narrow_window(self.bpm, self.narrow_bpm)
-            bpms = BPM_LO + np.arange(f, f + c) * self.cand_step
+            gidx = np.arange(f, f + c)
         else:
             self.sweep_clipped_lo = False
             self.sweep_clipped_hi = False
-            bpms = BPM_LO + np.arange(self.cand_count) * self.cand_step
+            gidx = np.arange(self.cand_count)
+        # THE LATTICE: keep only the candidates on the half-BPM grid.  The
+        # window is centred, so the lattice inside it is symmetric too.
+        if self.quant:
+            gidx = gidx[(gidx % 2) == 0]
+        bpms = BPM_LO + gidx * self.cand_step
+        self.sweep_gidx = gidx
         self.sweep_bpms = bpms
         # All the candidates, scored at once from the snapshot. The C++ scores
         # 44 a frame so the cost is flat; the RESULT is the same set of
@@ -797,10 +823,24 @@ class Tracker(object):
                 else:
                     pen = np.zeros(len(bpms))
             else:
-                pen = self.prior
+                # The prior is indexed by the CANDIDATE INDEX, so the
+                # lattice has to index it too.
+                pen = self.prior[self.sweep_gidx]
             scores, phases = self.comb_scores_all(self.sweep_frames,
                                                   self.sweep_str, bpms)
-            values = scores - pen
+            # The whole-number preference: a flat penalty on the HALF
+            # integers, so a whole BPM wins a near-tie against 127.5 and
+            # 122.5 is not punished at all.
+            wpen = 0.0
+            if self.quant and self.whole_bonus:
+                wpen = np.where((self.sweep_gidx % 4) == 2,
+                                self.whole_bonus, 0.0)
+            # The FIGHT's value: the evidence, less the lattice
+            # preference.  The prior is NOT in it - the prior is a
+            # tie-breaker and it must not choose which far rate gets to
+            # argue with the local one.
+            pick = scores - wpen
+            values = pick - pen
             j = int(np.argmax(values))
             # THE VETO.  A whole-band search while the grid is running has
             # to find the best rate INSIDE the narrow window AND the best
@@ -815,11 +855,12 @@ class Tracker(object):
                 f, c = narrow_window(self.bpm, self.narrow_bpm)
                 self.sweep_narrow_first = f
                 self.sweep_narrow_count = c
-                idx = np.arange(f, f + c)
+                idx = np.where((self.sweep_gidx >= f)
+                               & (self.sweep_gidx < f + c))[0]
                 # The local reference is the best EVIDENCE in the window -
                 # the raw score - and not the best value.  The prior is a
                 # tie-breaker and it stays out of this fight.
-                jn = int(idx[np.argmax(scores[idx])])
+                jn = int(idx[np.argmax(pick[idx])])
                 self.sweep_narrow_score = float(scores[jn])
                 self.sweep_narrow_bpm = float(bpms[jn])
                 self.sweep_narrow_phase = float(phases[jn])
@@ -832,7 +873,7 @@ class Tracker(object):
                 outside[idx] = False
                 jf = -1
                 if outside.any():
-                    jf = int(np.argmax(np.where(outside, scores, -1.0)))
+                    jf = int(np.argmax(np.where(outside, pick, -1.0)))
                     self.sweep_far_score = float(scores[jf])
                     self.sweep_far_bpm = float(bpms[jf])
                     self.sweep_far_phase = float(phases[jf])
