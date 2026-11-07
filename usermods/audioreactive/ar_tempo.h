@@ -888,6 +888,7 @@ struct ArTempoState {
   float    downbeatT;                     // the profile's t-score
   float    measureT;
   bool     downbeatKnown;                 // the score is above the threshold
+  bool     downbeatManual;                // ... or the USER set it
   bool     measureKnown;
   uint32_t downbeatEvalIndex;             // the beat the profiles were scored at
   uint32_t downbeatApplyAt;               // the beat the numbering shifts at
@@ -924,6 +925,24 @@ static float arTempoPriorPen[AR_TEMPO_CAND_COUNT];
 // serial console is not it. The flag is applied at the top of the next
 // frame - the same pattern as the auto-range's reset.
 static std::atomic<bool> arTempoRelockRequested{false};
+
+// THE DOWNBEAT IS THE USER'S TO SET.
+//
+// The sound does not say where the bar starts.  The bar profile's t-score
+// sat ON its null in forty-three per cent of sixty windows of real music -
+// chance - so the measured downbeat is not a measurement worth acting on.
+//
+// But the bar's NUMBERING does not have to come from the music: the person
+// standing at the board knows where the downbeat is, because they are
+// looking at the deck.  So they can SAY it: "the beat that is sounding now
+// is beat one".  From then on the estimator counts 1, 2, 3, 4 with the
+// grid's own beats, and the number the effect shows is a real bar position
+// and not a convention.
+//
+// Like the re-lock, this is a REQUEST: the grid belongs to the analysis
+// task, and the serial console and the web UI are not it.  0 = nothing,
+// 1 = set the downbeat at the next frame, 2 = clear it.
+static std::atomic<uint8_t> arTempoDownbeatRequest{0};
 
 // ---------------------------------------------------------------------------
 // The filters.
@@ -1275,6 +1294,7 @@ static void arTempoReset(void) {
   arTempo.downbeatT    = 0.0f;
   arTempo.measureT     = 0.0f;
   arTempo.downbeatKnown = false;
+  arTempo.downbeatManual = false;
   arTempo.measureKnown  = false;
   arTempo.downbeatEvalIndex = 0;
   arTempo.downbeatApplyAt = 0;
@@ -1319,6 +1339,13 @@ static void arTempoRequestRelock(void) {
   arTempoRelockRequested.store(true, std::memory_order_relaxed);
 }
 
+// Ask for the downbeat to be set - the beat that is sounding now is beat
+// one - or to be cleared, which puts the numbering back to the convention
+// and lets the bar profile find one again if it ever can.
+static void arTempoRequestDownbeat(bool set) {
+  arTempoDownbeatRequest.store(set ? 1 : 2, std::memory_order_relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // The PLL's rate update and re-anchor.
 //
@@ -1353,6 +1380,7 @@ static void arTempoAdopt(float bpm, float phase, float now) {
       arTempo.measCnt[i] = 0;
     }
     arTempo.downbeatKnown = false;
+    arTempo.downbeatManual = false;
     arTempo.measureKnown  = false;
     arTempo.downbeatEvalIndex = 0;
     arTempo.downbeatApplyAt = 0;
@@ -2152,6 +2180,45 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     arTempo.sweepActive = false;
     arTempo.needFullSearch = false;
     arTempo.fullSearchFailed = false;
+    // A downbeat the user marked belongs to the grid that was just thrown
+    // away: the new grid starts at a new beat, so the old mark means
+    // nothing.  The numbering goes back to the convention until it is set
+    // again.
+    arTempo.downbeatManual  = false;
+    arTempo.downbeatKnown   = false;
+    arTempo.downbeatApplyAt = 0xFFFFFFFFu;
+  }
+
+  // THE DOWNBEAT REQUEST, applied here for the same reason.
+  //
+  // "The beat that is sounding NOW is beat one."  The beat counter is
+  // incremented when a beat is detected and the counter names the beat that
+  // is sounding, so the current beat is the one to mark - and the mark
+  // takes effect at once, not at the next bar boundary: the user has just
+  // told us where the bar starts, and there is no bar to wait for.
+  //
+  // Clearing it puts the numbering back to the CONVENTION (the first beat
+  // after the lock is beat one) and lets the bar profile find a downbeat
+  // again if it ever can.
+  {
+    const uint8_t dbr = arTempoDownbeatRequest.exchange(0, std::memory_order_relaxed);
+    if (dbr == 1) {
+      if (arTempo.locked) {
+        arTempo.downbeatPos     = (uint8_t)(arTempo.beatIndex % 4u);
+        arTempo.downbeatApplyAt = arTempo.beatIndex;
+        arTempo.downbeatManual  = true;
+        arTempo.downbeatKnown   = true;
+        USER_PRINTF("tempo: downbeat set - the beat sounding now (was %u) is beat 1\n",
+                    (unsigned)(arTempo.beatIndex % 4u) + 1u);
+      } else {
+        USER_PRINTLN("tempo: no grid - there is no beat to mark");
+      }
+    } else if (dbr == 2) {
+      arTempo.downbeatManual  = false;
+      arTempo.downbeatKnown   = false;
+      arTempo.downbeatApplyAt = 0xFFFFFFFFu;   // nothing applies until a new one is set
+      USER_PRINTLN("tempo: downbeat cleared - the numbering is the convention again");
+    }
   }
 
   // The gate.
@@ -2426,6 +2493,36 @@ static bool arTempoDownbeatKnown(void) {
   return arTempo.locked && arTempo.downbeatKnown;
 }
 
+// Did the USER mark the downbeat by hand?
+//
+// The sound does not know where the bar starts - MEASURED over sixty windows
+// of real music, the bar profile's t-score sat ON its null in forty-three
+// per cent of them, which is chance.  So the person at the board says it:
+// "the beat sounding now is beat one".  This is the flag that says the
+// numbering came from that person and not from the tracker.
+static bool arTempoDownbeatManual(void) {
+  return arTempo.locked && arTempo.downbeatManual;
+}
+
+// How many beats have been counted since the reference point?
+//
+// The reference point is the beat that is beat ONE - the lock when there is
+// no downbeat, and the beat the numbering was shifted to when there is one
+// (whether the shift came from the bar profile or from the user marking it
+// by hand).
+//
+// So the count and the beat-in-bar always agree: the count is zero exactly
+// when the beat in the bar is one, and the bar count is the count over
+// four.  That is the counter the #BPOS macro shows and the bars are counted
+// from.
+static uint32_t arTempoBeatCount(void) {
+  if (!arTempo.locked) return 0u;
+  const bool applied = arTempo.downbeatKnown
+                    && arTempo.beatIndex >= arTempo.downbeatApplyAt;
+  return applied ? (arTempo.beatIndex - arTempo.downbeatApplyAt)
+                 : arTempo.beatIndex;
+}
+
 // The progress through the current beat, 0..1.
 static float arTempoBeatProgress(void) {
   if (!arTempo.locked || arTempo.period <= 0.0f) return 0.0f;
@@ -2478,6 +2575,8 @@ static bool arTempoValid(void) {
 //
 //   e / E    the comb's tolerance, down / up by 5 ms
 //   q        re-lock now: the grid is dropped and the next search starts over
+//   j        set the downbeat: the beat sounding NOW is beat one
+//   J        clear the downbeat: the numbering is the convention again
 //
 // Lowercase is the lower number and uppercase the higher one, for every
 // pair - the same rule as the rest of the AudioReactive keys.
@@ -2500,6 +2599,20 @@ void audioReactiveTempoCommand(char c) {
       // analysis task.
       arTempoRequestRelock();
       USER_PRINTLN("tempo: re-locking - the grid is dropped and the next search starts over");
+      break;
+    case 'j':
+      // "The beat sounding now is beat one."
+      //
+      // The sound does not know where the bar starts, so the person at the
+      // board says it.  This is a REQUEST: the grid belongs to the analysis
+      // task, and the mark is applied at the top of the next frame.
+      arTempoRequestDownbeat(true);
+      USER_PRINTLN("tempo: downbeat set - the beat sounding now is beat 1");
+      break;
+    case 'J':
+      // Take the mark away: the numbering goes back to the convention.
+      arTempoRequestDownbeat(false);
+      USER_PRINTLN("tempo: downbeat cleared - the numbering is the convention again");
       break;
     default:
       break;

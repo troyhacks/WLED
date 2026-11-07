@@ -5435,7 +5435,9 @@ void arAnalysisTask(void * parameter)
       tf.valid        = arTempoValid() ? 1 : 0;
       tf.beatInMeasure = arTempoBeatInMeasure();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
+      tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;
       tf.downbeatT    = arTempoDownbeatT();
+      tf.beatCount    = arTempoBeatCount();
       tf.refBpm       = arTempoRefBpm();
       tf.refErrMs     = arTempoRefErrMs();
       tf.refBeat      = arTempoRefBeat();
@@ -7740,6 +7742,14 @@ class AudioReactive : public Usermod {
         t["beat_in_measure"] = (int)tf.beatInMeasure;
         t["downbeat_known"] = tf.downbeatKnown != 0;
         t["downbeat_t"]   = (double)tf.downbeatT;
+        // The downbeat the USER marked: "the beat sounding now is beat one".
+        // It is published separately from "downbeat_known" so a reader can
+        // tell a mark the person made from a downbeat the tracker measured
+        // (which is at chance level, and is not acted on).
+        t["downbeat_set"]  = tf.downbeatSet != 0;
+        // The beats counted since the lock - the number the scrolling text's
+        // #BPOS macro shows, and the number the bars are counted from.
+        t["beat_count"]    = (int)tf.beatCount;
         // The tracker's own settings, so the numbers can be read against the
         // tolerance that produced them.
         t["tolerance_ms"] = (double)st.tempoTolMs;
@@ -8429,10 +8439,43 @@ class AudioReactive : public Usermod {
             } else {
               snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, score %.2f%s",
                        (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.score,
-                       tf.downbeatKnown ? ", downbeat measured" : "");
+                       tf.downbeatSet ? ", downbeat set"
+                                      : (tf.downbeatKnown ? ", downbeat measured" : ""));
             }
             infoArr = user.createNestedArray(F("Tempo"));
             infoArr.add(tempoBuf);
+          }
+
+          // THE DOWNBEAT MARK: the button that says where the bar starts.
+          //
+          // The sound does not know.  MEASURED over sixty windows of real
+          // music, the bar profile's t-score sat ON its null in forty-three
+          // per cent of them - chance - so the tracker has nothing to find
+          // here.  But the person standing at the board is looking at the
+          // deck, and they know.  So they press the button on the downbeat
+          // and the estimator counts 1, 2, 3, 4 from there with its own
+          // beats.
+          //
+          // 'btn-p' and not 'btn-xs': btn-xs is the 42x42 ICON button and it
+          // clips its text.
+          {
+            ArTempoFrame tf;
+            const bool tempoOk = arCopyTempo(&tf);
+            char dbBuf[64];
+            if (!tempoOk || !tf.valid) {
+              snprintf(dbBuf, sizeof(dbBuf), "no grid - nothing to mark");
+            } else if (tf.downbeatSet) {
+              snprintf(dbBuf, sizeof(dbBuf), "beat 1 is set (beat %u of 4)",
+                       (unsigned)tf.beatInBar);
+            } else {
+              snprintf(dbBuf, sizeof(dbBuf), "not set - the numbering is a convention");
+            }
+            infoArr = user.createNestedArray(F("Downbeat"));
+            infoArr.add(dbBuf);
+            infoArr = user.createNestedArray(F("Set downbeat"));
+            infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{setDownbeat:true}});\">set</button>"));
+            infoArr = user.createNestedArray(F("Clear downbeat"));
+            infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{clearDownbeat:true}});\">clear</button>"));
           }
 
           // The ProLink reference: our beat against the deck's.  This is the
@@ -8741,6 +8784,27 @@ class AudioReactive : public Usermod {
             audioReactiveResetAutoRange();
             USER_PRINTF("AR: display back to auto-range - trim %+.1f dB, span %.0f dB\n",
                         (double)TROYHACKS_DBREF, (double)arSettingsSnapshot().windowRangeDb);
+          }
+        }
+        // THE DOWNBEAT MARK, from the info pane's buttons.
+        //
+        // "The beat sounding now is beat one" - said by the person at the
+        // board, because the sound does not know where the bar starts.
+        //
+        // It is a REQUEST, not a write: the grid belongs to the analysis
+        // task, and the web server is not it.  The mark is applied at the
+        // top of the next frame, there and nowhere else.  This is the same
+        // pattern as the serial console's 'j'.
+        if (usermod[F("setDownbeat")].is<bool>()) {
+          if (usermod[F("setDownbeat")].as<bool>()) {
+            arTempoRequestDownbeat(true);
+            USER_PRINTLN("AR: downbeat set - the beat sounding now is beat 1");
+          }
+        }
+        if (usermod[F("clearDownbeat")].is<bool>()) {
+          if (usermod[F("clearDownbeat")].as<bool>()) {
+            arTempoRequestDownbeat(false);
+            USER_PRINTLN("AR: downbeat cleared - the numbering is the convention again");
           }
         }
         // The codec's MCLK pre-divider.

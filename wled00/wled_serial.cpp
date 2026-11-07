@@ -279,6 +279,8 @@ void handleSerial() {
     //   c / C    the codec's input gain, down / up by 0.5 dB
     //   e / E    the tempo tracker's tolerance, down / up by 5 ms
     //   q        the tempo tracker: re-lock now
+    //   j        the tempo tracker: the beat sounding NOW is beat one
+    //   J        the tempo tracker: clear the downbeat mark
     //
     // Lowercase is the lower number and uppercase the higher one, for every
     // pair. 'X' is NOT in this list: it is the force-reconnect key above.
@@ -334,8 +336,10 @@ void handleSerial() {
       // auto-range's release, the codec's input gain, and the pattern - which
       // sixteen of the thirty-one bands the sixteen bars show.
       audioReactiveRtaCommand(next);
-    } else if (next == 'e' || next == 'E' || next == 'q') {
-      // The tempo tracker: the comb score's tolerance and the re-lock.
+    } else if (next == 'e' || next == 'E' || next == 'q' ||
+               next == 'j' || next == 'J') {
+      // The tempo tracker: the comb score's tolerance, the re-lock, and the
+      // downbeat.
       //
       // The tolerance is a TRADE and not a constant. A tighter one makes the
       // score pickier about the rate - it will not believe a rate whose
@@ -346,6 +350,13 @@ void handleSerial() {
       // The re-lock drops the grid and starts the next search from scratch,
       // which is what you want after a track change the tracker has not
       // noticed.
+      //
+      // 'j' says "the beat sounding NOW is beat one". The sound does not
+      // know where the bar starts - MEASURED over sixty windows of real
+      // music, the bar profile's t-score sat on its null in forty-three per
+      // cent of them, which is chance - so the person at the board says it,
+      // and the estimator then counts 1, 2, 3, 4 with its own beats.
+      // 'J' takes the mark away again.
       audioReactiveTempoCommand(next);
 #endif
     } else if (next == 0xB0) {

@@ -11,6 +11,7 @@
 #include "fcn_declare.h"
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <LovyanGFX.hpp>
+#include <stdarg.h>
 #endif
 #if !(defined(WLED_DISABLE_PARTICLESYSTEM2D) && defined(WLED_DISABLE_PARTICLESYSTEM1D))
 #include "FXparticleSystem.h"
@@ -7484,6 +7485,27 @@ static const char _data_FX_MODE_2DBLOBS[] PROGMEM = "Blobs@!,# blobs,Blur;!;!;2;
 ////////////////////////////
 //    2D Scrolling text   //
 ////////////////////////////
+// Append formatted text to a bounded buffer.
+//
+// The scrolling text expands macros IN PLACE, and an expansion can be longer
+// than the text it replaces - "#BPM" becomes "124.5" - so the expansion
+// buffer has to be able to hold the result, and every append has to know
+// where the end is. This returns where the next append goes, and it never
+// goes past the end: a macro that does not fit is cut short instead of
+// overrunning the buffer.
+static char* appendBounded(char* dst, char* end, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  const size_t room = (size_t)(end - dst);
+  if (room > 1) {
+    int n = vsnprintf(dst, room, fmt, ap);
+    if (n < 0) n = 0;
+    dst += ((size_t)n >= room) ? (room - 1) : (size_t)n;
+  }
+  va_end(ap);
+  return dst;
+}
+
 uint16_t mode_2Dscrollingtext(void) {
   if (!strip.isMatrix) return mode_static(); // not a 2D set-up
 
@@ -7494,6 +7516,7 @@ uint16_t mode_2Dscrollingtext(void) {
   extern volatile uint8_t   prolink_beat_public;
   extern volatile uint32_t  prolink_beat_number_public;
   extern volatile float     prolink_beat_progress_public;
+  extern volatile bool      prolink_connected_public;
 
   // Bar/Beat Counters
   extern volatile uint32_t  prolink_beats_elapsed_public;
@@ -7593,79 +7616,129 @@ uint16_t mode_2Dscrollingtext(void) {
     else if (!strncmp_P(text, PSTR("#MM"), 3))   sprintf_P(text, zero ? PSTR("%02d") : PSTR("%d"), minute(localTime));
     else if ((!strncmp_P(text, PSTR("#AMP"), 4)) || (!strncmp_P(text, PSTR("#POW"), 4))) sprintf_P(text, PSTR("%3.1fA"), float(strip.currentMilliamps) / 1000.0f);
 
-    #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-    // --- PRO DJ LINK MACRO REPLACEMENT ---
     else {
-      char output[128] = { '\0' };
+      // --- THE BEAT SOURCE ---
+      //
+      // Two sources, and the order is the design - the same order as the
+      // Beat Strobe effect (mode_bpm_strobe): a Pioneer deck FIRST, because
+      // its grid is the master's clock, and our own estimator SECOND,
+      // because a measurement of the sound is better than no beat at all.
+      //
+      // #BPM, #BEAT, #BPOS and #BARS all read this source, so they work
+      // with a deck and without one.
+      float    srcBpm  = 0.0f;   // beats per minute
+      uint8_t  srcBeat = 0;      // the beat in the bar, 1..4; 0 = unknown
+      uint32_t srcPos  = 0;      // the beats elapsed
+      uint32_t srcBars = 0;      // the bars elapsed
+      bool     srcLive = false;
+
+      #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+      if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
+        srcBpm  = prolink_bpm_public;
+        srcBeat = prolink_beat_public;
+        srcPos  = prolink_beats_elapsed_public;
+        srcBars = prolink_bars_elapsed_public;
+        srcLive = true;
+      }
+      #endif
+
+      #if defined(USERMOD_AUDIOREACTIVE)
+      // The estimator, when the deck has not answered.
+      //
+      // arCopyTempo() returns false when the published frame is not a LIVE
+      // measurement - which is what a board receiving its sound over the
+      // network publishes, because it has no audio of its own to measure.
+      if (!srcLive) {
+        ArTempoFrame tf;
+        if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
+            tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+          srcBpm  = tf.bpm;
+          srcBeat = tf.beatInBar;
+          srcPos  = tf.beatCount;
+          srcBars = tf.beatCount / 4u;
+          srcLive = true;
+        }
+      }
+      #endif
+      (void)srcLive;   // read above; kept for the source's own sake
+
+      // The expansion buffer is the size of the text it is copied back into,
+      // so the copy back can never overrun it.
+      char output[sizeof(text)] = { '\0' };
+      char* const end = output + sizeof(output);
       char* src = text;
       char* dst = output;
 
-      while (*src && (dst - output) < 127) {
+      while (*src && dst < end - 1) {
         if (*src == '#') {
-          // Check each macro
-          if (strncmp(src, "#PP",3) == 0) {
+          // The beat macros read the source above.
+          if (strncmp(src, "#FPS", 4) == 0) {
+            dst = appendBounded(dst, end, "%3d", (int)strip.getFps());
+            src += 4;
+          } else if (strncmp(src, "#BPOS", 5) == 0) {
+            dst = appendBounded(dst, end, "%u", (unsigned)srcPos);
+            src += 5;
+          } else if (strncmp(src, "#BEAT", 5) == 0) {
+            const uint8_t b = (srcBeat == 0) ? 1 : srcBeat;
+            dst = appendBounded(dst, end, "%d/4", b);
+            src += 5;
+          } else if (strncmp(src, "#BARS", 5) == 0) {
+            dst = appendBounded(dst, end, "%u", (unsigned)srcBars);
+            src += 5;
+          } else if (strncmp(src, "#BPM", 4) == 0) {
+            dst = appendBounded(dst, end, "%.1f", srcBpm);
+            src += 4;
+          }
+          #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+          // --- PRO DJ LINK MACRO REPLACEMENT ---
+          else if (strncmp(src, "#PP",3) == 0) {
             if (prolink_phrase_progress_public * 100.0f < 100) {
-              dst += sprintf(dst, "%4.1f%%", prolink_phrase_progress_public * 100.0f);
+              dst = appendBounded(dst, end, "%4.1f%%", prolink_phrase_progress_public * 100.0f);
             }
             src += 3;
           } else if (strncmp(src, "#TT", 3) == 0) {
-            if (prolink_metadata_valid) dst += sprintf(dst, "%s", prolink_track_title.c_str());
+            if (prolink_metadata_valid) dst = appendBounded(dst, end, "%s", prolink_track_title.c_str());
             src += 3;
           } else if (strncmp(src, "#TA", 3) == 0) {
-            if (prolink_metadata_valid) dst += sprintf(dst, "%s", prolink_track_artist.c_str());
+            if (prolink_metadata_valid) dst = appendBounded(dst, end, "%s", prolink_track_artist.c_str());
             src += 3;
-          } else if (strncmp(src, "#FPS", 4) == 0) {
-            dst += sprintf(dst, "%3d", (int)strip.getFps());
-            src += 4;
           } else if (strncmp(src, "#PB", 3) == 0) {
-            dst += sprintf(dst, "%d", prolink_phrase_beats_public);
+            dst = appendBounded(dst, end, "%d", prolink_phrase_beats_public);
             src += 3;
           } else if (strncmp(src, "#PH", 3) == 0) {
-            dst += sprintf(dst, "%s", prolink_phrase_name_public.c_str());
+            dst = appendBounded(dst, end, "%s", prolink_phrase_name_public.c_str());
             src += 3;
           } else if (strncmp(src, "#PR", 3) == 0) {
             if (prolink_beat_progress_public * 100.0f < 100) {
-            dst += sprintf(dst, "%4.1f%%", prolink_beat_progress_public * 100.0f);
+            dst = appendBounded(dst, end, "%4.1f%%", prolink_beat_progress_public * 100.0f);
             }
             src += 3;
-          } else if (strncmp(src, "#BPOS", 5) == 0) {
-            dst += sprintf(dst, "%d", prolink_beats_elapsed_public);
-            src += 5;
-          } else if (strncmp(src, "#BEAT", 5) == 0) {
-            uint8_t b = (prolink_beat_public == 0) ? 1 : prolink_beat_public;
-            dst += sprintf(dst, "%d/4", b);
-            src += 5;
-          } else if (strncmp(src, "#BARS", 5) == 0) {
-            dst += sprintf(dst, "%d", prolink_bars_elapsed_public);
-            src += 5;
           } else if (strncmp(src, "#END", 4) == 0) {
             if (prolink_bars_remaining_public < 64) {
-              dst += sprintf(dst, "%d", prolink_bars_remaining_public);
+              dst = appendBounded(dst, end, "%d", prolink_bars_remaining_public);
             }
             src += 4;
-          } else if (strncmp(src, "#BPM", 4) == 0) {
-            dst += sprintf(dst, "%.1f", prolink_bpm_public);
-            src += 4;
           } else if (strncmp(src, "#PT", 3) == 0) {
-            dst += sprintf(dst, "%s%.2f%", (prolink_pitchPercent > 0.00f) ? "+":"", prolink_pitchPercent);
+            dst = appendBounded(dst, end, "%s%.2f%%", (prolink_pitchPercent > 0.00f) ? "+":"", prolink_pitchPercent);
             src += 3;
           } else if (strncmp(src, "#MD", 3) == 0) {
-            dst += sprintf(dst, "%s", prolink_mood_public.c_str());
+            dst = appendBounded(dst, end, "%s", prolink_mood_public.c_str());
             src += 3;
-          } else {
+          }
+          #endif
+          else {
             // Unknown macro, just copy the character
             *dst++ = *src++;
           }
-          } else {
+        } else {
           // Regular character
           *dst++ = *src++;
         }
-        }
+      }
       *dst = '\0';
       strcpy(text, output);
-      }
-    #endif
-    
+    }
+
   } else drawShadow = false;
 
   const int numberOfLetters = strlen(text);
