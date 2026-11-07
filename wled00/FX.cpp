@@ -7595,6 +7595,7 @@ uint16_t mode_2Dscrollingtext(void) {
     !strncmp_P(text, PSTR("#DATE"), 5) || !strncmp_P(text, PSTR("#DDMM"), 5) || !strncmp_P(text, PSTR("#MMDD"), 5) ||
     !strncmp_P(text, PSTR("#TIME"), 5) || !strncmp_P(text, PSTR("#HH"), 3) || !strncmp_P(text, PSTR("#MM"), 3) ||
     strstr(text, "#BPM") || strstr(text, "#BPOS") || strstr(text, "#BEAT") || strstr(text, "#BARS") ||
+    strstr(text, "#QUAL") ||
     strstr(text, "#END") || strstr(text, "#TT") || strstr(text, "#TA") || strstr(text, "#PR") ||
     strstr(text, "#PH") || strstr(text, "#PB") || strstr(text, "#PH") || strstr(text, "#PT") || strstr(text, "#MD");
 
@@ -7637,6 +7638,11 @@ uint16_t mode_2Dscrollingtext(void) {
       uint32_t srcPos  = 0;      // the beats elapsed
       uint32_t srcBars = 0;      // the bars elapsed
       bool     srcLive = false;
+      // The QUALITY of our own prediction: the comb score, 0..1.  It is
+      // negative when there is no measurement at all - a board that is
+      // RECEIVING its sound over the network measures nothing, and a board
+      // with a deck connected still runs its own estimator.
+      float    srcQual = -1.0f;
 
       #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
       if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
@@ -7654,15 +7660,22 @@ uint16_t mode_2Dscrollingtext(void) {
       // arCopyTempo() returns false when the published frame is not a LIVE
       // measurement - which is what a board receiving its sound over the
       // network publishes, because it has no audio of its own to measure.
-      if (!srcLive) {
+      {
         ArTempoFrame tf;
-        if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
-            tf.beatInBar >= 1 && tf.beatInBar <= 4) {
-          srcBpm  = tf.bpm;
-          srcBeat = tf.beatInBar;
-          srcPos  = tf.beatCount;
-          srcBars = tf.beatCount / 4u;
-          srcLive = true;
+        if (arCopyTempo(&tf) && tf.valid != 0) {
+          // The quality of the prediction is worth having even when the
+          // deck is the one driving the grid: it says how well OUR comb
+          // fits the music, and that is the number that says whether the
+          // beat grid can be trusted.
+          srcQual = tf.score * 100.0f;
+          if (!srcLive && tf.bpm > 0.0f &&
+              tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+            srcBpm  = tf.bpm;
+            srcBeat = tf.beatInBar;
+            srcPos  = tf.beatCount;
+            srcBars = tf.beatCount / 4u;
+            srcLive = true;
+          }
         }
       }
       #endif
@@ -7694,6 +7707,12 @@ uint16_t mode_2Dscrollingtext(void) {
           } else if (strncmp(src, "#BPM", 4) == 0) {
             dst = appendBounded(dst, end, "%.1f", srcBpm);
             src += 4;
+          } else if (strncmp(src, "#QUAL", 5) == 0) {
+            // The quality of the prediction: the comb score as a
+            // percentage.  "--" when there is no measurement at all.
+            if (srcQual < 0.0f) dst = appendBounded(dst, end, "--");
+            else                 dst = appendBounded(dst, end, "%d", (int)(srcQual + 0.5f));
+            src += 5;
           }
           #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
           // --- PRO DJ LINK MACRO REPLACEMENT ---
