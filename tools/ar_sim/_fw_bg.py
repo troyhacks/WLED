@@ -156,12 +156,21 @@ FIT_MAX = 2.0
 FIT_STILL = 0.50
 # THE FOLLOWER'S DEFAULTS ARE THE FIRMWARE'S.
 #
-# These were 5.0 and 0.50, which is NOT what the board runs: the firmware's
-# AR_TEMPO_RATE_TAU_S is 4.0 and the firmware has no catch follower at all.
-# A twin that silently disagrees with the firmware is a trap: a measurement
-# taken with the twin's defaults says nothing about the board.  Keep these
-# equal to usermods/audioreactive/ar_tempo.h.
-RATE_TAU_S = 4.0
+# These were 5.0 and 0.50, which is NOT what the board runs, and they were
+# then 4.0 and 0.50, which was the firmware's tau 4 - but the firmware's
+# tau is now 8.0, and it has no catch follower at all.  A twin that
+# silently disagrees with the firmware is a trap: a measurement taken with
+# the twin's defaults says nothing about the board.  Keep these equal to
+# usermods/audioreactive/ar_tempo.h.
+#
+# MEASURED, over forty windows of real house music: the published rate's
+# error against the music's own tempo, and how many of the windows whose
+# FIRST lock was wrong ended up right.
+#
+#   tau 4   0.145 BPM, 24 of 34 recovered
+#   tau 8   0.139 BPM, 26 of 34 recovered    <- the firmware's
+#   tau 12  0.155 BPM, 26 of 34 recovered
+RATE_TAU_S = 8.0
 CATCH_BPM = 99.0         # the catch follower is OFF: the firmware has none
 CATCH_TAU_S = 0.75
 
@@ -397,9 +406,19 @@ class BgTracker(P.Tracker):
         self.local_phase = 0.0
         self.qual_log = []
 
-        # THE REFINEMENT: 'plateau' is the committed rule, 'refine' is the
-        # least-squares fit of the grid to the music.
-        self.rate_mode = "plateau"
+        # THE RATE MODES.  The DEFAULT is the firmware's rule: the
+        # plateau's centre - the comb's own answer, the rate at which the
+        # music's features line up most regularly - followed SLOWLY.
+        #
+        #   'plateaufollow'  THE FIRMWARE'S RULE (the default)
+        #   'plateau'        the old rule: the centre, a step at a time,
+        #                    blended towards the clock - which is what
+        #                    published 131.4 when the music was at 129.0
+        #   'fitgrid'        the fit through the grid's own beats, followed
+        #                    - measured and REJECTED: steadier, but less
+        #                    accurate, and it recovered less
+        #   'refine'         the least-squares fit of the grid to the music
+        self.rate_mode = "plateaufollow"
         self.refine_tol = 1.0
         self.refine_uniform = False
         self.refine_max = REFINE_MAX
@@ -408,7 +427,12 @@ class BgTracker(P.Tracker):
         self.fit_have = False
         self.rate_tau = RATE_TAU_S
         self.catch_bpm = CATCH_BPM
-        self.acq_refine = True
+        # The firmware does NOT refine the acquisition: the first lock is
+        # the plateau's centre, and the follower takes it from there.
+        # (Measured: refining the acquisition is slightly WORSE - 0.176 BPM
+        # against 0.139 - because the cluster it fits is a biased estimate
+        # of where the beats are.)
+        self.acq_refine = False
         self.fit_rate = 0.0
         self.slews = 0
 
@@ -592,7 +616,7 @@ class BgTracker(P.Tracker):
             r2, p2 = self.refine(rate, phase)
             if r2 is not None and abs(r2 - rate) <= self.refine_max:
                 rate, phase = r2, p2
-        elif self.rate_mode == "fitgrid" and self.acq_refine:
+        elif self.rate_mode in ("fitgrid", "plateaufollow") and self.acq_refine:
             # THE ACQUISITION IS REFINED TOO: the first lock should be the
             # music's tempo, not the lattice's nearest quarter of a BPM.
             r2, p2 = fit_clusters(self.sweep_frames, self.sweep_str, rate, phase)
@@ -865,6 +889,25 @@ class BgTracker(P.Tracker):
                 else:
                     self.held_frames += 1
                 self.last_fit = meas
+            else:
+                self.held_frames += 1
+        elif self.rate_mode == "plateaufollow":
+            # THE PLATEAU'S CENTRE, FOLLOWED SLOWLY.
+            #
+            # The plateau's centre is the MORE ACCURATE measurement - it is
+            # where the comb's score is highest - but it is quantised to the
+            # lattice's step and it WANDERS inside the plateau, so latching
+            # it publishes a wrong round number now and then, and blending
+            # it toward the clock publishes a number that is on no lattice
+            # at all (0.8 x 131.25 + 0.2 x 132.0 = 131.4, exactly the
+            # "unlikely number" the user reported).
+            #
+            # A slow follower fixes BOTH: it averages the wander away, and
+            # the published rate is a continuous number near the truth
+            # instead of a step between lattice points.
+            if self.qual >= self.qual_min:
+                self.slew_rate(rate)
+                self.slews += 1
             else:
                 self.held_frames += 1
         elif run >= self.persist:

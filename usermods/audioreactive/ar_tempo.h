@@ -505,78 +505,51 @@ static constexpr float AR_TEMPO_QUAL_REL = 0.50f;
 static constexpr float AR_TEMPO_QUAL_DECAY = 0.99632f;   // per search, 8 s half-life
 
 // ---------------------------------------------------------------------------
-// THE REFINEMENT.
+// THE MEASUREMENT, AND THE SLOW FOLLOWER.
 //
-// The plateau's centre can only ever land on the LATTICE's step - the
-// candidates are a quarter of a BPM apart and the lattice is every other
-// one - so the published rate STEPS by quarters, and to anyone watching
-// them a step is a tempo change: 128.00, 127.75, 128.25, 127.50.
+// The measurement is the plateau's centre: the rate at which the music's
+// features line up most regularly, and the comb's own answer.  It has two
+// faults, and they are the two the user reported.
 //
-// The refinement replaces the centre with a FIT.  The onsets that sit on
-// the candidate's grid ARE the beats, and the least squares line through
-// them - their beat index against their time - gives the period the music
-// really has.  The answer is CONTINUOUS, so it cannot step by a quarter of
-// a BPM.
+//   1. It can only ever land on the LATTICE's step - the candidates are a
+//      quarter of a BPM apart and the lattice is every other one - so the
+//      published rate STEPS: 128.00, 127.75, 128.25, 127.50.  To anyone
+//      watching it, a step is a tempo change.
+//   2. It WANDERS inside the plateau as the score wobbles.  MEASURED over
+//      a window of real house music: 0.62 BPM (sd).
 //
-// The fit is GUARDED: it has to be within AR_TEMPO_REFINE_MAX_BPM of the
-// plateau's centre, or the plateau's centre is kept.  A fit that has
-// wandered off is a fit through the wrong beats, and the plateau's centre
-// is always a rate the comb actually scored.
+// The clock is a low-pass filter of the measurement it follows, so a
+// wandering measurement ends up as a clock that publishes a number which is
+// neither the music's tempo nor any of the answers - which is how a grid
+// ends up at 131.4 when the music is at 129.0.  (0.8 x 131.25 + 0.2 x
+// 132.0 = 131.4, exactly.)
 //
-// MEASURED, over sixty windows of real house music: 53 of the 60 rates
-// the plateau's centre published landed exactly on a quarter of a BPM.
-// The fit's own error against librosa is no worse than the centre's on
-// the same windows, and it removes the steps.
-static constexpr float AR_TEMPO_REFINE_MAX_BPM = 1.0f;
-
-// The fewest beats the fit needs.  Fewer than that and the line is being
-// drawn through three points, which is a guess.
-static constexpr int AR_TEMPO_REFINE_MIN_HITS = 6;
-
-// ---------------------------------------------------------------------------
-// THE FIT AT THE GRID, AND THE SLOW FOLLOWER.
+// So the clock follows the measurement SLOWLY.  The follower averages the
+// wander away, and the number it publishes is a CONTINUOUS one near the
+// music's tempo instead of a step between two lattice points.
 //
-// The rate the CLOCK follows is not the plateau's centre.  The centre is a
-// LATTICE point - it can only land on a quarter of a BPM - and it WANDERS:
-// the flat top of the comb's score moves as the score wobbles, and its
-// middle moves with it.  MEASURED over a window of real house music: the
-// plateau's centre wanders by 0.62 BPM (sd) while the fit at the grid
-// wanders by 0.19 - the fit is three and a half times steadier, and it is
-// unbiased.
+// MEASURED over forty windows of real house music: the published rate's
+// error against the music's own tempo, and how many of the windows whose
+// FIRST lock was wrong ended up right.
 //
-// The clock is a low-pass filter of the answer it follows, so a wandering
-// answer ends up as a clock that publishes a number which is neither the
-// music's tempo nor any of the answers - which is how a grid ends up at
-// 131.4 when the music is at 129.0.
+//   the plateau's centre, a step at a time   0.135 BPM, 26 of 34
+//   the fit at the grid, followed (tau 4)    0.295 BPM, 21 of 34
+//   the plateau's centre, followed (tau 4)   0.145 BPM, 24 of 34
+//   the plateau's centre, followed (tau 8)   0.139 BPM, 26 of 34
+//   the plateau's centre, followed (tau 12)  0.155 BPM, 26 of 34
 //
-// So the clock follows the FIT AT THE GRID: the running grid's own beats,
-// one feature each, fitted to a line.  The fit is GUARDED - it has to be
-// within AR_TEMPO_FIT_MAX_BPM of the clock, or it is a fit through the
-// wrong beats and the clock does not move.
+// THE FIT WAS MEASURED AND REJECTED.  It was the "features that line up
+// regularly" idea - the grid's own beats, one feature each, fitted to a
+// line - and it IS steadier (0.19 BPM sd against the centre's 0.62), but
+// it is LESS ACCURATE and it recovers LESS, because the cluster it fits is
+// a biased estimate of where the beats are.  A biased first lock is a
+// harder lock to correct.  It also cost 1.3 ms a frame.
 //
-// And the measurement may not JUMP: a jump is a tempo change (which settles
-// within a few searches) or a breakdown (where the grid would be chasing a
-// guess), and in both cases the grid holds until the answer has settled.
-static constexpr float AR_TEMPO_FIT_MAX_BPM = 2.0f;
-static constexpr float AR_TEMPO_FIT_STILL_BPM = 0.50f;
-
-// THE SLOW FOLLOWER: the clock's rate follows the measurement with this
-// time constant, so the published rate is the music's tempo and not a
-// number somewhere between two answers.
-//
-// MEASURED over forty windows of real house music (the rate's error against
-// the music's own tempo, and how much the published rate moves about):
-//
-//   the plateau's centre, a step at a time   the error 0.16 BPM
-//   the fit, followed with a 4 s constant    the error 0.26 BPM
-//
-// The difference is a fifth of a BPM - a twentieth of a percent of the
-// tempo - and the corpus flatters the lattice, because the house music in
-// it runs at ROUND tempos and a lattice point is exactly a round tempo.
-// The fit's error against the truth is the same size as the truth's own
-// error, and its p90 is BETTER (1.54 against 1.96): the lattice's tail is
-// where the wrong grids come from.
-static constexpr float AR_TEMPO_RATE_TAU_S = 4.0f;
+// (An earlier version of this file quoted a p90 of 1.54 BPM for the fit.
+// That was measured with the OFFLINE TWIN's defaults, which were not the
+// firmware's.  The shipped configuration measures 2.076, against the
+// plateau's 1.961.)
+static constexpr float AR_TEMPO_RATE_TAU_S = 8.0f;
 
 // ---- the background's fight ------------------------------------------------
 //
@@ -858,7 +831,9 @@ static constexpr int AR_TEMPO_MIN_PEAKS = 8;
 // quarter of a second.
 static constexpr float AR_TEMPO_PLL_GAMMA = 0.35f;
 
-// The rate's response to the comb: PROPORTIONAL, not a clamp.
+// The rate's response to the comb WAS PROPORTIONAL, not a clamp.  This is
+// the record of how that gain was chosen; the mechanism itself is gone (see
+// the end of the block).
 //
 // The clamp this replaces allowed the period to move at most 0.5 % of itself
 // per search, and it applied the FULL step whenever the comb's winner was
@@ -909,7 +884,11 @@ static constexpr float AR_TEMPO_PLL_GAMMA = 0.35f;
 // the rate, so a jump is a flash that lands off the beat and comes back.
 // That is the "skipped beats" failure this tracker exists to avoid, and it
 // is not worth two points of hit rate.
-static constexpr float AR_TEMPO_PLL_GAIN = 0.20f;
+// THE BLEND IS GONE.  The gain above was measured against another
+// implementation's beats, and it was chosen well - but the mechanism it
+// belonged to is the one that published 131.4 when the music was at 129.0.
+// The clock now FOLLOWS the measurement, slowly, and there is no gain to
+// choose.
 
 // ---- the confirmation ------------------------------------------------------
 //
@@ -1089,14 +1068,10 @@ struct ArTempoState {
   uint32_t frameIndex;                    // the frame counter, rebased
   float    bpm;                           // the published rate
   float    score;                         // the comb score, 0..1
-  // ---- the fit at the grid ----
+  // ---- the follower ----
   //
-  // The MEASUREMENT the clock follows: the fit through the grid's own
-  // beats - the features that line up regularly.  `fitHave` says whether
-  // the last search produced one at all.
-  float    fitRate;                      // the fit's rate
-  float    lastFit;                      // the fit before it
-  bool     fitHave;                      // ... and whether there was one
+  // The clock's rate follows the MEASUREMENT - the plateau's centre -
+  // slowly, and `lastSlewFrame` is when it last did.
   uint32_t lastSlewFrame;                // when the clock last followed it
   // ---- the quality and the drift ----
   //
@@ -1530,139 +1505,6 @@ static float arTempoCoverage(const int32_t *frames, int n, float bpm, float phas
 }
 
 // ---------------------------------------------------------------------------
-// THE REFINEMENT.
-//
-// The plateau's centre is a LATTICE point: the candidates are a quarter of
-// a BPM apart and the lattice is every other one, so the centre can only
-// land on a quarter.  The published rate then STEPS by quarters, and a
-// step is indistinguishable from a tempo change to anyone watching it.
-//
-// THE FIT: the features that line up regularly are the BEATS - four bass
-// beats, sixteen snare hits, the hats - and the line through them is the
-// tempo.  But the fit has to be careful WHICH features it takes: the
-// comb's kernel is a box around each beat, and inside it there can be a
-// kick, a hat and a snare tail - three onsets that are not the same
-// place.  So the fit does not take the onsets one by one: it takes, for
-// each beat, the WEIGHTED CENTRE of the onsets inside that beat's kernel.
-// That centre is the beat's own position, and the line through the
-// centres - the beat index against the beat's time - is the period the
-// music really has.
-//
-// MEASURED: the first version of this fit, which drew the line through
-// every onset in the kernel, measured WORSE than the plateau's centre
-// (0.31 BPM against 0.15) - it was fitting a line through three features
-// per beat that were not the beat.  The cluster's centre is not any of
-// them but their weighted middle, and it measures 0.22.
-//
-// Two passes: the first with the grid's own period, the second with the
-// period the first pass found, so a grid that is a little off does not
-// lose the far end of the window.
-//
-// The answer is CONTINUOUS, so it cannot step by a quarter of a BPM, and
-// it is precise: over a twelve second window the period's error is a
-// fraction of a millisecond.
-//
-// The caller GUARDS it: the fit has to be within AR_TEMPO_REFINE_MAX_BPM
-// of the plateau's centre, or the plateau's centre is used.  A fit that
-// has wandered off is a fit through the wrong beats.
-//
-// `bpm` and `phase` are the candidate's - or the GRID's, when the fit is
-// the measurement the clock follows; the fit is measured against the
-// sweep's own snapshot of the onsets.
-//
-// The most beat slots the window can hold.  Twelve seconds at the slowest
-// rate the tracker considers is twenty beats; at the fastest it is
-// thirty-five.  Sixty-four is a guard, not a limit.
-static constexpr int AR_TEMPO_FIT_MAX_SLOTS = 64;
-static bool arTempoFitPass(float per, float phase, float half,
-                            float *rateOut, float *phaseOut) {
-  const int n = (int)arTempo.sweepCount;
-  if (n < AR_TEMPO_REFINE_MIN_HITS) return false;
-  // The window's extent, and so the slots it covers.  The frames are
-  // relative to the frame base and can be NEGATIVE.
-  float fmin = (float)arTempo.sweepFrame[0];
-  float fmax = fmin;
-  for (int i = 1; i < n; i++) {
-    const float f = (float)arTempo.sweepFrame[i];
-    if (f < fmin) fmin = f;
-    if (f > fmax) fmax = f;
-  }
-  const int kmin = (int)lroundf((fmin - phase) / per);
-  const int kmax = (int)lroundf((fmax - phase) / per);
-  const int slots = kmax - kmin + 1;
-  if (slots < AR_TEMPO_REFINE_MIN_HITS || slots > AR_TEMPO_FIT_MAX_SLOTS) return false;
-  // The slots' strength, and their weighted sum of the residuals.
-  float sumW[AR_TEMPO_FIT_MAX_SLOTS];
-  float sumR[AR_TEMPO_FIT_MAX_SLOTS];
-  for (int i = 0; i < slots; i++) { sumW[i] = 0.0f; sumR[i] = 0.0f; }
-  for (int i = 0; i < n; i++) {
-    const float f = (float)arTempo.sweepFrame[i];
-    const float u = f - phase;
-    const int k = (int)lroundf(u / per);
-    const float res = u - (float)k * per;
-    if (fabsf(res) > half) continue;
-    const int idx = k - kmin;
-    if (idx < 0 || idx >= slots) continue;
-    const float w = arTempo.sweepStr[i];
-    sumW[idx] += w;
-    sumR[idx] += w * res;
-  }
-  // The centres, and the weighted means the line is fitted around.
-  float W = 0.0f, Sk = 0.0f, Sc = 0.0f;
-  int hits = 0;
-  for (int i = 0; i < slots; i++) {
-    if (sumW[i] <= 0.0f) continue;
-    W  += sumW[i];
-    Sk += sumW[i] * (float)(kmin + i);
-    Sc += sumW[i] * (sumR[i] / sumW[i]);
-    hits++;
-  }
-  if (hits < AR_TEMPO_REFINE_MIN_HITS || W <= 0.0f) return false;
-  const float km = Sk / W;
-  const float cm = Sc / W;
-  // The slope and the intercept: the weighted least squares line.
-  float Sxx = 0.0f, Sxy = 0.0f;
-  for (int i = 0; i < slots; i++) {
-    if (sumW[i] <= 0.0f) continue;
-    const float c = sumR[i] / sumW[i];
-    const float dk = (float)(kmin + i) - km;
-    Sxx += sumW[i] * dk * dk;
-    Sxy += sumW[i] * dk * (c - cm);
-  }
-  if (Sxx <= 0.0f) return false;
-  const float b = Sxy / Sxx;
-  const float perFit = per + b;
-  if (perFit <= 0.0f) return false;
-  const float a = cm - b * km;
-  // The new phase, folded into [0, period).  The floor, not the
-  // truncation: the phase can be negative.
-  const float raw = phase + a;
-  float ph = raw - floorf(raw / perFit) * perFit;
-  if (ph < 0.0f) ph += perFit;
-  *rateOut  = 60.0f * AR_TEMPO_RATE / perFit;
-  *phaseOut = ph;
-  return true;
-}
-
-static bool arTempoRefine(float bpm, float phase, float *rateOut, float *phaseOut) {
-  const float per = 60.0f * AR_TEMPO_RATE / bpm;
-  if (per <= 0.0f) return false;
-  const float tolFrames = (arFrameSettings.tempoTolMs * 0.001f) * AR_TEMPO_RATE;
-  const float half = fminf(tolFrames, AR_TEMPO_KERNEL_FRAC * per);
-  float rate = 0.0f, ph = 0.0f;
-  if (!arTempoFitPass(per, phase, half, &rate, &ph)) return false;
-  // The second pass, on the period the first pass found.
-  const float per2 = 60.0f * AR_TEMPO_RATE / rate;
-  if (per2 <= 0.0f) return false;
-  const float half2 = fminf(tolFrames, AR_TEMPO_KERNEL_FRAC * per2);
-  float rate2 = 0.0f, ph2 = 0.0f;
-  if (arTempoFitPass(per2, ph, half2, &rate2, &ph2)) { rate = rate2; ph = ph2; }
-  *rateOut  = rate;
-  *phaseOut = ph;
-  return true;
-}
-
-// ---------------------------------------------------------------------------
 // Init and reset.
 // ---------------------------------------------------------------------------
 
@@ -1762,10 +1604,7 @@ static void arTempoReset(void) {
   arTempo.driftBpm    = 0.0f;
   arTempo.driftMs     = 0.0f;
   arTempo.bgQual      = 0.0f;
-  // The fit at the grid, and the follower that follows it.
-  arTempo.fitRate     = 0.0f;
-  arTempo.lastFit     = 0.0f;
-  arTempo.fitHave     = false;
+  // The follower that follows the measurement.
   arTempo.lastSlewFrame = 0;
   // The confirmation starts with nothing to say.
   arTempo.confBase    = 0.0f;
@@ -1892,16 +1731,6 @@ static void arTempoRequestHold(bool on) {
 // ---------------------------------------------------------------------------
 
 // The RATE half: the period moves, the phase does not.
-static void arTempoAdoptRate(float bpm, bool hard) {
-  const float P = 60.0f * AR_TEMPO_RATE / bpm;   // the new period, in frames
-  if (hard) {
-    arTempo.period = P;
-  } else {
-    arTempo.period += AR_TEMPO_PLL_GAIN * (P - arTempo.period);
-  }
-  arTempo.bpm = 60.0f * AR_TEMPO_RATE / arTempo.period;
-}
-
 // THE SLOW FOLLOWER.
 //
 // The clock's rate follows the measurement with a TIME CONSTANT instead of
@@ -2050,10 +1879,8 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
     arTempo.bpm = bpm;
-    // The follower starts here, and the fit starts again: the grid is new.
+    // The follower starts here: the grid is new.
     arTempo.lastSlewFrame = (uint32_t)now;
-    arTempo.lastFit = 0.0f;
-    arTempo.fitHave = false;
     return;
   }
   if (hard) {
@@ -2062,10 +1889,8 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     const float anchor = phase + k * arTempo.period;
     arTempo.nextBeat = anchor;
     arTempo.bpm = 60.0f * AR_TEMPO_RATE / arTempo.period;
-    // The grid is new: the fit starts again, and the follower with it.
+    // The grid is new, and the follower with it.
     arTempo.lastSlewFrame = (uint32_t)now;
-    arTempo.lastFit = 0.0f;
-    arTempo.fitHave = false;
     // In PLAYLIST the music really did change - that is what the mode is
     // for - and the new track's bar starts somewhere else.  So the user's
     // mark belongs to the track that ended, and the bar profile that was
@@ -2094,7 +1919,15 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     }
     return;
   }
-  arTempoAdoptRate(bpm, false);
+  // The soft path: the clock's rate FOLLOWS the measurement and the phase
+  // is taken.
+  //
+  // It used to be a proportional step towards the answer - a BLEND, which
+  // is how a grid ended up at 131.4 when the music was at 129.0: 0.8 x
+  // 131.25 + 0.2 x 132.0 = 131.4, exactly.  A number on no lattice is a
+  // number nobody can trust, and a number that has been blended is a
+  // number that is on no lattice.
+  arTempoSlewRate(bpm, arTempo.frameIndex);
   arTempoAdoptPhase(phase);
 }
 
@@ -2463,24 +2296,15 @@ static void arTempoSweepStep(void) {
   uint16_t peak = 0;
   arTempoPlateauPick(arTempo.sweepFirst, arTempo.sweepN, arTempo.sweepStride,
                       !arTempo.sweepWasNarrow, &rate, &score, &phase, &peak);
-  // THE REFINEMENT.
+  // THE FIRST LOCK IS THE PLATEAU'S CENTRE, and it is left alone.
   //
-  // The plateau's centre can only land on the lattice's step, so the rate
-  // it gives STEPS - and a step is indistinguishable from a tempo change
-  // to anyone watching it.  The fit gives the period the music really has,
-  // and the answer is continuous.
-  //
-  // It is GUARDED: a fit more than AR_TEMPO_REFINE_MAX_BPM from the
-  // plateau's centre is a fit through the wrong beats, and the plateau's
-  // centre - a rate the comb actually scored - is kept.
-  {
-    float r2 = 0.0f, p2 = 0.0f;
-    if (arTempoRefine(rate, phase, &r2, &p2)
-        && fabsf(r2 - rate) <= AR_TEMPO_REFINE_MAX_BPM) {
-      rate  = r2;
-      phase = p2;
-    }
-  }
+  // The centre is a lattice point, so the first lock is a round number -
+  // but it is the number the comb actually scored, and the follower takes
+  // it from there.  The refinement that used to be here (the fit through
+  // the grid's own beats) was measured and REJECTED: it is steadier, but
+  // it is less accurate and it recovers LESS, because the cluster it fits
+  // is a biased estimate of where the beats are.  A biased first lock is
+  // a harder lock to correct.
   arTempo.sweepBestScore = score;
   arTempo.sweepBestBpm   = rate;
   arTempo.sweepBestPhase = phase;
@@ -2519,12 +2343,13 @@ static void arTempoSweepStep(void) {
   // THE STEADY STATE.
   //
   // The grid is a CLOCK and the comb's answer is a MEASUREMENT.  The
-  // measurement the clock follows is the FIT through the grid's own beats -
-  // the features that line up regularly - and the clock follows it SLOWLY,
-  // so a wander is averaged away and a tempo that really changes is
-  // followed smoothly.  The phase follows the comb's anchor on the grid's
-  // own period, so a candidate rate that jitters does not make the anchor
-  // jitter with it.
+  // measurement the clock follows is the plateau's centre - the rate at
+  // which the music's features line up most regularly - and the clock
+  // follows it SLOWLY, so a wander is averaged away, the published rate
+  // is a continuous number instead of a step, and a tempo that really
+  // changes is followed smoothly.  The phase follows the comb's anchor on
+  // the grid's own period, so a candidate rate that jitters does not make
+  // the anchor jitter with it.
   //
   // A rate a long way off is a DIFFERENT grid, and it is only taken when
   // the music really changed: the rate the grid is at has DIED, and the new
@@ -2561,28 +2386,43 @@ static void arTempoSweepStep(void) {
   arTempo.qualityPeak = fmaxf(arTempo.quality,
                                arTempo.qualityPeak * AR_TEMPO_QUAL_DECAY);
 
-  // THE MEASUREMENT AT THE GRID.
+  // THE MEASUREMENT: THE PLATEAU'S CENTRE.
   //
-  // The rate the clock follows is the FIT through the grid's own beats -
-  // the features that line up regularly - and not the plateau's centre.
-  // The centre can only land on the lattice's quarter and it wanders
-  // inside the plateau as the score wobbles, and a clock that follows a
-  // wandering answer publishes a number which is neither the music's tempo
-  // nor any of the answers.
+  // It is the comb's own answer - the rate at which the music's features
+  // line up most regularly - and it is the most ACCURATE answer there is:
+  // the score's flat top is centred on the music's tempo, and its middle
+  // is the music's tempo.
   //
-  // The fit is GUARDED: more than AR_TEMPO_FIT_MAX_BPM from the clock and
-  // it is a fit through the wrong beats - which is what a music that has
-  // really changed looks like - and then there is no measurement here and
-  // the comb's own answer stands in for it.
-  const bool hadFit = arTempo.fitHave;
-  float fitRate = 0.0f, fitPhase = 0.0f;
-  const bool haveFit = arTempoRefine(arTempo.bpm, ph, &fitRate, &fitPhase)
-                       && fabsf(fitRate - arTempo.bpm) <= AR_TEMPO_FIT_MAX_BPM;
-  arTempo.fitHave = haveFit;
-  if (haveFit) arTempo.fitRate = fitRate;
-  // What the clock follows: the fit when there is one, the comb's answer
-  // when there is not.
-  const float meas = haveFit ? fitRate : rate;
+  // It has two faults, and they are the two the user reported:
+  //
+  //   1. It can only land on the LATTICE's step, so the published rate
+  //      STEPS - 128.00, 127.75, 128.25 - and a step looks exactly like
+  //      a tempo change to anyone watching it.
+  //   2. It WANDERS inside the plateau as the score wobbles, by 0.62 BPM
+  //      (sd), so a clock that follows it directly publishes a number
+  //      which is neither the music's tempo nor any of the answers -
+  //      which is how a grid ends up at 131.4 when the music is at 129.0.
+  //
+  // The follower below fixes BOTH, and it fixes them by being a follower
+  // rather than a blend: the plateau's centre is averaged over the
+  // follower's time constant, so its wander is averaged away, and the
+  // answer it publishes is a CONTINUOUS number near the music's tempo
+  // instead of a step between two lattice points.
+  //
+  // MEASURED, over forty windows of real house music, against the music's
+  // own tempo, and against how many of the windows whose first lock was
+  // wrong ended up right:
+  //
+  //   the plateau's centre, a step at a time   the error 0.135 BPM, 26/40
+  //   the fit at the grid, followed (tau 4)    the error 0.295 BPM, 21/40
+  //   the plateau's centre, followed (tau 8)   the error 0.139 BPM, 26/40
+  //
+  // The fit was measured and REJECTED: it is steadier, but it is less
+  // accurate and it recovers LESS - the cluster it fits is a biased
+  // estimate of where the beats are, and a biased first lock is a harder
+  // lock to correct.  The plateau's centre, followed slowly, keeps the
+  // accuracy and the recovery and loses the steps.
+  const float meas = rate;
 
   // THE USER'S LOCK.
   //
@@ -2617,27 +2457,23 @@ static void arTempoSweepStep(void) {
     arTempoPublishDrift(meas, ph);
     return;
   }
-  if (haveFit) {
-    // THE CLOCK FOLLOWS THE MEASUREMENT, SLOWLY.
-    //
-    // The confirmation used to be a run before the clock moved.  A slow
-    // follower is the same thing done better: a wander is averaged away,
-    // and a tempo that really changes is followed smoothly.
-    //
-    // The measurement may not JUMP: a jump is a tempo change (which
-    // settles within a few searches) or a breakdown (where the grid would
-    // be chasing a guess), and in both cases the grid holds until the
-    // answer has settled.
-    const bool still = !hadFit
-                    || fabsf(fitRate - arTempo.lastFit) <= AR_TEMPO_FIT_STILL_BPM;
-    if (still && arTempo.quality >= AR_TEMPO_QUAL_MIN) {
-      arTempoSlewRate(fitRate, arTempo.frameIndex);
-    }
-    arTempo.lastFit = fitRate;
-  } else if (run >= arTempoConfirmNeed()) {
-    // No fit: the comb's answer is the measurement, and it moves the
-    // clock's rate a step at a time.
-    arTempoAdoptRate(rate, false);
+  // THE CLOCK FOLLOWS THE MEASUREMENT, SLOWLY.
+  //
+  // The confirmation used to be a run before the clock moved, and then the
+  // clock took the answer a STEP at a time - which is how the published
+  // rate came out as a series of lattice points, and how a blend of two
+  // of them came out as a number that was on no lattice at all.
+  //
+  // A slow follower is the same thing done better: the plateau's wander
+  // is averaged away, the published rate is a continuous number near the
+  // music's tempo, and a tempo that really changes is followed smoothly -
+  // which is what a DJ's pitch fader does.
+  //
+  // The follower is gated on the QUALITY: during a breakdown the music
+  // stops explaining the grid, the quality falls, and the grid HOLDS
+  // instead of chasing a guess.
+  if (arTempo.quality >= AR_TEMPO_QUAL_MIN) {
+    arTempoSlewRate(rate, arTempo.frameIndex);
   }
   // The DRIFT: how far the grid is from the music.  It is published always,
   // and it is what a LOCKED grid is watched with.
