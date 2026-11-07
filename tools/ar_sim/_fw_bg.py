@@ -154,8 +154,15 @@ REFINE_MAX = 1.0
 # does.
 FIT_MAX = 2.0
 FIT_STILL = 0.50
-RATE_TAU_S = 5.0
-CATCH_BPM = 0.50
+# THE FOLLOWER'S DEFAULTS ARE THE FIRMWARE'S.
+#
+# These were 5.0 and 0.50, which is NOT what the board runs: the firmware's
+# AR_TEMPO_RATE_TAU_S is 4.0 and the firmware has no catch follower at all.
+# A twin that silently disagrees with the firmware is a trap: a measurement
+# taken with the twin's defaults says nothing about the board.  Keep these
+# equal to usermods/audioreactive/ar_tempo.h.
+RATE_TAU_S = 4.0
+CATCH_BPM = 99.0         # the catch follower is OFF: the firmware has none
 CATCH_TAU_S = 0.75
 
 # THE CONFIRMATION.
