@@ -337,9 +337,9 @@ void handleSerial() {
       // sixteen of the thirty-one bands the sixteen bars show.
       audioReactiveRtaCommand(next);
     } else if (next == 'e' || next == 'E' || next == 'q' ||
-               next == 'j' || next == 'J') {
-      // The tempo tracker: the comb score's tolerance, the re-lock, and the
-      // downbeat.
+               next == 'j' || next == 'J' || next == 'M' || next == 'P') {
+      // The tempo tracker: the comb score's tolerance, the re-lock, the
+      // downbeat, and the mode.
       //
       // The tolerance is a TRADE and not a constant. A tighter one makes the
       // score pickier about the rate - it will not believe a rate whose

@@ -874,6 +874,7 @@ struct ArLiveSettings {
   bool    tempoEnabled;          // the tempo tracker runs?
   float   tempoTolMs;            // the comb score's tolerance, ms
   uint8_t tempoQuant;            // the candidate lattice: 0 = a quarter BPM, 1 = a half BPM, 2 = half BPM, whole preferred
+  bool    tempoPlaylist;         // DJ SET (false) or PLAYLIST (true)
 };
 
 // The settings as they are on boot.
@@ -2540,6 +2541,10 @@ static ArLiveSettings arSettingsBoot() {
   s.tempoEnabled   = true;
   s.tempoTolMs     = AR_TEMPO_TOL_DEFAULT_MS;
   s.tempoQuant     = AR_TEMPO_QUANT_DEFAULT;
+  // DJ SET is the default: the board is built for a DJ, the set is
+  // continuous, and DJ SET is the careful one - the grid that is working is
+  // trusted and the user's downbeat survives a rate change.
+  s.tempoPlaylist  = false;
   return s;
 }
 
@@ -7759,6 +7764,11 @@ class AudioReactive : public Usermod {
         // rate can be read against the grid that produced it - and so the
         // mode can be changed and seen to change.
         t["quant"]        = (int)st.tempoQuant;
+        // The mode: 0 = DJ SET, 1 = PLAYLIST.  Published so the rate can be
+        // read against the memory that produced it - and so the mode can be
+        // changed and seen to change.
+        t["mode"]         = st.tempoPlaylist ? 1 : 0;
+        t["mode_name"]    = st.tempoPlaylist ? F("playlist") : F("dj set");
         // The band the estimator searches, and the score below which the
         // estimate is not published as valid.
         t["bpm_low"]      = (double)AR_TEMPO_BPM_LO;
@@ -8446,6 +8456,32 @@ class AudioReactive : public Usermod {
             infoArr.add(tempoBuf);
           }
 
+          // THE MODE: DJ SET or PLAYLIST.
+          //
+          // DJ SET is one performance: the tempo drifts and ramps, the grid
+          // is continuous, and the grid that is working is trusted - the
+          // background has to converge fully before it may take the grid,
+          // and the user's downbeat survives a rate change, because a DJ's
+          // pitch change does not move the bar.
+          //
+          // PLAYLIST is anything-can-come-next.  The background's memory is
+          // shorter, so it forgets the track that ended sooner and finds
+          // the one that started sooner - MEASURED, the handover after a
+          // track change takes 5.7 s instead of 11.2 s - and the downbeat
+          // goes when the grid re-anchors, because the new track's bar
+          // starts somewhere else.
+          {
+            const ArLiveSettings st = arSettingsSnapshot();
+            infoArr = user.createNestedArray(F("Tempo mode"));
+            infoArr.add(st.tempoPlaylist ? F("playlist - anything can shuffle in")
+                                         : F("DJ set - smooth BPM and grid"));
+            infoArr = user.createNestedArray(st.tempoPlaylist ? F("Switch to DJ set")
+                                                              : F("Switch to playlist"));
+            infoArr.add(st.tempoPlaylist
+              ? F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{djSetMode:true}});\">DJ set</button>")
+              : F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{playlistMode:true}});\">playlist</button>"));
+          }
+
           // THE DOWNBEAT MARK: the button that says where the bar starts.
           //
           // The sound does not know.  MEASURED over sixty windows of real
@@ -8807,6 +8843,37 @@ class AudioReactive : public Usermod {
             USER_PRINTLN("AR: downbeat cleared - the numbering is the convention again");
           }
         }
+        // THE MODE, from the info pane's button.
+        //
+        // DJ SET and PLAYLIST are the same tracker with two different
+        // MEMORIES - the whole story is in ar_tempo.h.  The button changes
+        // it LIVE: the tracker reads the mode every frame, so the change
+        // takes effect on the next one, with no re-lock and no restart.  And
+        // it is SAVED, because a mode that forgets itself at the next reboot
+        // is not a setting.
+        //
+        // Two boolean keys and not one number, because a value that arrives
+        // as a string is read as zero - silently - and a zero here is a
+        // mode, not a number.
+        {
+          bool wantPlaylist = false;
+          bool haveMode = false;
+          if (usermod[F("playlistMode")].is<bool>()) {
+            wantPlaylist = usermod[F("playlistMode")].as<bool>();
+            haveMode = true;
+          } else if (usermod[F("djSetMode")].is<bool>()) {
+            wantPlaylist = !usermod[F("djSetMode")].as<bool>();
+            haveMode = true;
+          }
+          if (haveMode) {
+            const ArLiveSettings s = arSettingsEdit([wantPlaylist](ArLiveSettings& st) {
+              st.tempoPlaylist = wantPlaylist;
+            });
+            doSerializeConfig = true;
+            USER_PRINTF("AR: tempo mode is %s\n",
+                        s.tempoPlaylist ? "PLAYLIST" : "DJ SET");
+          }
+        }
         // The codec's MCLK pre-divider.
         //
         // The vendor coefficient tables all use 1 for MCLK = 256 x rate; this
@@ -9058,6 +9125,13 @@ class AudioReactive : public Usermod {
       //            is still a candidate), 2 = the lattice with the WHOLE
       //            numbers preferred over the halves.
       tempo[F("quant")]   = st.tempoQuant;
+      // "mode"   DJ SET (0) or PLAYLIST (1).  DJ SET is the default: one
+      //          performance, a continuous grid, and the user's downbeat
+      //          survives a rate change.  PLAYLIST is for anything that can
+      //          shuffle in: the background forgets the track that ended
+      //          sooner, so the new one is found sooner, and the downbeat
+      //          goes when the grid re-anchors.
+      tempo[F("mode")]   = st.tempoPlaylist ? 1 : 0;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -9381,10 +9455,20 @@ class AudioReactive : public Usermod {
                                                  quantRead, 0, 2);
         if (!haveQuant) configComplete = false;   // the key is missing - the config gets rewritten
 
-        arSettingsEdit([haveTempo, tempoOnRead, tolRead, haveQuant, quantRead](ArLiveSettings& st) {
+        // The mode: DJ SET (0) or PLAYLIST (1).  A missing key is not an
+        // error - the mode has a default, and a config written before it
+        // existed is still a good config - so it does not mark the config
+        // incomplete.
+        uint8_t modeRead = before.tempoPlaylist ? 1 : 0;
+        const bool haveMode = arGetRangedNumber(top["tempo"][F("mode")],
+                                                 modeRead, 0, 1);
+
+        arSettingsEdit([haveTempo, tempoOnRead, tolRead, haveQuant, quantRead,
+                        haveMode, modeRead](ArLiveSettings& st) {
           if (haveTempo) st.tempoEnabled = (tempoOnRead != 0);
           st.tempoTolMs = tolRead;
           if (haveQuant) st.tempoQuant = quantRead;
+          if (haveMode) st.tempoPlaylist = (modeRead != 0);
         });
       }
 

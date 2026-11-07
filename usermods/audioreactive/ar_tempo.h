@@ -384,51 +384,92 @@ static constexpr float AR_TEMPO_NARROW_BPM = 2.0f;
 // is re-anchored more often than it used to be, not less.
 static constexpr int AR_TEMPO_SEARCH_EVERY = 4;
 
-// ---- the safety net -------------------------------------------------------
+// ---- the two estimators ---------------------------------------------------
 //
-// The narrow search has ONE failure mode, and it is a bad one: when the
-// MUSIC changes, the narrow search is looking in the wrong place.  The
-// new beat is nowhere near the old one, so the narrow search finds the
-// best thing in a window that does not contain it - and, because the
-// window is narrow, the best thing in a wrong window is often at its
-// edge.  Nothing inside the narrow search says "I am lost".
+// There are TWO of them, and they have different jobs.
 //
-// So the whole-band search does not go away.  It becomes a safety net: it
-// runs every AR_TEMPO_FULL_EVERY frames, whatever the score says, and it
-// is the only search that can move the grid a long way.
+// The STEADY state is the narrow search: it looks at the rate the grid
+// believes, plus or minus AR_TEMPO_NARROW_BPM, and it moves the grid by
+// small amounts.  That is the grid that runs the lights, and it is not
+// allowed to jump: a rate that is a long way off the one the grid is at is
+// a DIFFERENT grid, and a different grid has to be earned.
+//
+// The BACKGROUND is a second estimator with its own clock: it looks at the
+// WHOLE band, every AR_TEMPO_BG_EVERY frames, and it nominates a rate and
+// a grid of its own.  It does not touch the grid while it is still making
+// up its mind.  It may only move the grid when it has CONVERGED - the same
+// rate AND the same grid, over several searches in a row - and when its
+// evidence is CLEARLY better than the steady rate's, measured on the SAME
+// window.
+//
+// The old safety net was the third thing, and it was the thing that broke:
+// a whole-band search every 32 frames whose far candidate took the grid on
+// a 5 % margin as soon as the local rate was called dead.  MEASURED on the
+// offline twin: that is the path a 128 BPM track took to 160.
 //
 // The cost, in candidate-passes over the comb's window a frame:
 //
-//   the whole-band search alone   341 / 8 frames = 42.6 a frame
-//   the safety net, every 32 frames          341 / 32      = 10.7 a frame
-//   the narrow search, every 4 frames           17 / 4       =  4.3 a frame
-//   together                                            15.0 a frame
+//   the background, every 32 frames    171 / 32   =  5.3 a frame
+//   the narrow search, every 4 frames   17 / 4    =  4.3 a frame
+//   together                                     9.6 a frame
 //
-// against the 42.6 the board was paying before - a cut of nearly three.
-//
-// A second way back exists, and it is free: if the narrow search's SCORE
-// collapses - the beat it was tracking is not there any more - then the
-// music has changed, and the next search looks everywhere at once.
-static constexpr int AR_TEMPO_FULL_EVERY = 32;
+// against the 15.0 the safety net and the narrow search were paying, and
+// the 42.6 the board was paying before that.
+static constexpr int AR_TEMPO_BG_EVERY = 32;
 
-// ---- the veto --------------------------------------------------------------
+// How many CONSECUTIVE background searches have to agree before the
+// background counts as converged.  Six searches at 32 frames is two
+// seconds: long enough that a compromise rate - the rate a MIXTURE fits
+// best - cannot hold it, because a mixture's compromise moves as the
+// window fills.
+static constexpr int AR_TEMPO_BG_CONVERGE = 6;
+
+// How close two background nominations have to be, in BPM, to count as
+// the same rate.  The lattice is half a BPM wide, so this is a little
+// over one lattice step: two nominations that differ by less than this
+// are the same rate.
+static constexpr float AR_TEMPO_BG_AGREE_BPM = 0.60f;
+
+// How close two background nominations have to be, in BEATS, to count as
+// the same grid.  Half a beat: the same rate with the grid a whole beat
+// out of place is a different bar, and a bar the user can hear.
+static constexpr float AR_TEMPO_BG_PHASE_TOL = 0.50f;
+
+// A NUDGE: a rate this close to the one the grid is at is the same music,
+// and it is taken without a fight.  It has to be wider than the plateau
+// the comb cannot separate - measured, the plateau's half-width is about
+// 1.25 BPM - or the rate can never walk to the middle of it.
+static constexpr float AR_TEMPO_NEAR_BPM = 1.50f;
+
+// When the rate the grid is at has DIED - its own score is under the
+// floor - a new rate has to clear this to take the grid.  The old rule
+// asked only for a 5 % margin over a rate that was already dead, and it
+// was happy with a rate that was WORSE.
+static constexpr float AR_TEMPO_DEAD_ACCEPT = 0.50f;
+
+// The plateau's flat top, as a RELATIVE width.  The comb's score
+// saturates: on a clean 128 BPM track every candidate from 126.5 to 129.0
+// scores exactly 1.000, because the kernel is wide enough to hold them
+// all.  The argmax of a flat run is its FIRST member, so the old tracker
+// published the rate at the EDGE of the band of rates it could not tell
+// apart - and wandered by half a BPM at random.  The rate is the CENTRE
+// of that run instead, and this is how wide "flat" is.
+static constexpr float AR_TEMPO_PLATEAU_TOL = 1e-4f;
+
+// ---- the background's fight ------------------------------------------------
 //
-// The safety net finds the best rate in the WHOLE band; the narrow search
-// finds the best rate in a couple of BPM around the grid.  They disagree
-// sometimes, and when they do the grid is dragged between them: the board
-// was answering 125.00, then 131.00, then 125.00 again.
+// The background nominates a rate and a grid.  To move the grid it has to
+// be CLEARLY better evidence than the steady rate - not equal, not a little
+// better: CLEARLY.
 //
-// So the far rate does not get to move the grid just because it won.  It
-// has to be CLEARLY better evidence - and "clearly" is measured, not
-// guessed.
+// Both sides of the fight are the RAW score, measured on the SAME onset
+// snapshot with the same kernel, so the comparison is fair.  The prior is
+// left out of it on purpose: the prior is a tie-breaker and not evidence,
+// and letting it decide this fight is what turned its centre - 125.00 -
+// into an attractor.
 //
-// The two are compared on the RAW score, on the SAME onset snapshot, so
-// the comparison is fair.  The prior is left out of it on purpose: the
-// prior is a tie-breaker and not evidence, and letting it decide the
-// fight is what turned its centre - 125.00 - into an attractor.
-//
-// The margin is RELATIVE - a fraction of the local score, not an absolute
-// one, because the score's scale moves with the music.
+// The margin is RELATIVE - a fraction of the steady rate's score, not an
+// absolute one, because the score's scale moves with the music.
 //
 // MEASURED, over 34 windows of real house music and ten cuts between
 // different tracks, the ratio of the far score to the local score:
@@ -467,14 +508,6 @@ static constexpr int AR_TEMPO_FULL_EVERY = 32;
 // margin buys the re-lock at the price of the wander, and the wander is
 // the complaint this margin exists to answer.
 //
-// The veto applies to BOTH whole-band searches - the safety net's and the
-// COLLAPSE one, the search the narrow search asks for when its score falls
-// below the minimum.  Exempting the collapse search was measured and it
-// changes NOTHING (the hit rate, the wander and the re-lock are all
-// identical), because at the moment the narrow search collapses the comb's
-// twelve-second window is still full of the OLD music: the far rate cannot
-// win yet, so there is nothing for the veto to refuse.  One rule, then.
-//
 // MEASURED, on a click track that changes tempo half way through (the
 // offline twin, the firmware's own band and comb):
 //
@@ -488,18 +521,60 @@ static constexpr int AR_TEMPO_FULL_EVERY = 32;
 // long as a twenty BPM one - and the number is suspiciously close to the
 // comb's TWELVE SECOND WINDOW.  That is what it is: after the music
 // changes, the window is still full of the OLD music, which still lines up
-// with the OLD rate, so the old rate keeps winning the veto until the
+// with the OLD rate, so the old rate keeps winning the fight until the
 // window has flushed.  The confusion time is the comb's memory.
 //
 // Lowering the margin does NOT help: at 0.45 the corpus is unchanged (the
 // same-music far/local ratio almost never reaches 1.45), and at 0.30 the
 // wander comes back - the p90 went from 0.124 BPM to 0.668 and the jumps
 // from 46 to 93.  The margin is the price of the wander, and it stays.
-static constexpr float AR_TEMPO_NET_MARGIN = 0.70f;
+static constexpr float AR_TEMPO_BG_MARGIN = 0.70f;
 
 // How much history the comb score looks at: 12 s.
 static constexpr float AR_TEMPO_COMB_WINDOW_S = 12.0f;
 static constexpr int   AR_TEMPO_COMB_FRAMES   = (int)(12.0f * 93.75f);  // 1125
+
+// ---------------------------------------------------------------------------
+// THE TWO MODES: DJ SET and PLAYLIST.
+//
+// They are the same tracker with two different MEMORIES, because the music
+// is different.
+//
+// DJ SET - one performance.  The tempo drifts, ramps and mixes, and the
+// grid is continuous.  A long memory is HONEST here: the window holds one
+// piece of music, so the background remembers as long as the grid does, it
+// has to CONVERGE fully before it may move the grid, and its evidence has
+// to be clearly better than the steady rate's.  The user's downbeat
+// SURVIVES a rate change: the DJ may pitch up or down, and the user has
+// already said the grid is right at that moment.
+//
+// PLAYLIST - anything can come next.  A window can straddle a track
+// boundary, and a twelve-second memory then holds TWO tracks - which is
+// exactly how the new track stays a mystery for ten seconds while the old
+// one is still in the window and still lining up with the old rate.  So the
+// BACKGROUND's memory is shorter: it forgets the old track sooner, so it
+// finds the new one sooner.  The handover is quicker - fewer agreements
+// needed, less margin to win on - and the user's downbeat is DROPPED when
+// the grid re-anchors, because the new track's bar starts somewhere else.
+//
+// MEASURED on the offline twin (tools/ar_sim/_bg_mode.py), five tracks of
+// twenty seconds each at five different tempi - the time from the change
+// to the grid sitting on the new rate:
+//
+//     128 -> 140      dj set 11.2 s     playlist  5.7 s
+//     140 ->  95      dj set 13.0 s     playlist  8.5 s
+//      95 -> 172      dj set 14.5 s     playlist  7.6 s
+//     172 -> 110      dj set 10.5 s     playlist  7.8 s
+//
+// and in BOTH modes the ramp is still followed, and the mixture, the
+// breakdown and the 160-on-top still do not take the grid.
+// ---------------------------------------------------------------------------
+static constexpr int     AR_TEMPO_BG_WINDOW_DJ    = AR_TEMPO_COMB_FRAMES;
+static constexpr int     AR_TEMPO_BG_WINDOW_LIST  = AR_TEMPO_COMB_FRAMES / 2;
+static constexpr uint8_t AR_TEMPO_BG_CONVERGE_DJ   = 6;
+static constexpr uint8_t AR_TEMPO_BG_CONVERGE_LIST = 3;
+static constexpr float   AR_TEMPO_BG_MARGIN_DJ     = 0.70f;
+static constexpr float   AR_TEMPO_BG_MARGIN_LIST   = 0.40f;
 
 // The prior: a log-normal on the BPM, centred on 125, sigma 0.35 in ln units
 // (about +-27 % at one sigma). Weight 0.6: measured, that is where the
@@ -571,19 +646,6 @@ static constexpr float AR_TEMPO_MIN_SCORE = 0.35f;
 // collapse and not a dip.  The grid survives a dip; it does not survive four
 // of them.
 static constexpr uint8_t AR_TEMPO_COLLAPSE_COUNT = 4;
-
-// How much better the far rate has to be before a DEAD local rate gives up
-// the grid to it.
-//
-// The rule used to be "the local rate's score is under the floor, so it is
-// dead: take the far rate".  It took the far rate even when the far rate
-// was WORSE than the local one, and that is what turned a good rate into a
-// walk: MEASURED over sixteen windows of real house music, the wander went
-// from 0.105 BPM to 0.835 and the jumps from 0.00 a window to 1.23.
-//
-// A dead local rate still has to be BEATEN.  How hard is a question the
-// corpus answers: 5 % is enough.
-static constexpr float AR_TEMPO_DEAD_MARGIN = 0.05f;
 
 // ---- the comb's kernel -------------------------------------------------
 
@@ -821,45 +883,39 @@ struct ArTempoState {
   uint8_t  sweepStride;                   // 1 = every candidate, 2 = the lattice (every other one)
   uint8_t  quantMode;                     // 0 = the plain grid, 1 = the lattice, 2 = the lattice + the whole numbers
   float    sweepBonus;                    // the whole-number penalty, in score units
-  uint16_t sweepNarrowSpan;               // the narrow window's span, in candidate indices
-  uint32_t lastSweepFrame;                // when the last search started
-  uint32_t lastFullFrame;                 // ... and the last WHOLE-BAND one
+  uint32_t lastSweepFrame;                // when the last steady search started
   float    sweepNow;                      // the frame the sweep STARTED at
   float    sweepTotal;                    // the window's onset strength, summed
   float    combH[AR_TEMPO_COMB_BINS];      // the phase histogram
-  float    sweepBestValue;                // the best (score - penalty)
+  // Every candidate's RAW score.  The rate is the CENTRE of the run of
+  // candidates the comb cannot separate, and finding that run needs the
+  // whole profile - not just the winner.
+  float    sweepScore[AR_TEMPO_CAND_COUNT];
   float    sweepBestScore;
   float    sweepBestBpm;
   float    sweepBestPhase;
   uint16_t sweepBestIdx;                  // ... and which candidate that was
-  // The narrow window's best, measured on the SAME snapshot as the whole
-  // band so the two are comparable.  It is what the veto compares against.
-  uint16_t sweepNarrowFirst;              // the narrow window's first candidate
-  uint16_t sweepNarrowCount;              // ... and how many it has
-  float    sweepNarrowValue;
-  float    sweepNarrowScore;
-  float    sweepNarrowPick;               // the fight's value: the score less the lattice preference
-  float    sweepNarrowBpm;
-  float    sweepNarrowPhase;
-  uint16_t sweepNarrowIdx;                // ... and which candidate that was
-  // The FAR candidate: the best EVIDENCE outside the narrow window.  It is
-  // nominated by the RAW score, and not by the value, because the prior is
-  // a tie-breaker and it must not be allowed to choose which far rate gets
-  // to argue with the local one.  When the prior chose it, a rate fifteen
-  // BPM away never got to argue at all: the prior had already decided it
-  // was not worth mentioning, and 125.00 became an attractor.
-  float    sweepFarScore;
-  float    sweepFarValue;
-  float    sweepFarPick;                  // the fight's value, as above
-  float    sweepFarBpm;
-  float    sweepFarPhase;
-  uint16_t sweepFarIdx;                   // ... and which candidate that was
   bool     sweepActive;
   bool     sweepWasNarrow;                // this search looked around
-  bool     sweepHasNarrow;                // ... and the veto's window is marked
-  bool     needFullSearch;                // the next one looks everywhere
-  bool     fullSearchFailed;              // ... and one that found nothing
+  bool     sweepBackground;               // ... and this one is the background's
+  bool     playlist;                      // PLAYLIST mode, not DJ SET
   uint8_t  collapseCount;                 // searches below the floor, in a row
+
+  // ---- the background ----------------------------------------------------
+  //
+  // The second estimator.  It has its own clock, it looks at the WHOLE
+  // band, and it nominates a rate and a grid of its own.  It does not
+  // touch the grid until it has CONVERGED - the same rate and the same
+  // grid, over several searches in a row - and until its evidence is
+  // clearly better than the steady rate's.
+  float    bgBpm;                         // the rate it nominates
+  float    bgPhase;                       // ... and the grid it nominates
+  float    bgScore;                       // ... and its evidence
+  float    bgLocalScore;                  // the steady rate's evidence, same window
+  uint8_t  bgAgree;                       // how many searches in a row agreed
+  bool     bgHave;                        // it has said something
+  bool     bgConverged;                   // ... and it has agreed with itself
+  uint32_t bgLastFrame;                   // when it last looked
 
   // ---- the PLL ----
   float    period;                        // the beat period, in frames
@@ -920,6 +976,18 @@ struct ArTempoState {
 
 static ArTempoState arTempo;
 static float arTempoPriorPen[AR_TEMPO_CAND_COUNT];
+
+// The prior's penalty at a rate that is not on the candidate grid.
+//
+// The table above is indexed by the candidate, and the plateau's CENTRE is
+// not a candidate: it is the middle of a run of them.  So the penalty has
+// to be computable at any rate, and it is the same formula the table was
+// built from.
+static float arTempoPriorAt(float bpm) {
+  if (bpm <= 0.0f) return 0.0f;
+  const float z = logf(bpm / AR_TEMPO_PRIOR_BPM) / AR_TEMPO_PRIOR_SIGMA;
+  return AR_TEMPO_PRIOR_WEIGHT * z * z;
+}
 
 // A re-lock is a REQUEST: the grid belongs to the analysis task, and the
 // serial console is not it. The flag is applied at the top of the next
@@ -1242,34 +1310,24 @@ static void arTempoReset(void) {
   arTempo.sweepN      = AR_TEMPO_CAND_COUNT;
   arTempo.sweepPerFrame = AR_TEMPO_CAND_PER_FRAME;
   arTempo.sweepStride = 1;
-  arTempo.sweepNarrowSpan = 0;
   arTempo.lastSweepFrame = 0;
-  arTempo.lastFullFrame = 0;
   arTempo.sweepActive = false;
   arTempo.sweepWasNarrow = false;
-  arTempo.needFullSearch = false;
-  arTempo.sweepBestValue = -1e9f;
+  arTempo.sweepBackground = false;
   arTempo.sweepBestScore = 0.0f;
   arTempo.sweepBestBpm   = 0.0f;
   arTempo.sweepBestPhase = 0.0f;
   arTempo.sweepBestIdx   = 0;
-  arTempo.sweepHasNarrow = false;
-  arTempo.sweepNarrowFirst = 0;
-  arTempo.sweepNarrowCount = 0;
-  arTempo.sweepNarrowValue = -1e9f;
-  arTempo.sweepNarrowScore = -1e9f;
-  arTempo.sweepNarrowPick  = -1e9f;
-  arTempo.sweepNarrowBpm   = 0.0f;
-  arTempo.sweepNarrowPhase = 0.0f;
-  arTempo.sweepNarrowIdx   = 0;
-  arTempo.sweepFarScore = -1e9f;
-  arTempo.sweepFarPick  = -1e9f;
-  arTempo.sweepFarValue = -1e9f;
-  arTempo.sweepFarBpm   = 0.0f;
-  arTempo.sweepFarPhase = 0.0f;
-  arTempo.sweepFarIdx   = 0;
-  arTempo.fullSearchFailed = false;
   arTempo.collapseCount = 0;
+  // The background: it starts with nothing to say.
+  arTempo.bgBpm      = 0.0f;
+  arTempo.bgPhase    = 0.0f;
+  arTempo.bgScore    = 0.0f;
+  arTempo.bgLocalScore = 0.0f;
+  arTempo.bgAgree    = 0;
+  arTempo.bgHave     = false;
+  arTempo.bgConverged = false;
+  arTempo.bgLastFrame = 0;
   arTempo.period      = 0.0f;
   arTempo.nextBeat    = 0.0f;
   arTempo.lastBeat    = 0.0f;
@@ -1329,9 +1387,17 @@ static void arTempoHold(void) {
   arTempo.prevPeakFrame = -1000;
   arTempo.prevPeakStr = 0.0f;
   arTempo.sweepActive = false;
-  arTempo.needFullSearch = false;
-  arTempo.fullSearchFailed = false;
+  arTempo.sweepBackground = false;
   arTempo.collapseCount = 0;
+  // The background forgets too: it is a fresh start, and a nomination from
+  // before the silence is not evidence about the music that is coming.
+  arTempo.bgHave = false;
+  arTempo.bgConverged = false;
+  arTempo.bgAgree = 0;
+  arTempo.bgBpm = 0.0f;
+  arTempo.bgPhase = 0.0f;
+  arTempo.bgScore = 0.0f;
+  arTempo.bgLocalScore = 0.0f;
 }
 
 // Throw the grid away and wait for the next search.
@@ -1356,8 +1422,16 @@ static void arTempoRequestDownbeat(bool set) {
 // gone in three searches.
 //
 // `phase` and `now` are both relative to the frame base.
+//
+// `hard` says the evidence is a DIFFERENT rate and not a slightly
+// different one, and the grid is RE-ANCHORED on it instead of walked
+// toward it.  The walk is what does the damage: a ten per cent step from
+// 130 towards 173 passes through 140 and 150, where nothing aligns at all,
+// and the tracker sits in that dead zone for seconds while its score is
+// rubbish.  The walk is right for a nudge, where the two rates are the
+// same music, and wrong for a change, where they are not.
 // ---------------------------------------------------------------------------
-static void arTempoAdopt(float bpm, float phase, float now) {
+static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
   const float P = 60.0f * AR_TEMPO_RATE / bpm;   // the new period, in frames
   if (!arTempo.locked) {
     // The first lock: place the grid at the comb's phase, immediately. There
@@ -1385,6 +1459,37 @@ static void arTempoAdopt(float bpm, float phase, float now) {
     arTempo.downbeatEvalIndex = 0;
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
+  } else if (hard) {
+    arTempo.period = P;
+    const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
+    const float anchor = phase + k * arTempo.period;
+    arTempo.nextBeat = anchor;
+    // In PLAYLIST the music really did change - that is what the mode is
+    // for - and the new track's bar starts somewhere else.  So the user's
+    // mark belongs to the track that ended, and the bar profile that was
+    // measured on it is measured on nothing now.  Both go, and the
+    // numbering goes back to the convention until the profile finds a
+    // downbeat in the new music or the user marks one.
+    //
+    // DJ SET keeps them: there the change is a DJ pitching the music up or
+    // down, and the user has already said the grid is right.
+    if (arTempo.playlist) {
+      arTempo.downbeatManual  = false;
+      arTempo.downbeatKnown   = false;
+      arTempo.downbeatApplyAt = 0xFFFFFFFFu;
+      arTempo.measureKnown    = false;
+      arTempo.measureApplyAt  = 0;
+      for (int i = 0; i < 4; i++) {
+        arTempo.barSum[i] = 0.0f;
+        arTempo.barSq[i]  = 0.0f;
+        arTempo.barCnt[i] = 0;
+      }
+      for (int i = 0; i < 16; i++) {
+        arTempo.measSum[i] = 0.0f;
+        arTempo.measSq[i]  = 0.0f;
+        arTempo.measCnt[i] = 0;
+      }
+    }
   } else {
     arTempo.period += AR_TEMPO_PLL_GAIN * (P - arTempo.period);
     const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
@@ -1460,10 +1565,10 @@ static void arTempoNarrowWindowLattice(float bpm, int *first, int *count) {
 //
 // Two searches, and they cost very different amounts.
 //
-// The WHOLE-BAND search looks at all 341 candidates.  It does not fit in
-// one frame comfortably, so it is SPREAD: it starts, scores a fixed number
-// of candidates a frame, and finishes eight frames later.  It runs when
-// the tracker has no rate - at the start, and after the music changes.
+// The WHOLE-BAND search looks at all 341 candidates - 171 on the lattice.
+// It does not fit in one frame comfortably, so it is SPREAD: it starts,
+// scores a fixed number of candidates a frame, and finishes four frames
+// later.  It is the BACKGROUND's search, and the ACQUISITION's.
 //
 // The NARROW search looks at the rate the grid believes, plus or minus
 // AR_TEMPO_NARROW_BPM.  That is a handful of candidates and they are all
@@ -1474,11 +1579,19 @@ static void arTempoNarrowWindowLattice(float bpm, int *first, int *count) {
 // comparable with each other.
 // ---------------------------------------------------------------------------
 
-static void arTempoSweepStart(void) {
+static void arTempoSweepStart(bool background) {
   // The window's onsets, newest first. The comb does not care about the
   // order - the modulo is order-independent - but the ring is walked
   // backwards anyway, because that is the direction the window is in.
-  const int32_t cutoff = (int32_t)arTempo.frameIndex - (int32_t)AR_TEMPO_COMB_FRAMES;
+  //
+  // THE BACKGROUND'S WINDOW is the mode's memory.  In PLAYLIST it is half
+  // as long, so the background forgets the track that just ended in half
+  // the time and finds the one that just started in half the time.  The
+  // steady search always looks at the full window: the grid it is
+  // tracking lives there.
+  const int window = (background && arTempo.playlist)
+                   ? AR_TEMPO_BG_WINDOW_LIST : AR_TEMPO_COMB_FRAMES;
+  const int32_t cutoff = (int32_t)arTempo.frameIndex - (int32_t)window;
   int n = 0;
   float total = 0.0f;
   for (int i = 0; i < (int)arTempo.peakCount && n < AR_TEMPO_PEAK_RING; i++) {
@@ -1490,9 +1603,9 @@ static void arTempoSweepStart(void) {
     n++;
   }
 
-  // The candidate set.  Locked, the search looks around the rate the grid
-  // believes; unlocked, it looks at the whole band, because that is the
-  // search that FINDS a rate in the first place.
+  // The candidate set.  Locked and steady, the search looks around the rate
+  // the grid believes; the background's search and the acquisition's look at
+  // the whole band, because those are the searches that FIND a rate.
   //
   // On the LATTICE the candidates are every other index of the 0.25 BPM
   // grid - the multiples of half a BPM - so the stride is two and the
@@ -1502,46 +1615,21 @@ static void arTempoSweepStart(void) {
   int first = 0;
   int count = lattice ? ((AR_TEMPO_CAND_COUNT + 1) / 2) : AR_TEMPO_CAND_COUNT;
   bool narrow = false;
-  if (arTempo.locked && !arTempo.needFullSearch && arTempo.bpm > 0.0f) {
+  if (!background && arTempo.locked && arTempo.bpm > 0.0f) {
     if (lattice) arTempoNarrowWindowLattice(arTempo.bpm, &first, &count);
     else         arTempoNarrowWindow(arTempo.bpm, &first, &count);
     narrow = true;
   }
-  arTempo.needFullSearch = false;
-  arTempo.sweepWasNarrow = narrow;
-
-  // The veto's window.  When the search is the WHOLE BAND and the tracker
-  // is locked, the veto needs the best answer NEAR the grid as well as the
-  // best answer anywhere - and it needs both from the SAME snapshot, or the
-  // comparison is not fair.  So the narrow window's candidates are marked
-  // here, and the scoring loop remembers which of them won.
-  //
-  // A narrow search does not need this: everything it scored was inside the
-  // window already.
-  arTempo.sweepHasNarrow   = false;
-  arTempo.sweepNarrowFirst = 0;
-  arTempo.sweepNarrowCount = 0;
-  arTempo.sweepNarrowSpan  = 0;
-  arTempo.sweepNarrowValue = -1e9f;
-  arTempo.sweepNarrowScore = -1e9f;
-  arTempo.sweepNarrowPick  = -1e9f;
-  arTempo.sweepNarrowBpm   = 0.0f;
-  arTempo.sweepNarrowPhase = 0.0f;
-  arTempo.sweepNarrowIdx   = 0;
-  arTempo.sweepFarScore = -1e9f;
-  arTempo.sweepFarValue = -1e9f;
-  arTempo.sweepFarPick  = -1e9f;
-  arTempo.sweepFarBpm   = 0.0f;
-  arTempo.sweepFarPhase = 0.0f;
-  arTempo.sweepFarIdx   = 0;
-  if (!narrow && arTempo.locked && arTempo.bpm > 0.0f) {
-    int f = 0, c = 0;
-    if (lattice) arTempoNarrowWindowLattice(arTempo.bpm, &f, &c);
-    else         arTempoNarrowWindow(arTempo.bpm, &f, &c);
-    arTempo.sweepNarrowFirst = (uint16_t)f;
-    arTempo.sweepNarrowCount = (uint16_t)c;
-    arTempo.sweepNarrowSpan  = (uint16_t)((c - 1) * stride + 1);
-    arTempo.sweepHasNarrow   = true;
+  arTempo.sweepWasNarrow  = narrow;
+  arTempo.sweepBackground = background;
+  if (background && n < AR_TEMPO_MIN_PEAKS) {
+    // Nothing to look at: a breakdown, or the music has not started.  The
+    // background says NOTHING, and it does not accuse the steady state -
+    // it simply forgets what it had, so that a nomination from before the
+    // silence cannot be counted as an agreement with one after it.
+    arTempo.bgHave = false;
+    arTempo.bgConverged = false;
+    arTempo.bgAgree = 0;
   }
 
   arTempo.sweepCount     = n;
@@ -1551,16 +1639,180 @@ static void arTempoSweepStart(void) {
   arTempo.sweepStride    = (uint8_t)stride;
   arTempo.sweepPerFrame  = (count > AR_TEMPO_CAND_PER_FRAME)
                          ? (uint16_t)AR_TEMPO_CAND_PER_FRAME : (uint16_t)count;
-  arTempo.lastSweepFrame = arTempo.frameIndex;
-  if (!narrow) arTempo.lastFullFrame = arTempo.frameIndex;
+  // The background has its own clock, so it does not touch the steady
+  // search's.
+  if (!background) arTempo.lastSweepFrame = arTempo.frameIndex;
   arTempo.sweepNow       = (float)arTempo.frameIndex;
   arTempo.sweepTotal     = total;
-  arTempo.sweepBestValue = -1e9f;
   arTempo.sweepBestScore = 0.0f;
   arTempo.sweepBestBpm   = 0.0f;
   arTempo.sweepBestPhase = 0.0f;
   arTempo.sweepBestIdx   = 0;
   arTempo.sweepActive    = (n >= AR_TEMPO_MIN_PEAKS);
+}
+
+// ---------------------------------------------------------------------------
+// THE RATE IS THE PLATEAU'S CENTRE.
+//
+// The comb's score SATURATES: on a clean 128 BPM track every candidate
+// from 126.5 to 129.0 scores exactly 1.000, because the kernel is wide
+// enough to hold them all.  The argmax of a flat run is its FIRST member,
+// so the old tracker published the rate at the EDGE of the band of rates
+// the comb could not tell apart - and it wandered by half a BPM at random.
+// MEASURED: the argmax of a clean 128 track reads 127.50, 128.00, 128.50
+// at different moments; the plateau's CENTRE reads 128.00, 128.12, 128.00.
+//
+// So the rate is the CENTRE of the run of candidates the comb cannot
+// separate.
+//
+// WHICH RUN?  The score has several peaks - the music's tempo, and the
+// harmonics the comb also likes - and the PRIOR chooses between them,
+// exactly as it chose between candidates before.  It cannot choose WITHIN
+// a run: the prior's penalty varies by less than the plateau's tolerance
+// across a run, so applying it to the run would cut the run short and
+// drag the centre towards 125.  So: the prior picks the plateau, the
+// geometry gives the rate inside it.
+//
+// The candidates are `first, first+stride, ...` - the list the sweep just
+// scored - and the run is found in the RAW score.  The prior enters the
+// plateau's VALUE, never its extent.
+// ---------------------------------------------------------------------------
+static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
+                                bool usePrior,
+                                float *rateOut, float *scoreOut,
+                                float *phaseOut, uint16_t *peakIdxOut) {
+  const int st = (int)stride;
+  const int f  = (int)first;
+  const int last = f + (int)(n - 1) * st;
+  float bestVal   = -1e18f;
+  float bestRate  = AR_TEMPO_BPM_LO + (float)f * AR_TEMPO_CAND_STEP;
+  float bestScore = 0.0f;
+  int   bestPeak  = f;
+  for (int idx = f; idx <= last; idx += st) {
+    const float s = arTempo.sweepScore[idx];
+    // The run's peak: a local maximum.  An equal neighbour is part of the
+    // same run, and the earlier member finds it.
+    if (idx > f && arTempo.sweepScore[idx - st] >= s) continue;
+    if (idx < last && arTempo.sweepScore[idx + st] >= s) continue;
+    // The run: the candidates the comb cannot separate from this one.
+    const float tol = fmaxf(1e-9f, s * AR_TEMPO_PLATEAU_TOL);
+    int a = idx;
+    while (a - st >= f && arTempo.sweepScore[a - st] >= s - tol) a -= st;
+    int b = idx;
+    while (b + st <= last && arTempo.sweepScore[b + st] >= s - tol) b += st;
+    const float centre = 0.5f * ((AR_TEMPO_BPM_LO + (float)a * AR_TEMPO_CAND_STEP)
+                                + (AR_TEMPO_BPM_LO + (float)b * AR_TEMPO_CAND_STEP));
+    // The value: the evidence, less the lattice's preference, less the
+    // prior - and the prior ONLY here, at the plateau's centre, so it
+    // chooses between plateaus and never inside one.
+    float val = s;
+    if (arTempo.quantMode >= 2 && (idx & 3) == 2) val -= arTempo.sweepBonus;
+    if (usePrior) val -= arTempoPriorAt(centre);
+    if (val > bestVal) {
+      bestVal   = val;
+      bestRate  = centre;
+      bestScore = s;
+      bestPeak  = idx;
+    }
+  }
+  *rateOut   = bestRate;
+  *scoreOut  = bestScore;
+  *peakIdxOut = (uint16_t)bestPeak;
+  // The phase, at the plateau's peak: the comb's own answer for that rate,
+  // recomputed so that the phase and the score come from the same
+  // measurement.
+  float ph = 0.0f;
+  arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr, arTempo.sweepCount,
+                   arTempo.sweepTotal,
+                   AR_TEMPO_BPM_LO + (float)bestPeak * AR_TEMPO_CAND_STEP, &ph);
+  *phaseOut = ph;
+}
+
+// ---------------------------------------------------------------------------
+// THE BACKGROUND.
+//
+// The second estimator.  It has its own clock, it looks at the WHOLE band,
+// and it nominates a rate and a grid of its own.
+//
+// It does not touch the grid while it is still making up its mind: it has
+// to CONVERGE first - the same rate AND the same grid, over several
+// searches in a row - and then its evidence has to be CLEARLY better than
+// the steady rate's, measured on the SAME window.
+//
+// The old safety net was a third thing, and it was the thing that broke: a
+// whole-band search whose far candidate took the grid on a 5 % margin as
+// soon as the local rate was called dead.  MEASURED on the offline twin:
+// that is the path a 128 BPM track took to 160.
+// ---------------------------------------------------------------------------
+
+// The background's verdict: does the grid move?
+static void arTempoBackgroundPromote(void) {
+  if (!arTempo.bgHave || !arTempo.bgConverged) return;
+  if (arTempo.bgScore < AR_TEMPO_MIN_SCORE) return;    // it has found nothing
+  if (fabsf(arTempo.bgBpm - arTempo.bpm) <= AR_TEMPO_NEAR_BPM) {
+    // A NUDGE: the background agrees with the grid about where the tempo
+    // is, within the lattice's own resolution.
+    arTempoAdopt(arTempo.bgBpm, arTempo.bgPhase, arTempo.sweepNow, false);
+    return;
+  }
+  if (arTempo.bgLocalScore < AR_TEMPO_MIN_SCORE) {
+    // The rate the grid is at has DIED: the music changed, and the
+    // background's answer has evidence of its own.
+    if (arTempo.bgScore < AR_TEMPO_DEAD_ACCEPT) return;   // refused
+    arTempoAdopt(arTempo.bgBpm, arTempo.bgPhase, arTempo.sweepNow, true);
+    return;
+  }
+  // A long way off, and the steady rate is still alive: the background has
+  // to be CLEARLY better evidence.  This is what keeps a mixture's
+  // compromise rate - a little better than the rate the grid has, not a
+  // lot better - from taking the grid.
+  //
+  // In PLAYLIST the margin is looser, because a change is EXPECTED there:
+  // the margin is the price of the grid not jumping on a compromise, and
+  // in a playlist the compromise is a track boundary rather than an
+  // accident.
+  const float margin = arTempo.playlist ? AR_TEMPO_BG_MARGIN_LIST
+                                         : AR_TEMPO_BG_MARGIN_DJ;
+  if (arTempo.bgScore < arTempo.bgLocalScore * (1.0f + margin)) return;
+  arTempoAdopt(arTempo.bgBpm, arTempo.bgPhase, arTempo.sweepNow, true);
+}
+
+// The background's search, finished: record the nomination, and let it try
+// to move the grid.
+static void arTempoBackgroundResult(float rate, float score, float phase) {
+  // The steady rate's OWN evidence, on the SAME window.  A fight where one
+  // side has twelve seconds of memory and the other has five is not a
+  // fight.
+  float ph = 0.0f;
+  arTempo.bgLocalScore = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
+                                           arTempo.sweepCount, arTempo.sweepTotal,
+                                           arTempo.bpm, &ph);
+  // The agreement: the same rate AND the same grid.
+  if (arTempo.bgHave) {
+    const float d = fabsf(rate - arTempo.bgBpm);
+    const float per = 60.0f * AR_TEMPO_RATE / rate;
+    float a = fmodf(arTempo.bgPhase / per, 1.0f); if (a < 0.0f) a += 1.0f;
+    float b = fmodf(phase / per, 1.0f);       if (b < 0.0f) b += 1.0f;
+    float dp = fabsf(a - b); if (dp > 0.5f) dp = 1.0f - dp;
+    if (d <= AR_TEMPO_BG_AGREE_BPM && dp <= AR_TEMPO_BG_PHASE_TOL) {
+      if (arTempo.bgAgree < 255) arTempo.bgAgree++;
+    } else {
+      arTempo.bgAgree = 1;
+    }
+  } else {
+    arTempo.bgAgree = 1;
+  }
+  arTempo.bgBpm      = rate;
+  arTempo.bgPhase    = phase;
+  arTempo.bgScore    = score;
+  arTempo.bgHave     = true;
+  // The convergence: how many agreements it takes.  DJ SET wants them all
+  // - the grid that is working is trusted.  PLAYLIST wants fewer, because
+  // a track boundary is not something to be waited out.
+  const uint8_t need = arTempo.playlist ? AR_TEMPO_BG_CONVERGE_LIST
+                                         : AR_TEMPO_BG_CONVERGE_DJ;
+  arTempo.bgConverged = (arTempo.bgAgree >= need);
+  arTempoBackgroundPromote();
 }
 
 static void arTempoSweepStep(void) {
@@ -1574,188 +1826,76 @@ static void arTempoSweepStep(void) {
     const float score = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
                                          arTempo.sweepCount, arTempo.sweepTotal,
                                          bpm, &phase);
-    // The prior votes in the WHOLE-BAND search and NOT in the narrow one.
-    //
-    // The narrow search looks at the rate the grid already believes, plus or
-    // minus two BPM - seventeen candidates, and on a 0.25 BPM grid that is a
-    // four BPM span.  The prior's gradient across that span is small: about
-    // a thousandth of a score at 125 BPM and about three hundredths at 140.
-    // So a prior that votes there does not decide the search - it breaks
-    // ties, and it breaks them TOWARDS ITS CENTRE.
-    //
-    // That is the whole reason it does not vote there.  The grid was not
-    // being pulled to a different music; it was being pulled to 125.00 by a
-    // tie-breaker that was allowed to outvote the evidence, and 125.00 is
-    // where the board said the music was when the music was not there.
-    //
-    // MEASURED, over 40 windows against librosa's independent beat tracker,
-    // at the shipped margin: with the prior voting here the median error
-    // is 1.078 BPM and the wander 0.296; without it, 1.159 and 0.374.  So
-    // it is worth very little - and the corpus is centred on 125, so even
-    // that flatters it.
-    //
-    // The whole-band search is where the prior belongs: that is the search
-    // that has to choose a rate out of nothing, and the prior is what keeps
-    // it off the four-thirds harmonic, whose score is only a little better.
-    // The whole-number preference: a flat penalty on the HALF integers, so
-    // that 128.00 beats 127.50 in a near-tie.  It is flat over the whole
-    // band - no centre, no attractor - so, unlike the prior, it votes in
-    // the narrow search too, and in the veto's fight.
-    const float bonus = ((arTempo.quantMode >= 2) && (idx & 3) == 2)
-                      ? arTempo.sweepBonus : 0.0f;
-    // The FIGHT's value: the evidence, less the lattice preference.  The
-    // prior is NOT in it - the prior is a tie-breaker and it must not be
-    // allowed to choose which far rate gets to argue with the local one.
-    const float pick = score - bonus;
-    const float value = arTempo.sweepWasNarrow ? pick
-                                               : (pick - arTempoPriorPen[idx]);
-    if (value > arTempo.sweepBestValue) {
-      arTempo.sweepBestValue = value;
-      arTempo.sweepBestScore = score;
-      arTempo.sweepBestBpm   = bpm;
-      arTempo.sweepBestPhase = phase;
-      arTempo.sweepBestIdx   = (uint16_t)idx;
-    }
-    // The veto's local answer: the best candidate inside the window around
-    // the rate the grid believes.  Scored on the same snapshot, with the
-    // same kernel, so the two are comparable.
-    //
-    // It is picked by the RAW score and not by the value, so the prior does
-    // not get a vote in the fight it is supposed to stay out of.  The
-    // difference is small - inside a two-BPM window the prior moves by less
-    // than a thousandth - but it is the difference between "the local rate's
-    // best EVIDENCE" and "the local rate the prior likes best", and only
-    // the first of those is evidence.
-    const bool inWindow = arTempo.sweepHasNarrow
-        && idx >= (int)arTempo.sweepNarrowFirst
-        && idx < (int)arTempo.sweepNarrowFirst + (int)arTempo.sweepNarrowSpan;
-    if (inWindow) {
-      if (pick > arTempo.sweepNarrowPick) {
-        arTempo.sweepNarrowPick  = pick;
-        arTempo.sweepNarrowScore = score;
-        arTempo.sweepNarrowValue = value;
-        arTempo.sweepNarrowBpm   = bpm;
-        arTempo.sweepNarrowPhase = phase;
-        arTempo.sweepNarrowIdx   = (uint16_t)idx;
-      }
-    } else if (arTempo.sweepHasNarrow) {
-      // The FAR candidate: the best EVIDENCE outside the window.
-      //
-      // It is nominated by the RAW score.  The prior is a tie-breaker, and
-      // a tie-breaker that also gets to choose the opponent is not a
-      // tie-breaker: it chose 125.00's opponent every time, and the grid
-      // could never be argued out of 125.00.
-      if (pick > arTempo.sweepFarPick) {
-        arTempo.sweepFarPick   = pick;
-        arTempo.sweepFarScore = score;
-        arTempo.sweepFarValue = value;
-        arTempo.sweepFarBpm   = bpm;
-        arTempo.sweepFarPhase = phase;
-        arTempo.sweepFarIdx   = (uint16_t)idx;
-      }
-    }
+    // Every candidate's RAW score, because the rate is the CENTRE of a
+    // plateau and finding a plateau needs the whole profile.
+    arTempo.sweepScore[idx] = score;
   }
   if (arTempo.sweepIndex < total) return;
 
-  // The veto.
-  //
-  // The safety net has looked everywhere, and it has two answers: the best
-  // EVIDENCE near the grid, and the best evidence far from it.  The far one
-  // is asking the grid to move a long way, so it has to be CLEARLY better
-  // evidence than the rate the grid already believes.  Otherwise the
-  // near-tie is refused and the local rate keeps the grid.
-  //
-  // Both sides of the fight are the RAW score, measured on the SAME
-  // snapshot with the same kernel, and the prior is left out of it
-  // altogether: the prior is a tie-breaker, not evidence, and letting it
-  // decide this fight is what turned its centre - 125.00 - into an
-  // attractor.
-  //
-  // And the local rate has to be ALIVE to defend itself.  A rate the
-  // tracker has already declared dead - one whose score has been below the
-  // minimum for AR_TEMPO_COLLAPSE_COUNT searches in a row, which is exactly
-  // what the COLLAPSE search means - has no evidence to defend, so it does
-  // not get to veto anything.  A dead local rate cannot keep the grid while
-  // the music has moved on.
-  //
-  // The death has to be SUSTAINED, because one search under the floor is a
-  // dip and not a collapse: the score goes under the floor on a fraction of
-  // a percent of the frames of real music, and a grid that surrenders on one
-  // of them is a grid that jumps.
-  if (arTempo.sweepHasNarrow) {
-    const bool localAlive = arTempo.collapseCount < AR_TEMPO_COLLAPSE_COUNT;
-    const bool farAlive   = arTempo.sweepFarScore   >= AR_TEMPO_MIN_SCORE;
-    bool takeFar = false;
-    if (!localAlive) {
-      // The local rate is dead, but it still has to be BEATEN.  Taking the
-      // far rate because the local one is under the floor - without asking
-      // whether the far one is any better - is what walked a good rate into
-      // a false one.
-      takeFar = farAlive
-             && arTempo.sweepFarScore
-             >= arTempo.sweepNarrowScore * (1.0f + AR_TEMPO_DEAD_MARGIN);
-    } else {
-      takeFar = arTempo.sweepFarScore
-             >= arTempo.sweepNarrowScore * (1.0f + AR_TEMPO_NET_MARGIN);
-    }
-    if (takeFar) {
-      arTempo.sweepBestValue = arTempo.sweepFarValue;
-      arTempo.sweepBestScore = arTempo.sweepFarScore;
-      arTempo.sweepBestBpm   = arTempo.sweepFarBpm;
-      arTempo.sweepBestPhase = arTempo.sweepFarPhase;
-      arTempo.sweepBestIdx   = arTempo.sweepFarIdx;
-    } else {
-      // The local rate keeps the grid.  Its score is the one that is
-      // published, because it is the score of the rate being published.
-      arTempo.sweepBestValue = arTempo.sweepNarrowValue;
-      arTempo.sweepBestScore = arTempo.sweepNarrowScore;
-      arTempo.sweepBestBpm   = arTempo.sweepNarrowBpm;
-      arTempo.sweepBestPhase = arTempo.sweepNarrowPhase;
-      arTempo.sweepBestIdx   = arTempo.sweepNarrowIdx;
-    }
+  // The sweep is done.  The rate is the CENTRE of the best plateau, and
+  // the prior chooses the plateau - so it votes in the whole-band search
+  // (the acquisition's and the background's) and not in the narrow one,
+  // where it would be a tie-breaker pulling towards 125.
+  float rate = 0.0f, score = 0.0f, phase = 0.0f;
+  uint16_t peak = 0;
+  arTempoPlateauPick(arTempo.sweepFirst, arTempo.sweepN, arTempo.sweepStride,
+                      !arTempo.sweepWasNarrow, &rate, &score, &phase, &peak);
+  arTempo.sweepBestScore = score;
+  arTempo.sweepBestBpm   = rate;
+  arTempo.sweepBestPhase = phase;
+  arTempo.sweepBestIdx   = peak;
+  arTempo.sweepActive    = false;
+
+  if (arTempo.sweepBackground) {
+    arTempoBackgroundResult(rate, score, phase);
+    return;
   }
 
-  // The sweep is done. The score is published whether or not it is believed:
-  // it is the measurement, and a score that has fallen is the signal that
-  // the estimate is no longer trustworthy.
+  // The score is published whether or not it is believed: it is the
+  // measurement, and a score that has fallen is the signal that the
+  // estimate is no longer trustworthy.
   //
-  // The grid is anchored to the frame the sweep STARTED at, not the frame it
-  // finished at. The phase was measured from the onsets that existed then,
-  // so anchoring it to a later frame would put the grid seven frames late -
-  // and the PLL would then spend its whole life pulling it back.
-  arTempo.score = arTempo.sweepBestScore;
-  if (arTempo.sweepBestScore >= AR_TEMPO_MIN_SCORE) {
-    arTempo.fullSearchFailed = false;
-    arTempo.collapseCount = 0;
-    arTempoAdopt(arTempo.sweepBestBpm, arTempo.sweepBestPhase, arTempo.sweepNow);
-  } else if (arTempo.sweepWasNarrow) {
+  // The grid is anchored to the frame the sweep STARTED at, not the frame
+  // it finished at. The phase was measured from the onsets that existed
+  // then, so anchoring it to a later frame would put the grid seven frames
+  // late - and the PLL would then spend its whole life pulling it back.
+  arTempo.score = score;
+  if (score < AR_TEMPO_MIN_SCORE) {
     // The narrow search cannot find the beat any more.  Its score fell
     // below the minimum, so the music it was tracking is not there: the
-    // next search looks everywhere, at once.
-    //
-    // Unless a WHOLE-BAND search has already looked everywhere and found
-    // nothing.  Then looking everywhere again will not make a beat appear,
-    // and the sweep would run every ninth frame for the price of 341
-    // candidates.  The safety net still looks, once every
-    // AR_TEMPO_FULL_EVERY frames - that is what it is for.
-    //
-    // But it takes AR_TEMPO_COLLAPSE_COUNT searches in a row below the
-    // floor before the grid is called dead.  One search under the floor is
-    // a dip: the score goes under it on a fraction of a percent of the
-    // frames of real music, and looking everywhere on one of them is how a
-    // good rate turns into a jump.
+    // grid HOLDS - no adopt, so neither the rate nor the phase moves - and
+    // the BACKGROUND's search is what will find the new rate.
     if (arTempo.collapseCount < 255) arTempo.collapseCount++;
-    if (!arTempo.fullSearchFailed
-        && arTempo.collapseCount >= AR_TEMPO_COLLAPSE_COUNT) {
-      arTempo.needFullSearch = true;
-    }
-  } else {
-    // A WHOLE-BAND search that found nothing.  It has already looked
-    // everywhere, so the narrow search must not ask it to.
-    arTempo.fullSearchFailed = true;
-    if (arTempo.collapseCount < 255) arTempo.collapseCount++;
+    return;
   }
-  arTempo.sweepActive = false;
+  arTempo.collapseCount = 0;
+  if (!arTempo.locked) {
+    // The acquisition: the grid has no rate, and this is the rate.
+    arTempoAdopt(rate, phase, arTempo.sweepNow, false);
+    return;
+  }
+
+  // THE STEADY STATE.
+  //
+  // A rate close to the one the grid is at is the SAME music - the music
+  // drifting, the window filling - and it is taken as a NUDGE.  A rate a
+  // long way off is a DIFFERENT grid, and it is only taken when the music
+  // really changed: the rate the grid is at has DIED, and the new one has
+  // evidence of its own.
+  //
+  // And a MIXTURE - three seconds of 127 inside twelve seconds of 128 -
+  // fits neither: its best fit is a COMPROMISE rate (measured: 125.75) that
+  // is neither of them, and it must not take the grid.
+  float ph = 0.0f;
+  const float local = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
+                                        arTempo.sweepCount, arTempo.sweepTotal,
+                                        arTempo.bpm, &ph);
+  if (fabsf(rate - arTempo.bpm) <= AR_TEMPO_NEAR_BPM) {
+    arTempoAdopt(rate, phase, arTempo.sweepNow, false);    // a NUDGE
+  } else if (local < AR_TEMPO_MIN_SCORE && score >= AR_TEMPO_DEAD_ACCEPT) {
+    arTempoAdopt(rate, phase, arTempo.sweepNow, true);     // the music changed
+  }
+  // Otherwise: HOLD.  The grid keeps its rate and its phase.
 }
 
 // ---------------------------------------------------------------------------
@@ -2165,6 +2305,11 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
   arTempo.quantMode   = arFrameSettings.tempoQuant;
   arTempo.sweepBonus  = AR_TEMPO_QUANT_BONUS;
 
+  // The MODE, read every frame like the lattice is: DJ SET (the default)
+  // or PLAYLIST.  It is a live setting and the tracker changes its mind
+  // the moment it changes - no re-lock, no restart.
+  arTempo.playlist    = arFrameSettings.tempoPlaylist;
+
   // The re-lock request, applied here because the grid belongs to this task.
   if (arTempoRelockRequested.exchange(false, std::memory_order_relaxed)) {
     arTempo.locked = false;
@@ -2178,8 +2323,10 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     arTempo.prevPeakFrame = -1000;
     arTempo.prevPeakStr = 0.0f;
     arTempo.sweepActive = false;
-    arTempo.needFullSearch = false;
-    arTempo.fullSearchFailed = false;
+    arTempo.sweepBackground = false;
+    arTempo.bgHave = false;
+    arTempo.bgConverged = false;
+    arTempo.bgAgree = 0;
     // A downbeat the user marked belongs to the grid that was just thrown
     // away: the new grid starts at a new beat, so the old mark means
     // nothing.  The numbering goes back to the convention until it is set
@@ -2359,26 +2506,33 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     }
 
     // ---- the search -----------------------------------------------------
-    // Unlocked, the search runs as soon as the last one finished: it is
-    // looking for a rate and there is no rate to look around.  Locked, it
-    // runs every AR_TEMPO_SEARCH_EVERY frames, and it is the narrow one -
-    // unless the safety net is due, or the narrow search lost the beat.
+    // Two searches, and they take turns.
+    //
+    // The BACKGROUND runs on its own clock, every AR_TEMPO_BG_EVERY frames,
+    // and it is the only search that may move the grid a long way.  It
+    // looks at the WHOLE band, and it does not touch the grid until it has
+    // converged and its evidence is clearly better.
+    //
+    // The STEADY search runs every AR_TEMPO_SEARCH_EVERY frames, and it is
+    // the narrow one: it looks around the rate the grid believes and moves
+    // the grid by small amounts.
+    //
+    // Unlocked, there is no rate to look around, so the whole band is
+    // searched - that is the acquisition - and it runs as soon as the last
+    // one finished.
     if (gateOpen) {
       if (!arTempo.sweepActive) {
-        // The safety net: a whole-band search every AR_TEMPO_FULL_EVERY
-        // frames, whatever the score says.  This is the only search that
-        // can move the grid a long way, so it is the one that notices the
-        // music changed.
         if (arTempo.locked
-            && (int32_t)(arTempo.frameIndex - arTempo.lastFullFrame)
-               >= AR_TEMPO_FULL_EVERY) {
-          arTempo.needFullSearch = true;
+            && (int32_t)(arTempo.frameIndex - arTempo.bgLastFrame)
+               >= AR_TEMPO_BG_EVERY) {
+          arTempo.bgLastFrame = arTempo.frameIndex;
+          arTempoSweepStart(true);
+        } else {
+          const bool due = !arTempo.locked
+                        || ((int32_t)(arTempo.frameIndex - arTempo.lastSweepFrame)
+                            >= AR_TEMPO_SEARCH_EVERY);
+          if (due) arTempoSweepStart(false);
         }
-        const bool due = !arTempo.locked
-                      || arTempo.needFullSearch
-                      || ((int32_t)(arTempo.frameIndex - arTempo.lastSweepFrame)
-                          >= AR_TEMPO_SEARCH_EVERY);
-        if (due) arTempoSweepStart();
       }
       arTempoSweepStep();
     }
@@ -2399,10 +2553,10 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
       } else {
         arTempo.lastSweepFrame = 0;
       }
-      if (arTempo.lastFullFrame >= AR_TEMPO_REBASE_FRAMES) {
-        arTempo.lastFullFrame -= AR_TEMPO_REBASE_FRAMES;
+      if (arTempo.bgLastFrame >= AR_TEMPO_REBASE_FRAMES) {
+        arTempo.bgLastFrame -= AR_TEMPO_REBASE_FRAMES;
       } else {
-        arTempo.lastFullFrame = 0;
+        arTempo.bgLastFrame = 0;
       }
       // The onset ring moves with the base.  The frames are SIGNED, so the
       // subtraction is exact and an onset that happened before the rebase
@@ -2577,9 +2731,17 @@ static bool arTempoValid(void) {
 //   q        re-lock now: the grid is dropped and the next search starts over
 //   j        set the downbeat: the beat sounding NOW is beat one
 //   J        clear the downbeat: the numbering is the convention again
+//   M        the mode: DJ SET (one continuous mix)
+//   P        the mode: PLAYLIST (anything can shuffle in)
 //
 // Lowercase is the lower number and uppercase the higher one, for every
 // pair - the same rule as the rest of the AudioReactive keys.
+//
+// The mode is NOT a lower/upper pair: the two modes are two different
+// words, so each gets its own letter.  "M" is the mix, "P" is the
+// playlist.  (A lower/upper pair was wanted - "m" for the mix - but the
+// lower-case "m" is the HDMI mode menu's key and is eaten before the
+// AudioReactive keys are read, so a lower-case "m" would never arrive.)
 // ---------------------------------------------------------------------------
 void audioReactiveTempoCommand(char c) {
   switch (c) {
@@ -2614,6 +2776,20 @@ void audioReactiveTempoCommand(char c) {
       arTempoRequestDownbeat(false);
       USER_PRINTLN("tempo: downbeat cleared - the numbering is the convention again");
       break;
+    case 'M': case 'P': {
+      // THE MODE: DJ SET or PLAYLIST.
+      //
+      // It is a live change and it takes effect on the next frame - the
+      // tracker reads the mode every frame - and it is SAVED, because a
+      // mode that forgets itself at the next reboot is not a setting.
+      const bool want = (c == 'P');
+      const ArLiveSettings s = arSettingsEdit([want](ArLiveSettings& st) {
+        st.tempoPlaylist = want;
+      });
+      doSerializeConfig = true;
+      USER_PRINTF("tempo mode now %s\n", s.tempoPlaylist ? "PLAYLIST" : "DJ SET");
+      break;
+    }
     default:
       break;
   }
