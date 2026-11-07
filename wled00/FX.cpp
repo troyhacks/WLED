@@ -804,20 +804,26 @@ uint16_t mode_bpm_strobe(void) {
       srcBeat     = tf.beatInBar;
       srcProgress = tf.beatProgress;
       srcLive     = true;
-      // The downbeat colour is the DECK's to give.
+      // The downbeat colour comes from the DECK, or from the USER.
       //
-      // The estimator's downbeat is not used, even when it believes it has
-      // one.  The sound does not know where the downbeat is: MEASURED over
-      // sixty windows of real music, the bar profile's t-score sat ON its
-      // null in forty-three per cent of them - chance - so there is nothing
-      // there to find (audio_reactive.h).  The estimator's bar position also
-      // drifts against the deck's, because its rate is a measurement and not
-      // a clock, so it cannot be trusted to name the downbeat either.
+      // The estimator's OWN downbeat is not used, even when it believes it
+      // has one.  The sound does not know where the bar starts: MEASURED
+      // over sixty windows of real music, the bar profile's t-score sat ON
+      // its null in forty-three per cent of them - chance - so there is
+      // nothing there to find (audio_reactive.h).  The estimator's bar
+      // position also drifts against the deck's, because its rate is a
+      // measurement and not a clock, so it cannot be trusted to name the
+      // downbeat either.
       //
-      // So the "Downbeat" option is ignored without ProLink data: a
-      // downbeat that is wrong more often than right is worse than none.
+      // But the person at the board CAN name it: "the beat sounding now is
+      // beat one" - the 'j' key, or the info pane's "set downbeat" button.
+      // That is not a measurement and it is not a guess; it is the user
+      // saying where the bar starts, and the estimator's numbering is
+      // shifted to match it (ar_tempo.h).  So a downbeat the user SET is
+      // as good as the deck's, and the "Downbeat" option is honoured.
+      //
       // The debug line below says whether the downbeat colour is in force.
-      srcDownbeat = false;
+      srcDownbeat = (tf.downbeatSet != 0);
     }
   }
   #endif
