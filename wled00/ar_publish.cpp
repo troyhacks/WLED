@@ -93,6 +93,9 @@ void arPublishTempo(const ArTempoFrame& t) {
 void arCopyTempoLocked(ArTempoFrame* dest) {
   if (!arTempoValid) {
     dest->bpm = 0.0f; dest->beatProgress = 0.0f; dest->score = 0.0f;
+    dest->quality = 0.0f; dest->qualityPeak = 0.0f;
+    dest->driftMs = 0.0f; dest->driftBpm = 0.0f;
+    dest->hold = 0;
     dest->beatInBar = 0; dest->valid = 0;
     dest->beatInMeasure = 0; dest->downbeatKnown = 0; dest->downbeatSet = 0;
     dest->downbeatT = 0.0f; dest->beatCount = 0;

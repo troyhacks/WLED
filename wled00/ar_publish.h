@@ -99,6 +99,11 @@ struct ArTempoFrame {
   float    bpm;             // beats per minute; 0 when there is no estimate
   float    beatProgress;    // 0..1 through the current beat
   float    score;           // the comb score, 0..1: how well the onsets fit the grid
+  float    quality;         // the alignment x the coverage: how well the music explains the RUNNING grid
+  float    qualityPeak;     // the quality's recent best: the yardstick the relative gate uses
+  float    driftMs;         // the grid's phase error against the music, ms (signed)
+  float    driftBpm;        // the estimate minus the clock, BPM (signed)
+  uint8_t  hold;            // 1 when the USER has frozen the clock
   uint8_t  beatInBar;       // 1..4; 1 is the downbeat
   uint8_t  valid;           // 1 when the estimate is a real measurement
   uint8_t  beatInMeasure;   // 1..16; 1 is the measure's own beat

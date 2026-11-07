@@ -7638,8 +7638,13 @@ uint16_t mode_2Dscrollingtext(void) {
       uint32_t srcPos  = 0;      // the beats elapsed
       uint32_t srcBars = 0;      // the bars elapsed
       bool     srcLive = false;
-      // The QUALITY of our own prediction: the comb score, 0..1.  It is
-      // negative when there is no measurement at all - a board that is
+      // The QUALITY of our own prediction: how well the music explains the
+      // RUNNING grid, 0..1.  It is the alignment (the comb's score at the
+      // grid's own rate) times the coverage (the fraction of the grid's
+      // beats the music confirms) - so it FALLS when the music stops
+      // explaining the grid, which is what a breakdown is.
+      //
+      // It is negative when there is no measurement at all - a board that is
       // RECEIVING its sound over the network measures nothing, and a board
       // with a deck connected still runs its own estimator.
       float    srcQual = -1.0f;
@@ -7667,7 +7672,7 @@ uint16_t mode_2Dscrollingtext(void) {
           // deck is the one driving the grid: it says how well OUR comb
           // fits the music, and that is the number that says whether the
           // beat grid can be trusted.
-          srcQual = tf.score * 100.0f;
+          srcQual = tf.quality * 100.0f;
           if (!srcLive && tf.bpm > 0.0f &&
               tf.beatInBar >= 1 && tf.beatInBar <= 4) {
             srcBpm  = tf.bpm;
@@ -7708,8 +7713,9 @@ uint16_t mode_2Dscrollingtext(void) {
             dst = appendBounded(dst, end, "%.1f", srcBpm);
             src += 4;
           } else if (strncmp(src, "#QUAL", 5) == 0) {
-            // The quality of the prediction: the comb score as a
-            // percentage.  "--" when there is no measurement at all.
+            // The quality of the prediction: how well the music explains
+            // the running grid, as a percentage.  "--" when there is no
+            // measurement at all.
             if (srcQual < 0.0f) dst = appendBounded(dst, end, "--");
             else                 dst = appendBounded(dst, end, "%d", (int)(srcQual + 0.5f));
             src += 5;

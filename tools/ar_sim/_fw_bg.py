@@ -77,6 +77,87 @@ NEAR_BPM = 1.50               # a NUDGE: this close needs no margin
 DEAD_ACCEPT = 0.50            # when the local rate is dead, a candidate must clear this
 PLATEAU_TOL = 1e-4            # the relative width of the plateau's flat top
 
+# THE QUALITY - what "how well is the prediction" actually means.
+#
+# The comb's score is best/total: a FRACTION.  It says how much of the
+# music's strength sits on the grid, and it says NOTHING about how much
+# music there is.  A breakdown with three onsets in twelve seconds scores
+# 1.000, because those three onsets are on the grid and the fraction is
+# perfect.  So the score reads HIGH exactly when the tracker is GUESSING,
+# and that is what Troy saw:
+#
+#   "#QUAL doesn't seem to track reality.  I see a lot of grid
+#    adjustments happen during breakdowns because it's over-estimating
+#    quality even tho the BPM hasn't changed."
+#
+# The quality is therefore TWO numbers multiplied:
+#
+#   ALIGNMENT  the score: how much of the music's strength is on the grid
+#   COVERAGE   how many of the grid's beats the music confirms
+#
+# Either one alone is fooled - the alignment by an empty window, the
+# coverage by a grid that is right but the music that is not there - and
+# their product is zero when either is.  The product is the number the
+# info page publishes and #QUAL prints.
+#
+# QUAL_MIN is where the grid stops taking the measurement's PHASE.  Below
+# it the tracker is guessing, and a guess must not move a running grid.
+QUAL_MIN = 0.20
+
+# THE RELATIVE GATE.
+#
+# An absolute threshold is a guess about how loud the music is.  The
+# relative one is not: the peak is the quality this music has managed
+# while it was explaining itself, and the question is not "is this number
+# big" but "is it as good as it has been".  The peak decays with a
+# half-life of eight seconds, so a breakdown holds the grid for as long as
+# the breakdown lasts.
+QUAL_REL = 0.50
+QUAL_DECAY = 0.99632
+
+# THE REFINEMENT'S GUARD.
+#
+# The fit replaces the plateau's centre - which can only land on the
+# lattice's step - with the period the music really has.  The fit has to
+# be this close to the plateau's centre, or the centre is kept: a fit that
+# has wandered off is a fit through the wrong beats, and the plateau's
+# centre is always a rate the comb actually scored.
+REFINE_MAX = 1.0
+
+# --------------------------------------------------------------------------
+# THE MEASUREMENT AT THE GRID.
+#
+# The plateau's centre is the comb's answer at the CANDIDATE, and it is
+# QUANTISED: it can only land on the lattice's step.  Measured on the real
+# music it also WANDS - the plateau's flat top moves as the score wobbles,
+# and the centre moves with it.  The twin measures the wander:
+#
+#   the plateau's centre      0.618 BPM (sd), over 468 searches a window
+#   the fit at the GRID        0.192 BPM (sd)
+#
+# Three and a half times steadier, and unbiased: the fit is the grid's own
+# beats, one feature each, fitted to a line - which is "features that line
+# up regularly", taken literally.
+#
+# FIT_MAX is the guard: the fit may not be further than this from the
+# grid's own rate, or it is a fit through the wrong beats.
+#
+# FIT_STILL is the still test: the fit may not JUMP between two searches.
+# A jump is either a tempo change - which settles within a few searches -
+# or a breakdown, where the grid would be chasing a guess.
+#
+# RATE_TAU_S is the clock's time constant: the clock follows the
+# measurement this slowly.  The confirmation was a run - five seconds of
+# evidence before the clock moved - and a slow follower is the same thing
+# done better: a breakdown's wander is averaged away, and a tempo that
+# really changes is followed smoothly, which is what a DJ's pitch fader
+# does.
+FIT_MAX = 2.0
+FIT_STILL = 0.50
+RATE_TAU_S = 5.0
+CATCH_BPM = 0.50
+CATCH_TAU_S = 0.75
+
 # THE CONFIRMATION.
 #
 # The comb's answer is a MEASUREMENT and the grid is a CLOCK.  A measurement
@@ -135,6 +216,117 @@ MODES = {
 }
 
 
+# --------------------------------------------------------------------------
+# The coverage: how many of the beats the grid predicts does the music
+# confirm?
+# --------------------------------------------------------------------------
+
+def coverage(frames, bpm, phase):
+    """The fraction of the grid's beats that the music backs.
+
+    `phase` is the grid's phase in frames, on the same clock as `frames`
+    (the comb's own phase: the offset of the beat grid from frame 0).
+
+    The comb's kernel is a box of half-width min(tol, 0.14 * period), so an
+    onset counts as a hit when it is inside that of a grid beat.  The beats
+    are counted over the SPAN of the evidence, not over the nominal window:
+    a window that has only just filled has fewer beats to confirm and
+    would read as a bad prediction for no reason at all.
+    """
+    n = len(frames)
+    if n == 0 or bpm <= 0.0:
+        return 0.0
+    per = 60.0 * P.RATE / bpm
+    if per <= 0.0:
+        return 0.0
+    half = min(P.TOL_MS * 0.001 * P.RATE, P.KERNEL_FRAC * per)
+    slot = np.round((frames - phase) / per)
+    hit = np.abs(frames - (phase + slot * per)) <= half
+    if not hit.any():
+        return 0.0
+    hits = len(np.unique(slot[hit]))
+    span = float(frames.max() - frames.min())
+    beats = int(span / per) + 1
+    if beats <= 0:
+        return 0.0
+    return float(hits) / float(beats)
+
+
+def fit_clusters(frames, strs, bpm, phase):
+    """THE FIT AT THE GRID: the running grid's own beats, one feature each.
+
+    The comb's kernel is a box around each beat, and inside it there can be
+    a kick, a hat and a snare tail - three onsets that are not the same
+    place.  So the fit does not take the onsets one by one: it takes, for
+    each beat, the WEIGHTED CENTRE of the onsets inside that beat's kernel.
+    That centre is the beat's own position, and the line through the
+    centres - beat index against beat time - is the period the music has.
+
+    Two passes: the first with the grid's own period, the second with the
+    period the first pass found, so a grid that is a little off does not
+    lose the far end of the window.
+
+    Returns (rate, phase), or (None, None).
+    """
+    if frames is None or len(frames) < 6 or bpm <= 0.0:
+        return None, None
+    per = 60.0 * P.RATE / bpm
+    if per <= 0.0:
+        return None, None
+    half = min(P.TOL_MS * 0.001 * P.RATE, P.KERNEL_FRAC * per)
+    rate, ph = _fit_pass(frames, strs, per, phase, half)
+    if rate is None:
+        return None, None
+    per2 = 60.0 * P.RATE / rate
+    half2 = min(P.TOL_MS * 0.001 * P.RATE, P.KERNEL_FRAC * per2)
+    rate2, ph2 = _fit_pass(frames, strs, per2, ph, half2)
+    if rate2 is not None:
+        return rate2, ph2
+    return rate, ph
+
+
+def _fit_pass(frames, strs, per, phase, half):
+    """One pass of the fit: the slots, their weighted centres, the line."""
+    slot = np.round((frames - phase) / per)
+    res = frames - (phase + slot * per)
+    keep = np.abs(res) <= half
+    if not keep.any():
+        return None, None
+    k = slot[keep]
+    r = res[keep]
+    w = strs[keep]
+    ks, cs, ws = [], [], []
+    for s in np.unique(k):
+        m = (k == s)
+        ww = w[m]
+        tot = ww.sum()
+        if tot <= 0.0:
+            continue
+        ks.append(float(s))
+        cs.append(float((ww * r[m]).sum() / tot))
+        ws.append(float(tot))
+    if len(ks) < 6:
+        return None, None
+    ka = np.array(ks)
+    ca = np.array(cs)
+    wa = np.array(ws)
+    km = float((wa * ka).sum() / wa.sum())
+    cm = float((wa * ca).sum() / wa.sum())
+    sxx = float((wa * (ka - km) ** 2).sum())
+    if sxx <= 0.0:
+        return None, None
+    b = float((wa * (ka - km) * (ca - cm)).sum() / sxx)
+    perf = per + b
+    if perf <= 0.0:
+        return None, None
+    a = cm - b * km
+    raw = phase + a
+    ph = raw - math.floor(raw / perf) * perf
+    if ph < 0.0:
+        ph += perf
+    return 60.0 * P.RATE / perf, ph
+
+
 class BgTracker(P.Tracker):
     """The new tracker: two estimators, one grid."""
 
@@ -160,6 +352,8 @@ class BgTracker(P.Tracker):
         self.bg_phase = 0.0
         self.bg_score = 0.0
         self.bg_local_score = 0.0
+        self.bg_qual = 0.0
+        self.bg_frames = None
         self.bg_agree = 0
         self.bg_converged = False
         self.bg_have = False
@@ -174,11 +368,49 @@ class BgTracker(P.Tracker):
         self.events = []
         self.last_plateau = (0, 0, 0, 0.0)
 
+        # THE QUALITY, the USER'S LOCK and the DRIFT.
+        #
+        # The quality is what the info page publishes and what #QUAL prints:
+        # the alignment (the comb's score) times the coverage (how many of
+        # the grid's beats the music confirms).  It is a number between 0
+        # and 1, and it FALLS when the music stops explaining the grid.
+        self.qual = 0.0
+        self.qual_peak = 0.0
+        self.qual_min = QUAL_MIN
+        # The USER'S LOCK: the clock is frozen at its current rate and
+        # grid, and the estimate keeps running.  The drift is then the
+        # distance between the frozen grid and the music.
+        self.hold = False
+        self.drift_bpm = 0.0
+        self.drift_ms = 0.0
+        self.held_phase = 0
+        # The comb's answer at the GRID'S OWN RATE: the score and the
+        # phase the running grid can be measured against.
+        self.local_score = 0.0
+        self.local_phase = 0.0
+        self.qual_log = []
+
+        # THE REFINEMENT: 'plateau' is the committed rule, 'refine' is the
+        # least-squares fit of the grid to the music.
+        self.rate_mode = "plateau"
+        self.refine_tol = 1.0
+        self.refine_uniform = False
+        self.refine_max = REFINE_MAX
+        # THE MEASUREMENT AT THE GRID: the fit, and the fit before it.
+        self.last_fit = 0.0
+        self.fit_have = False
+        self.rate_tau = RATE_TAU_S
+        self.catch_bpm = CATCH_BPM
+        self.acq_refine = True
+        self.fit_rate = 0.0
+        self.slews = 0
+
         # The confirmation: the measurement's consistency state.
         self.conf_base = 0.0
         self.conf_prev = 0.0
         self.conf_count = 0
         self.conf_dir = 0
+        self.conf_log = []
 
     # ---- the mode -------------------------------------------------------
 
@@ -260,6 +492,64 @@ class BgTracker(P.Tracker):
 
     # ---- the search -----------------------------------------------------
 
+    def refine(self, bpm, phase, frames=None, strs=None):
+        """THE REFINEMENT: a LEAST-SQUARES fit of the grid to the music.
+
+        The comb's score SATURATES: on real music a whole band of nearby
+        rates captures every onset, so the score is flat across it and the
+        plateau's centre - which is what the rate used to be - can only ever
+        land on the lattice's own step.  That is Troy's:
+
+          "Also locking on 0.5 increments of fake BPM changes sometimes."
+
+        The refinement replaces the plateau's centre with a FIT: the onsets
+        that sit on the candidate's grid are the beats, and the least
+        squares line through them - their beat index against their time -
+        gives the period the music really has.  The answer is CONTINUOUS,
+        so it cannot step by half a BPM, and it is precise: over a twelve
+        second window the period's error is a fraction of a millisecond.
+
+        The weights are the onset strengths, and the tolerance is the
+        comb's own kernel - the beats are the onsets the candidate's grid
+        already explains.
+
+        Returns (rate, phase), or (None, None) when there is not enough to
+        fit.
+        """
+        frames = self.sweep_frames if frames is None else frames
+        strs = self.sweep_str if strs is None else strs
+        if frames is None or len(frames) < 6:
+            return None, None
+        per = 60.0 * P.RATE / bpm
+        if per <= 0.0:
+            return None, None
+        half = min(P.TOL_MS * 0.001 * P.RATE,
+                   P.KERNEL_FRAC * per) * self.refine_tol
+        slot = np.round((frames - phase) / per)
+        res = frames - (phase + slot * per)
+        keep = np.abs(res) <= half
+        if int(keep.sum()) < 6:
+            return None, None
+        k = slot[keep].astype(float)
+        r = res[keep]
+        w = strs[keep].astype(float)
+        if self.refine_uniform:
+            w = np.ones_like(w)
+        W = float(w.sum())
+        if W <= 0.0:
+            return None, None
+        km = float((w * k).sum()) / W
+        rm = float((w * r).sum()) / W
+        skk = float((w * (k - km) ** 2).sum())
+        if skk <= 0.0:
+            return None, None
+        b = float((w * (k - km) * (r - rm)).sum()) / skk
+        perf = per + b
+        if perf <= 0.0:
+            return None, None
+        a = rm - b * km
+        return 60.0 * P.RATE / perf, float((phase + a) % perf)
+
     def _score_the(self, frames, strs, gidx):
         bpms = P.BPM_LO + gidx * self.cand_step
         scores, phases = self.comb_scores_all(frames, strs, bpms)
@@ -289,14 +579,41 @@ class BgTracker(P.Tracker):
         rate, peak = self.rate_from(scores, bpms, wpen, use_prior=not self.locked)
         score = float(scores[peak])
         phase = float(phases[peak])
+        # THE REFINEMENT: the rate the measurement reports is the FIT, not
+        # the plateau's centre.
+        if self.rate_mode == "refine":
+            r2, p2 = self.refine(rate, phase)
+            if r2 is not None and abs(r2 - rate) <= self.refine_max:
+                rate, phase = r2, p2
+        elif self.rate_mode == "fitgrid" and self.acq_refine:
+            # THE ACQUISITION IS REFINED TOO: the first lock should be the
+            # music's tempo, not the lattice's nearest quarter of a BPM.
+            r2, p2 = fit_clusters(self.sweep_frames, self.sweep_str, rate, phase)
+            if r2 is not None and abs(r2 - rate) <= self.refine_max:
+                rate, phase = r2, p2
         self.score = score
+        # THE GRID'S OWN MEASUREMENT.
+        #
+        # The comb is asked about the rate the grid is RUNNING, not only
+        # about the candidate: the score says how well the music fits the
+        # running grid, and the phase says where the music's beats are on
+        # the grid's OWN period.  That phase is what the grid follows -
+        # the candidate's phase is measured on the candidate's period, and
+        # a candidate rate that wanders inside the plateau moves it by
+        # tens of milliseconds for no reason at all.
+        local = 0.0
+        if self.locked:
+            ls, lp = self.comb_score(self.sweep_frames, self.sweep_str, self.bpm)
+            local = float(ls)
+            self.local_score = local
+            self.local_phase = float(lp)
+            self.qual = self.quality(local, self.local_phase, self.bpm)
+            self.qual_peak = max(self.qual, self.qual_peak * QUAL_DECAY)
+        else:
+            self.qual = 0.0
         if score >= self.min_score:
             self.full_search_failed = False
             self.collapse_count = 0
-            local = 0.0
-            if self.locked:
-                local = float(self.comb_score(self.sweep_frames,
-                                              self.sweep_str, self.bpm)[0])
             self.narrow_result(rate, phase, score, local)
         else:
             # The narrow search cannot find the beat any more.  The grid
@@ -317,6 +634,29 @@ class BgTracker(P.Tracker):
             lim = P.PLL_SLEW * self.period
             d = per - self.period
             self.period += lim if d > lim else (-lim if d < 0 else d)
+        self.bpm = 60.0 * P.RATE / self.period
+
+    def slew_rate(self, bpm):
+        """The clock's rate follows the measurement, slowly.
+
+        The follower has a time constant of RATE_TAU_S: the period moves
+        towards the measured period by the fraction of the way that one
+        search's interval is of the time constant.  A wander is averaged
+        away; a tempo that really changes is followed smoothly.
+        """
+        per = 60.0 * P.RATE / bpm
+        if per <= 0.0:
+            return
+        dt = self.search_every / P.RATE
+        # The follower is FAST when the measurement says the clock is wrong
+        # and SLOW when it does not.
+        tau = self.rate_tau
+        if abs(self.bpm - 60.0 * P.RATE / per) > self.catch_bpm:
+            tau = CATCH_TAU_S
+        alpha = dt / tau
+        if alpha > 1.0:
+            alpha = 1.0
+        self.period += alpha * (per - self.period)
         self.bpm = 60.0 * P.RATE / self.period
 
     def adopt_phase(self, phase):
@@ -362,7 +702,7 @@ class BgTracker(P.Tracker):
             self.conf_count = 1
             self.conf_dir = 0
             return self.conf_count
-        move = rate - self.conf_prev
+        move = rate - self.conf_base
         if abs(move) <= MOVE:
             # It has not really moved: the same answer again.  The run goes
             # on - a still answer is the most consistent answer there is.
@@ -382,6 +722,40 @@ class BgTracker(P.Tracker):
         self.conf_prev = rate
         return self.conf_count
 
+    def quality(self, score, phase, bpm):
+        """THE QUALITY: the alignment times the coverage.
+
+        `score` is the comb's score at `bpm` - how much of the music's
+        strength is on the grid - and the coverage is how many of the
+        grid's beats the music confirms.  The product is the number that
+        says whether the running grid can be trusted, and it FALLS when
+        the music stops explaining the grid: a breakdown with no drums
+        confirms few of the beats, so the quality falls even though the
+        little that is left is perfectly aligned.
+        """
+        if score <= 0.0 or bpm <= 0.0:
+            return 0.0
+        cov = coverage(self.sweep_frames, bpm, phase)
+        return float(score) * cov
+
+    def drift(self, phase, bpm):
+        """How far the running grid is from the music, in ms.
+
+        The grid's anchor and the comb's phase are both positions on the
+        same clock, so the difference is the phase error: how late (or
+        early) the grid's beats are against the music's.
+        """
+        if bpm <= 0.0:
+            return 0.0
+        per = 60.0 * P.RATE / bpm
+        if per <= 0.0:
+            return 0.0
+        grid = self.next_beat % per
+        d = (phase - grid) % per
+        if d > per * 0.5:
+            d -= per
+        return d / P.RATE * 1000.0
+
     def narrow_result(self, rate, phase, score, local):
         """The narrow search's winner - the steady state's own decision.
 
@@ -391,21 +765,55 @@ class BgTracker(P.Tracker):
         it is what lets a DJ's slow tempo change through, because a tempo
         change pushes the answer out of the dead band and leaves it there.
 
-        THE PHASE ALWAYS FOLLOWS.  The comb's phase is a much better
-        conditioned measurement than its rate - the phase histogram has a
-        sharp peak even when the rate is ambiguous - so the grid tracks
-        the music's beats while the rate stays where it is.
+        THE PHASE FOLLOWS, BUT ONLY WHILE THE MUSIC EXPLAINS THE GRID.
+        The phase is measured on the GRID'S OWN period, so a candidate
+        rate that wanders inside the plateau cannot move the anchor.  And
+        it is only taken when the QUALITY says the measurement is worth
+        something: during a breakdown the music stops confirming the
+        beats, the quality falls, and the grid HOLDS instead of chasing a
+        guess.
         """
         if not self.locked:
             self.adopt(rate, phase, self.sweep_now)
             self.conf_count = 0
             self.conf_dir = 0
             return
+        # THE MEASUREMENT AT THE GRID.
+        #
+        # The comb's answer at the CANDIDATE is quantised - it can only land
+        # on the lattice's step - and it wanders, because the plateau's flat
+        # top moves as the score wobbles.  The clock is a low-pass filter of
+        # the answer, so a wandering answer ends up as a clock that
+        # publishes a number that is neither the music's tempo nor any of
+        # the answers - which is how a grid ends up at 131.4 when the music
+        # is at 129.0.
+        #
+        # So the answer the clock follows is the FIT AT THE GRID: the
+        # running grid's own beats, one feature each, fitted to a line.
+        # Measured on the real music it is three and a half times steadier
+        # than the plateau's centre and it is unbiased.
+        meas = None
+        if self.rate_mode == "fitgrid":
+            fit = fit_clusters(self.sweep_frames, self.sweep_str,
+                               self.bpm, self.local_phase)
+            if fit[0] is not None and abs(fit[0] - self.bpm) <= FIT_MAX:
+                meas = fit[0]
+                self.fit_rate = fit[0]
+                self.fit_have = True
+            else:
+                self.fit_have = False
+        # THE USER'S LOCK.  The clock is frozen - the rate and the grid
+        # stay where they are - and the estimate keeps running, so the
+        # drift between the frozen grid and the music is visible.
+        if self.hold:
+            self.drift_bpm = (meas if meas is not None else rate) - self.bpm
+            self.drift_ms = self.drift(self.local_phase, self.bpm)
+            return
         # The RUN: the answer has to keep going one way - or keep still -
         # before it is believed.  It is watched whether it is near the clock
         # or far from it.
         run = self.confirm(rate)
-        near = abs(rate - self.bpm) <= self.near_bpm
+        near = abs((meas if meas is not None else rate) - self.bpm) <= self.near_bpm
         if not near:
             # A DIFFERENT grid.
             if local < self.min_score and score >= self.dead_accept:
@@ -423,17 +831,51 @@ class BgTracker(P.Tracker):
                 self.changes += 1
                 return
             # Otherwise: HOLD.  The grid keeps its rate and its phase.
+            self.drift_bpm = rate - self.bpm
+            self.drift_ms = self.drift(self.local_phase, self.bpm)
             return
         # The answer is in the clock's neighbourhood.  It may still be
         # telling the clock that its rate is wrong.
-        if run >= self.persist:
+        if self.rate_mode == "fitgrid":
+            # THE CLOCK FOLLOWS THE MEASUREMENT, SLOWLY.
+            #
+            # The confirmation used to be a run: five seconds of evidence
+            # before the clock moved.  A slow follower is the same thing
+            # done better - a breakdown's wander is averaged away, and a
+            # tempo that really changes is followed smoothly, which is what
+            # a DJ's pitch fader does.
+            #
+            # The measurement may not JUMP: a jump is a tempo change (which
+            # settles within a few searches) or a breakdown (where the grid
+            # would be chasing a guess), and in both cases the grid holds
+            # until the answer has settled.
+            if meas is not None:
+                still = (not self.fit_have) or \
+                    abs(meas - self.last_fit) <= FIT_STILL
+                if still and self.qual >= self.qual_min:
+                    self.slew_rate(meas)
+                    self.slews += 1
+                else:
+                    self.held_frames += 1
+                self.last_fit = meas
+            else:
+                self.held_frames += 1
+        elif run >= self.persist:
             # CONFIRMED: the answer has held its course.  Move the clock's
             # rate, a step at a time.
             self.adopt_rate(rate)
             self.nudges += 1
         else:
             self.held_frames += 1
-        self.adopt_phase(phase)
+        self.drift_bpm = (meas if meas is not None else rate) - self.bpm
+        self.drift_ms = self.drift(self.local_phase, self.bpm)
+        # THE PHASE, MEASURED ON THE GRID'S OWN RATE, AND ONLY WHILE THE
+        # QUALITY SAYS SO.
+        if (self.qual >= self.qual_min
+                and self.qual >= QUAL_REL * self.qual_peak):
+            self.adopt_phase(self.local_phase)
+        else:
+            self.held_phase += 1
 
     # ---- the background estimator ---------------------------------------
 
@@ -461,11 +903,19 @@ class BgTracker(P.Tracker):
         rate, peak = self.rate_from(scores, bpms, wpen)
         score = float(scores[peak])
         phase = float(phases[peak])
+        if self.rate_mode == "refine":
+            r2, p2 = self.refine(rate, phase, frames, strs)
+            if r2 is not None and abs(r2 - rate) <= self.refine_max:
+                rate, phase = r2, p2
 
         # The steady rate's OWN evidence, on the SAME window.  A fight where
         # one side has twelve seconds of memory and the other has five is
         # not a fight.
         self.bg_local_score = float(self.comb_score(frames, strs, self.bpm)[0])
+        self.bg_frames = frames
+        # The background's own quality: the alignment at its rate times the
+        # coverage of the beats that rate predicts.
+        self.bg_qual = float(score) * coverage(frames, rate, phase)
 
         # The agreement: the same rate AND the same grid.
         if self.bg_have:
@@ -503,6 +953,10 @@ class BgTracker(P.Tracker):
             return False
         if self.bg_score < self.min_score:
             return False
+        if self.hold:
+            # The USER'S LOCK: the clock is frozen.  The background keeps
+            # estimating, and it says nothing to the clock.
+            return False
         near = abs(self.bg_bpm - self.bpm) <= self.near_bpm
         if near:
             # A nudge: the background agrees with the grid about where the
@@ -515,6 +969,12 @@ class BgTracker(P.Tracker):
             # 0.6 BPM is the flicker this whole scheme exists to stop.  The
             # rate moves on the narrow path's CONFIRMATION, or on a change;
             # the background's long-window anchor is worth the phase.
+            #
+            # And only while the quality says the measurement is worth
+            # something: a breakdown's long window confirms few of the
+            # beats, so the phase must not be taken from it.
+            if self.bg_qual < self.qual_min:
+                return False
             self.adopt_phase(self.bg_phase)
             return True
         if self.bg_local_score < self.min_score:
@@ -553,6 +1013,8 @@ class BgTracker(P.Tracker):
                 self.beat_index += 1
         self.bpm_log.append(self.bpm)
         self.score_log.append(self.score)
+        self.qual_log.append(self.qual)
+        self.conf_log.append(self.conf_count)
         self.bg_maybe()
         if not self.sweep_active:
             # While the grid is locked the ONLY whole-band search is the

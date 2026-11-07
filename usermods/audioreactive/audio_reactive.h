@@ -5436,6 +5436,11 @@ void arAnalysisTask(void * parameter)
       tf.bpm          = arTempoBpm();
       tf.beatProgress = arTempoBeatProgress();
       tf.score        = arTempoScore();
+      tf.quality      = arTempoQuality();
+      tf.qualityPeak  = arTempoQualityPeak();
+      tf.driftMs      = arTempoDriftMs();
+      tf.driftBpm     = arTempoDriftBpm();
+      tf.hold         = arTempoUserHold() ? 1 : 0;
       tf.beatInBar    = arTempoBeatInBar();
       tf.valid        = arTempoValid() ? 1 : 0;
       tf.beatInMeasure = arTempoBeatInMeasure();
@@ -7744,6 +7749,23 @@ class AudioReactive : public Usermod {
         t["beat_in_bar"]  = (int)tf.beatInBar;
         t["beat_progress"] = (double)tf.beatProgress;
         t["score"]        = (double)tf.score;
+        // THE QUALITY: how well the music explains the RUNNING grid.  It
+        // is the alignment (the score above, measured at the grid's own
+        // rate) times the coverage (the fraction of the grid's beats the
+        // music confirms).  It is the number that says whether the grid
+        // can be trusted, and it is what gates the grid's phase: below
+        // AR_TEMPO_QUAL_MIN the grid holds still instead of following a
+        // guess.
+        t["quality"]      = (double)tf.quality;
+        t["quality_peak"] = (double)tf.qualityPeak;
+        // THE DRIFT: how far the running grid is from the music.  The
+        // milliseconds are the grid's phase error - positive means the
+        // grid is LATE - and the BPM are how far the music has moved from
+        // the grid.  They are what a LOCKED grid is watched with.
+        t["drift_ms"]     = (double)tf.driftMs;
+        t["drift_bpm"]    = (double)tf.driftBpm;
+        // The USER'S LOCK: the clock is frozen, the estimate keeps running.
+        t["hold"]         = (int)tf.hold;
         t["beat_in_measure"] = (int)tf.beatInMeasure;
         t["downbeat_known"] = tf.downbeatKnown != 0;
         t["downbeat_t"]   = (double)tf.downbeatT;
@@ -8453,16 +8475,50 @@ class AudioReactive : public Usermod {
             if (!tempoOk) {
               snprintf(tempoBuf, sizeof(tempoBuf), "no estimate");
             } else if (!tf.valid) {
-              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, score %.2f, not locked",
-                       (double)tf.bpm, (double)tf.score);
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, qual %.2f, not locked",
+                       (double)tf.bpm, (double)tf.quality);
             } else {
-              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, score %.2f%s",
-                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.score,
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, qual %.2f/%.2f, drift %+.0f ms%s",
+                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.quality,
+                       (double)tf.qualityPeak, (double)tf.driftMs,
                        tf.downbeatSet ? ", downbeat set"
                                       : (tf.downbeatKnown ? ", downbeat measured" : ""));
             }
             infoArr = user.createNestedArray(F("Tempo"));
             infoArr.add(tempoBuf);
+          }
+
+          // THE LOCK: freeze the clock and watch the drift.
+          //
+          // "Lock BPM and grid to current values - keep estimating, but
+          // don't change the active clock and grid."
+          //
+          // While the lock is on, the RATE and the GRID stay exactly where
+          // they are and the estimator keeps running, so the DRIFT - the
+          // distance between the frozen grid and the music - is the number
+          // that moves.  It is how far the grid had to be corrected, and
+          // that is the only honest way to judge a grid: by the error it
+          // would have had.
+          {
+            ArTempoFrame tf;
+            const bool tempoOk = arCopyTempo(&tf);
+            char lockBuf[96];
+            if (!tempoOk || !tf.valid) {
+              snprintf(lockBuf, sizeof(lockBuf), "no grid to lock");
+            } else if (tf.hold) {
+              snprintf(lockBuf, sizeof(lockBuf),
+                       "locked at %.2f BPM - the drift is %+.0f ms, %+.2f BPM",
+                       (double)tf.bpm, (double)tf.driftMs, (double)tf.driftBpm);
+            } else {
+              snprintf(lockBuf, sizeof(lockBuf), "free - the grid may move");
+            }
+            infoArr = user.createNestedArray(F("Tempo lock"));
+            infoArr.add(lockBuf);
+            infoArr = user.createNestedArray(tf.hold ? F("Unlock the grid")
+                                                     : F("Lock the grid"));
+            infoArr.add(tf.hold
+              ? F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{unlockTempo:true}});\">unlock</button>")
+              : F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{lockTempo:true}});\">lock</button>"));
           }
 
           // THE MODE: DJ SET or PLAYLIST.
@@ -8850,6 +8906,30 @@ class AudioReactive : public Usermod {
           if (usermod[F("clearDownbeat")].as<bool>()) {
             arTempoRequestDownbeat(false);
             USER_PRINTLN("AR: downbeat cleared - the numbering is the convention again");
+          }
+        }
+        // THE LOCK, from the info pane's button.
+        //
+        // "Lock BPM and grid to current values - keep estimating, but
+        // don't change the active clock and grid."
+        //
+        // It is a REQUEST, like the downbeat's: the clock belongs to the
+        // analysis task, and the web server is not it.  While it is frozen
+        // the estimator keeps running and the DRIFT is published, so the
+        // frozen grid can be watched against the music.
+        //
+        // It is not saved: it is a test instrument, and a lock that
+        // survived a reboot would be a lock nobody could explain.
+        if (usermod[F("lockTempo")].is<bool>()) {
+          if (usermod[F("lockTempo")].as<bool>()) {
+            arTempoRequestHold(true);
+            USER_PRINTLN("AR: tempo locked - the grid stays, the estimate runs");
+          }
+        }
+        if (usermod[F("unlockTempo")].is<bool>()) {
+          if (usermod[F("unlockTempo")].as<bool>()) {
+            arTempoRequestHold(false);
+            USER_PRINTLN("AR: tempo unlocked - the grid may move again");
           }
         }
         // THE MODE, from the info pane's button.

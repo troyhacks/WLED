@@ -86,6 +86,8 @@ PLL_GAMMA = 0.35             # AR_TEMPO_PLL_GAMMA
 PLL_SLEW = 0.005             # AR_TEMPO_PLL_SLEW
 PEAK_RING = 256              # AR_TEMPO_PEAK_RING
 TOL_MS = 70.0                # AR_TEMPO_TOL_DEFAULT_MS
+KERNEL_FRAC = 0.14           # AR_TEMPO_KERNEL_FRAC (the box, as a fraction
+                              # of the period - the cap on the tolerance)
 
 
 # --------------------------------------------------------------------------
