@@ -789,6 +789,47 @@ static constexpr float AR_TEMPO_PLL_GAMMA = 0.35f;
 // is not worth two points of hit rate.
 static constexpr float AR_TEMPO_PLL_GAIN = 0.20f;
 
+// ---- the confirmation ------------------------------------------------------
+//
+// THE CLOCK IS A CLOCK.  The comb's answer is a MEASUREMENT, and a
+// measurement only moves the clock when it is CONSISTENT: the same answer,
+// the same way, several searches in a row.
+//
+// Troy, on a set that flickered between 128 and 127 and back:
+//
+//   "We aren't 'trusting' the established BPM and clock strongly enough
+//    during 'confused' moments like breakdowns and transitions."
+//
+//   "The BPM doing minor fluctuations is a good sign of being confused."
+//
+//   "in DJ Set mode, we expect a fairly steady tempo and the beat grid to
+//    shift very mildly - if we see a bunch of grid modifications, that's
+//    confusion - keep the steady state and adjust once we have a better
+//    lock."
+//
+//   "No DJ is going to go 128, 129, 128 over a few seconds."
+//
+// So the answer that comes BACK the way it came is not a tempo drift, it is
+// a tracker that is confused, and it does not get to move the grid.  A
+// tempo drift - a DJ's pitch fader, a slow ramp - keeps saying the same
+// thing in the same direction, so it does.
+//
+// So the rule is a RUN: the answer has to keep going one way - or keep
+// still - for CONFIRM_N searches before the clock may move.  A reversal
+// starts the run again from there.
+//
+// CONFIRM_MOVE is below which the answer has not really moved: the
+// lattice's own step is a quarter of a BPM, so this sees every real step.
+// CONFIRM_N is how long the run has to be - the narrow search runs every
+// four frames, so 116 searches is five seconds.  Five seconds is longer
+// than a breakdown's wander and shorter than the patience of a DJ whose
+// pitch fader has moved.
+static constexpr float   AR_TEMPO_CONFIRM_MOVE = 0.10f;
+static constexpr uint8_t AR_TEMPO_CONFIRM_N    = 116;
+// PLAYLIST wants less than a third of it: a track boundary is not something
+// to be waited out, and the memory there is already half as long.
+static constexpr uint8_t AR_TEMPO_CONFIRM_N_LIST = 39;
+
 // ---- the ring and the rebase ----------------------------------------------
 
 // The onset ring's entries. The window holds 1125 frames and two onsets
@@ -926,6 +967,25 @@ struct ArTempoState {
   float    bpm;                           // the published rate
   float    score;                         // the comb score, 0..1
   bool     locked;                        // the grid is running
+
+  // ---- the confirmation ----
+  //
+  // The CLOCK and the MEASUREMENT are two different things.  The clock is
+  // the steady grid; the measurement is the comb's answer, and it is only
+  // allowed to move the clock when it is CONSISTENT - the same answer, the
+  // same way, several searches in a row.
+  //
+  // A measurement that goes 128, 127, 128 is not a drifting tempo, it is a
+  // tracker that is confused, and a confused tracker must not be allowed to
+  // move the grid.  A DJ's slow tempo change IS a measurement that keeps
+  // saying the same thing in the same direction, so it gets through.
+  //
+  // The RUN: how long the answer has kept going one way.  A reversal - the
+  // answer coming back the way it came - starts the run again from there.
+  float    confBase;                      // the answer where the run started
+  float    confPrev;                      // the answer before it
+  uint8_t  confCount;                     // how long the run has lasted
+  int8_t   confDir;                       // which way it has been going: -1, 0, +1
 
   // ---- the downbeat ----
   //
@@ -1257,6 +1317,10 @@ static float arTempoCombScore(const int32_t *frames, const float *str, int n,
 // track's comb score, and the first estimate would be a blend of two tracks.
 static void arTempoReset(void);
 
+// How many agreeing searches the current mode wants before the clock's rate
+// may move.  DJ SET wants the full run; PLAYLIST wants fewer.
+static uint8_t arTempoConfirmNeed(void);
+
 // Bake the coefficients and clear the state.
 static void arTempoInit(void) {
   // The anti-alias filter: the AR's own Butterworth builder, 4th order.
@@ -1335,6 +1399,11 @@ static void arTempoReset(void) {
   arTempo.frameIndex  = 0;
   arTempo.bpm         = 0.0f;
   arTempo.score       = 0.0f;
+  // The confirmation starts with nothing to say.
+  arTempo.confBase    = 0.0f;
+  arTempo.confPrev    = 0.0f;
+  arTempo.confCount   = 0;
+  arTempo.confDir     = 0;
   // The downbeat's profile goes with the grid: its positions are the
   // beat counter's, and the beat counter restarts with the lock.
   for (int i = 0; i < 4; i++) {
@@ -1431,6 +1500,83 @@ static void arTempoRequestDownbeat(bool set) {
 // rubbish.  The walk is right for a nudge, where the two rates are the
 // same music, and wrong for a change, where they are not.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// THE CLOCK, IN TWO HALVES.
+//
+// The RATE is how fast the grid runs; the PHASE is where in time the next
+// beat falls.  They were one operation, and that is why a jittering rate
+// also made the grid jump: the anchor was worked out with the CANDIDATE's
+// period while the grid was running on its own, so a candidate that moved
+// moved the grid with it.
+//
+// Split, they can be trusted separately: the rate moves only on a
+// CONFIRMED measurement, and the phase follows the comb's anchor on the
+// grid's OWN period, so the anchor does not jitter with the candidate.
+// ---------------------------------------------------------------------------
+
+// The RATE half: the period moves, the phase does not.
+static void arTempoAdoptRate(float bpm, bool hard) {
+  const float P = 60.0f * AR_TEMPO_RATE / bpm;   // the new period, in frames
+  if (hard) {
+    arTempo.period = P;
+  } else {
+    arTempo.period += AR_TEMPO_PLL_GAIN * (P - arTempo.period);
+  }
+  arTempo.bpm = 60.0f * AR_TEMPO_RATE / arTempo.period;
+}
+
+// The PHASE half: the beat moves, the rate does not.
+//
+// The anchor is worked out with the GRID's own period, so the comb's answer
+// is used for WHERE the beat is and not for HOW FAST.
+static void arTempoAdoptPhase(float phase) {
+  const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
+  const float anchor = phase + k * arTempo.period;
+  arTempo.nextBeat += AR_TEMPO_PLL_GAMMA * (anchor - arTempo.nextBeat);
+}
+
+// The confirmation: the RUN.
+//
+// How long has the answer kept going one way?  A reversal - the answer
+// coming back the way it came - starts the run again from there.  The clock
+// may be moved when the run reaches AR_TEMPO_CONFIRM_N.
+//
+// A run that has lasted five seconds has not reversed for five seconds, and
+// that is the only thing the clock asks.  A breakdown's wander reverses
+// every second or two, so it never gets there; a DJ's slow tempo change
+// never reverses at all, so it does.
+static uint8_t arTempoConfirm(float rate) {
+  if (arTempo.confCount == 0) {
+    arTempo.confBase = rate;
+    arTempo.confPrev = rate;
+    arTempo.confCount = 1;
+    arTempo.confDir  = 0;
+    return 1;
+  }
+  const float move = rate - arTempo.confPrev;
+  if (fabsf(move) <= AR_TEMPO_CONFIRM_MOVE) {
+    // It has not really moved: the same answer again.  The run goes on - a
+    // still answer is the most consistent answer there is.
+    if (arTempo.confCount < 255) arTempo.confCount++;
+    arTempo.confPrev = rate;
+    return arTempo.confCount;
+  }
+  const int8_t dir = (move > 0.0f) ? 1 : -1;
+  if (arTempo.confDir != 0 && dir != arTempo.confDir) {
+    // IT CAME BACK.  That is confusion, not a tempo.  The run starts again
+    // from here.
+    arTempo.confBase = rate;
+    arTempo.confCount = 1;
+    arTempo.confDir  = 0;
+  } else {
+    arTempo.confDir = dir;
+    if (arTempo.confCount < 255) arTempo.confCount++;
+  }
+  arTempo.confPrev = rate;
+  return arTempo.confCount;
+}
+
+// The whole clock, for the moments when it moves as one.
 static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
   const float P = 60.0f * AR_TEMPO_RATE / bpm;   // the new period, in frames
   if (!arTempo.locked) {
@@ -1459,11 +1605,15 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     arTempo.downbeatEvalIndex = 0;
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
-  } else if (hard) {
+    arTempo.bpm = bpm;
+    return;
+  }
+  if (hard) {
     arTempo.period = P;
     const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
     const float anchor = phase + k * arTempo.period;
     arTempo.nextBeat = anchor;
+    arTempo.bpm = 60.0f * AR_TEMPO_RATE / arTempo.period;
     // In PLAYLIST the music really did change - that is what the mode is
     // for - and the new track's bar starts somewhere else.  So the user's
     // mark belongs to the track that ended, and the bar profile that was
@@ -1490,13 +1640,10 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
         arTempo.measCnt[i] = 0;
       }
     }
-  } else {
-    arTempo.period += AR_TEMPO_PLL_GAIN * (P - arTempo.period);
-    const float k      = roundf((arTempo.nextBeat - phase) / arTempo.period);
-    const float anchor = phase + k * arTempo.period;
-    arTempo.nextBeat += AR_TEMPO_PLL_GAMMA * (anchor - arTempo.nextBeat);
+    return;
   }
-  arTempo.bpm = 60.0f * AR_TEMPO_RATE / arTempo.period;
+  arTempoAdoptRate(bpm, false);
+  arTempoAdoptPhase(phase);
 }
 
 // ---------------------------------------------------------------------------
@@ -1752,7 +1899,15 @@ static void arTempoBackgroundPromote(void) {
   if (fabsf(arTempo.bgBpm - arTempo.bpm) <= AR_TEMPO_NEAR_BPM) {
     // A NUDGE: the background agrees with the grid about where the tempo
     // is, within the lattice's own resolution.
-    arTempoAdopt(arTempo.bgBpm, arTempo.bgPhase, arTempo.sweepNow, false);
+    //
+    // The PHASE only.  The background's rate has earned its own agreement
+    // - six searches that said the same rate AND the same grid - but that
+    // agreement is only to within 0.6 BPM, and pulling the clock 20 %
+    // toward a rate that wanders inside that 0.6 BPM is the flicker this
+    // whole scheme exists to stop.  The rate moves on the narrow path's
+    // CONFIRMATION, or on a change; the background's long-window anchor is
+    // worth the phase.
+    arTempoAdoptPhase(arTempo.bgPhase);
     return;
   }
   if (arTempo.bgLocalScore < AR_TEMPO_MIN_SCORE) {
@@ -1877,11 +2032,16 @@ static void arTempoSweepStep(void) {
 
   // THE STEADY STATE.
   //
-  // A rate close to the one the grid is at is the SAME music - the music
-  // drifting, the window filling - and it is taken as a NUDGE.  A rate a
-  // long way off is a DIFFERENT grid, and it is only taken when the music
-  // really changed: the rate the grid is at has DIED, and the new one has
-  // evidence of its own.
+  // The grid is a CLOCK and the comb's answer is a MEASUREMENT.  The
+  // measurement only moves the clock when it has held its COURSE - when it
+  // has not come back the way it came for five seconds - and the phase
+  // follows the comb's anchor on the grid's own period, so a candidate
+  // rate that jitters does not make the anchor jitter with it.
+  //
+  // A rate a long way off is a DIFFERENT grid, and it is only taken when
+  // the music really changed: the rate the grid is at has DIED, and the new
+  // one has evidence of its own - or when the far answer has held its
+  // course long enough to be believed.
   //
   // And a MIXTURE - three seconds of 127 inside twelve seconds of 128 -
   // fits neither: its best fit is a COMPROMISE rate (measured: 125.75) that
@@ -1890,12 +2050,34 @@ static void arTempoSweepStep(void) {
   const float local = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
                                         arTempo.sweepCount, arTempo.sweepTotal,
                                         arTempo.bpm, &ph);
-  if (fabsf(rate - arTempo.bpm) <= AR_TEMPO_NEAR_BPM) {
-    arTempoAdopt(rate, phase, arTempo.sweepNow, false);    // a NUDGE
-  } else if (local < AR_TEMPO_MIN_SCORE && score >= AR_TEMPO_DEAD_ACCEPT) {
-    arTempoAdopt(rate, phase, arTempo.sweepNow, true);     // the music changed
+  // The RUN: the answer has to keep going one way - or keep still - before
+  // it is believed.  It is watched whether it is near the clock or far.
+  const uint8_t run = arTempoConfirm(rate);
+  const bool near = (fabsf(rate - arTempo.bpm) <= AR_TEMPO_NEAR_BPM);
+  if (!near) {
+    if (local < AR_TEMPO_MIN_SCORE && score >= AR_TEMPO_DEAD_ACCEPT) {
+      arTempoAdopt(rate, phase, arTempo.sweepNow, true);   // the music changed
+      return;
+    }
+    if (run >= arTempoConfirmNeed() && score >= AR_TEMPO_DEAD_ACCEPT) {
+      // The far answer has held its course, and it has evidence of its own.
+      // A MIXTURE is not that: its best fit is a compromise rate that
+      // nothing aligns with, and the score says so.
+      arTempoAdopt(rate, phase, arTempo.sweepNow, true);
+      return;
+    }
+    // Otherwise: HOLD the rate.  The grid keeps its rate and its phase.
+    return;
   }
-  // Otherwise: HOLD.  The grid keeps its rate and its phase.
+  if (run >= arTempoConfirmNeed()) {
+    // CONFIRMED: the clock's rate may move, a step at a time.
+    arTempoAdoptRate(rate, false);
+  }
+  // The phase always follows: the comb's phase is a much better
+  // conditioned measurement than its rate - the phase histogram has a
+  // sharp peak even when the rate is ambiguous - so the grid tracks the
+  // music's beats while the rate stays where it is.
+  arTempoAdoptPhase(phase);
 }
 
 // ---------------------------------------------------------------------------
@@ -2597,6 +2779,32 @@ static float arTempoBpm(void) {
 // grid's best phase. It is what says whether the estimate is to be believed.
 static float arTempoScore(void) {
   return arTempo.score;
+}
+
+// How many searches in a row have now agreed with each other.
+//
+// This is the tracker's own answer to "is the measurement consistent?",
+// and it is published so the number can be watched while the music plays:
+// it sits at zero while the tracker is confused and climbs to
+// AR_TEMPO_CONFIRM_N when the measurement has earned the right to move the
+// clock.
+static uint8_t arTempoConfirmCount(void) {
+  return arTempo.confCount;
+}
+
+// How many agreeing searches the current mode wants.
+//
+// DJ SET waits for the full run: the grid that is working is the one the
+// user set up, and a breakdown is not a reason to lose it.  PLAYLIST wants
+// fewer, because a track boundary is a real change and the memory there is
+// already half as long.
+static uint8_t arTempoConfirmNeed(void) {
+  return arTempo.playlist ? AR_TEMPO_CONFIRM_N_LIST : AR_TEMPO_CONFIRM_N;
+}
+
+// Is the clock's rate being held right now?
+static bool arTempoRateHeld(void) {
+  return arTempo.confCount < arTempoConfirmNeed();
 }
 
 // The beat in the bar.

@@ -58,6 +58,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _cache                                      # noqa: E402
 import _fw_port as P                               # noqa: E402
+from _fw_port import rnd                          # noqa: E402
 from _fw_band import firmware_odf                  # noqa: E402
 
 
@@ -76,6 +77,41 @@ NEAR_BPM = 1.50               # a NUDGE: this close needs no margin
 DEAD_ACCEPT = 0.50            # when the local rate is dead, a candidate must clear this
 PLATEAU_TOL = 1e-4            # the relative width of the plateau's flat top
 
+# THE CONFIRMATION.
+#
+# The comb's answer is a MEASUREMENT and the grid is a CLOCK.  A measurement
+# is allowed to move the clock only when it is CONSISTENT, and consistency
+# here means one thing: the answer has not REVERSED.
+#
+# A breakdown, a transition, a breakdown again - the answer goes 127.5,
+# 128.0, 128.25, 127.75, 128.0.  It goes back the way it came.  That is
+# not a tempo, it is a tracker that is confused, and a confused tracker
+# must not be allowed to move the clock.  It is exactly Troy's:
+#
+#   "No DJ is going to go 128, 129, 128 over a few seconds."
+#
+# A DJ's slow tempo change, on the other hand, keeps saying the same thing
+# in the same direction: 128.0, 128.25, 128.5, 128.75.  It never comes
+# back.  So it, and only it, is allowed to move the clock.
+#
+# So the rule is a RUN: the answer has to keep going one way - or keep
+# still - for PERSIST searches before the clock may move.  A reversal
+# starts the run again from there.
+#
+#   MOVE     below this the answer has not really moved.  The lattice's
+#            step is a quarter of a BPM, so this sees every real step.
+#   PERSIST  how many searches the run has to last.  The narrow search runs
+#            every four frames, so 116 searches is five seconds.
+#
+# Troy:
+#
+#   "keep the steady state and adjust once we have a better lock."
+MOVE = 0.10
+PERSIST = 116
+# PLAYLIST wants less than a third of it: a track boundary is not something
+# to be waited out, and the memory there is already half as long.
+PERSIST_LIST = 39
+
 
 # The two modes.  Each is a set of the constants above, and each one is a
 # choice the firmware makes from the mode setting - so they belong HERE,
@@ -92,8 +128,10 @@ PLATEAU_TOL = 1e-4            # the relative width of the plateau's flat top
 #              sooner and the new one is found sooner - and the handover
 #              is quicker: fewer agreements (3) and a smaller margin (0.40).
 MODES = {
-    "dj set":    dict(window=P.COMB_FRAMES,     converge=6, margin=0.70),
-    "playlist":  dict(window=P.COMB_FRAMES // 2, converge=3, margin=0.40),
+    "dj set":    dict(window=P.COMB_FRAMES,     converge=6, margin=0.70,
+                     persist=PERSIST),
+    "playlist":  dict(window=P.COMB_FRAMES // 2, converge=3, margin=0.40,
+                     persist=PERSIST_LIST),
 }
 
 
@@ -114,6 +152,7 @@ class BgTracker(P.Tracker):
         self.bg_min_peaks = BG_MIN_PEAKS
         self.near_bpm = NEAR_BPM
         self.dead_accept = DEAD_ACCEPT
+        self.persist = PERSIST
         self.mode = "dj set"
 
         # The background's state.
@@ -133,6 +172,13 @@ class BgTracker(P.Tracker):
         self.changes = 0
         self.held_frames = 0
         self.events = []
+        self.last_plateau = (0, 0, 0, 0.0)
+
+        # The confirmation: the measurement's consistency state.
+        self.conf_base = 0.0
+        self.conf_prev = 0.0
+        self.conf_count = 0
+        self.conf_dir = 0
 
     # ---- the mode -------------------------------------------------------
 
@@ -148,6 +194,7 @@ class BgTracker(P.Tracker):
         self.bg_window = cfg["window"]
         self.bg_converge = cfg["converge"]
         self.bg_margin = cfg["margin"]
+        self.persist = cfg["persist"]
 
     # ---- the plateau ----------------------------------------------------
 
@@ -196,6 +243,10 @@ class BgTracker(P.Tracker):
             while b < n - 1 and scores[b + 1] >= scores[j] - tol:
                 b += 1
             centre = 0.5 * (float(bpms[a]) + float(bpms[b]))
+            # The plateau's geometry, for the instrument.  The centre is the
+            # rate; a and b are where the flat top ENDS, and they are what
+            # moves when the score wobbles.
+            self.last_plateau = (a, b, j, centre)
             val = float(scores[j])
             if use_prior:
                 val -= self._prior_penalty(centre)
@@ -253,30 +304,136 @@ class BgTracker(P.Tracker):
             self.collapse_count = min(255, self.collapse_count + 1)
         self.sweep_active = False
 
-    def narrow_result(self, rate, phase, score, local):
-        """The narrow search's winner.
+    # ---- the clock and the measurement ----------------------------------
 
-        THE RATE DOES NOT MOVE FOR A MIXTURE.  A rate that is close to the
-        one the grid is at is a NUDGE - the music drifting, the window
-        filling - and it is taken.  A rate that is a long way off is a
-        DIFFERENT grid, and it is only taken when the music really changed:
-        the rate the grid is at has died, and the new one has evidence of
-        its own.
+    def adopt_rate(self, bpm, hard=False):
+        """The RATE half of the clock: the period moves, the phase does not."""
+        per = 60.0 * P.RATE / bpm
+        if hard:
+            self.period = per
+        elif self.pll_gain > 0.0:
+            self.period += self.pll_gain * (per - self.period)
+        else:
+            lim = P.PLL_SLEW * self.period
+            d = per - self.period
+            self.period += lim if d > lim else (-lim if d < 0 else d)
+        self.bpm = 60.0 * P.RATE / self.period
+
+    def adopt_phase(self, phase):
+        """The PHASE half of the clock: the beat moves, the rate does not.
+
+        The anchor is worked out with the CLOCK's own period, so a candidate
+        rate that jitters does not make the anchor jitter with it.
+        """
+        k = rnd((self.next_beat - phase) / self.period)
+        anchor = phase + k * self.period
+        self.next_beat += P.PLL_GAMMA * (anchor - self.next_beat)
+
+    def adopt(self, bpm, phase, now, hard=False):
+        """The whole clock, for the moments when it moves as one."""
+        if not self.locked:
+            self.period = 60.0 * P.RATE / bpm
+            self.next_beat = phase + rnd((now - phase) / self.period) * self.period
+            self.locked = True
+            self.beat_index = 0
+            self.bpm = bpm
+            return
+        if hard:
+            self.adopt_rate(bpm, hard=True)
+            k = rnd((self.next_beat - phase) / self.period)
+            self.next_beat = phase + k * self.period
+        else:
+            self.adopt_rate(bpm)
+            self.adopt_phase(phase)
+
+    def confirm(self, rate):
+        """The RUN: how long has the answer kept going one way?
+
+        A reversal - the answer going back the way it came - starts the run
+        again from there.  A run that has lasted PERSIST searches has not
+        reversed for that long, and that is the only thing the clock asks
+        before it moves.
+
+        Returns the length of the current run.
+        """
+        if self.conf_count == 0:
+            self.conf_base = rate
+            self.conf_prev = rate
+            self.conf_count = 1
+            self.conf_dir = 0
+            return self.conf_count
+        move = rate - self.conf_prev
+        if abs(move) <= MOVE:
+            # It has not really moved: the same answer again.  The run goes
+            # on - a still answer is the most consistent answer there is.
+            self.conf_count += 1
+            self.conf_prev = rate
+            return self.conf_count
+        d = 1 if move > 0 else -1
+        if self.conf_dir != 0 and d != self.conf_dir:
+            # IT CAME BACK.  That is confusion, not a tempo.  The run starts
+            # again from here.
+            self.conf_base = rate
+            self.conf_count = 1
+            self.conf_dir = 0
+        else:
+            self.conf_dir = d
+            self.conf_count += 1
+        self.conf_prev = rate
+        return self.conf_count
+
+    def narrow_result(self, rate, phase, score, local):
+        """The narrow search's winner - the steady state's own decision.
+
+        THE CLOCK IS A CLOCK.  The comb's answer is a MEASUREMENT, and a
+        measurement only moves the clock when it says the clock is wrong AND
+        keeps saying it.  That is what stops the 128-127-128 flicker, and
+        it is what lets a DJ's slow tempo change through, because a tempo
+        change pushes the answer out of the dead band and leaves it there.
+
+        THE PHASE ALWAYS FOLLOWS.  The comb's phase is a much better
+        conditioned measurement than its rate - the phase histogram has a
+        sharp peak even when the rate is ambiguous - so the grid tracks
+        the music's beats while the rate stays where it is.
         """
         if not self.locked:
             self.adopt(rate, phase, self.sweep_now)
+            self.conf_count = 0
+            self.conf_dir = 0
             return
-        if abs(rate - self.bpm) <= self.near_bpm:
-            self.adopt(rate, phase, self.sweep_now)
+        # The RUN: the answer has to keep going one way - or keep still -
+        # before it is believed.  It is watched whether it is near the clock
+        # or far from it.
+        run = self.confirm(rate)
+        near = abs(rate - self.bpm) <= self.near_bpm
+        if not near:
+            # A DIFFERENT grid.
+            if local < self.min_score and score >= self.dead_accept:
+                # The music changed: re-anchor on the new grid rather than
+                # walking through the rates where nothing aligns.
+                self.adopt(rate, phase, self.sweep_now, hard=True)
+                self.changes += 1
+                return
+            if run >= self.persist and score >= self.dead_accept:
+                # The far answer has held its course, and it has evidence of
+                # its own.  A MIXTURE - three seconds of 127 inside twelve
+                # seconds of 128 - is not that: its best fit is a compromise
+                # rate that nothing aligns with, and the score says so.
+                self.adopt(rate, phase, self.sweep_now, hard=True)
+                self.changes += 1
+                return
+            # Otherwise: HOLD.  The grid keeps its rate and its phase.
+            return
+        # The answer is in the clock's neighbourhood.  It may still be
+        # telling the clock that its rate is wrong.
+        if run >= self.persist:
+            # CONFIRMED: the answer has held its course.  Move the clock's
+            # rate, a step at a time.
+            self.adopt_rate(rate)
             self.nudges += 1
-            return
-        if local < self.min_score and score >= self.dead_accept:
-            # The music changed: re-anchor on the new grid rather than
-            # walking through the rates where nothing aligns.
-            self.adopt(rate, phase, self.sweep_now, hard=True)
-            self.changes += 1
-            return
-        self.held_frames += 1
+        else:
+            self.held_frames += 1
+        self.adopt_phase(phase)
 
     # ---- the background estimator ---------------------------------------
 
@@ -350,8 +507,15 @@ class BgTracker(P.Tracker):
         if near:
             # A nudge: the background agrees with the grid about where the
             # tempo is, within the lattice's own resolution.
-            self.adopt(self.bg_bpm, self.bg_phase, self.sweep_now)
-            self.nudges += 1
+            #
+            # The PHASE only.  The background's rate has earned its own
+            # agreement - six searches that said the same rate AND the same
+            # grid - but that agreement is only to within 0.6 BPM, and
+            # pulling the clock 20 % toward a rate that wanders inside that
+            # 0.6 BPM is the flicker this whole scheme exists to stop.  The
+            # rate moves on the narrow path's CONFIRMATION, or on a change;
+            # the background's long-window anchor is worth the phase.
+            self.adopt_phase(self.bg_phase)
             return True
         if self.bg_local_score < self.min_score:
             # The rate the grid is at has died: the music changed, and the

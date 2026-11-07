@@ -7774,6 +7774,15 @@ class AudioReactive : public Usermod {
         t["bpm_low"]      = (double)AR_TEMPO_BPM_LO;
         t["bpm_high"]     = (double)AR_TEMPO_BPM_HI;
         t["min_score"]    = (double)AR_TEMPO_MIN_SCORE;
+        // THE RUN: how long the comb's answer has gone on going one way.
+        // A reversal - the answer coming back the way it came - starts the
+        // run again, so the count sits low while the tracker is confused
+        // and climbs when the measurement has earned the right to move the
+        // clock.  "held" is the same thing as a flag: the rate is not
+        // moving while it is one.
+        t["confirm"]      = (int)arTempoConfirmCount();
+        t["confirm_n"]    = (int)arTempoConfirmNeed();
+        t["held"]         = arTempoRateHeld() ? 1 : 0;
         // The ProLink reference: the deck's grid measured against ours.  Zero
         // when no deck is connected.
         //
