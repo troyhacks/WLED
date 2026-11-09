@@ -7570,7 +7570,11 @@ uint16_t mode_2Dscrollingtext(void) {
   // expanded, because a block of lines is taller than one line and the
   // block has to be centred as a block.
   int yoffset = 0;
-  char text[64] = { '\0' };  // Increased to 64 for longer combined strings
+  // The buffers.  The NAME is still 63 characters (that is the segment's own
+  // limit), but the EXPANDED text is longer: a macro can be five characters
+  // and its value seven, and "#BDBG" stands for a whole block of them.
+  char text[128] = { '\0' };  // the expanded text, and the name before it
+  char pre[128]  = { '\0' };  // the name with "#BDBG" put back as its block
   unsigned maxLen = (SEGMENT.name) ? min(63, (int)strlen(SEGMENT.name)) : 0;
   if (SEGMENT.name) for (size_t i = 0, j = 0; i < maxLen; i++) if (SEGMENT.name[i] > 31 && SEGMENT.name[i] < 128) text[j++] = SEGMENT.name[i];
   const bool zero = strchr(text, '0') != nullptr;
@@ -7600,6 +7604,7 @@ uint16_t mode_2Dscrollingtext(void) {
     strstr(text, "#BPM") || strstr(text, "#BPOS") || strstr(text, "#BEAT") || strstr(text, "#BARS") ||
     strstr(text, "#QUAL") || strstr(text, "#BSRC") || strstr(text, "#BLCK") ||
     strstr(text, "#BDRF") || strstr(text, "#GDRF") || strstr(text, "#^") ||
+    strstr(text, "#BDBG") ||
     strstr(text, "#END") || strstr(text, "#TT") || strstr(text, "#TA") || strstr(text, "#PR") ||
     strstr(text, "#PH") || strstr(text, "#PB") || strstr(text, "#PH") || strstr(text, "#PT") || strstr(text, "#MD");
 
@@ -7706,11 +7711,46 @@ uint16_t mode_2Dscrollingtext(void) {
       #endif
       (void)srcLive;   // read above; kept for the source's own sake
 
+      // THE BEAT DEBUG BLOCK.
+      //
+      // "#BDBG" is one macro that stands for the whole block:
+      //
+      //   #BPM - #BEAT - #QUAL
+      //   #BSRC - #BLCK
+      //   #BDRF - #GDRF
+      //
+      // It is put back HERE, before the expansion, and not inside it: the
+      // six macros in the block are then expanded like any other macro, so
+      // the block shows the numbers and not the names.
+      //
+      // The newlines are REAL newlines in the block, so the block is three
+      // lines of text exactly as if the user had typed them - which is what
+      // the line layout below is built for.
+      static const char BDBG_BLOCK[] =
+        "#BPM - #BEAT - #QUAL\n#BSRC - #BLCK\n#BDRF - #GDRF";
+      {
+        const char* s = text;
+        char* d = pre;
+        char* const dend = pre + sizeof(pre);
+        while (*s && d < dend - 1) {
+          if (strncmp(s, "#BDBG", 5) == 0) {
+            const size_t bl = strlen(BDBG_BLOCK);
+            if (d + bl >= dend) break;          // no room for the block
+            memcpy(d, BDBG_BLOCK, bl);
+            d += bl;
+            s += 5;
+          } else {
+            *d++ = *s++;
+          }
+        }
+        *d = '\0';
+      }
+
       // The expansion buffer is the size of the text it is copied back into,
       // so the copy back can never overrun it.
       char output[sizeof(text)] = { '\0' };
       char* const end = output + sizeof(output);
-      char* src = text;
+      char* src = pre;
       char* dst = output;
 
       while (*src && dst < end - 1) {
