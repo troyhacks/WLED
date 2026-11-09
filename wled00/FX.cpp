@@ -7820,28 +7820,35 @@ uint16_t mode_2Dscrollingtext(void) {
             // It is PRESENTATION: the drift inside is untouched.
             // "--" when there is no measurement at all.
             //
-            // The field is TWELVE CHARACTERS WIDE, always: the milliseconds
-            // with their sign (3), "ms" (2), a space (1), a bracket (1),
-            // the percentage with its sign (3), a bracket (1) and a per cent
-            // (1).  The "--" case is padded to the same twelve, so that the
-            // columns do not move when the measurement comes and goes.
+            // The field is THIRTEEN CHARACTERS WIDE, always: the sign (1),
+            // the milliseconds (3), "ms" (2), a space and a bracket (2),
+            // the percentage's sign (1), the percentage (2), and the last
+            // two (2).  The "--" case is padded to the same thirteen, so
+            // that the columns do not move when the measurement comes and
+            // goes.
+            //
+            // The SIGN HAS ITS OWN COLUMN and the number is right-aligned
+            // in the rest.  That is what stops the field from moving: the
+            // milliseconds are two digits at one moment and three at the
+            // next (the phase error is folded to half a beat, so at a slow
+            // tempo it can reach three digits), and with the sign inside
+            // the number the "ms" would be pushed sideways every time.
             char gbuf[32];
             if (!srcHaveDrift) {
-              snprintf(gbuf, sizeof(gbuf), "%-12s", "--");
+              snprintf(gbuf, sizeof(gbuf), "%-13s", "--");
             } else if (srcGridBpm > 0.0f) {
               // The grid's beat in milliseconds is 60000 / BPM, so the
               // PERCENTAGE of a beat is the error times the rate over 600.
-              const float pct = srcDriftMs * srcGridBpm / 600.0f;
-              const float r   = roundf(pct);
-              // A rounded zero is a zero: "-0%" is a reading, not a number.
-              // The sign sits where the padding is, so " 47" and "-47" are
-              // the same width and the columns line up.
-              if      (r >=  0.5f) snprintf(gbuf, sizeof(gbuf), "%+3.0fms (%3.0f%%)",  srcDriftMs,  r);
-              else if (r <= -0.5f) snprintf(gbuf, sizeof(gbuf), "%+3.0fms (-%2.0f%%)", srcDriftMs, -r);
-              else                 snprintf(gbuf, sizeof(gbuf), "%+3.0fms (%3.0f%%)",  srcDriftMs, 0.0f);
+              const float mr = roundf(srcDriftMs);   // a rounded zero is a zero
+              const float pr = roundf(srcDriftMs * srcGridBpm / 600.0f);
+              snprintf(gbuf, sizeof(gbuf), "%c%3.0fms (%c%2.0f%%)",
+                       (mr < 0.0f) ? '-' : '+', (double)fabsf(mr),
+                       (pr < 0.0f) ? '-' : ' ', (double)fabsf(pr));
             } else {
               // No grid rate, so no percentage - but the field keeps its width.
-              snprintf(gbuf, sizeof(gbuf), "%+3.0fms%-7s", srcDriftMs, "");
+              const float mr = roundf(srcDriftMs);
+              snprintf(gbuf, sizeof(gbuf), "%c%3.0fms%-7s",
+                       (mr < 0.0f) ? '-' : '+', (double)fabsf(mr), "");
             }
             dst = appendBounded(dst, end, "%s", gbuf);
             src += 5;
