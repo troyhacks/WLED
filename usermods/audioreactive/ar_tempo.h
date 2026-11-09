@@ -1203,15 +1203,19 @@ static std::atomic<uint8_t> arTempoDownbeatRequest{0};
 // "Lock BPM and grid to current values - keep estimating, but don't change
 // the active clock and grid."
 //
-// It is a REQUEST, like the downbeat's: the clock belongs to the analysis
-// task, and the web UI is not it.  0 = nothing, 1 = freeze the clock,
-// 2 = let it move again.
+// It is a live SETTING, and not a request the clock has to be told about:
+// the clock belongs to the analysis task, but the STATE of the lock belongs
+// to the person pressing the button.  So the button sets the state at once
+// and the pane reads that same state - there is no round trip in between
+// for the two to fall out of step in.
 //
 // While it is frozen the ESTIMATOR keeps running - the comb still measures
 // the music - and the DRIFT is published: how far the frozen grid is from
 // the music, in milliseconds and in BPM.  That is the instrument: it says
 // how good the grid was, by how much it had to be corrected.
-static std::atomic<uint8_t> arTempoHoldRequest{0};
+static inline bool arTempoHoldRequested() {
+  return arFrameSettings.tempoHold;
+}
 
 // THE USER'S SYNC.
 //
@@ -1708,8 +1712,15 @@ static void arTempoRequestDownbeat(bool set) {
 // While it is frozen the rate and the grid stay where they are and the
 // estimate keeps running, so the drift between the frozen grid and the
 // music is published.
+//
+// This sets the live SETTING, so the state is true the moment it is asked
+// for: the pane reads the same setting, and the analysis task picks the
+// state up on its next frame.  Nothing is queued, so nothing can be lost
+// and nothing can arrive late.
 static void arTempoRequestHold(bool on) {
-  arTempoHoldRequest.store(on ? 1 : 2, std::memory_order_relaxed);
+  arSettingsEdit([on](ArLiveSettings& st) {
+    st.tempoHold = on;
+  });
 }
 
 // Put the GRID back on the music, without touching the RATE.
@@ -2960,19 +2971,21 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     arTempo.downbeatApplyAt = 0xFFFFFFFFu;
   }
 
-  // THE USER'S LOCK REQUEST, applied here for the same reason: the clock
-  // belongs to the analysis task and nobody else may move it.
+  // THE USER'S LOCK, applied here for the same reason: the clock belongs to
+  // the analysis task and nobody else may move it.
   //
   // While it is frozen the estimator keeps running, so the drift between
   // the frozen grid and the music is published and can be watched.
-  {
-    const uint8_t hrr = arTempoHoldRequest.exchange(0, std::memory_order_relaxed);
-    if (hrr == 1) {
-      arTempo.userHold = true;
+  //
+  // The STATE comes from the live settings, so the lock the pane shows and
+  // the lock the clock is in are the same thing - the button sets it, the
+  // pane reads it, and the clock follows on the next frame.
+  if (arTempo.userHold != arFrameSettings.tempoHold) {
+    arTempo.userHold = arFrameSettings.tempoHold;
+    if (arTempo.userHold) {
       USER_PRINTF("tempo: LOCKED at %.2f BPM - the estimate keeps running, the grid does not move\n",
                   (double)arTempo.bpm);
-    } else if (hrr == 2) {
-      arTempo.userHold = false;
+    } else {
       USER_PRINTLN("tempo: unlocked - the grid may move again");
     }
   }

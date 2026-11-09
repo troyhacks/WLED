@@ -875,6 +875,7 @@ struct ArLiveSettings {
   float   tempoTolMs;            // the comb score's tolerance, ms
   uint8_t tempoQuant;            // the candidate lattice: 0 = a quarter BPM, 1 = a half BPM, 2 = half BPM, whole preferred
   bool    tempoPlaylist;         // DJ SET (false) or PLAYLIST (true)
+  bool    tempoHold;             // the clock is frozen by the user's lock?
 };
 
 // The settings as they are on boot.
@@ -2545,6 +2546,9 @@ static ArLiveSettings arSettingsBoot() {
   // continuous, and DJ SET is the careful one - the grid that is working is
   // trusted and the user's downbeat survives a rate change.
   s.tempoPlaylist  = false;
+  // The lock is OFF on boot: a frozen clock that nobody set is a clock
+  // nobody can explain.
+  s.tempoHold      = false;
   return s;
 }
 
@@ -8475,55 +8479,47 @@ class AudioReactive : public Usermod {
           // that is the only honest way to judge a grid: by the error it
           // would have had.
           {
-            ArTempoFrame tf;
-            const bool tempoOk = arCopyTempo(&tf);
-            const bool locked = tempoOk && tf.valid && tf.hold;
+            const ArLiveSettings lst = arSettingsSnapshot();
+            const bool locked = lst.tempoHold;
             // The lock is a TOGGLE, and the button's text IS the status:
             // it says whether the grid is locked or free, and the click
             // flips it.  The click updates the text at once (arToggle in
             // the web UI), so the change is visible without waiting for
             // the pane to come back from the board.
             //
+            // The state it shows is the board's own state - the live
+            // setting, the same one the analysis task reads - so the button
+            // cannot end up saying "free" while the clock is frozen.
+            //
             // The drift - how far the frozen grid is from the music - is
-            // the row below, where the sync is.
+            // the row below.
             infoArr = user.createNestedArray(F("Tempo lock"));
-            if (!tempoOk || !tf.valid) {
-              infoArr.add(F("no grid to lock"));
-            } else {
-              infoArr.add(locked
-                ? F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',true,{lockTempo:true},{unlockTempo:true});\">locked</button>")
-                : F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',false,{lockTempo:true},{unlockTempo:true});\">free</button>"));
-            }
+            infoArr.add(locked
+              ? F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',true,{lockTempo:true},{unlockTempo:true});\">locked</button>")
+              : F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',false,{lockTempo:true},{unlockTempo:true});\">free</button>"));
           }
 
-          // THE SYNC: the grid onto the estimation, the rate untouched.
+          // THE DRIFT: how far the frozen grid is from the music.
           //
-          // "Sync current beat grid estimation to update the beat grid only
-          // with the estimation."
+          // Two numbers and nothing else: the drift in milliseconds and in
+          // BPM.  While the clock is locked this is the only thing that
+          // moves, and it is the instrument: it says how good the grid was,
+          // by how much it had to be corrected.
           //
-          // The clock has two parts - the RATE and the GRID - and the lock
-          // freezes both.  The sync is the correction to the GRID alone: the
-          // grid's position moves onto the music's phase, so the phase
-          // error the drift shows is cancelled, and the RATE stays exactly
-          // where the user put it.
-          //
-          // It is most useful while the clock is LOCKED, because then the
-          // drift is the only thing that moves, and the sync is the answer
-          // to it: "put the grid back where the music is, and leave my
-          // tempo alone".
+          // The button below is the correction itself - the grid's position
+          // moves onto the music's phase and the RATE is not touched.
           {
             ArTempoFrame tf;
             const bool tempoOk = arCopyTempo(&tf);
-            char syncBuf[96];
+            char driftBuf[64];
             if (!tempoOk || !tf.valid) {
-              snprintf(syncBuf, sizeof(syncBuf), "no grid to sync");
+              snprintf(driftBuf, sizeof(driftBuf), "--");
             } else {
-              snprintf(syncBuf, sizeof(syncBuf),
-                       "the grid can be put back on the music - the drift is %+.0f ms, %+.2f BPM",
+              snprintf(driftBuf, sizeof(driftBuf), "%+.0f ms, %+.2f BPM",
                        (double)tf.driftMs, (double)tf.driftBpm);
             }
-            infoArr = user.createNestedArray(F("Tempo sync"));
-            infoArr.add(syncBuf);
+            infoArr = user.createNestedArray(F("Tempo drift"));
+            infoArr.add(driftBuf);
             infoArr = user.createNestedArray(F("Sync the grid"));
             infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{syncTempo:true}});\">sync</button>"));
           }
@@ -8592,14 +8588,11 @@ class AudioReactive : public Usermod {
             infoArr.add(refBuf);
           }
 
-          // The display's offset from the analyser's scale, and the
-          // analyser's own reference.  The window, the trim, the span and
-          // the band pattern are not rows: they are the display's
-          // internals, and they are on /json/ar.
+          // The analyser's own reference.  The display's offset from it,
+          // the window, the trim, the span and the band pattern are not
+          // rows: they are the display's internals, and they are on
+          // /json/ar.
           char lvlBuf[64];
-          infoArr = user.createNestedArray(F("Display offset (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)arRefOffsetDb);
-          infoArr.add(lvlBuf);
 
           // The reference offset: the difference between our dB and the
           // analyser's. It is applied to the MEASUREMENT, so the band levels
@@ -8849,10 +8842,13 @@ class AudioReactive : public Usermod {
         // "Lock BPM and grid to current values - keep estimating, but
         // don't change the active clock and grid."
         //
-        // It is a REQUEST, like the downbeat's: the clock belongs to the
-        // analysis task, and the web server is not it.  While it is frozen
-        // the estimator keeps running and the DRIFT is published, so the
-        // frozen grid can be watched against the music.
+        // It is a live STATE, and the state is set the moment it is asked
+        // for: the pane reads the same setting, so the button and the
+        // board cannot disagree while the request is in flight.  The clock
+        // follows on the analysis task's next frame.
+        //
+        // While it is frozen the estimator keeps running and the DRIFT is
+        // published, so the frozen grid can be watched against the music.
         //
         // It is not saved: it is a test instrument, and a lock that
         // survived a reboot would be a lock nobody could explain.
