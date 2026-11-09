@@ -2306,40 +2306,26 @@ public:
     }
     infoArr.add(status);
 
-    // The clock's own diagnosis: which streams arrived, what the deck's own
-    // beat number reads, and how long ago its last beat was.  This is the
-    // row to look at when the beat is not running.
-    infoArr.add("<br />clock: " + String(prolink_beat_packets_public) + " beat pkt, " +
-                String(prolink_status_packets_public) + " status, num " +
-                String(prolink_beat_number_public) + " / inbar " +
-                String(prolink_beat_public) + ", +" +
-                String(prolink_beat_elapsed_ms_public) + " ms, prog " +
-                String(prolink_beat_progress_public * 100.0f, 0) + "%" +
-                ", grid " + String(prolink_loop_rate_hz_public) + " Hz" +
-                (gridStale ? ", STALE (grid stopped)" : ""));
-
-    // The anchor's age limit: how many beats the clock's anchor may be old
-    // before the deck's grid is declared dead.  This is the number to raise
-    // when the deck's beat packets are being dropped, and it is live.
-    String anchorRow = String(anchorMaxBeats) + " beats";
-    if (anchorMaxBeats == 0) anchorRow += " (the deck's grid is NOT used)";
-    infoArr.add("<br />anchor max: " + anchorRow);
-
-    // The phase offset: how far the deck's grid was moved back so the flash
-    // lands on the audible beat.  This is the number to change when the
-    // flash is late or early - it is live-tunable, so the fix does not
-    // need a rebuild.
+    // The pane is for reading at a glance, and it had become a report: the
+    // clock's counters, the anchor's age limit and the offset's explanation
+    // were three more lines of prose.  They are all on /json/ar.
+    //
+    // What stays is the one number that is tuned LIVE: the phase offset -
+    // how far the deck's grid was moved back so the flash lands on the
+    // audible beat.
     //
     // The SETTING and the offset IN FORCE are both shown when they differ:
     // the offset in force is clamped to half a beat (a bigger shift would
     // fold the grid onto itself), and a setting past that clamp is not
     // what the grid is actually doing.
     String offsetRow = String(phaseOffsetMs) + " ms set";
-    if (prolink_phase_offset_ms_public != phaseOffsetMs) {
+    if (linkState.isConnected && (prolink_phase_offset_ms_public != phaseOffsetMs)) {
       offsetRow += ", " + String(prolink_phase_offset_ms_public) + " ms in force";
     }
-    infoArr.add("<br />phase offset: " + offsetRow +
-                " (deck grid moved back onto the audible beat)");
+    // A grid that has stopped is a fault, and a fault is worth a row of
+    // its own - but it does not need a paragraph.
+    if (gridStale) offsetRow += ", STALE (the grid stopped)";
+    infoArr.add("<br />phase offset: " + offsetRow);
 
     if (prolink_phrase_name_public.length() > 0 && linkState.isMaster) {
       infoArr.add("<br />" + prolink_mood_public + " " + prolink_phrase_name_public);

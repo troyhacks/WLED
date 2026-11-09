@@ -8440,49 +8440,24 @@ class AudioReactive : public Usermod {
           infoArr.add(stBuf);
         }
 
-        // The level tracker: the four numbers that decide what is published.
-        //
-        // They are the whole of the level / floor / gate / reference chain, and each
-        // one is a DIFFERENT quantity - which is the point. The old code had a
-        // single number (a peak-minus-floor difference) feeding all of them,
-        // and the floor it subtracted was the same number the gate compared
-        // against.
+        // The pane is for reading at a glance, and it had grown into a
+        // report.  The level, the floor and the gate are the analysis'
+        // internals: they are on /json/ar, as numbers, and they are not
+        // what the person at the board is watching for.
         {
-          char lvlBuf[64];
-          infoArr = user.createNestedArray(F("Level (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%.1f", (double)arLevelDb);
-          infoArr.add(lvlBuf);
-
-          infoArr = user.createNestedArray(F("Noise floor (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%.1f", (double)arFloorDb);
-          infoArr.add(lvlBuf);
-
-          infoArr = user.createNestedArray(F("Gate"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%s, %+.1f dB over floor",
-                   arGateOpen ? "open" : "shut", (double)(arLevelDb - arFloorDb));
-          infoArr.add(lvlBuf);
-
-          // The tempo tracker: the rate, the beat in the bar and the score.
+          // The tempo tracker: the RATE and nothing else.
           //
-          // It is brief on purpose - the machine's version of this is the
-          // "tempo" object on /json/ar, and the pane is for reading at a
-          // glance. The beat in the bar is a LOCAL counter, so it says "beat"
-          // and not "downbeat".
+          // The rest of the tempo - the beat in the bar, the score, the
+          // drift - is either on the wall or on /json/ar.  The pane says
+          // how fast it is going.
           {
             ArTempoFrame tf;
             const bool tempoOk = arCopyTempo(&tf);
             char tempoBuf[96];
-            if (!tempoOk) {
+            if (!tempoOk || tf.bpm <= 0.0f) {
               snprintf(tempoBuf, sizeof(tempoBuf), "no estimate");
-            } else if (!tf.valid) {
-              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, qual %.2f, not locked",
-                       (double)tf.bpm, (double)tf.quality);
             } else {
-              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM, beat %u, qual %.2f/%.2f, drift %+.0f ms%s",
-                       (double)tf.bpm, (unsigned)tf.beatInBar, (double)tf.quality,
-                       (double)tf.qualityPeak, (double)tf.driftMs,
-                       tf.downbeatSet ? ", downbeat set"
-                                      : (tf.downbeatKnown ? ", downbeat measured" : ""));
+              snprintf(tempoBuf, sizeof(tempoBuf), "%.1f BPM", (double)tf.bpm);
             }
             infoArr = user.createNestedArray(F("Tempo"));
             infoArr.add(tempoBuf);
@@ -8502,30 +8477,23 @@ class AudioReactive : public Usermod {
           {
             ArTempoFrame tf;
             const bool tempoOk = arCopyTempo(&tf);
-            char lockBuf[96];
-            if (!tempoOk || !tf.valid) {
-              snprintf(lockBuf, sizeof(lockBuf), "no grid to lock");
-            } else if (tf.hold) {
-              // The same drift in the two forms: the milliseconds say whether
-              // the flash will LOOK on the beat, and the fraction of a beat
-              // says how far out the grid is, without a division.  The
-              // fraction is bounded by half a beat, so it is never above 50%.
-              const float driftPct = (tf.bpm > 0.0f) ? (tf.driftMs * tf.bpm / 600.0f) : 0.0f;
-              float driftRnd = roundf(driftPct);
-              if (driftRnd == 0.0f) driftRnd = 0.0f;   // -0.0 is not a reading
-              snprintf(lockBuf, sizeof(lockBuf),
-                       "locked at %.2f BPM - the drift is %+.0f ms (%.0f%%), %+.2f BPM",
-                       (double)tf.bpm, (double)tf.driftMs, (double)driftRnd, (double)tf.driftBpm);
-            } else {
-              snprintf(lockBuf, sizeof(lockBuf), "free - the grid may move");
-            }
+            const bool locked = tempoOk && tf.valid && tf.hold;
+            // The lock is a TOGGLE, and the button's text IS the status:
+            // it says whether the grid is locked or free, and the click
+            // flips it.  The click updates the text at once (arToggle in
+            // the web UI), so the change is visible without waiting for
+            // the pane to come back from the board.
+            //
+            // The drift - how far the frozen grid is from the music - is
+            // the row below, where the sync is.
             infoArr = user.createNestedArray(F("Tempo lock"));
-            infoArr.add(lockBuf);
-            infoArr = user.createNestedArray(tf.hold ? F("Unlock the grid")
-                                                     : F("Lock the grid"));
-            infoArr.add(tf.hold
-              ? F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{unlockTempo:true}});\">unlock</button>")
-              : F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{lockTempo:true}});\">lock</button>"));
+            if (!tempoOk || !tf.valid) {
+              infoArr.add(F("no grid to lock"));
+            } else {
+              infoArr.add(locked
+                ? F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',true,{lockTempo:true},{unlockTempo:true});\">locked</button>")
+                : F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'locked','free',false,{lockTempo:true},{unlockTempo:true});\">free</button>"));
+            }
           }
 
           // THE SYNC: the grid onto the estimation, the rate untouched.
@@ -8560,30 +8528,19 @@ class AudioReactive : public Usermod {
             infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{syncTempo:true}});\">sync</button>"));
           }
 
-          // THE MODE: DJ SET or PLAYLIST.
+          // THE MODE: DJ SET or PLAYLIST - a TOGGLE, like the lock.
           //
-          // DJ SET is one performance: the tempo drifts and ramps, the grid
-          // is continuous, and the grid that is working is trusted - the
-          // background has to converge fully before it may take the grid,
-          // and the user's downbeat survives a rate change, because a DJ's
-          // pitch change does not move the bar.
-          //
-          // PLAYLIST is anything-can-come-next.  The background's memory is
-          // shorter, so it forgets the track that ended sooner and finds
-          // the one that started sooner - MEASURED, the handover after a
-          // track change takes 5.7 s instead of 11.2 s - and the downbeat
-          // goes when the grid re-anchors, because the new track's bar
-          // starts somewhere else.
+          // The button's text is the mode the board is in, and the click
+          // flips it.  There is no separate "mode" row and no separate
+          // "switch to..." row: the button says which mode it is, and that
+          // is the whole of the row.
           {
-            const ArLiveSettings st = arSettingsSnapshot();
-            infoArr = user.createNestedArray(F("Tempo mode"));
-            infoArr.add(st.tempoPlaylist ? F("playlist - anything can shuffle in")
-                                         : F("DJ set - smooth BPM and grid"));
-            infoArr = user.createNestedArray(st.tempoPlaylist ? F("Switch to DJ set")
-                                                              : F("Switch to playlist"));
-            infoArr.add(st.tempoPlaylist
-              ? F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{djSetMode:true}});\">DJ set</button>")
-              : F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{playlistMode:true}});\">playlist</button>"));
+            const ArLiveSettings mst = arSettingsSnapshot();
+            const bool playlist = mst.tempoPlaylist;
+            infoArr = user.createNestedArray(F("Mode"));
+            infoArr.add(playlist
+              ? F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'playlist','DJ set',true,{playlistMode:true},{djSetMode:true});\">playlist</button>")
+              : F("<button class=\"btn btn-p\" onclick=\"arToggle(this,'playlist','DJ set',false,{playlistMode:true},{djSetMode:true});\">DJ set</button>"));
           }
 
           // THE DOWNBEAT MARK: the button that says where the bar starts.
@@ -8596,22 +8553,12 @@ class AudioReactive : public Usermod {
           // and the estimator counts 1, 2, 3, 4 from there with its own
           // beats.
           //
+          // There is no status row: the mark is either set or it is not,
+          // and the wall says which.
+          //
           // 'btn-p' and not 'btn-xs': btn-xs is the 42x42 ICON button and it
           // clips its text.
           {
-            ArTempoFrame tf;
-            const bool tempoOk = arCopyTempo(&tf);
-            char dbBuf[64];
-            if (!tempoOk || !tf.valid) {
-              snprintf(dbBuf, sizeof(dbBuf), "no grid - nothing to mark");
-            } else if (tf.downbeatSet) {
-              snprintf(dbBuf, sizeof(dbBuf), "beat 1 is set (beat %u of 4)",
-                       (unsigned)tf.beatInBar);
-            } else {
-              snprintf(dbBuf, sizeof(dbBuf), "not set - the numbering is a convention");
-            }
-            infoArr = user.createNestedArray(F("Downbeat"));
-            infoArr.add(dbBuf);
             infoArr = user.createNestedArray(F("Set downbeat"));
             infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{setDownbeat:true}});\">set</button>"));
             infoArr = user.createNestedArray(F("Clear downbeat"));
@@ -8645,36 +8592,13 @@ class AudioReactive : public Usermod {
             infoArr.add(refBuf);
           }
 
+          // The display's offset from the analyser's scale, and the
+          // analyser's own reference.  The window, the trim, the span and
+          // the band pattern are not rows: they are the display's
+          // internals, and they are on /json/ar.
+          char lvlBuf[64];
           infoArr = user.createNestedArray(F("Display offset (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)arRefOffsetDb);
-          infoArr.add(lvlBuf);
-
-          // The WINDOW: auto-range or fixed, and in the fixed case the two
-          // numbers that define it. It is ONE window - the 16 bars and the 31
-          // RTA bars are drawn in it, at the same scale, because the 16 bars
-          // ARE 16 of the 31.
-          //
-          // The auto-range has no absolute scale - its top is wherever the
-          // last peak put it - so the implied absolute window is reported as
-          // well. That is the number to compare with an analyser's own grid:
-          // "our display is currently showing -12 to -52 dB" is comparable
-          // with the analyser's, "our bars look like that" is not.
-          infoArr = user.createNestedArray(F("RTA window"));
-          if (st.autoRange) {
-            snprintf(lvlBuf, sizeof(lvlBuf), "auto, %.1f..%.1f dB",
-                     (double)(AR_WINDOW_TARGET_DB - arRefOffsetDb - st.windowRangeDb),
-                     (double)(AR_WINDOW_TARGET_DB - arRefOffsetDb));
-          } else {
-            snprintf(lvlBuf, sizeof(lvlBuf), "fixed, %.1f..%.1f dB",
-                     (double)st.windowFloorDb, (double)st.windowTopDb);
-          }
-          infoArr.add(lvlBuf);
-
-          // How fast the auto-range's top follows the loudest band. The
-          // release is a setting ('w'/'W'), the attack is not.
-          infoArr = user.createNestedArray(F("Auto-range follow (ms)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "attack %.0f, release %.0f",
-                   (double)AR_REF_ATTACK_MS, (double)st.refReleaseMs);
           infoArr.add(lvlBuf);
 
           // The reference offset: the difference between our dB and the
@@ -8683,28 +8607,6 @@ class AudioReactive : public Usermod {
           infoArr = user.createNestedArray(F("RTA reference (dB)"));
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)st.rtaRefDb);
           infoArr.add(lvlBuf);
-
-          // The display trim and the span: the last two numbers that decide
-          // where a bar lands. The trim is the user's ('d'/'D'), the span is
-          // how much of the spectrum's shape the bar covers below the top.
-          // It is the shared window's span - both views are drawn in it.
-          infoArr = user.createNestedArray(F("Display trim (dB)"));
-          snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f, span %.0f dB",
-                   (double)TROYHACKS_DBREF, (double)st.windowRangeDb);
-          infoArr.add(lvlBuf);
-
-          // The PATTERN: which sixteen of the thirty-one the sixteen bars
-          // show. The thirty-one RTA bars are the same measurement and they do
-          // not move - this only says which of them the display draws.
-          {
-            char patBuf[72];
-            snprintf(patBuf, sizeof(patBuf), "%s (%.0f Hz to %.0f Hz)",
-                     arGeqPatternName(arGeqPattern),
-                     (double)lay31.centre[arGeqBandOf(0, arGeqPattern)],
-                     (double)lay31.centre[arGeqBandOf(NUM_GEQ_CHANNELS - 1, arGeqPattern)]);
-            infoArr = user.createNestedArray(F("Band pattern"));
-            infoArr.add(patBuf);
-          }
 
           // The 31 RTA band levels are NOT a row here any more. They are a
           // wall of thirty-one numbers, and the info pane is for the short
@@ -8720,23 +8622,18 @@ class AudioReactive : public Usermod {
           // The bank's own numbers - its band count, its rate, its detector's
           // time constant, its cost per frame - live on the /json/ar endpoint.
           //
-          // Its self-test still gets a row, because a self-test that FAILED
-          // is a fault, and faults belong where they are seen.
-          if (bankReady) {
-            // The self-test's verdict - only when it FAILED. A passing
-            // self-test is the expected case and does not need a row.
-            if (!bankTestDone) {
-              infoArr = user.createNestedArray(F("RTA bank self-test"));
-              infoArr.add(F("not run"));
-            } else if ((bankTestFails != 0) || (bankTestNbrFails != 0)) {
-              char bankBuf[96];
-              infoArr = user.createNestedArray(F("RTA bank self-test"));
-              snprintf(bankBuf, sizeof(bankBuf),
-                       "FAILED: %d bands, %d of %d neighbours, worst %+.3f dB @ %.0f Hz",
-                       bankTestFails, bankTestNbrFails, bankTestNbrChecks,
-                       (double)bankTestWorst, (double)bankTestWorstF);
-              infoArr.add(bankBuf);
-            }
+          // Its self-test gets a row ONLY when it FAILED - a self-test
+          // that failed is a fault, and faults belong where they are seen.
+          // A self-test that has not run, or that passed, is the expected
+          // case and gets no row at all.
+          if (bankReady && bankTestDone && ((bankTestFails != 0) || (bankTestNbrFails != 0))) {
+            char bankBuf[96];
+            infoArr = user.createNestedArray(F("RTA bank self-test"));
+            snprintf(bankBuf, sizeof(bankBuf),
+                     "FAILED: %d bands, %d of %d neighbours, worst %+.3f dB @ %.0f Hz",
+                     bankTestFails, bankTestNbrFails, bankTestNbrChecks,
+                     (double)bankTestWorst, (double)bankTestWorstF);
+            infoArr.add(bankBuf);
           }
         }
 #endif

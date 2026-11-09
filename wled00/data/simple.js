@@ -980,6 +980,22 @@ function readState(s,command=false)
 var jsonTimeout;
 var reqsLegal = false;
 
+// The AudioReactive pane's TOGGLES.
+//
+// A toggle has to read as a toggle: the click changes the state and the
+// button says what the state IS - straight away, without waiting for the
+// pane to come back from the board.  So the button's own text is changed
+// here, at the click, and the request goes out behind it.
+//
+// The request still goes through requestJson, so when the board answers the
+// pane is refreshed with the truth - but the change is already on the
+// screen, and the button is not waiting for a round trip to say so.
+function arToggle(btn, txtOn, txtOff, isOn, cmdOn, cmdOff)
+{
+	btn.innerHTML = isOn ? txtOff : txtOn;
+	requestJson({AudioReactive: isOn ? cmdOff : cmdOn});
+}
+
 function requestJson(command=null)
 {
 	gId('connind').style.backgroundColor = "var(--c-r)";
