@@ -8506,9 +8506,16 @@ class AudioReactive : public Usermod {
             if (!tempoOk || !tf.valid) {
               snprintf(lockBuf, sizeof(lockBuf), "no grid to lock");
             } else if (tf.hold) {
+              // The same drift in the two forms: the milliseconds say whether
+              // the flash will LOOK on the beat, and the fraction of a beat
+              // says how far out the grid is, without a division.  The
+              // fraction is bounded by half a beat, so it is never above 50%.
+              const float driftPct = (tf.bpm > 0.0f) ? (tf.driftMs * tf.bpm / 600.0f) : 0.0f;
+              float driftRnd = roundf(driftPct);
+              if (driftRnd == 0.0f) driftRnd = 0.0f;   // -0.0 is not a reading
               snprintf(lockBuf, sizeof(lockBuf),
-                       "locked at %.2f BPM - the drift is %+.0f ms, %+.2f BPM",
-                       (double)tf.bpm, (double)tf.driftMs, (double)tf.driftBpm);
+                       "locked at %.2f BPM - the drift is %+.0f ms (%.0f%%), %+.2f BPM",
+                       (double)tf.bpm, (double)tf.driftMs, (double)driftRnd, (double)tf.driftBpm);
             } else {
               snprintf(lockBuf, sizeof(lockBuf), "free - the grid may move");
             }

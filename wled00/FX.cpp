@@ -7667,6 +7667,10 @@ uint16_t mode_2Dscrollingtext(void) {
       // the deck is driving, because they are OUR grid's error.
       float    srcDriftBpm = 0.0f;
       float    srcDriftMs  = 0.0f;
+      // The GRID's own rate - the clock, not the source.  It is the beat the
+      // phase error is measured against, so it is the denominator of the
+      // fraction of a beat that #GDRF shows beside the milliseconds.
+      float    srcGridBpm  = 0.0f;
       bool     srcHaveDrift = false;
 
       #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
@@ -7697,6 +7701,7 @@ uint16_t mode_2Dscrollingtext(void) {
           srcHold = tf.hold != 0;
           srcDriftBpm = tf.driftBpm;
           srcDriftMs  = tf.driftMs;
+          srcGridBpm  = tf.bpm;
           srcHaveDrift = true;
           if (!srcLive && tf.bpm > 0.0f &&
               tf.beatInBar >= 1 && tf.beatInBar <= 4) {
@@ -7770,35 +7775,75 @@ uint16_t mode_2Dscrollingtext(void) {
             dst = appendBounded(dst, end, "%u", (unsigned)srcBars);
             src += 5;
           } else if (strncmp(src, "#BPM", 4) == 0) {
-            dst = appendBounded(dst, end, "%.1f", srcBpm);
+            // The WIDTHS ARE FIXED.  Every field below is padded to the
+            // width of its widest case, so that a value going from one digit
+            // to three does not move the text beside it.  The wall is read
+            // at a glance, and a line that shuffles sideways is a line that
+            // cannot be read at a glance.
+            dst = appendBounded(dst, end, "%5.1f", srcBpm);
             src += 4;
           } else if (strncmp(src, "#QUAL", 5) == 0) {
             // The quality of the prediction: how well the music explains
             // the running grid, as a percentage.  "--" when there is no
             // measurement at all.
-            if (srcQual < 0.0f) dst = appendBounded(dst, end, "--");
-            else                 dst = appendBounded(dst, end, "%d", (int)(srcQual + 0.5f));
+            if (srcQual < 0.0f) dst = appendBounded(dst, end, "%3s", "--");
+            else                 dst = appendBounded(dst, end, "%3d", (int)(srcQual + 0.5f));
             src += 5;
           } else if (strncmp(src, "#BSRC", 5) == 0) {
             // WHO IS DRIVING THE GRID: the deck or our own estimator.
-            if (srcDeck)     dst = appendBounded(dst, end, "PRODJ");
-            else if (srcLive) dst = appendBounded(dst, end, "INT");
-            else             dst = appendBounded(dst, end, "--");
+            if (srcDeck)     dst = appendBounded(dst, end, "%5s", "PRODJ");
+            else if (srcLive) dst = appendBounded(dst, end, "%5s", "INT");
+            else             dst = appendBounded(dst, end, "%5s", "--");
             src += 5;
           } else if (strncmp(src, "#BLCK", 5) == 0) {
             // THE LOCK: the user has frozen the clock, or has not.
-            dst = appendBounded(dst, end, "%s", srcHold ? "LOCK" : "FREE");
+            dst = appendBounded(dst, end, "%4s", srcHold ? "LOCK" : "FREE");
             src += 5;
           } else if (strncmp(src, "#BDRF", 5) == 0) {
             // THE RATE'S DRIFT: how far the music's tempo has moved from the
             // clock, in BPM.  "--" when there is no measurement at all.
-            if (srcHaveDrift) dst = appendBounded(dst, end, "%+.2f", srcDriftBpm);
-            else              dst = appendBounded(dst, end, "--");
+            if (srcHaveDrift) dst = appendBounded(dst, end, "%+6.2f", srcDriftBpm);
+            else              dst = appendBounded(dst, end, "%6s", "--");
             src += 5;
           } else if (strncmp(src, "#GDRF", 5) == 0) {
-            // THE GRID'S DRIFT: the phase error, in milliseconds.
-            if (srcHaveDrift) dst = appendBounded(dst, end, "%+.0f", srcDriftMs);
-            else              dst = appendBounded(dst, end, "--");
+            // THE GRID'S DRIFT: the phase error, in milliseconds, and the
+            // same error as a FRACTION OF THE GRID'S OWN BEAT.
+            //
+            // The two are the same number in different clothes, and both are
+            // shown because they answer different questions: the
+            // milliseconds say whether the flash will LOOK on the beat (a
+            // fixed ~40-50 ms of audio-visual slack, whatever the tempo),
+            // and the fraction says how far out the grid is (always between
+            // half a beat behind and half a beat ahead, so it reads without
+            // dividing anything).
+            //
+            // It is PRESENTATION: the drift inside is untouched.
+            // "--" when there is no measurement at all.
+            //
+            // The field is TWELVE CHARACTERS WIDE, always: the milliseconds
+            // with their sign (3), "ms" (2), a space (1), a bracket (1),
+            // the percentage with its sign (3), a bracket (1) and a per cent
+            // (1).  The "--" case is padded to the same twelve, so that the
+            // columns do not move when the measurement comes and goes.
+            char gbuf[32];
+            if (!srcHaveDrift) {
+              snprintf(gbuf, sizeof(gbuf), "%-12s", "--");
+            } else if (srcGridBpm > 0.0f) {
+              // The grid's beat in milliseconds is 60000 / BPM, so the
+              // PERCENTAGE of a beat is the error times the rate over 600.
+              const float pct = srcDriftMs * srcGridBpm / 600.0f;
+              const float r   = roundf(pct);
+              // A rounded zero is a zero: "-0%" is a reading, not a number.
+              // The sign sits where the padding is, so " 47" and "-47" are
+              // the same width and the columns line up.
+              if      (r >=  0.5f) snprintf(gbuf, sizeof(gbuf), "%+3.0fms (%3.0f%%)",  srcDriftMs,  r);
+              else if (r <= -0.5f) snprintf(gbuf, sizeof(gbuf), "%+3.0fms (-%2.0f%%)", srcDriftMs, -r);
+              else                 snprintf(gbuf, sizeof(gbuf), "%+3.0fms (%3.0f%%)",  srcDriftMs, 0.0f);
+            } else {
+              // No grid rate, so no percentage - but the field keeps its width.
+              snprintf(gbuf, sizeof(gbuf), "%+3.0fms%-7s", srcDriftMs, "");
+            }
+            dst = appendBounded(dst, end, "%s", gbuf);
             src += 5;
           } else if (strncmp(src, "#^", 2) == 0) {
             // A NEW LINE.  The text is drawn one line under the other.
