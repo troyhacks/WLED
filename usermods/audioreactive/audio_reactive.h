@@ -3365,6 +3365,7 @@ static void arPublishRta(float dtMs) {
   // different jobs - one is a bar's look, the other is a meter's needle.
   {
     float absDb[NUM_RTA_CHANNELS];
+    float maxAbs = -120.0f;
     for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
       const float db = (arGateOpen && (estRtaDb[k] > -119.0f)) ? estRtaDb[k] : -120.0f;
       float &sm = arRtaAbsSmth[k];
@@ -3375,8 +3376,36 @@ static void arPublishRta(float dtMs) {
       }
       if (sm < -120.0f) sm = -120.0f;
       absDb[k] = sm;
+      if (sm > maxAbs) maxAbs = sm;
     }
-    arPublishRtaDb(absDb);
+
+    // The WINDOW the levels are read against.
+    //
+    // It is the same window the bars above are drawn in - the auto-range's,
+    // with the loudest band held at its top - and it is in the same scale as
+    // the levels, so a meter can draw its own dB axis against them and put
+    // the right numbers on it.
+    //
+    // Before the reference is set there is no window yet, so the loudest band
+    // of this frame stands in for it: the meter shows something from the
+    // first frame of the audio instead of waiting for the reference.
+    ArRtaScale scale;
+    bool haveWindow = true;
+    if (arFrameSettings.autoRange) {
+      scale.topDb   = (arRefDb == AR_REF_UNSET) ? maxAbs : arRefDb;
+      scale.rangeDb = arFrameSettings.windowRangeDb;
+      // Without a reference there is no window - and in silence there is not
+      // even a level to make one from. A window whose top is the silence
+      // floor (-120) is a window two hundred decibels tall, and a meter that
+      // draws an axis against it is drawing a lie.
+      if (arRefDb == AR_REF_UNSET) haveWindow = (maxAbs > -119.0f);
+    } else {
+      scale.topDb   = arFrameSettings.windowTopDb;
+      scale.rangeDb = arFrameSettings.windowTopDb - arFrameSettings.windowFloorDb;
+    }
+    scale.valid = (haveWindow && scale.rangeDb > 0.5f) ? 1 : 0;
+
+    arPublishRtaDb(absDb, scale);
   }
 }
 

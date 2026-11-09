@@ -80,24 +80,34 @@ void arResetRtaBands() {
 //
 // Double buffered like the bands themselves, and under the same lock: a
 // reader must never see half of one frame's levels and half of another's.
+//
+// The window they are read against travels with them, for the same reason:
+// the auto-range moves the window, so the levels and the window have to come
+// from the same frame or the axis is a lie.
 static float arRtaDbBuf[2][NUM_RTA_CHANNELS] = {{0}};
+static ArRtaScale arRtaScale = {};
 static uint8_t arRtaDbIdx = 0;
 static bool    arRtaDbValid = false;
 
-void arPublishRtaDb(const float* db) {
+void arPublishRtaDb(const float* db, const ArRtaScale& scale) {
   ArPublishGuard guard;
   memcpy(arRtaDbBuf[arRtaDbIdx ^ 1], db, NUM_RTA_CHANNELS * sizeof(float));
+  arRtaScale = scale;
   arRtaDbIdx ^= 1;
   arRtaDbValid = true;
 }
 
-bool arCopyRtaDb(float* dest) {
+bool arCopyRtaDb(float* dest, ArRtaScale* scale) {
   ArPublishGuard guard;
   if (!arRtaDbValid || !arRtaLive) {
     for (int k = 0; k < NUM_RTA_CHANNELS; k++) dest[k] = -120.0f;
+    scale->topDb = -120.0f;
+    scale->rangeDb = 0.0f;
+    scale->valid = 0;
     return false;
   }
   memcpy(dest, arRtaDbBuf[arRtaDbIdx], NUM_RTA_CHANNELS * sizeof(float));
+  *scale = arRtaScale;
   return true;
 }
 

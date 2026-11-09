@@ -160,6 +160,27 @@ constexpr float AR_LOUD_LRA_REL    = -20.0f;   // LU below the gated mean
 // The standard's offset: a full-scale sine reads 0 LUFS.
 constexpr float AR_LOUD_OFFSET     = -0.691f;
 
+// ---------------------------------------------------------------------------
+// The absolute gate, in the sample domain.
+//
+// LUFS is ABSOLUTE: it is measured against digital full scale, and ours is
+// the CODEC's full scale, which is not the analyser's. The calibration maps
+// ours onto the analyser's, so the gate has to be mapped with it.
+//
+// A gate applied to the uncalibrated scale is a gate applied at the wrong
+// level. With this board's calibration (+31.3 dB) the uncalibrated gate sits
+// at -70 LUFS of the codec's scale, which is -101.3 LUFS of the analyser's -
+// and a programme that is LOUD on the analyser then falls below it, so
+// nothing passes the gate, the integrated loudness is never computed, and
+// the programme reads as "nothing measured" for ever.
+//
+// The calibration is a live setting, so the threshold is computed where it
+// is used and not once at init.
+static inline float arLoudAbsGateEnergy() {
+  const float cal = arSettingsSnapshot().loudnessCalDb;
+  return 10.0f * powf(10.0f, (AR_LOUD_ABS_GATE - cal - AR_LOUD_OFFSET) / 10.0f);
+}
+
 // DIGITAL FULL SCALE, in the sample domain the analysis works in.
 //
 // The samples arrive from the codec in 16-bit units - the same units the
@@ -374,7 +395,7 @@ static float arLoudWindowMean(int frames) {
 // relative gate depends on the first pass.
 static void arLoudnessRecomputeIntegrated() {
   if (!arLoud || arLoud->blockCount == 0) return;
-  const float absE = 10.0f * powf(10.0f, (AR_LOUD_ABS_GATE - AR_LOUD_OFFSET) / 10.0f);
+  const float absE = arLoudAbsGateEnergy();
 
   // Pass 1: the mean of the blocks above the absolute gate.
   float sum = 0.0f;
@@ -414,7 +435,12 @@ static void arLoudnessRebuildHistogram() {
   // gate leaves an EMPTY histogram and not the last one's values: a stale
   // percentile is worse than no percentile.
   memset(arLoud->hist, 0, (size_t)AR_LOUD_HIST_BINS * sizeof(uint32_t));
-  const float absE = 10.0f * powf(10.0f, (AR_LOUD_ABS_GATE - AR_LOUD_OFFSET) / 10.0f);
+  const float absE = arLoudAbsGateEnergy();
+  // The histogram's bins are in the CALIBRATED scale - the analyser's - so
+  // that the values land inside the histogram's range. The raw scale puts
+  // them tens of decibels below it, and every value falls into the first
+  // bin and the range comes out zero.
+  const float cal = arSettingsSnapshot().loudnessCalDb;
 
   // Pass 1: the mean of the short-term values above the absolute gate.
   float sum = 0.0f;
@@ -433,7 +459,7 @@ static void arLoudnessRebuildHistogram() {
   for (int i = 0; i < arLoud->shortCount; i++) {
     const float e = arLoud->shorts[i];
     if (e < absE || e < relE) continue;
-    const float l = arLoudOf(e);
+    const float l = arLoudOf(e) + cal;
     int bin = (int)((l - AR_LOUD_HIST_LO) / 0.1f);
     if (bin < 0) bin = 0;
     if (bin >= AR_LOUD_HIST_BINS) bin = AR_LOUD_HIST_BINS - 1;
@@ -593,6 +619,18 @@ static void arLoudnessProcess(const float *x, int n) {
 }
 
 // ---------------------------------------------------------------------------
+// The calibration, applied to a number that may be the "nothing measured"
+// sentinel.
+//
+// The sentinel is -120: the module's own way of saying there is no
+// measurement. Adding the calibration to it turns it into -88.7, which is a
+// NUMBER - and a wrong one: it reads as a programme loudness instead of the
+// absence of one.
+static inline float arLoudCal(float v, float cal) {
+  return (v <= -119.0f) ? -120.0f : (v + cal);
+}
+
+// ---------------------------------------------------------------------------
 // Publish.
 //
 // The frame is handed to the publish module, which copies it under the ONE
@@ -602,15 +640,15 @@ static void arLoudnessPublish() {
   if (!arLoud) return;
   const float cal = arSettingsSnapshot().loudnessCalDb;
   ArLoudnessFrame f;
-  f.programme    = arLoud->programme    + cal;
-  f.momentary    = arLoud->momentary    + cal;
-  f.momentaryMax = arLoud->momentaryMax + cal;
-  f.shortTerm    = arLoud->shortTerm    + cal;
-  f.shortTermMax = arLoud->shortTermMax + cal;
-  f.sliding10    = arLoud->sliding10    + cal;
+  f.programme    = arLoudCal(arLoud->programme,    cal);
+  f.momentary    = arLoudCal(arLoud->momentary,    cal);
+  f.momentaryMax = arLoudCal(arLoud->momentaryMax, cal);
+  f.shortTerm    = arLoudCal(arLoud->shortTerm,    cal);
+  f.shortTermMax = arLoudCal(arLoud->shortTermMax, cal);
+  f.sliding10    = arLoudCal(arLoud->sliding10,    cal);
   f.lra          = arLoud->lra;
-  f.truePeak     = arLoud->truePeak     + cal;
-  f.truePeakNow  = arLoud->truePeakNow  + cal;
+  f.truePeak     = arLoudCal(arLoud->truePeak,     cal);
+  f.truePeakNow  = arLoudCal(arLoud->truePeakNow,  cal);
   // There is a programme to talk about once there is at least one 400 ms
   // block in the history. Before that there is nothing to integrate, and
   // the pane says so rather than showing a number that means nothing.

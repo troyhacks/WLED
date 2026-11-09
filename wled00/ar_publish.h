@@ -95,13 +95,26 @@ void arResetRtaBands();
 //
 // These are the levels the axis is for: the calibrated dB of each band, on
 // the analyser's own scale, in the same unit as the reference offset.
-void arPublishRtaDb(const float* db);
+//
+// They come with the WINDOW they are read against, because the window moves:
+// the auto-range holds the loudest band at its top, so the axis a meter draws
+// against them moves too. The two are published together, so a reader cannot
+// get the levels from one frame and the window from another.
+struct ArRtaScale {
+  float    topDb;     // the window's top edge, in the same scale as the levels
+  float    rangeDb;   // the window's span, dB
+  uint8_t  valid;     // 1 when there is a window to draw against
+};
 
-// Copy the published band levels into dest (NUM_RTA_CHANNELS floats).
+void arPublishRtaDb(const float* db, const ArRtaScale& scale);
+
+// Copy the published band levels into dest (NUM_RTA_CHANNELS floats), and the
+// window they are read against into scale.
 // Returns whether they may be USED - false if nothing has been published yet,
 // or if the frame is not a live measurement (see arSetRtaLive above). When
-// it returns false, dest is filled with -120 dB, which is silence.
-bool arCopyRtaDb(float* dest);
+// it returns false, dest is filled with -120 dB, which is silence, and the
+// scale is filled with a window that is not there.
+bool arCopyRtaDb(float* dest, ArRtaScale* scale);
 
 // The loudness frame: the programme loudness and its family.
 //
