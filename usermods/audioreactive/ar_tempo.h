@@ -1213,6 +1213,21 @@ static std::atomic<uint8_t> arTempoDownbeatRequest{0};
 // how good the grid was, by how much it had to be corrected.
 static std::atomic<uint8_t> arTempoHoldRequest{0};
 
+// THE USER'S SYNC.
+//
+// "Sync the current beat grid estimation to update the beat grid only with
+// the estimation" - the GRID's POSITION takes the estimation's phase, and
+// the RATE is not touched at all.
+//
+// It is a REQUEST, like the lock's: the grid belongs to the analysis task.
+// 0 = nothing, 1 = sync the grid.
+//
+// It is the correction to the lock's drift.  The lock freezes the rate and
+// the grid so the DRIFT can be watched; the sync is what the watcher asks
+// for when the drift has grown and the grid should be put back on the
+// music - without the rate the user froze being disturbed.
+static std::atomic<uint8_t> arTempoSyncRequest{0};
+
 // ---------------------------------------------------------------------------
 // The filters.
 //
@@ -1695,6 +1710,20 @@ static void arTempoRequestDownbeat(bool set) {
 // music is published.
 static void arTempoRequestHold(bool on) {
   arTempoHoldRequest.store(on ? 1 : 2, std::memory_order_relaxed);
+}
+
+// Put the GRID back on the music, without touching the RATE.
+//
+// The phase is the comb's phase ON THE GRID'S OWN PERIOD - `localPhase`,
+// the same number the drift is measured against - so moving the grid onto
+// it cancels the phase error exactly, and the grid's beats land on the
+// music's beats again.
+//
+// The rate is NOT moved: this is a correction of the GRID, and a locked
+// clock stays locked.  A grid whose rate is wrong is a different problem
+// and the lock is the answer to it.
+static void arTempoRequestSync(void) {
+  arTempoSyncRequest.store(1, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -2945,6 +2974,43 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     } else if (hrr == 2) {
       arTempo.userHold = false;
       USER_PRINTLN("tempo: unlocked - the grid may move again");
+    }
+  }
+
+  // THE USER'S SYNC REQUEST, applied here for the same reason.
+  //
+  // The GRID's POSITION moves onto the music's phase and the RATE does not
+  // move at all.  The phase is `localPhase`: the comb's phase measured ON
+  // THE GRID'S OWN PERIOD, which is the very number the drift is measured
+  // against - so this cancels the phase error exactly.
+  //
+  // The grid's beat lattice is kept: the new position is the lattice point
+  // nearest the old one, so the beats stay a whole period apart and the
+  // grid does not gain or lose a beat.
+  {
+    const uint8_t srr = arTempoSyncRequest.exchange(0, std::memory_order_relaxed);
+    if (srr == 1) {
+      if (!arTempo.locked || arTempo.period <= 0.0f) {
+        USER_PRINTLN("tempo: no grid - there is nothing to sync");
+      } else if (arTempo.quality < AR_TEMPO_QUAL_MIN) {
+        // The music is not explaining the grid, so its phase is not worth
+        // taking.  Syncing onto a phase measured against a breakdown is how
+        // a grid is lost.
+        USER_PRINTF("tempo: not synced - the quality is only %.2f\n",
+                    (double)arTempo.quality);
+      } else {
+        const float beforeMs = arTempo.driftMs;
+        const float k      = roundf((arTempo.nextBeat - arTempo.localPhase) / arTempo.period);
+        const float anchor = arTempo.localPhase + k * arTempo.period;
+        arTempo.nextBeat  = anchor;
+        // The phase error is cancelled, so the drift the user watches drops
+        // to zero at once instead of at the next search.  The RATE's drift
+        // is left alone: the rate did not move, and that number is the
+        // honest one.
+        arTempo.driftMs = 0.0f;
+        USER_PRINTF("tempo: grid synced - the drift was %+.0f ms, the rate stays at %.2f BPM\n",
+                    (double)beforeMs, (double)arTempo.bpm);
+      }
     }
   }
 

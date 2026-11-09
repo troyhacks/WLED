@@ -7566,7 +7566,10 @@ uint16_t mode_2Dscrollingtext(void) {
   case 4: letterWidth = 7; letterHeight = 9; break;
   case 5: letterWidth = 5; letterHeight = 12; break;
   }
-  const int yoffset = map(SEGMENT.intensity, 0, 255, -rows / 2, rows / 2) + (rows - letterHeight) / 2;
+  // The vertical placement of the text.  It is settled AFTER the text is
+  // expanded, because a block of lines is taller than one line and the
+  // block has to be centred as a block.
+  int yoffset = 0;
   char text[64] = { '\0' };  // Increased to 64 for longer combined strings
   unsigned maxLen = (SEGMENT.name) ? min(63, (int)strlen(SEGMENT.name)) : 0;
   if (SEGMENT.name) for (size_t i = 0, j = 0; i < maxLen; i++) if (SEGMENT.name[i] > 31 && SEGMENT.name[i] < 128) text[j++] = SEGMENT.name[i];
@@ -7595,7 +7598,8 @@ uint16_t mode_2Dscrollingtext(void) {
     !strncmp_P(text, PSTR("#DATE"), 5) || !strncmp_P(text, PSTR("#DDMM"), 5) || !strncmp_P(text, PSTR("#MMDD"), 5) ||
     !strncmp_P(text, PSTR("#TIME"), 5) || !strncmp_P(text, PSTR("#HH"), 3) || !strncmp_P(text, PSTR("#MM"), 3) ||
     strstr(text, "#BPM") || strstr(text, "#BPOS") || strstr(text, "#BEAT") || strstr(text, "#BARS") ||
-    strstr(text, "#QUAL") ||
+    strstr(text, "#QUAL") || strstr(text, "#BSRC") || strstr(text, "#BLCK") ||
+    strstr(text, "#BDRF") || strstr(text, "#GDRF") || strstr(text, "#^") ||
     strstr(text, "#END") || strstr(text, "#TT") || strstr(text, "#TA") || strstr(text, "#PR") ||
     strstr(text, "#PH") || strstr(text, "#PB") || strstr(text, "#PH") || strstr(text, "#PT") || strstr(text, "#MD");
 
@@ -7648,6 +7652,17 @@ uint16_t mode_2Dscrollingtext(void) {
       // RECEIVING its sound over the network measures nothing, and a board
       // with a deck connected still runs its own estimator.
       float    srcQual = -1.0f;
+      // WHO IS DRIVING THE GRID: the deck or our own estimator.  It is what
+      // #BSRC shows, and it is the first question about any beat number.
+      bool     srcDeck = false;
+      // The LOCK: the user has frozen the clock.  It is what #BLCK shows.
+      bool     srcHold = false;
+      // THE DRIFTS: how far the running grid is from the music, in BPM and
+      // in milliseconds.  They are published by the tracker whether or not
+      // the deck is driving, because they are OUR grid's error.
+      float    srcDriftBpm = 0.0f;
+      float    srcDriftMs  = 0.0f;
+      bool     srcHaveDrift = false;
 
       #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
       if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
@@ -7656,6 +7671,7 @@ uint16_t mode_2Dscrollingtext(void) {
         srcPos  = prolink_beats_elapsed_public;
         srcBars = prolink_bars_elapsed_public;
         srcLive = true;
+        srcDeck = true;
       }
       #endif
 
@@ -7673,6 +7689,10 @@ uint16_t mode_2Dscrollingtext(void) {
           // fits the music, and that is the number that says whether the
           // beat grid can be trusted.
           srcQual = tf.quality * 100.0f;
+          srcHold = tf.hold != 0;
+          srcDriftBpm = tf.driftBpm;
+          srcDriftMs  = tf.driftMs;
+          srcHaveDrift = true;
           if (!srcLive && tf.bpm > 0.0f &&
               tf.beatInBar >= 1 && tf.beatInBar <= 4) {
             srcBpm  = tf.bpm;
@@ -7719,6 +7739,31 @@ uint16_t mode_2Dscrollingtext(void) {
             if (srcQual < 0.0f) dst = appendBounded(dst, end, "--");
             else                 dst = appendBounded(dst, end, "%d", (int)(srcQual + 0.5f));
             src += 5;
+          } else if (strncmp(src, "#BSRC", 5) == 0) {
+            // WHO IS DRIVING THE GRID: the deck or our own estimator.
+            if (srcDeck)     dst = appendBounded(dst, end, "PRODJ");
+            else if (srcLive) dst = appendBounded(dst, end, "INT");
+            else             dst = appendBounded(dst, end, "--");
+            src += 5;
+          } else if (strncmp(src, "#BLCK", 5) == 0) {
+            // THE LOCK: the user has frozen the clock, or has not.
+            dst = appendBounded(dst, end, "%s", srcHold ? "LOCK" : "FREE");
+            src += 5;
+          } else if (strncmp(src, "#BDRF", 5) == 0) {
+            // THE RATE'S DRIFT: how far the music's tempo has moved from the
+            // clock, in BPM.  "--" when there is no measurement at all.
+            if (srcHaveDrift) dst = appendBounded(dst, end, "%+.2f", srcDriftBpm);
+            else              dst = appendBounded(dst, end, "--");
+            src += 5;
+          } else if (strncmp(src, "#GDRF", 5) == 0) {
+            // THE GRID'S DRIFT: the phase error, in milliseconds.
+            if (srcHaveDrift) dst = appendBounded(dst, end, "%+.0f", srcDriftMs);
+            else              dst = appendBounded(dst, end, "--");
+            src += 5;
+          } else if (strncmp(src, "#^", 2) == 0) {
+            // A NEW LINE.  The text is drawn one line under the other.
+            *dst++ = '\n';
+            src += 2;
           }
           #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
           // --- PRO DJ LINK MACRO REPLACEMENT ---
@@ -7772,12 +7817,49 @@ uint16_t mode_2Dscrollingtext(void) {
 
   } else drawShadow = false;
 
+  // THE LINES.
+  //
+  // A '#^' in the text is a NEWLINE: the macro expansion leaves a '\n' in
+  // the text, and the text is drawn one line under the other.  All the
+  // lines scroll together - one x offset, one speed - so a block of text
+  // reads as a block and not as several texts.
+  //
+  // The block is centred like a single line is, so the Y Offset slider
+  // moves the WHOLE block and not just its first line.
+  int lineCount = 1;
+  int longest   = 0;
+  int lineLen   = 0;
+  for (const char *p = text; *p; p++) {
+    if (*p == '\n') {
+      if (lineLen > longest) longest = lineLen;
+      lineLen = 0;
+      lineCount++;
+    } else {
+      lineLen++;
+    }
+  }
+  if (lineLen > longest) longest = lineLen;
+
+  // The line spacing: one row between the lines, so they do not touch.
+  const int lineStep = letterHeight + 1;
+  // How many lines FIT.  The ones that do not are not drawn: a line that
+  // is off the bottom of the display is a line the user cannot read.
+  int maxLines = (rows - letterHeight) / lineStep + 1;
+  if (maxLines < 1) maxLines = 1;
+  if (lineCount > maxLines) lineCount = maxLines;
+  // The block's height, and the Y offset that centres it.
+  const int blockH = (lineCount - 1) * lineStep + letterHeight;
+  // The single line keeps the range it always had; a block is limited to
+  // the room it has, so the slider cannot push it off the display.
+  const int range = (lineCount > 1) ? max(0, (rows - blockH) / 2) : (rows / 2);
+  yoffset = map(SEGMENT.intensity, 0, 255, -range, range) + (rows - blockH) / 2;
+
   const int numberOfLetters = strlen(text);
 
   long delayTime = long(strip.now) - long(SEGENV.step);
   if ((delayTime >= 0) || (abs(delayTime) > 1500)) {
-    if ((numberOfLetters * letterWidth) > cols) ++SEGENV.aux0 %= (numberOfLetters * letterWidth) + cols;
-    else                                        SEGENV.aux0 = (cols + (numberOfLetters * letterWidth)) / 2;
+    if ((longest * letterWidth) > cols) ++SEGENV.aux0 %= (longest * letterWidth) + cols;
+    else                                        SEGENV.aux0 = (cols + (longest * letterWidth)) / 2;
     SEGENV.aux1 = (SEGENV.aux1 + 1) & 0xFF;
     SEGENV.step = strip.now + map2(SEGMENT.speed, 0, 255, 10 * FRAMETIME_FIXED, 2 * FRAMETIME_FIXED);
     if (!SEGMENT.check2) {
@@ -7791,16 +7873,29 @@ uint16_t mode_2Dscrollingtext(void) {
     }
   }
 
-  if (SEGENV.check2 && ((numberOfLetters * letterWidth) > cols)) drawShadow = true;
+  if (SEGENV.check2 && ((longest * letterWidth) > cols)) drawShadow = true;
+  // The draw: the characters, one line under the other.  The x is the
+  // SCROLL position, and it is the same for every line: the block scrolls
+  // as one thing.
+  int lineIdx = 0;
+  int colIdx  = 0;
   for (int i = 0; i < numberOfLetters; i++) {
-    if (int(cols) - int(SEGENV.aux0) + letterWidth * (i + 1) < 0) continue;
+    if (text[i] == '\n') {
+      lineIdx++;
+      colIdx = 0;
+      if (lineIdx >= maxLines) break;    // the lines that do not fit
+      continue;
+    }
+    const int x = int(cols) - int(SEGENV.aux0) + letterWidth * colIdx;
+    colIdx++;
+    if (x + letterWidth < 0) continue;   // off the left edge
     uint32_t col1 = SEGMENT.color_from_palette(SEGENV.aux1, false, PALETTE_SOLID_WRAP, 0);
     uint32_t col2 = BLACK;
     if (SEGMENT.check1 && SEGMENT.palette == 0) {
       col1 = SEGCOLOR(0);
       col2 = SEGCOLOR(2);
     }
-    SEGMENT.drawCharacter(text[i], int(cols) - int(SEGENV.aux0) + letterWidth * i, yoffset, letterWidth, letterHeight, col1, col2, drawShadow);
+    SEGMENT.drawCharacter(text[i], x, yoffset + lineIdx * lineStep, letterWidth, letterHeight, col1, col2, drawShadow);
   }
 
   return FRAMETIME;

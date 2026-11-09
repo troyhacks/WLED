@@ -8521,6 +8521,38 @@ class AudioReactive : public Usermod {
               : F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{lockTempo:true}});\">lock</button>"));
           }
 
+          // THE SYNC: the grid onto the estimation, the rate untouched.
+          //
+          // "Sync current beat grid estimation to update the beat grid only
+          // with the estimation."
+          //
+          // The clock has two parts - the RATE and the GRID - and the lock
+          // freezes both.  The sync is the correction to the GRID alone: the
+          // grid's position moves onto the music's phase, so the phase
+          // error the drift shows is cancelled, and the RATE stays exactly
+          // where the user put it.
+          //
+          // It is most useful while the clock is LOCKED, because then the
+          // drift is the only thing that moves, and the sync is the answer
+          // to it: "put the grid back where the music is, and leave my
+          // tempo alone".
+          {
+            ArTempoFrame tf;
+            const bool tempoOk = arCopyTempo(&tf);
+            char syncBuf[96];
+            if (!tempoOk || !tf.valid) {
+              snprintf(syncBuf, sizeof(syncBuf), "no grid to sync");
+            } else {
+              snprintf(syncBuf, sizeof(syncBuf),
+                       "the grid can be put back on the music - the drift is %+.0f ms, %+.2f BPM",
+                       (double)tf.driftMs, (double)tf.driftBpm);
+            }
+            infoArr = user.createNestedArray(F("Tempo sync"));
+            infoArr.add(syncBuf);
+            infoArr = user.createNestedArray(F("Sync the grid"));
+            infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{syncTempo:true}});\">sync</button>"));
+          }
+
           // THE MODE: DJ SET or PLAYLIST.
           //
           // DJ SET is one performance: the tempo drifts and ramps, the grid
@@ -8930,6 +8962,21 @@ class AudioReactive : public Usermod {
           if (usermod[F("unlockTempo")].as<bool>()) {
             arTempoRequestHold(false);
             USER_PRINTLN("AR: tempo unlocked - the grid may move again");
+          }
+        }
+        // THE SYNC, from the info pane's button.
+        //
+        // "Sync current beat grid estimation to update the beat grid only
+        // with the estimation."
+        //
+        // It is a REQUEST, like the lock's: the grid belongs to the analysis
+        // task, and the web server is not it.  The GRID's position takes the
+        // estimation's phase; the RATE is not touched at all, so a locked
+        // clock stays locked at the tempo the user chose.
+        if (usermod[F("syncTempo")].is<bool>()) {
+          if (usermod[F("syncTempo")].as<bool>()) {
+            arTempoRequestSync();
+            USER_PRINTLN("AR: tempo grid sync requested - the rate is not touched");
           }
         }
         // THE MODE, from the info pane's button.

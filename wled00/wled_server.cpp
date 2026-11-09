@@ -11,6 +11,8 @@
 #endif
 #include "html_cpal.h"
 
+#include "wled_screenshot.h"
+
 #if defined(SOC_SDMMC_HOST_SUPPORTED) && defined(WLED_ENABLE_FS_EDITOR)
 #include "vfs_api.h"
 static std::shared_ptr<VFSImpl> sdVfsImpl = std::make_shared<VFSImpl>();
@@ -182,6 +184,29 @@ void initServer()
     //request->send_P(200, "text/html", PAGE_liveview);
   });
 #endif
+
+  // The screenshot: the picture, JPEG-encoded by the SoC's own encoder, so the
+  // screen can be READ.  The live view is scaled down to 64x36 - it shows that
+  // something is there, but it cannot be read.
+  #if WLED_HAS_SCREENSHOT
+  server.on("/screenshot.jpg", HTTP_GET, [](AsyncWebServerRequest *request){
+    uint8_t source = WLED_SHOT_BUS;
+    if (request->hasParam("src")) {
+      if (request->getParam("src")->value().equalsIgnoreCase("hdmi")) source = WLED_SHOT_HDMI;
+    }
+    uint16_t w = 0, h = 0;
+    // The response owns the JPEG and frees it when the send is done, so the
+    // picture never has to be copied into the web server's own memory.
+    AsyncWebServerResponse *response = wledScreenshotResponse(source, w, h);
+    if (!response) {
+      request->send(500, "text/plain", "the screenshot failed");
+      return;
+    }
+    response->addHeader(F("X-Screenshot-Width"), String(w));
+    response->addHeader(F("X-Screenshot-Height"), String(h));
+    request->send(response);
+  });
+  #endif
 
   // Android captive portal detection
   server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* request) {
