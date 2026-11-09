@@ -220,6 +220,13 @@ void IRAM_ATTR_YN WS2812FX::setPixelColorXY(int x, int y, uint32_t col) //WLEDMM
 {
 #ifndef WLED_DISABLE_2D
   if (!isMatrix) return; // not a matrix set-up
+  // The canvas is only as wide as it is wide: a glyph that hangs over the
+  // edge (the shadow column, a character that is scrolling in from the
+  // right, a character half off the left) must NOT be written.  The index
+  // is a flat offset into the bus, so an x outside the canvas does not go
+  // nowhere - it lands in the row below, or the row above, and the picture
+  // is corrupted.
+  if (x < 0 || x >= (int)Segment::maxWidth || y < 0 || y >= (int)Segment::maxHeight) return;
   uint_fast32_t index = y * Segment::maxWidth + x;
 #else
   uint16_t index = x;

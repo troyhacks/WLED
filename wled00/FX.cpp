@@ -7866,19 +7866,29 @@ uint16_t mode_2Dscrollingtext(void) {
   //
   // The block is centred like a single line is, so the Y Offset slider
   // moves the WHOLE block and not just its first line.
+  //
+  // And every line is CENTRED IN THE BLOCK: the short lines start further
+  // right, so a block of lines reads as a block of centred lines and not
+  // as a block of lines hanging off the left edge of the longest one.
+  // When the block fits on the canvas, that means every line is centred on
+  // the canvas; when it scrolls, the lines keep their places in the block
+  // and the block scrolls as one thing.
+  int lineLen[32] = {0};
   int lineCount = 1;
   int longest   = 0;
-  int lineLen   = 0;
+  int curLen    = 0;
   for (const char *p = text; *p; p++) {
     if (*p == '\n') {
-      if (lineLen > longest) longest = lineLen;
-      lineLen = 0;
+      if (lineCount <= 32) lineLen[lineCount - 1] = curLen;
+      if (curLen > longest) longest = curLen;
+      curLen = 0;
       lineCount++;
     } else {
-      lineLen++;
+      curLen++;
     }
   }
-  if (lineLen > longest) longest = lineLen;
+  if (lineCount <= 32) lineLen[lineCount - 1] = curLen;
+  if (curLen > longest) longest = curLen;
 
   // The line spacing: one row between the lines, so they do not touch.
   const int lineStep = letterHeight + 1;
@@ -7886,6 +7896,7 @@ uint16_t mode_2Dscrollingtext(void) {
   // is off the bottom of the display is a line the user cannot read.
   int maxLines = (rows - letterHeight) / lineStep + 1;
   if (maxLines < 1) maxLines = 1;
+  if (maxLines > 32) maxLines = 32;   // the lengths are held in 32
   if (lineCount > maxLines) lineCount = maxLines;
   // The block's height, and the Y offset that centres it.
   const int blockH = (lineCount - 1) * lineStep + letterHeight;
@@ -7926,9 +7937,13 @@ uint16_t mode_2Dscrollingtext(void) {
       if (lineIdx >= maxLines) break;    // the lines that do not fit
       continue;
     }
-    const int x = int(cols) - int(SEGENV.aux0) + letterWidth * colIdx;
+    // The line's own place in the block: the short lines start further
+    // right, so that every line is centred on the block's axis.
+    const int lineOff = ((longest - lineLen[lineIdx]) * letterWidth) / 2;
+    const int x = int(cols) - int(SEGENV.aux0) + lineOff + letterWidth * colIdx;
     colIdx++;
     if (x + letterWidth < 0) continue;   // off the left edge
+    if (x >= int(cols)) continue;         // off the right edge - not in yet
     uint32_t col1 = SEGMENT.color_from_palette(SEGENV.aux1, false, PALETTE_SOLID_WRAP, 0);
     uint32_t col2 = BLACK;
     if (SEGMENT.check1 && SEGMENT.palette == 0) {
