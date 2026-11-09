@@ -14821,16 +14821,18 @@ static const char _data_FX_MODE_PS_SPRINGY[] PROGMEM = "PS Springy@Stiffness,Dam
 //
 // So this effect draws the levels themselves, in decibels, and puts the
 // programme loudness and its family beside them, in the units the analyser
-// uses. The axis MOVES, the way the RTA mode of the GEQ PPA moves it, and
-// the numbers down the left are the window's own edges - so the axis says
-// what it is instead of being a decoration.
+// uses.
 //
-// The overall level at the right is a meter, so it has a scale of its own -
-// and that scale moves too, on the programme's scale rather than a fixed
-// one, because a fixed scale of 0 to -60 LUFS is a scale for a loud room
-// and this board's input can be far below that. The programme is the
-// reference, the momentary is the bar, and the numbers beside the meter say
-// where the window is.
+// The axis is set BY HAND, by two sliders: the upper and the lower of the
+// range. Both sides of the panel are read against that ONE window - the
+// spectrum down the left and the level meter at the right - the way the
+// analyser reads them, and the numbers down the side are the window's own
+// values, so the axis says what it is instead of being a decoration.
+//
+// The overall level at the right is a meter, so it is read against the same
+// window: the programme is a marker across it, the momentary is the bar, and
+// the peak caps - on the bars and on the meter - are held only while the peak
+// hold option is on.
 //
 // THE DATA
 // --------
@@ -14839,8 +14841,7 @@ static const char _data_FX_MODE_PS_SPRINGY[] PROGMEM = "PS Springy@Stiffness,Dam
 // the number beside it belong to the same instant:
 //
 //   - the ABSOLUTE band levels (arCopyRtaDb): the calibrated dB of each of
-//     the thirty-one third-octave bands, with no auto-range offset on them,
-//     and the WINDOW they are read against - the auto-range's, which moves.
+//     the thirty-one third-octave bands, with no auto-range offset on them.
 //   - the loudness frame (arCopyLoudness): the programme loudness, its
 //     momentary, the short term, the sliding ten seconds, the loudness range
 //     and the true peak.
@@ -14867,41 +14868,44 @@ static const char _data_FX_MODE_PS_SPRINGY[] PROGMEM = "PS Springy@Stiffness,Dam
 #define RTA_METER_MIN_W 320
 #define RTA_METER_MIN_H 160
 
-// The spectrum's axis MOVES.
+// The window is set BY HAND.
 //
-// It is the auto-range's window - the loudest band is held at the top and the
-// span below it is the setting - so the axis follows the signal the way the
-// GEQ PPA's RTA mode does, and the numbers down the left say where it
-// actually is at that moment.
+// Two sliders set the top and the bottom of the range, in the analyser's
+// decibels, and BOTH sides of the panel are read against it: the spectrum's
+// axis down the left and the level meter at the right. That is how the
+// analyser reads them, and it is why the numbers down the left are the
+// numbers beside the meter.
 //
-// These are the fallback, for the frames before there is a window at all: a
-// fixed window, so the meter is never drawn against nothing.
-#define RTA_AXIS_FALLBACK_TOP  (-40.0f)
-#define RTA_AXIS_FALLBACK_SPAN (30.0f)
+// The slider is a knob and not a readout: what the window IS is written
+// down the side of the picture, where it can be read.
+#define RTA_WIN_BASE    (-120.0f)   // the slider's zero
+#define RTA_WIN_STEP    (   0.5f)   // decibels per slider step
+#define RTA_WIN_MAX_TOP (  60.0f)
+#define RTA_WIN_MIN_BOT (-120.0f)
+#define RTA_WIN_MIN_SPAN (  6.0f)
+#define RTA_WIN_MAX_SPAN (120.0f)
 
-// The vertical level scale at the right of the panel: 0 LUFS at the top and
-// -60 at the bottom, in six decibel steps.
+// The default window.
 //
-// That is the FALLBACK - the scale for the frames before there is a
-// programme to scale against. The meter's own scale follows the programme;
-// see the note on the meter further down.
-#define RTA_SCALE_FLOOR (-60.0f)
-
-// How much of the programme's window the meter's scale spans, and how far
-// above it the top of the scale sits. Six decibels of headroom over the
-// programme, and twenty-four below it: the programme's marker then sits at
-// four fifths of the height, and the music moves above and below it.
-#define RTA_METER_SPAN  (30.0f)
-#define RTA_METER_HEAD  ( 6.0f)
+// It is the ANALYSER's own axis - the fixed fifteen to seventy-five decibels
+// the hardware draws - because that is the picture being copied, and because
+// a fixed range does not move under the reader's feet. The sliders are there
+// for when the material wants a different one.
+#define RTA_WIN_DEF_TOP (-15.0f)
+#define RTA_WIN_DEF_BOT (-75.0f)
 
 // The colours, taken from the analyser's own look, packed as 0xRRGGBB so
 // that they can go straight into LovyanGFX's setTextColor.
-#define RTA_COL_BG   0x101C2EUL
-#define RTA_COL_GRID 0x2E5476UL
-#define RTA_COL_BAR  0xE8EC28UL
-#define RTA_COL_CAP  0xFFFFAAUL
-#define RTA_COL_LAB  0x6EC8FFUL
-#define RTA_COL_VAL  0xFFE23CUL
+//
+// The grid has two kinds of line: the ten decibel ones, and the halfway
+// ones, which are darker.
+#define RTA_COL_BG    0x101C2EUL
+#define RTA_COL_GRID  0x2E5476UL
+#define RTA_COL_GRID2 0x1C3550UL
+#define RTA_COL_BAR   0xE8EC28UL
+#define RTA_COL_CAP   0xFFFFAAUL
+#define RTA_COL_LAB   0x6EC8FFUL
+#define RTA_COL_VAL   0xFFE23CUL
 
 // The published band level is the band's power in the SAMPLE's own units -
 // 16-bit counts - so it sits 90.31 dB above the digital full scale. The
@@ -14956,12 +14960,6 @@ static const char * const rtaMeterLabelShort[6] = {
 };
 static const char * const rtaMeterUnit[6] = { "LUFS", "dBTP", "LUFS", "LU", "dB", "LUFS" };
 
-// The octave marks: every third band of the third-octave set - 31.6, 63.1,
-// 125.9, 251, 501, 1k, 2k, 4k, 8k and 16 kHz. They are the grid lines down
-// the spectrum; the labels under them are not drawn - the scale across the
-// bottom is a convenience, not the reading.
-static const uint8_t rtaOctaveBand[10] = { 2, 5, 8, 11, 14, 17, 20, 23, 26, 29 };
-
 // A loudness number, or two dashes when there is no reading.
 //
 // -120 is the loudness module's way of saying "nothing measured". Printed as
@@ -14996,62 +14994,45 @@ static uint16_t mode_RTAMeter(void) {
   // Both copies are taken under the one publish lock, one after the other -
   // never nested, because that lock is a spinlock and does not nest.
   float bandDb[NUM_RTA_CHANNELS];
-  ArRtaScale scale;
-  const bool haveBands = arCopyRtaDb(bandDb, &scale);
+  const bool haveBands = arCopyRtaDb(bandDb, nullptr);
   ArLoudnessFrame loud;
   const bool haveLoud  = arCopyLoudness(&loud);
 
-  // ---- the axis ---------------------------------------------------------
+  // ---- the window --------------------------------------------------------
   //
-  // The window the levels are read against comes with them: the auto-range
-  // holds the loudest band at the top of the window and the span below it is
-  // the setting. So the axis follows the signal, the way the GEQ PPA's RTA
-  // mode does, and the numbers down the left are the window's own edges.
+  // The range is set by two sliders: the upper and the lower, in the
+  // analyser's decibels. BOTH sides of the panel are read against this one
+  // window - the spectrum's axis down the left and the level meter at the
+  // right - which is how the analyser reads them.
   //
-  // The top is rounded UP to a whole decibel, so the loudest band is never
-  // above the axis and the numbers are whole numbers that agree with the
-  // grid lines they sit on.
-  float axisTop  = RTA_AXIS_FALLBACK_TOP;
-  float axisSpan = RTA_AXIS_FALLBACK_SPAN;
-  if (haveBands && scale.valid) {
-    axisTop  = scale.topDb - RTA_DBFS_OFFSET;
-    axisSpan = scale.rangeDb;
+  // The slider is a knob and not a readout. What the window IS is written
+  // down the side of the picture, where it can be read.
+  float winTop = RTA_WIN_DEF_TOP;
+  float winBot = RTA_WIN_DEF_BOT;
+  if (SEGMENT.custom1 != 0 || SEGMENT.custom2 != 0) {
+    winTop = RTA_WIN_BASE + RTA_WIN_STEP * (float)SEGMENT.custom1;
+    winBot = RTA_WIN_BASE + RTA_WIN_STEP * (float)SEGMENT.custom2;
   }
-  if (axisSpan < 6.0f) axisSpan = 6.0f;
-  if (axisSpan > 120.0f) axisSpan = 120.0f;
   // The window's top is a LEVEL, so it is clamped to the range a level can
-  // be in. Without this a very quiet room - or the frames before the
-  // reference is set - puts the top of the axis at minus two hundred
-  // decibels, and the numbers down the left stop being numbers at all.
-  if (axisTop > 60.0f) axisTop = 60.0f;
-  if (axisTop < -99.0f) axisTop = -99.0f;
-  axisTop = ceilf(axisTop);
-  const float axisBot = axisTop - axisSpan;
+  // be in, and its edges are whole decibels, so the numbers down the side
+  // are whole numbers that agree with the grid lines they sit on.
+  if (winTop > RTA_WIN_MAX_TOP) winTop = RTA_WIN_MAX_TOP;
+  if (winBot < RTA_WIN_MIN_BOT) winBot = RTA_WIN_MIN_BOT;
+  winTop = roundf(winTop);
+  winBot = roundf(winBot);
+  if (winTop - winBot > RTA_WIN_MAX_SPAN) winBot = winTop - RTA_WIN_MAX_SPAN;
+  if (winTop - winBot < RTA_WIN_MIN_SPAN) winBot = winTop - RTA_WIN_MIN_SPAN;
+  const float winSpan = winTop - winBot;
 
-  // ---- the meter's own scale --------------------------------------------
-  //
-  // The overall level is a loudness, and a loudness is read against a scale.
-  //
-  // A FIXED scale - 0 at the top and -60 at the bottom - is the honest one,
-  // and it is the scale the analyser has. But it is a scale for a programme
-  // at -20 LUFS, and this board's input can be a long way below that: the
-  // column would be a sliver along the bottom of the frame, and a meter
-  // that never moves is a meter that does not work.
-  //
-  // So the meter's scale FOLLOWS the programme, the way the spectrum's axis
-  // follows the loudest band: the programme is the reference, the window is
-  // the programme plus six decibels at the top and twenty-four below it,
-  // and the numbers beside the meter say where the window actually is.
-  //
-  // The programme is a ten-minute mean, so the scale is steady. The bar on
-  // it is the MOMENTARY - the last 400 ms - which moves with the music.
-  float meterTop   = 0.0f;
-  float meterFloor = RTA_SCALE_FLOOR;
-  if (haveLoud && loud.valid && loud.programme > -119.0f) {
-    meterTop   = loud.programme + RTA_METER_HEAD;
-    meterFloor = meterTop - RTA_METER_SPAN;
-  }
-  const float meterStep = (meterTop - meterFloor) / 5.0f;
+  // The numbers down the side: the window's own values, every ten decibels,
+  // and the floor.
+  float labDb[9];
+  int nLab = 0;
+  for (float db = winTop; db > winBot - 0.01f && nLab < 8; db -= 10.0f) labDb[nLab++] = db;
+  if (winSpan - floorf(winSpan / 10.0f) * 10.0f > 0.5f && nLab < 8) labDb[nLab++] = winBot;
+
+  // The peak hold is an option: sometimes a held peak is in the way.
+  const bool peakHold = SEGMENT.check1;
 
   // ---- the layout -------------------------------------------------------
   //
@@ -15124,25 +15105,31 @@ static uint16_t mode_RTAMeter(void) {
   fillRect(0, 0, W, H, RTA_COL_BG);
 
   // The horizontal grid: a line every ten decibels of the WINDOW, and the
-  // window's own floor. The lines move with the window, and the numbers on
-  // the left are these lines' own values.
-  const int gridSteps = (int)(axisSpan / 10.0f);
-  for (int d = 0; d <= gridSteps; d++) {
-    const float db = axisTop - 10.0f * d;
-    int32_t y = (int32_t)((axisTop - db) / axisSpan * plotH);
+  // window's own floor. The lines are the window's own, and the numbers down
+  // the left are these lines' values.
+  //
+  // Half of the grid - the lines halfway between the ten decibel ones - is
+  // darker, so the grid reads as two kinds of line and the eye can find the
+  // ten decibel ones at a glance.
+  const float pxPerDb = (float)plotH / winSpan;
+  for (float db = winTop; db > winBot - 0.01f; db -= 10.0f) {
+    int32_t y = (int32_t)((winTop - db) * pxPerDb);
     if (y > plotH - 1) y = plotH - 1;     // the last line sits ON the bottom row
     fillRect(plotX, y, plotW, 1, RTA_COL_GRID);
   }
   // The floor, if it is not one of the ten decibel steps.
-  if (axisSpan - (float)gridSteps * 10.0f > 0.5f) {
-    const int32_t y = (int32_t)((axisTop - axisBot) / axisSpan * plotH);
-    if (y < plotH) fillRect(plotX, y, plotW, 1, RTA_COL_GRID);
+  if (winSpan - floorf(winSpan / 10.0f) * 10.0f > 0.5f) {
+    int32_t y = (int32_t)(winSpan * pxPerDb);
+    if (y > plotH - 1) y = plotH - 1;
+    fillRect(plotX, y, plotW, 1, RTA_COL_GRID);
   }
-  // The vertical grid: one line at each octave mark, down the middle of its
-  // band.
-  for (int i = 0; i < 10; i++) {
-    const int32_t x = barsX + (int32_t)rtaOctaveBand[i] * pitch + pitch / 2;
-    fillRect(x, 0, 1, plotH, RTA_COL_GRID);
+  // The halfway lines, darker - but only when they are far enough apart to
+  // be lines and not a wash.
+  if (5.0f * pxPerDb >= 8.0f) {
+    for (float db = winTop - 5.0f; db > winBot + 0.01f; db -= 10.0f) {
+      const int32_t y = (int32_t)((winTop - db) * pxPerDb);
+      if (y >= 0 && y < plotH) fillRect(plotX, y, plotW, 1, RTA_COL_GRID2);
+    }
   }
   // The meter's own line, at the right of the frame.
   fillRect(meterLineX, 0, 1, H, RTA_COL_GRID);
@@ -15155,17 +15142,21 @@ static uint16_t mode_RTAMeter(void) {
   // the axis - which is the analyser's own - is in dBFS.
   //
   // A peak cap is held on each of them and falls slowly, the way an
-  // analyser's does.
+  // analyser's does - unless the peak hold is switched off.
   static float rtaPeakDb[NUM_RTA_CHANNELS];
   for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
     if (!haveBands) { rtaPeakDb[k] = -120.0f; continue; }
     const float db = bandDb[k] - RTA_DBFS_OFFSET;
-    if (db > rtaPeakDb[k]) rtaPeakDb[k] = db;
-    else rtaPeakDb[k] -= 0.1f;                // the hold falls, ~9 dB a second
-    if (rtaPeakDb[k] < axisBot) rtaPeakDb[k] = axisBot;
+    if (!peakHold) {
+      rtaPeakDb[k] = -120.0f;                // no hold: no cap to draw
+    } else {
+      if (db > rtaPeakDb[k]) rtaPeakDb[k] = db;
+      else rtaPeakDb[k] -= 0.1f;             // the hold falls, ~9 dB a second
+      if (rtaPeakDb[k] < winBot) rtaPeakDb[k] = winBot;
+    }
 
-    if (db < axisBot) continue;               // below the axis: nothing to draw
-    int32_t h = (int32_t)((db - axisBot) / axisSpan * plotH);
+    if (db < winBot) continue;               // below the axis: nothing to draw
+    int32_t h = (int32_t)((db - winBot) / winSpan * plotH);
     if (h > plotH) h = plotH;
     if (h < 1) continue;
 
@@ -15177,7 +15168,8 @@ static uint16_t mode_RTAMeter(void) {
 
     fillRect(bx, plotH - h, bw, h, RTA_COL_BAR);
 
-    int32_t ph = (int32_t)((rtaPeakDb[k] - axisBot) / axisSpan * plotH);
+    if (!peakHold) continue;
+    int32_t ph = (int32_t)((rtaPeakDb[k] - winBot) / winSpan * plotH);
     if (ph > plotH) ph = plotH;
     if (ph >= 1) fillRect(bx, plotH - ph, bw, 2, RTA_COL_CAP);
   }
@@ -15186,36 +15178,40 @@ static uint16_t mode_RTAMeter(void) {
   //
   // The column grows from the BOTTOM - from silence up to the level -
   // because that is the way a level is read, and it is drawn against the
-  // meter's own scale, the one computed above.
+  // SAME window as the spectrum: one scale, both sides.
   //
   // The column is the MOMENTARY loudness, the last 400 ms, so it moves with
   // the music; the programme loudness is a marker across it, and the
   // momentary keeps a peak cap that falls slowly.
   if (haveLoud && loud.valid) {
-    const float mspan = meterTop - meterFloor;
+    const float mspan = winSpan;
 
-    // The momentary, in the meter's own scale: the height is what is left of
-    // the range, measured from the bottom.
+    // The momentary, in the window: the height is what is left of the
+    // range, measured from the bottom.
     const float mom = loud.momentary;
-    if (mom > meterFloor) {
-      int32_t h = (int32_t)((mom - meterFloor) / mspan * H);
+    if (mom > winBot) {
+      int32_t h = (int32_t)((mom - winBot) / mspan * H);
       if (h > H) h = H;
       if (h > 0) fillRect(meterColX, H - h, meterColW, h, RTA_COL_BAR);
     }
 
     // The peak cap on the momentary.
     static float rtaMomPeak = -120.0f;
-    if (mom > rtaMomPeak) rtaMomPeak = mom;
-    else rtaMomPeak -= 0.05f;                // the hold falls, ~1.5 dB a second
-    if (rtaMomPeak < meterFloor) rtaMomPeak = meterFloor;
-    if (rtaMomPeak > meterFloor) {
-      const int32_t y = (int32_t)(H - (rtaMomPeak - meterFloor) / mspan * H);
-      if (y >= 0 && y < H) fillRect(meterColX, y, meterColW, 2, RTA_COL_CAP);
+    if (!peakHold) {
+      rtaMomPeak = -120.0f;
+    } else {
+      if (mom > rtaMomPeak) rtaMomPeak = mom;
+      else rtaMomPeak -= 0.05f;              // the hold falls, ~1.5 dB a second
+      if (rtaMomPeak < winBot) rtaMomPeak = winBot;
+      if (rtaMomPeak > winBot) {
+        const int32_t y = (int32_t)(H - (rtaMomPeak - winBot) / mspan * H);
+        if (y >= 0 && y < H) fillRect(meterColX, y, meterColW, 2, RTA_COL_CAP);
+      }
     }
 
     // The programme loudness, as a marker across the meter.
-    if (loud.programme > meterFloor) {
-      const int32_t y = (int32_t)(H - (loud.programme - meterFloor) / mspan * H);
+    if (loud.programme > winBot) {
+      const int32_t y = (int32_t)(H - (loud.programme - winBot) / mspan * H);
       if (y >= 0 && y < H) fillRect(meterColX, y, meterColW, 1, RTA_COL_CAP);
     }
   }
@@ -15290,14 +15286,9 @@ static uint16_t mode_RTAMeter(void) {
 
     // ---- the scale down the left, when the window moves ---------------
     //
-    // The numbers are the window's own edges, so they change with it. They
+    // The numbers are the window's own values, so they change with it. They
     // are redrawn only when one of them changes, which is not often: the
-    // axis moves a whole decibel at a time.
-    float labDb[8];
-    int nLab = 0;
-    for (int d = 0; d <= gridSteps && nLab < 8; d++) labDb[nLab++] = axisTop - 10.0f * d;
-    if (axisSpan - (float)gridSteps * 10.0f > 0.5f && nLab < 8) labDb[nLab++] = axisBot;
-
+    // window moves a whole decibel at a time.
     char akey[64];
     akey[0] = 0;
     for (int i = 0; i < nLab; i++) {
@@ -15320,7 +15311,7 @@ static uint16_t mode_RTAMeter(void) {
       for (int i = 0; i < nLab; i++) {
         char lab[8];
         snprintf(lab, sizeof(lab), "%d", (int)lroundf(labDb[i]));
-        const int32_t ty = (int32_t)((axisTop - labDb[i]) / axisSpan * plotH) - 4;
+        const int32_t ty = (int32_t)((winTop - labDb[i]) * pxPerDb) - 4;
         const int32_t tw = rtaSprite.textWidth(lab);
         // The gutter is the only room these have, so a number that does not
         // fit is NOT drawn. Drawing it anyway would put the text starting
@@ -15333,25 +15324,14 @@ static uint16_t mode_RTAMeter(void) {
       rtaRotateWords((uint8_t*)rtaSprite.getBuffer(), 0, 0, gutterW, H, W);
     }
 
-    // ---- the meter's scale, when the window moves ----------------------
+    // ---- the scale beside the meter, when the window moves --------------
     //
-    // The numbers beside the meter are the meter's own window, so they are
-    // redrawn when the window moves - which is when the programme moves,
-    // and that is not often.
-    //
-    // They are drawn in the meter's own corner of the sprite - to the right
-    // of the panel's six rows - so the panel and the meter have separate
-    // windows and either of them can move on its own.
-    char mkey[64];
-    mkey[0] = 0;
-    for (int d = 0; d <= 5; d++) {
-      char one[8];
-      snprintf(one, sizeof(one), "%d,", (int)lroundf(meterTop - meterStep * d));
-      strncat(mkey, one, sizeof(mkey) - strlen(mkey) - 1);
-    }
-
-    if (strcmp(mkey, sprMeterKey) != 0) {
-      strncpy(sprMeterKey, mkey, sizeof(sprMeterKey) - 1);
+    // The numbers beside the meter are the WINDOW's numbers - the same ones
+    // down the left, on the same rows - because both sides are read against
+    // one scale. They are drawn in the meter's own corner of the sprite, so
+    // the panel's six rows and the scale do not tread on each other.
+    if (strcmp(akey, sprMeterKey) != 0) {
+      strncpy(sprMeterKey, akey, sizeof(sprMeterKey) - 1);
       sprMeterKey[sizeof(sprMeterKey) - 1] = 0;
 
       // The meter's corner of the sprite is cleared first: the new numbers
@@ -15361,11 +15341,10 @@ static uint16_t mode_RTAMeter(void) {
       rtaSprite.setTextSize(1, 1);
       rtaSprite.setTextColor((uint32_t)RTA_COL_LAB);
 
-      for (int d = 0; d <= 5; d++) {
-        const float db = meterTop - meterStep * d;
+      for (int i = 0; i < nLab; i++) {
         char lab[8];
-        snprintf(lab, sizeof(lab), "%d", (int)lroundf(db));
-        int32_t y = (int32_t)((meterTop - db) / (meterTop - meterFloor) * H) - 4;
+        snprintf(lab, sizeof(lab), "%d", (int)lroundf(labDb[i]));
+        int32_t y = (int32_t)((winTop - labDb[i]) * pxPerDb) - 4;
         if (y < 0) y = 0;
         if (y > H - 8) y = H - 8;
         // The text must end inside the sprite: a glyph drawn past the end
@@ -15471,7 +15450,10 @@ static uint16_t mode_RTAMeter(void) {
   return FRAMETIME;
 }
 
-static const char _data_FX_MODE_RTA_METER[] PROGMEM = "RTA Meter ☾🐺@;;!;2f;sx=0,ix=0,c1=0,c2=0,c3=0,pal=72,o1=0,o2=0,o3=0";
+// The two sliders are the window's upper and lower range, and the checkbox
+// is the peak hold. The empty names hide the sliders the effect does not
+// use, and the names after the fifth are the checkboxes' names.
+static const char _data_FX_MODE_RTA_METER[] PROGMEM = "RTA Meter ☾🐺@,,Upper Range,Lower Range,,Peak Hold;;!;2f;sx=0,ix=0,c1=210,c2=90,c3=0,pal=72,o1=1,o2=0,o3=0";
 #endif // SOC_PPA_SUPPORTED
 
 //////////////////////////////////////////////////////////////////////////////////////////

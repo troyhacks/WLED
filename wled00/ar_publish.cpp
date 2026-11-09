@@ -97,17 +97,22 @@ void arPublishRtaDb(const float* db, const ArRtaScale& scale) {
   arRtaDbValid = true;
 }
 
+// The window that comes with the levels is the auto-range's, for the readers
+// that want it. A reader that sets its own window - the RTA effect does,
+// with its two sliders - passes nullptr and does not get one.
 bool arCopyRtaDb(float* dest, ArRtaScale* scale) {
   ArPublishGuard guard;
   if (!arRtaDbValid || !arRtaLive) {
     for (int k = 0; k < NUM_RTA_CHANNELS; k++) dest[k] = -120.0f;
-    scale->topDb = -120.0f;
-    scale->rangeDb = 0.0f;
-    scale->valid = 0;
+    if (scale) {
+      scale->topDb = -120.0f;
+      scale->rangeDb = 0.0f;
+      scale->valid = 0;
+    }
     return false;
   }
   memcpy(dest, arRtaDbBuf[arRtaDbIdx], NUM_RTA_CHANNELS * sizeof(float));
-  *scale = arRtaScale;
+  if (scale) *scale = arRtaScale;
   return true;
 }
 

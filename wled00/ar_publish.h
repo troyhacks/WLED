@@ -109,7 +109,8 @@ struct ArRtaScale {
 void arPublishRtaDb(const float* db, const ArRtaScale& scale);
 
 // Copy the published band levels into dest (NUM_RTA_CHANNELS floats), and the
-// window they are read against into scale.
+// window they are read against into scale. A reader that sets its own window
+// passes nullptr for scale and does not get one.
 // Returns whether they may be USED - false if nothing has been published yet,
 // or if the frame is not a live measurement (see arSetRtaLive above). When
 // it returns false, dest is filled with -120 dB, which is silence, and the
