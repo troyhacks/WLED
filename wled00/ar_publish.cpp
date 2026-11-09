@@ -76,6 +76,64 @@ void arResetRtaBands() {
   arRtaValid = false;
 }
 
+// The published ABSOLUTE band levels.
+//
+// Double buffered like the bands themselves, and under the same lock: a
+// reader must never see half of one frame's levels and half of another's.
+static float arRtaDbBuf[2][NUM_RTA_CHANNELS] = {{0}};
+static uint8_t arRtaDbIdx = 0;
+static bool    arRtaDbValid = false;
+
+void arPublishRtaDb(const float* db) {
+  ArPublishGuard guard;
+  memcpy(arRtaDbBuf[arRtaDbIdx ^ 1], db, NUM_RTA_CHANNELS * sizeof(float));
+  arRtaDbIdx ^= 1;
+  arRtaDbValid = true;
+}
+
+bool arCopyRtaDb(float* dest) {
+  ArPublishGuard guard;
+  if (!arRtaDbValid || !arRtaLive) {
+    for (int k = 0; k < NUM_RTA_CHANNELS; k++) dest[k] = -120.0f;
+    return false;
+  }
+  memcpy(dest, arRtaDbBuf[arRtaDbIdx], NUM_RTA_CHANNELS * sizeof(float));
+  return true;
+}
+
+// The published loudness frame.
+//
+// One struct and not a double buffer, like the tempo: the copy is made under
+// the lock, so a reader cannot see half of it.
+static ArLoudnessFrame arLoudFrame = {};
+static bool arLoudValid = false;
+static bool arLoudLive  = false;
+
+void arPublishLoudness(const ArLoudnessFrame& l) {
+  ArPublishGuard guard;
+  arLoudFrame = l;
+  arLoudValid = true;
+}
+
+bool arCopyLoudness(ArLoudnessFrame* dest) {
+  ArPublishGuard guard;
+  if (!arLoudValid || !arLoudLive) {
+    dest->programme = -120.0f; dest->momentary = -120.0f;
+    dest->momentaryMax = -120.0f; dest->shortTerm = -120.0f;
+    dest->shortTermMax = -120.0f; dest->sliding10 = -120.0f;
+    dest->lra = 0.0f; dest->truePeak = -120.0f; dest->truePeakNow = -120.0f;
+    dest->valid = 0;
+    return false;
+  }
+  *dest = arLoudFrame;
+  return true;
+}
+
+void arSetLoudnessLive(bool live) {
+  ArPublishGuard guard;
+  arLoudLive = live;
+}
+
 // The published tempo frame.
 //
 // It is ONE struct and not a double buffer, because the payload is twelve

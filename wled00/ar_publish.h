@@ -86,6 +86,57 @@ void arCopyRtaBandsLocked(uint8_t* dest);
 // told there is nothing to read.
 void arResetRtaBands();
 
+// The ABSOLUTE band levels.
+//
+// The published RTA BANDS above are a BYTE: a bar HEIGHT, drawn in a window
+// that moves with the signal (the auto-range). A meter that draws its OWN dB
+// axis needs the LEVEL, not the height - the height has already been windowed
+// into the display's scale, so an axis drawn over it would be a lie.
+//
+// These are the levels the axis is for: the calibrated dB of each band, on
+// the analyser's own scale, in the same unit as the reference offset.
+void arPublishRtaDb(const float* db);
+
+// Copy the published band levels into dest (NUM_RTA_CHANNELS floats).
+// Returns whether they may be USED - false if nothing has been published yet,
+// or if the frame is not a live measurement (see arSetRtaLive above). When
+// it returns false, dest is filled with -120 dB, which is silence.
+bool arCopyRtaDb(float* dest);
+
+// The loudness frame: the programme loudness and its family.
+//
+// These are the numbers a hardware analyser's programme meter shows, measured
+// to ITU-R BS.1770-4 on this board's own input. Like the tempo, they are a
+// LOCAL measurement, so they carry the same live flag: a board that is
+// receiving the sound over the network has no loudness of its own.
+struct ArLoudnessFrame {
+  float    programme;      // the gated mean over the programme, LUFS
+  float    momentary;      // the last 400 ms, LUFS
+  float    momentaryMax;   // the highest 400 ms seen, LUFS
+  float    shortTerm;      // the last 3 s, LUFS
+  float    shortTermMax;   // the highest 3 s seen, LUFS
+  float    sliding10;      // the rolling ten seconds, LUFS
+  float    lra;            // the spread of the short-term values, LU
+  float    truePeak;       // the inter-sample peak, dBTP (held)
+  float    truePeakNow;    // the inter-sample peak, dBTP (this frame)
+  uint8_t  valid;          // 1 when there is a programme to talk about
+};
+
+// Publish one whole loudness frame.
+void arPublishLoudness(const ArLoudnessFrame& l);
+
+// Copy the published loudness frame into dest. Returns whether the frame may
+// be USED - false if nothing has been published yet, or if the frame is not a
+// live measurement (see arSetLoudnessLive below). When it returns false,
+// dest is filled with the "nothing measured" values.
+bool arCopyLoudness(ArLoudnessFrame* dest);
+
+// Is the published loudness frame a LIVE measurement?
+//
+// The same rule as the RTA bands and the tempo: while the sound is the
+// NETWORK's, there is no local analysis and the frame is stale.
+void arSetLoudnessLive(bool live);
+
 // The tempo frame: the beat rate, the beat's place in the bar, the progress
 // through the current beat and the score.
 //

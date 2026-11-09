@@ -275,6 +275,7 @@ void handleSerial() {
     //   n / p    the band the trim applies to, next / previous
     //   y / Y    that band's trim, down / up by 1 dB         (calibration)
     //   k / K    the filter bank's detector, shorter / longer by 5 ms
+    //   l / L    the loudness calibration, down / up by 1 dB       (calibration)
     //   w / W    the auto-range's release, shorter / longer by 500 ms
     //   c / C    the codec's input gain, down / up by 0.5 dB
     //   e / E    the tempo tracker's tolerance, down / up by 5 ms
@@ -328,13 +329,15 @@ void handleSerial() {
                next == 'o' || next == 'O' || next == 'n' || next == 'p' ||
                next == 'y' || next == 'Y' || next == 'k' || next == 'K' ||
                next == 'w' || next == 'W' || next == 'c' || next == 'C' ||
+               next == 'l' || next == 'L' ||
                next == 'z' || next == 'Z') {
       // The window and the calibration: the floor and the top in absolute dB,
       // the auto window's span, the reference offset that ties our dB to the
       // analyser's, the per-band trim that makes the shapes match, the filter
       // bank's detector time constant - how fast the bars follow - the
-      // auto-range's release, the codec's input gain, and the pattern - which
-      // sixteen of the thirty-one bands the sixteen bars show.
+      // auto-range's release, the codec's input gain, the loudness
+      // calibration that ties our LUFS to the analyser's, and the pattern -
+      // which sixteen of the thirty-one bands the sixteen bars show.
       audioReactiveRtaCommand(next);
     } else if (next == 'e' || next == 'E' || next == 'q' ||
                next == 'j' || next == 'J' || next == 'M' || next == 'P') {

@@ -867,6 +867,7 @@ struct ArLiveSettings {
   float   windowFloorDb;         // the FIXED window's floor
   float   windowTopDb;           // the FIXED window's top
   float   rtaRefDb;              // the RTA reference offset, dB (calibration)
+  float   loudnessCalDb;         // the loudness calibration, dB (LUFS/dBTP onto the analyser's scale)
   float   refReleaseMs;          // the reference's release
   int     trimBand;              // the band the serial trim works on
   float   trimDb[AR_MAX_BANDS];  // the per-band trim, dB
@@ -1482,6 +1483,16 @@ static void bankMeasureAaDb() {
 // that places the beats. Everything it needs is passed in or is above.
 // ---------------------------------------------------------------------------
 #include "ar_tempo.h"
+
+// The loudness meter: ITU-R BS.1770-4 programme loudness, measured on the
+// raw input, published as the numbers a hardware analyser shows.
+//
+// It is its own header because it is a self-contained instrument: a
+// K-weighting filter, a set of sliding windows over the frame's energy, the
+// two gates, and a histogram for the percentiles. Everything it needs is
+// passed in or is above.
+// ---------------------------------------------------------------------------
+#include "ar_loudness.h"
 
 // The bank's calibration: the chain's response and the anti-alias filter's
 // response, both divided out.
@@ -2518,7 +2529,14 @@ static constexpr float AR_WINDOW_FLOOR_MIN = -120.0f;  // the floor's travel
 static constexpr float AR_WINDOW_FLOOR_MAX =  40.0f;
 static constexpr float AR_WINDOW_SPAN_MIN  =   6.0f;   // the window's minimum width
 static constexpr float AR_WINDOW_SPAN_MAX  = 120.0f;
-static constexpr float AR_RTA_REF_MAX   =  60.0f;   // the reference offset's travel
+static constexpr float AR_RTA_REF_MAX   = 100.0f;   // the reference offset's travel
+// The loudness calibration's travel.
+//
+// It is wider than the reference offset's because the loudness is measured
+// against the CODEC's full scale and the analyser measures against its own:
+// the difference between the two is the whole of the input gain, and a
+// microphone's sensitivity can be another 40 dB on top of that.
+static constexpr float AR_LOUD_CAL_MAX  = 100.0f;
 
 // The settings as they are on boot.
 //
@@ -2535,6 +2553,10 @@ static ArLiveSettings arSettingsBoot() {
   s.windowFloorDb  = -60.0f;
   s.windowTopDb    =  0.0f;
   s.rtaRefDb       =  0.0f;
+  // The loudness calibration starts at zero: our LUFS are the codec's full
+  // scale, and until they are compared with an instrument there is nothing
+  // to correct.
+  s.loudnessCalDb  =  0.0f;
   s.refReleaseMs   = AR_REF_RELEASE_MS;
   s.trimBand       = 0;
   for (int k = 0; k < AR_MAX_BANDS; k++) s.trimDb[k] = 0.0f;
@@ -2631,6 +2653,11 @@ static void arRequestAutoRangeReset() {
 }
 
 static float arRtaSmth[NUM_RTA_CHANNELS] = {0.0f};  // the RTA bars' smoothing, dB
+// The smoothing of the ABSOLUTE band levels - the ones on the analyser's own
+// scale, with no auto-range offset on them. They are a separate array because
+// they are a separate measurement: the bars are a height in a moving window,
+// and a meter that draws its own dB axis needs the level.
+static float arRtaAbsSmth[NUM_RTA_CHANNELS] = {0.0f};
 static volatile bool  arGateOpen  = false;   // the gate's state
 static bool  arTrackInit = false;             // the trackers have their first value
 static uint32_t arTrackMs = 0;                // when the trackers last ran
@@ -2864,6 +2891,7 @@ void audioReactiveResetAutoRange() {
 //   n / p   the band the trim applies to, next / previous
 //   y / Y   that band's trim, down / up by 1 dB
 //   k / K   the filter bank's detector, shorter / longer by 5 ms
+//   l / L   the loudness calibration, down / up by 1 dB
 //
 // The window is ONE window - the 16 bands and the 31 RTA bands are drawn in
 // it - so touching the floor or the top switches BOTH to the FIXED window:
@@ -2943,6 +2971,23 @@ void audioReactiveRtaCommand(char c) {
       });
       USER_PRINTF("RTA reference offset now %+.1f dB (our dB = the analyser's dB %+.1f)\n",
                   (double)s.rtaRefDb, (double)s.rtaRefDb);
+      break;
+    }
+    case 'l': case 'L': {
+      // The LOUDNESS calibration: our LUFS and dBTP onto the analyser's
+      // scale.
+      //
+      // It is a separate constant from the RTA reference offset because it
+      // corrects a different thing: the reference offset ties our BAND
+      // levels to the analyser's, and this ties our LOUDNESS to it. The
+      // analyser may well use a different reference for the two.
+      const ArLiveSettings s = arSettingsEdit([c](ArLiveSettings& st) {
+        st.loudnessCalDb += (c == 'L') ? 1.0f : -1.0f;
+        if (st.loudnessCalDb >  AR_LOUD_CAL_MAX) st.loudnessCalDb =  AR_LOUD_CAL_MAX;
+        if (st.loudnessCalDb < -AR_LOUD_CAL_MAX) st.loudnessCalDb = -AR_LOUD_CAL_MAX;
+      });
+      USER_PRINTF("loudness calibration now %+.1f dB (our LUFS = the analyser's LUFS %+.1f)\n",
+                  (double)s.loudnessCalDb, (double)s.loudnessCalDb);
       break;
     }
     case 'n': case 'p': {
@@ -3307,6 +3352,32 @@ static void arPublishRta(float dtMs) {
   // frame and the one lock. The sound simulator publishes through the same
   // door, so the two writers cannot tear each other's frame.
   arPublishRtaBands(frame);
+
+  // The ABSOLUTE levels: the same bands in dB, on the analyser's own scale.
+  //
+  // The bytes above are bar HEIGHTS in a window that moves with the signal -
+  // the auto-range's offset is folded into them - so a meter that draws its
+  // own dB axis cannot use them. These are the levels the axis is for, and
+  // they carry the calibration, the reference and the per-band trim, and NOT
+  // the auto-range's offset.
+  //
+  // They are smoothed separately: the two are different measurements with
+  // different jobs - one is a bar's look, the other is a meter's needle.
+  {
+    float absDb[NUM_RTA_CHANNELS];
+    for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
+      const float db = (arGateOpen && (estRtaDb[k] > -119.0f)) ? estRtaDb[k] : -120.0f;
+      float &sm = arRtaAbsSmth[k];
+      if (dtMs > 0.0f) {
+        sm += ((db > sm) ? aRise : aFall) * (db - sm);
+      } else {
+        sm = db;
+      }
+      if (sm < -120.0f) sm = -120.0f;
+      absDb[k] = sm;
+    }
+    arPublishRtaDb(absDb);
+  }
 }
 
 // Publish a set of band bytes that came from somewhere else - the UDP sound
@@ -5056,6 +5127,27 @@ void arAnalysisTask(void * parameter)
     // exactly once and in order, and they get it.
     if (audioSource) audioSource->getSamples(vReal, hopSamples);
 
+    // THE LOUDNESS METER.
+    //
+    // It runs HERE - on the raw samples, before the chain filters them in
+    // place - because a loudness meter measures what ARRIVES, not what a
+    // filter made of it. A hardware analyser does not correct its microphone
+    // either, so correcting ours would make the two incomparable.
+    //
+    // The chain's own correction is a per-BAND calibration; the loudness is
+    // a broadband number and has no such correction. What it does have is
+    // its own calibration constant (loudnessCalDb), applied at publish time.
+    //
+    // The K-weighting's high-pass takes the DC out, which is what the
+    // standard says it should, so the DC blocker's absence here is not a
+    // problem.
+    //
+    // It is inside the source's own check, because without a source there
+    // are no samples: the frame would be the STALE ones, and a loudness
+    // meter that measures stale samples is worse than one that measures
+    // nothing.
+    if (audioSource) arLoudnessProcess(vReal, hopSamples);
+
     // The frame's peak - the raw peak of the fresh samples, before the input
     // filters run - used to be measured here as `rawPeak`, against `maxSample`
     // after them, so that the pair separated "the signal never arrived at the
@@ -5463,6 +5555,14 @@ void arAnalysisTask(void * parameter)
       tf.refOffset    = arTempoRefOffset();
       arPublishTempo(tf);
     }
+
+    // THE LOUDNESS NUMBERS.
+    //
+    // They are published here, at the end of the frame, so that the copy
+    // under the publish lock is the frame's own - and the calibration is
+    // applied at that moment, so it can be moved live without disturbing
+    // the history.
+    arLoudnessPublish();
 
     probe(dFinal);
 
@@ -6837,6 +6937,15 @@ class AudioReactive : public Usermod {
 
       useInputFilter = 2; // default: DC blocker
 
+      // The loudness meter's history.
+      //
+      // It is allocated HERE, once, and never again: the history is the
+      // programme's, and it survives a source change (a new codec is a new
+      // programme, but the meter should not have to be re-created).
+      if (!arLoudnessInit()) {
+        USER_PRINTLN("AR: the loudness meter could not allocate its history - it is off");
+      }
+
       // The switch below replaces audioSource without freeing the old one. On
       // the first call there is nothing to free, but setup() can be called
       // again (a config change restarts the audio stack), and then the old
@@ -7296,6 +7405,12 @@ class AudioReactive : public Usermod {
       // is there, the estimator second, and NEITHER when neither is live.
       arSetTempoLive(!disableSoundProcessing);
 
+      // The loudness is a LOCAL measurement for the same reason: it is
+      // measured from this board's own input, so a board receiving its sound
+      // over the network has none, and what was published before the network
+      // took over is stale.
+      arSetLoudnessLive(!disableSoundProcessing);
+
       // The analysis task gates ITSELF on disableSoundProcessing, at the top
       // of its frame. Nothing is stopped from out here any more.
       //
@@ -7518,6 +7633,7 @@ class AudioReactive : public Usermod {
         for (int i = (init ? 0 : 1); i < NUM_GEQ_CHANNELS; i += 2) arBandBytes[i] = 16;
         if (arUmData != nullptr) arUmData->u_data[2] = arBandBytes;
         memset(arRtaSmth, 0, sizeof(arRtaSmth));
+        memset(arRtaAbsSmth, 0, sizeof(arRtaAbsSmth));
       }
       // The published RTA frame: cleared and marked unpublished, so a reader
       // falls back to the GEQ view until the next frame arrives. The publish
@@ -7707,6 +7823,46 @@ class AudioReactive : public Usermod {
         // drawn in the same window at the same scale. The key is kept because
         // a script may be reading it, and it is the same number.
         l["rta_range_db"]   = (double)arRefOffsetDb;
+      }
+
+      // ---- the loudness --------------------------------------------------
+      //
+      // ITU-R BS.1770-4 programme loudness, measured on the raw input.
+      //
+      // These are the numbers a hardware analyser shows, in the analyser's
+      // units, so the two can be put side by side:
+      //
+      //   programme_lufs     the gated mean over the programme   (LUFS)
+      //   momentary_lufs     the last 400 ms                     (LUFS)
+      //   momentary_max_lufs the highest 400 ms seen              (LUFS)
+      //   short_term_lufs    the last 3 s                        (LUFS)
+      //   short_term_max_lufs the highest 3 s seen               (LUFS)
+      //   sliding10_lufs     the rolling ten seconds             (LUFS)
+      //   lra_lu             the spread of the short-term values (LU)
+      //   true_peak_dbtp     the inter-sample peak, held         (dBTP)
+      //
+      // The calibration (cal_db) is added to every one of them except the
+      // range, which is a DIFFERENCE and does not move when the scale does.
+      {
+        const ArLoudnessFrame lf = arLoudnessSnapshot();
+        JsonObject lo = ar.createNestedObject("loudness");
+        lo["valid"]            = (lf.valid != 0);
+        // The same question the RTA view asks: is this a LIVE measurement?
+        // The loudness comes from this board's own input, so a board that is
+        // RECEIVING its sound over the network has none - and the numbers
+        // published before the network took over are stale.
+        lo["usable"]           = (audioSource != nullptr) && !disableSoundProcessing
+                                 && (audioSyncEnabled != AUDIOSYNC_REC);
+        lo["programme_lufs"]   = (double)lf.programme;
+        lo["momentary_lufs"]   = (double)lf.momentary;
+        lo["momentary_max_lufs"] = (double)lf.momentaryMax;
+        lo["short_term_lufs"]  = (double)lf.shortTerm;
+        lo["short_term_max_lufs"] = (double)lf.shortTermMax;
+        lo["sliding10_lufs"]   = (double)lf.sliding10;
+        lo["lra_lu"]           = (double)lf.lra;
+        lo["true_peak_dbtp"]   = (double)lf.truePeak;
+        lo["true_peak_now_dbtp"] = (double)lf.truePeakNow;
+        lo["cal_db"]           = (double)st.loudnessCalDb;
       }
 
       // ---- the tempo ------------------------------------------------------
@@ -8601,6 +8757,41 @@ class AudioReactive : public Usermod {
           snprintf(lvlBuf, sizeof(lvlBuf), "%+.1f", (double)st.rtaRefDb);
           infoArr.add(lvlBuf);
 
+          // THE LOUDNESS, in the units the analyser uses.
+          //
+          // Two rows and a button. The pane is for reading at a glance, and
+          // these are the two numbers a person compares against the
+          // analyser: the programme's loudness and its true peak, and the
+          // range.
+          //
+          // The momentary, the short term and the sliding ten seconds are
+          // MEASUREMENTS and they are on /json/ar, where they are numbers
+          // and not a wall of text.
+          {
+            const ArLoudnessFrame lf = arLoudnessSnapshot();
+            char loudBuf[64];
+            infoArr = user.createNestedArray(F("Programme loudness"));
+            if (!lf.valid) {
+              infoArr.add(F("--"));
+            } else {
+              snprintf(loudBuf, sizeof(loudBuf), "%.1f LUFS, TP %.1f dBTP",
+                       (double)lf.programme, (double)lf.truePeak);
+              infoArr.add(loudBuf);
+            }
+            infoArr = user.createNestedArray(F("Loudness range"));
+            if (!lf.valid) {
+              infoArr.add(F("--"));
+            } else {
+              snprintf(loudBuf, sizeof(loudBuf), "%.1f LU", (double)lf.lra);
+              infoArr.add(loudBuf);
+            }
+            // The programme's loudness is a statement about a PROGRAMME, so
+            // it needs a start: the button says the programme begins here,
+            // and the history is forgotten.
+            infoArr = user.createNestedArray(F("Start programme"));
+            infoArr.add(F("<button class=\"btn btn-p\" onclick=\"requestJson({AudioReactive:{resetProgramme:true}});\">start</button>"));
+          }
+
           // The 31 RTA band levels are NOT a row here any more. They are a
           // wall of thirty-one numbers, and the info pane is for the short
           // facts - the machine detail belongs on /json/ar, where the same
@@ -8816,6 +9007,22 @@ class AudioReactive : public Usermod {
                         (double)TROYHACKS_DBREF, (double)arSettingsSnapshot().windowRangeDb);
           }
         }
+        // THE PROGRAMME STARTS HERE.
+        //
+        // The integrated loudness and the loudness range are statements
+        // about a PROGRAMME, so they need a beginning: the button forgets
+        // the history and the measurement starts again from this moment.
+        //
+        // It is a REQUEST and not a write, because the history belongs to
+        // the analysis task: it is cleared at the top of the next frame,
+        // there and nowhere else.
+        if (usermod[F("resetProgramme")].is<bool>()) {
+          if (usermod[F("resetProgramme")].as<bool>()) {
+            arLoudnessRequestReset();
+            USER_PRINTLN("AR: programme loudness restarts from here");
+          }
+        }
+
         // THE DOWNBEAT MARK, from the info pane's buttons.
         //
         // "The beat sounding now is beat one" - said by the person at the
@@ -9134,6 +9341,11 @@ class AudioReactive : public Usermod {
       freqScale[F("rtaFloor")] = st.windowFloorDb;
       freqScale[F("rtaTop")]   = st.windowTopDb;
       freqScale[F("rtaRef")]   = st.rtaRefDb;
+      // The loudness calibration: our LUFS and dBTP onto the analyser's
+      // scale. It is a separate number from the reference offset, because
+      // it corrects a different thing - the LEVEL of the measurement, not
+      // the shape of the spectrum.
+      freqScale[F("loudCal")]  = st.loudnessCalDb;
       freqScale[F("rtaTau")]   = st.bankTauMs;
       // Which sixteen of the thirty-one the sixteen bars show. The running
       // pattern is written, so a save keeps what is running.
@@ -9411,16 +9623,26 @@ class AudioReactive : public Usermod {
         } else {
           configComplete = false;
         }
+        // The loudness calibration.
+        //
+        // It is OPTIONAL: a config written before the loudness meter existed
+        // has no "loudCal", and the missing key must not force the whole
+        // config to be rewritten. So its absence keeps the current value.
+        float loudRead = before.loudnessCalDb;
+        if (arGetNumber(top["frequency"][F("loudCal")], loudRead)) {
+          loudRead = constrain(loudRead, -AR_LOUD_CAL_MAX, AR_LOUD_CAL_MAX);
+        }
         // The window has to have a width, or the bar mapping divides by
         // zero.
         if (topRead - floorRead < AR_WINDOW_SPAN_MIN) topRead = floorRead + AR_WINDOW_SPAN_MIN;
 
-        arSettingsEdit([haveAuto, autoRead, rangeRead, floorRead, topRead, refRead](ArLiveSettings& st) {
+        arSettingsEdit([haveAuto, autoRead, rangeRead, floorRead, topRead, refRead, loudRead](ArLiveSettings& st) {
           if (haveAuto) st.autoRange = (autoRead != 0);
           st.windowRangeDb = rangeRead;
           st.windowFloorDb = floorRead;
           st.windowTopDb   = topRead;
           st.rtaRefDb      = refRead;
+          st.loudnessCalDb = loudRead;
         });
         // The detector's time constant.
         //
@@ -9889,6 +10111,7 @@ class AudioReactive : public Usermod {
       oappend(SET_F("addInfo(ux+':frequency:rtaTop',1,'dB <i>(fixed window)</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:rtaRef',1,'dB <i>our dB = the reference dB + this</i>');"));
       oappend(SET_F("addInfo(ux+':frequency:rtaTau',1,'ms <i>the filter bank detector time constant</i>');"));
+      oappend(SET_F("addInfo(ux+':frequency:loudCal',1,'dB <i>the loudness calibration: our LUFS and dBTP = the analyser reading + this</i>');"));
 
       // Which sixteen of the thirty-one the sixteen display bars show.
       //
@@ -9933,10 +10156,10 @@ class AudioReactive : public Usermod {
         const ArLiveSettings live = arSettingsSnapshot();
         oappendi(live.autoRange ? 1 : 0);
         oappend(";");
-        const char *liveFields[5] = {"rtaRange", "rtaFloor", "rtaTop", "rtaRef", "rtaTau"};
-        const float liveValues[5] = {live.windowRangeDb, live.windowFloorDb, live.windowTopDb, live.rtaRefDb, live.bankTauMs};
+        const char *liveFields[6] = {"rtaRange", "rtaFloor", "rtaTop", "rtaRef", "rtaTau", "loudCal"};
+        const float liveValues[6] = {live.windowRangeDb, live.windowFloorDb, live.windowTopDb, live.rtaRefDb, live.bankTauMs, live.loudnessCalDb};
         char num[24];
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 6; i++) {
           snprintf(num, sizeof(num), "%.3f", (double)liveValues[i]);
           oappend(SET_F("arv=document.getElementsByName(ux+':frequency:"));
           oappend(liveFields[i]);

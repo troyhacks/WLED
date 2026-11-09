@@ -12,6 +12,8 @@
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <LovyanGFX.hpp>
 #include <stdarg.h>
+#include <esp_cache.h>
+#include <soc/soc_caps.h>
 #endif
 #if !(defined(WLED_DISABLE_PARTICLESYSTEM2D) && defined(WLED_DISABLE_PARTICLESYSTEM1D))
 #include "FXparticleSystem.h"
@@ -14802,6 +14804,491 @@ static const char _data_FX_MODE_PS_SPRINGY[] PROGMEM = "PS Springy@Stiffness,Dam
 
 #endif // WLED_DISABLE_PARTICLESYSTEM1D
 
+// ===========================================================================
+// THE RTA METER
+//
+// A hardware analyser's screen: the spectrum on the left, on the analyser's
+// own decibel scale, and the programme meter's six numbers on the right.
+//
+// WHY IT IS NOT THE GEQ EFFECT
+// ----------------------------
+//
+// The GEQ PPA effect draws a spectrum, but what it draws is BAR HEIGHTS: the
+// bands mapped into a window that moves with the signal, so that the display
+// always uses its full range. That is right for a bar display on a wall and
+// wrong for a meter, because a meter is read AGAINST something - an axis -
+// and the axis must not move.
+//
+// So this effect draws the levels themselves, in decibels, against a fixed
+// axis, and puts the programme loudness and its family beside them, in the
+// units the analyser uses. The two can then be put side by side and read.
+//
+// THE DATA
+// --------
+//
+// Two published frames, both read under the ONE publish lock, so a bar and
+// the number beside it belong to the same instant:
+//
+//   - the ABSOLUTE band levels (arCopyRtaDb): the calibrated dB of each of
+//     the thirty-one third-octave bands, with no auto-range offset on them.
+//   - the loudness frame (arCopyLoudness): the programme loudness, its
+//     momentary, the short term, the sliding ten seconds, the loudness range
+//     and the true peak.
+//
+// Both are LOCAL measurements. While the sound is the NETWORK's there is
+// nothing to draw, and the effect says so rather than drawing a stale frame.
+//
+// THE FRAME
+// ---------
+//
+// The frame is flexible: the effect fills whatever the segment is, in
+// whatever aspect ratio it is. Below a minimum size the type does not fit
+// and the thirty-one bars cannot be told apart, so the effect draws NOTHING
+// rather than something that cannot be read.
+// ===========================================================================
+#if defined(SOC_PPA_SUPPORTED)
+
+// The smallest frame the effect will draw at.
+//
+// The panel's type is eight pixels tall and its longest label needs about a
+// hundred pixels, and the thirty-one bars have to be told apart. Below this
+// the effect draws NOTHING: a frame that cannot be read is worse than a blank
+// one, and a blank one is honest.
+#define RTA_METER_MIN_W 320
+#define RTA_METER_MIN_H 160
+
+// The spectrum's axis: the analyser's own range, top to bottom, in ten decibel
+// steps. The levels are absolute - the calibration is already in them - so
+// this axis does not move.
+#define RTA_AXIS_TOP    (-15.0f)
+#define RTA_AXIS_BOT    (-75.0f)
+
+// The vertical level scale at the right of the panel: 0 LUFS at the top and
+// -60 at the bottom, in six decibel steps.
+#define RTA_SCALE_FLOOR (-60.0f)
+
+// The colours, taken from the analyser's own look, packed as 0xRRGGBB so
+// that they can go straight into LovyanGFX's setTextColor.
+#define RTA_COL_BG   0x101C2EUL
+#define RTA_COL_GRID 0x2E5476UL
+#define RTA_COL_BAR  0xE8EC28UL
+#define RTA_COL_CAP  0xFFFFAAUL
+#define RTA_COL_LAB  0x6EC8FFUL
+#define RTA_COL_VAL  0xFFE23CUL
+
+// The published band level is the band's power in the SAMPLE's own units -
+// 16-bit counts - so it sits 90.31 dB above the digital full scale. The
+// analyser's axis is in dBFS, so that is the number that comes off it.
+#define RTA_DBFS_OFFSET 90.31f
+
+// The sprite's pixels, turned round.
+//
+// The LovyanGFX sprite holds a pixel as A,R,G,B and the PPA reads the same
+// buffer as B,G,R,A - so it reads the alpha as the blue and the red and the
+// green the wrong way round. Rotating the word one byte to the right puts it
+// the right way round, and the display then shows the colour that was asked
+// for. It is done on the CPU because the order of the two hardware swaps is
+// not written down anywhere.
+static void rtaRotateWords(uint8_t* buf, int32_t x0, int32_t y0, int32_t x1,
+                           int32_t y1, int32_t stride) {
+  uint32_t* p = (uint32_t*)buf + (size_t)y0 * stride + x0;
+  const int32_t w = x1 - x0;
+  for (int32_t y = y0; y < y1; y++) {
+    for (int32_t x = 0; x < w; x++) {
+      *p = (*p >> 8) | (*p << 24);
+      p++;
+    }
+    p += stride - w;
+  }
+}
+
+// The sprite's rectangle, cleared to nothing.
+//
+// The sprite is a transparent sheet over the background, so a rectangle that
+// is drawn over has to be wiped first. Zero is transparent; the colour
+// TFT_TRANSPARENT would be read as opaque black.
+static void rtaClearWords(uint8_t* buf, int32_t x0, int32_t y0, int32_t x1,
+                           int32_t y1, int32_t stride) {
+  const size_t rowBytes = (size_t)(x1 - x0) * 4;
+  uint8_t* p = buf + ((size_t)y0 * stride + x0) * 4;
+  for (int32_t y = y0; y < y1; y++) {
+    memset(p, 0, rowBytes);
+    p += (size_t)stride * 4;
+  }
+}
+
+// The programme meter's six rows: the label, a shorter label for a narrow
+// panel, and the unit of the value.
+static const char * const rtaMeterLabel[6] = {
+  "Program Loudness", "True-peak Max", "Loudness Max (M)",
+  "Loudness Range", "Peak to Loudness", "Sliding 10 sec"
+};
+static const char * const rtaMeterLabelShort[6] = {
+  "Prog Loudness", "True-peak Max", "Loud Max (M)",
+  "Loud Range", "Peak-Loud", "Sliding 10s"
+};
+static const char * const rtaMeterUnit[6] = { "LUFS", "dBTP", "LUFS", "LU", "dB", "LUFS" };
+
+// The octave marks: every third band of the third-octave set - 31.6, 63.1,
+// 125.9, 251, 501, 1k, 2k, 4k, 8k and 16 kHz - and the labels the analyser
+// puts under them.
+static const uint8_t rtaOctaveBand[10] = { 2, 5, 8, 11, 14, 17, 20, 23, 26, 29 };
+static const char * const rtaOctaveLabel[10] = {
+  "31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"
+};
+
+static uint16_t mode_RTAMeter(void) {
+  if (!strip.isMatrix) return mode_static();
+
+  PPAEffectContext ctx;
+  if (!ppaEffectBegin(ctx)) return mode_static();
+
+  const int32_t W = ctx.width;
+  const int32_t H = ctx.height;
+
+  // ---- too small to read ------------------------------------------------
+  //
+  // The frame is cleared, so a segment that is too small is black rather than
+  // a picture of the last frame that fitted.
+  if (W < RTA_METER_MIN_W || H < RTA_METER_MIN_H) {
+    ppaEffectClear(ctx);
+    ppaEffectEnd(ctx);
+    return FRAMETIME;
+  }
+
+  // ---- the data ---------------------------------------------------------
+  //
+  // Both copies are taken under the one publish lock, one after the other -
+  // never nested, because that lock is a spinlock and does not nest.
+  float bandDb[NUM_RTA_CHANNELS];
+  const bool haveBands = arCopyRtaDb(bandDb);
+  ArLoudnessFrame loud;
+  const bool haveLoud  = arCopyLoudness(&loud);
+
+  // ---- the layout -------------------------------------------------------
+  //
+  // Left to right: the dB scale, the spectrum, the six numbers, the level
+  // meter. The meter is at the RIGHT edge, because that is where a meter
+  // belongs and that is where the analyser puts it.
+  const int32_t gutterW = 20;                 // the dB scale, on the left
+  const int32_t meterW  = 26;                 // the level meter, on the right
+  int32_t panelW = (W * 40) / 100;
+  if (panelW < 120) panelW = 120;
+  const int32_t specW   = W - gutterW - panelW - meterW;
+  const int32_t panelX  = gutterW + specW;    // the numbers' left edge
+  const int32_t meterX  = panelX + panelW;    // the meter's left edge
+  const int32_t textW   = panelW;
+
+  const int32_t plotX = gutterW;
+  const int32_t plotW = specW - 2;
+
+  // The bars: an INTEGER pitch, so every bar is the same width and every
+  // gap is the same size. The group is centred in the plot.
+  const int32_t pitch = (plotW > 0) ? (plotW / NUM_RTA_CHANNELS) : 1;
+  const int32_t barW  = (pitch > 1) ? pitch - 1 : 1;
+  const int32_t barsX = plotX + (plotW - pitch * NUM_RTA_CHANNELS) / 2;
+
+  // The frequency labels along the bottom. They are six pixels a character,
+  // so they can be measured before the sprite exists: if they do not all fit
+  // on one row with a two pixel gap between them, the odd ones drop to a row
+  // below and the plot gives up the space.
+  bool twoRows = false;
+  {
+    int32_t prevRight = -1000;
+    for (int i = 0; i < 10; i++) {
+      const int32_t lw = 6 * (int32_t)strlen(rtaOctaveLabel[i]);
+      const int32_t cx = barsX + (int32_t)rtaOctaveBand[i] * pitch + pitch / 2;
+      const int32_t left = cx - lw / 2;
+      if (left < prevRight + 2) { twoRows = true; break; }
+      prevRight = left + lw;
+    }
+  }
+  const int32_t labelH = twoRows ? 19 : 10;
+  const int32_t plotH  = H - labelH;
+
+  // Where the segment's own pixels start: the transform buffer holds the
+  // segment at the origin, the bus holds it at its place in the canvas.
+  const int32_t baseX = ctx.needs_transform_buffer ? 0 : ctx.start_x;
+  const int32_t baseY = ctx.needs_transform_buffer ? 0 : ctx.start_y;
+
+  // The meter's own parts: the numbers, the programme's column, the line.
+  const int32_t meterNumX  = meterX + 1;
+  const int32_t meterColX  = meterX + meterW - 6;
+  const int32_t meterColW  = 4;
+  const int32_t meterLineX = W - 1;
+
+  // A rectangle of the segment's own colour.
+  //
+  // The bus holds its pixels in B,G,R order and the display reads them as
+  // R,G,B, so the red and the blue go in each other's place on the way in.
+  auto fillRect = [&](int32_t x, int32_t y, int32_t w, int32_t h,
+                      uint32_t col) {
+    if (w <= 0 || h <= 0) return;
+    ppa_fill_oper_config_t f = ppaGetFillConfig(ctx);
+    f.fill_argb_color.r =  col        & 0xFF;
+    f.fill_argb_color.g = (col >>  8) & 0xFF;
+    f.fill_argb_color.b = (col >> 16) & 0xFF;
+    f.fill_argb_color.a = 255;
+    f.out.block_offset_x = baseX + x;
+    f.out.block_offset_y = baseY + y;
+    f.fill_block_w = w;
+    f.fill_block_h = h;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &f));
+  };
+
+  // ---- the background and the grid --------------------------------------
+  fillRect(0, 0, W, H, RTA_COL_BG);
+
+  const float dbSpan = RTA_AXIS_TOP - RTA_AXIS_BOT;
+  // The horizontal grid: one line every ten decibels.
+  for (int d = 0; d <= 6; d++) {
+    const float db = RTA_AXIS_TOP - 10.0f * d;
+    const int32_t y = (int32_t)((RTA_AXIS_TOP - db) / dbSpan * plotH);
+    fillRect(plotX, y, plotW, 1, RTA_COL_GRID);
+  }
+  // The vertical grid: one line at each octave mark, down the middle of its
+  // band.
+  for (int i = 0; i < 10; i++) {
+    const int32_t x = barsX + (int32_t)rtaOctaveBand[i] * pitch + pitch / 2;
+    fillRect(x, 0, 1, plotH, RTA_COL_GRID);
+  }
+  // The meter's own line, at the right of the frame.
+  fillRect(meterLineX, 0, 1, H, RTA_COL_GRID);
+
+  // ---- the bars ---------------------------------------------------------
+  //
+  // The bars are the ABSOLUTE levels: the calibrated dB of each third-octave
+  // band, against a fixed axis. The published dB is the band's power in the
+  // sample's own units, so it is 90.31 dB above the digital full scale and
+  // the axis - which is the analyser's own - is in dBFS.
+  //
+  // A peak cap is held on each of them and falls slowly, the way an
+  // analyser's does.
+  static float rtaPeakDb[NUM_RTA_CHANNELS];
+  for (int k = 0; k < NUM_RTA_CHANNELS; k++) {
+    if (!haveBands) { rtaPeakDb[k] = RTA_AXIS_BOT; continue; }
+    const float db = bandDb[k] - RTA_DBFS_OFFSET;
+    if (db > rtaPeakDb[k]) rtaPeakDb[k] = db;
+    else rtaPeakDb[k] -= 0.1f;                // the hold falls, ~9 dB a second
+    if (rtaPeakDb[k] < RTA_AXIS_BOT) rtaPeakDb[k] = RTA_AXIS_BOT;
+
+    if (db < RTA_AXIS_BOT) continue;          // below the axis: nothing to draw
+    int32_t h = (int32_t)((db - RTA_AXIS_BOT) / dbSpan * plotH);
+    if (h > plotH) h = plotH;
+    if (h < 1) continue;
+
+    int32_t bx = barsX + k * pitch;
+    int32_t bw = barW;
+    if (bx < plotX) { bw += bx - plotX; bx = plotX; }
+    if (bx + bw > plotX + plotW) bw = plotX + plotW - bx;
+    if (bw < 1) continue;
+
+    fillRect(bx, plotH - h, bw, h, RTA_COL_BAR);
+
+    int32_t ph = (int32_t)((rtaPeakDb[k] - RTA_AXIS_BOT) / dbSpan * plotH);
+    if (ph > plotH) ph = plotH;
+    if (ph >= 1) fillRect(bx, plotH - ph, bw, 2, RTA_COL_CAP);
+  }
+
+  // ---- the programme loudness on the meter ------------------------------
+  if (haveLoud && loud.valid && loud.programme > RTA_SCALE_FLOOR) {
+    int32_t h = (int32_t)((loud.programme - RTA_SCALE_FLOOR) / (0.0f - RTA_SCALE_FLOOR) * H);
+    if (h > H) h = H;
+    if (h > 0) fillRect(meterColX, 0, meterColW, h, RTA_COL_BAR);
+  }
+
+  // ---- the numbers ------------------------------------------------------
+  //
+  // The six values, and the key that says whether they have changed. The
+  // type is the expensive part, so it is only redrawn when a number moves.
+  char val[6][16];
+  if (haveLoud && loud.valid) {
+    snprintf(val[0], 16, "%.1f", (double)loud.programme);
+    snprintf(val[1], 16, "%.1f", (double)loud.truePeak);
+    snprintf(val[2], 16, "%.1f", (double)loud.momentaryMax);
+    snprintf(val[3], 16, "%.1f", (double)loud.lra);
+    // "Peak to Loudness" is the true peak's distance above the programme.
+    snprintf(val[4], 16, "%.1f", (double)(loud.truePeak - loud.programme));
+    snprintf(val[5], 16, "%.1f", (double)loud.sliding10);
+  } else {
+    for (int i = 0; i < 6; i++) snprintf(val[i], 16, "--");
+  }
+  char key[128];
+  snprintf(key, sizeof(key), "%s|%s|%s|%s|%s|%s",
+           val[0], val[1], val[2], val[3], val[4], val[5]);
+
+  static LGFX_Sprite rtaSprite;
+  static int32_t sprW = 0, sprH = 0;
+  static bool    sprOk = false;
+  static char    sprKey[128] = {0};
+
+  // The panel's rectangle: the only part of the sprite that changes.
+  const int32_t panX0 = panelX, panX1 = panelX + textW;
+
+  if (!sprOk || sprW != W || sprH != H) {
+    rtaSprite.setFont(&fonts::Font0);
+    rtaSprite.setTextSize(1, 1);
+    rtaSprite.setPsram(true);
+    rtaSprite.setColorDepth(32);              // ARGB8888 - the PPA blends it
+    sprOk = rtaSprite.createSprite(W, H);
+    rtaSprite.setFont(&fonts::Font0);
+    rtaSprite.setTextSize(1, 1);
+    sprW = W; sprH = H;
+    sprKey[0] = 0;                            // force a redraw
+  }
+
+  if (sprOk) {
+    // ---- the static text: the scales and the frequency labels ----------
+    //
+    // It is drawn once, when the sprite is made, and the whole sprite is
+    // turned round then. It does not change while the frame does.
+    static int32_t staticW = 0, staticH = 0;
+    if (staticW != W || staticH != H) {
+      staticW = W; staticH = H;
+      rtaClearWords((uint8_t*)rtaSprite.getBuffer(), 0, 0, W, H, W);
+      rtaSprite.setTextSize(1, 1);
+      rtaSprite.setTextColor((uint32_t)RTA_COL_LAB);
+
+      // The dB scale, down the left.
+      for (int d = 0; d <= 6; d++) {
+        const float db = RTA_AXIS_TOP - 10.0f * d;
+        char lab[8];
+        snprintf(lab, sizeof(lab), "%d", (int)db);
+        int32_t y = (int32_t)((RTA_AXIS_TOP - db) / dbSpan * plotH) - 4;
+        if (y < 0) y = 0;
+        const int32_t tw = rtaSprite.textWidth(lab);
+        rtaSprite.drawString(lab, gutterW - 2 - tw, y);
+      }
+
+      // The frequency labels, along the bottom. They are packed into two
+      // rows: the first row that has room for one takes it, so the row a
+      // label ends up on is decided by the space, not by its index.
+      int32_t prevRight[2] = { -1000, -1000 };
+      for (int i = 0; i < 10; i++) {
+        const int32_t tw = rtaSprite.textWidth(rtaOctaveLabel[i]);
+        int32_t tx = barsX + (int32_t)rtaOctaveBand[i] * pitch + pitch / 2 - tw / 2;
+        int32_t row = 0;
+        if (tx < prevRight[0] + 2) {
+          row = (tx >= prevRight[1] + 2) ? 1 : 0;
+        }
+        prevRight[row] = tx + tw;
+        if (tx < plotX) tx = plotX;
+        if (tx + tw > plotX + plotW) tx = plotX + plotW - tw;
+        rtaSprite.drawString(rtaOctaveLabel[i], tx, plotH + 1 + row * 9);
+      }
+
+      // The meter's numbers, at the right.
+      for (int d = 0; d <= 10; d += 2) {
+        const float db = -6.0f * d;
+        char lab[8];
+        snprintf(lab, sizeof(lab), "%d", (int)db);
+        int32_t y = (int32_t)((0.0f - db) / (0.0f - RTA_SCALE_FLOOR) * H) - 4;
+        if (y < 0) y = 0;
+        rtaSprite.drawString(lab, meterNumX, y);
+      }
+
+      // The whole sprite is turned round: the LovyanGFX sprite holds its
+      // pixels as A,R,G,B and the PPA reads the same buffer as B,G,R,A, so
+      // one byte rotation per pixel puts it the right way round.
+      rtaRotateWords((uint8_t*)rtaSprite.getBuffer(), 0, 0, W, H, W);
+    }
+
+    // ---- the six rows, when a number moves -----------------------------
+    if (strcmp(key, sprKey) != 0) {
+      strncpy(sprKey, key, sizeof(sprKey) - 1);
+      sprKey[sizeof(sprKey) - 1] = 0;
+
+      // The panel's rectangle is cleared first: the rows are drawn over it
+      // and the old numbers have to go.
+      rtaClearWords((uint8_t*)rtaSprite.getBuffer(), panX0, 0, panX1, H, W);
+
+      rtaSprite.setTextSize(1, 1);
+      rtaSprite.setTextColor((uint32_t)RTA_COL_LAB);
+
+      const int32_t rowH = H / 6;
+      for (int r = 0; r < 6; r++) {
+        const int32_t rowY = r * rowH;
+
+        // The label, and the short form of it if the panel is too narrow.
+        const char* lab = rtaMeterLabel[r];
+        int32_t lw = rtaSprite.textWidth(lab);
+        if (lw > textW - 4) { lab = rtaMeterLabelShort[r]; lw = rtaSprite.textWidth(lab); }
+
+        // The value, at double size if it fits under its label.
+        rtaSprite.setTextSize(2, 2);
+        int32_t vw = rtaSprite.textWidth(val[r]);
+        rtaSprite.setTextSize(1, 1);
+        const int32_t uw = rtaSprite.textWidth(rtaMeterUnit[r]);
+        int32_t vsize = 2;
+        if (vw + uw + 6 > textW) { vsize = 1; vw = rtaSprite.textWidth(val[r]); }
+        const int32_t groupW = vw + 4 + uw;
+        const int32_t vx = panelX + 2;
+
+        // The label above the value, and the unit beside it.
+        rtaSprite.setTextSize(1, 1);
+        rtaSprite.setTextColor((uint32_t)RTA_COL_LAB);
+        rtaSprite.drawString(lab, vx, rowY + 2);
+
+        rtaSprite.setTextSize(vsize, vsize);
+        rtaSprite.setTextColor((uint32_t)RTA_COL_VAL);
+        rtaSprite.drawString(val[r], vx, rowY + 12);
+
+        rtaSprite.setTextSize(1, 1);
+        rtaSprite.setTextColor((uint32_t)RTA_COL_LAB);
+        rtaSprite.drawString(rtaMeterUnit[r], vx + groupW - uw, rowY + 12 + (vsize == 2 ? 8 : 0));
+      }
+
+      rtaRotateWords((uint8_t*)rtaSprite.getBuffer(), panX0, 0, panX1, H, W);
+    }
+  }
+
+  // ---- the text over the background -------------------------------------
+  if (sprOk) {
+    // The sprite is in PSRAM and the PPA reads it with its own DMA, so the
+    // CPU's cache has to be written back first: otherwise the PPA can read
+    // the sprite's PREVIOUS contents.
+    #if defined(SOC_PSRAM_DMA_CAPABLE) && defined(SOC_CACHE_WRITEBACK_SUPPORTED)
+    if (esp_ptr_external_ram(rtaSprite.getBuffer())) {
+      esp_cache_msync((void*)rtaSprite.getBuffer(), (size_t)W * H * 4,
+                      ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    }
+    #endif
+
+    ppa_blend_oper_config_t blend = {};
+    blend.in_bg.buffer = ctx.effectBuffer;
+    blend.in_bg.pic_w = ctx.render_pic_w;
+    blend.in_bg.pic_h = ctx.render_pic_h;
+    blend.in_bg.block_w = W;
+    blend.in_bg.block_h = H;
+    blend.in_bg.block_offset_x = baseX;
+    blend.in_bg.block_offset_y = baseY;
+    blend.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+
+    blend.in_fg.buffer = (uint8_t*)rtaSprite.getBuffer();
+    blend.in_fg.pic_w = W;
+    blend.in_fg.pic_h = H;
+    blend.in_fg.block_w = W;
+    blend.in_fg.block_h = H;
+    blend.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_ARGB8888;
+
+    blend.out.buffer = ctx.effectBuffer;
+    blend.out.buffer_size = ctx.effectBufferSize;
+    blend.out.pic_w = ctx.render_pic_w;
+    blend.out.pic_h = ctx.render_pic_h;
+    blend.out.block_offset_x = baseX;
+    blend.out.block_offset_y = baseY;
+    blend.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+    blend.mode = PPA_TRANS_MODE_BLOCKING;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_blend(ppa_blend_handle, &blend));
+  }
+
+  ppaEffectEnd(ctx);
+  return FRAMETIME;
+}
+
+static const char _data_FX_MODE_RTA_METER[] PROGMEM = "RTA Meter ☾🐺@;;!;2f;sx=0,ix=0,c1=0,c2=0,c3=0,pal=72,o1=0,o2=0,o3=0";
+#endif // SOC_PPA_SUPPORTED
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // mode data
 static const char _data_RESERVED[] PROGMEM = "RSVD";
@@ -15058,6 +15545,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // beats: ProLink if a deck is connected, the AR's estimator otherwise
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
+  addEffect(FX_MODE_RTA_METER, &mode_RTAMeter, _data_FX_MODE_RTA_METER); // audio: the analyser view
   #endif
 
   #ifndef WLED_DISABLE_PARTICLESYSTEM2D
