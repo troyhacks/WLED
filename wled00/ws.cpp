@@ -19,6 +19,78 @@ static volatile unsigned long wsLastLiveTime = 0;   // WLEDMM
 
 static volatile uint32_t wsPendingClient = 0;
 
+/*
+ * The TEMPO stream.
+ *
+ * The full state broadcast is on a 1.2 s cooldown, which is far too slow for
+ * four boxes that light up with the beat - a beat at 128 BPM is 470 ms, so a
+ * 1.2 s update would skip two beats out of three. So the beat gets its OWN
+ * push: a compact frame, to the clients that asked for it.
+ *
+ * 25 Hz is the CEILING, not the rate: the push happens in the main loop, and
+ * on a board with 57600 LEDs on it the loop manages about 14 turns a second.
+ * The page fills its box from the beat's own clock between the frames, so
+ * the sweep is smooth even at that rate.
+ *
+ * It is OPT-IN, per client. A client subscribes with {"tempo":true} and
+ * unsubscribes with {"tempo":false}. The subscription is answered with
+ * silence - the client is turning a stream on, it is not asking for a state.
+ *
+ * The numbers come from arGetBeatSource(), which is the ONE arbitration
+ * between the deck and the estimator. The effect that strobes to the beat
+ * reads the same function, so the wall and the screen cannot disagree.
+ */
+#define WS_TEMPO_INTERVAL_MS 40
+#define WS_TEMPO_MAX_CLIENTS 4
+static uint32_t wsTempoClients[WS_TEMPO_MAX_CLIENTS] = {0};
+static unsigned long wsLastTempoTime = 0;
+
+static void wsTempoAddClient(uint32_t id) {
+  for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
+    if (wsTempoClients[i] == id) return;                 // already subscribed
+    if (wsTempoClients[i] == 0) { wsTempoClients[i] = id; return; }  // a free slot
+  }
+  wsTempoClients[0] = id;   // no room: the newest takes over the first slot
+}
+
+static void wsTempoDelClient(uint32_t id) {
+  for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
+    if (wsTempoClients[i] == id) wsTempoClients[i] = 0;
+  }
+}
+
+static bool wsTempoAnyClient(void) {
+  for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
+    if (wsTempoClients[i]) return true;
+  }
+  return false;
+}
+
+static void wsSendTempo(void) {
+  if (!wsTempoAnyClient()) return;
+
+  // The ONE arbitration: the deck if there is one, the estimator if not.
+  ArBeatSource b = arGetBeatSource(false);
+
+  // The frame is built by hand, not with ArduinoJson: it is a fixed shape
+  // and a fixed size, and the JSON buffer lock is needed elsewhere.
+  char buf[192];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"tempo\":{\"bpm\":%.1f,\"beat\":%u,\"prog\":%.3f,\"live\":%u,\"lock\":%u,"
+    "\"db\":%u,\"dbset\":%u,\"plink\":%u,\"drift\":%.2f}}",
+    (double)b.bpm, (unsigned)b.beatInBar, (double)b.beatProgress,
+    (unsigned)b.live, (unsigned)b.locked, (unsigned)b.downbeatKnown,
+    (unsigned)b.downbeatSet, (unsigned)b.fromProLink, (double)b.driftPct);
+  if (n < 1 || n >= (int)sizeof(buf)) return;
+
+  for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
+    if (!wsTempoClients[i]) continue;
+    AsyncWebSocketClient* wsc = ws.client(wsTempoClients[i]);
+    if (!wsc || wsc->queueLength() > 0) continue;  // busy: it will get the next one
+    wsc->text(buf);
+  }
+}
+
 void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len)
 {
   if(type == WS_EVT_CONNECT){
@@ -29,6 +101,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
   } else if(type == WS_EVT_DISCONNECT){
     //client disconnected
     if (client->id() == wsLiveClientId) wsLiveClientId = 0;
+    wsTempoDelClient(client->id());
     DEBUG_PRINTLN(F("WS client disconnected."));
   } else if(type == WS_EVT_DATA){
     DEBUG_PRINTLN(F("WS event data."));
@@ -46,6 +119,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         }
 
         bool verboseResponse = false;
+        bool tempoOnly = false;
         if (!requestJSONBufferLock(11)) {
           client->text(F("{\"error\":3}")); // ERR_NOBUF
           return;
@@ -62,6 +136,12 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
           verboseResponse = true;
         } else if (root.containsKey("lv")) {
           wsLiveClientId = root["lv"] ? client->id() : 0;
+        } else if (root.containsKey("tempo")) {
+          // The tempo stream's subscription. It is not a state request, so
+          // it gets no answer - the client is turning the stream on.
+          if (root["tempo"].as<bool>()) wsTempoAddClient(client->id());
+          else                               wsTempoDelClient(client->id());
+          tempoOnly = true;
         } else {
           verboseResponse = deserializeState(root);
         }
@@ -70,7 +150,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         if (!interfaceUpdateCallMode) { // individual client response only needed if no WS broadcast soon
           if (verboseResponse) {
             sendDataWs(client);
-          } else {
+          } else if (!tempoOnly) {
             // we have to send something back otherwise WS connection closes
             client->text(F("{\"success\":true}"));
           }
@@ -436,6 +516,15 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
 
 void handleWs()
 {
+  // The TEMPO stream goes FIRST, and before the strip check on purpose:
+  // it does not touch the LEDs, and it must not be starved by an effect
+  // that keeps the bus busy. The boxes have to keep up with the beat
+  // whatever the wall is doing.
+  if ((millis() - wsLastTempoTime) >= WS_TEMPO_INTERVAL_MS) {
+    wsLastTempoTime = millis();
+    wsSendTempo();
+  }
+
   // if (!busses.canAllShow()) return;
   if (strip.isUpdating()) return;
 

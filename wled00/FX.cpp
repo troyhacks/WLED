@@ -746,8 +746,9 @@ static void bpmStrobeDrawBpm(float bpm) {
 uint16_t mode_bpm_strobe(void) {
   // ---- the beat source -------------------------------------------------
   //
-  // TWO sources, and the order is the design: ProLink first if it is there,
-  // the estimator second, and NEITHER when neither is live.
+  // ONE arbitration, in arGetBeatSource() (wled00/ar_publish.cpp): ProLink
+  // first if it is there, the estimator second, and NEITHER when neither is
+  // live.
   //
   // The ProLink usermod gets the tempo from a Pioneer deck's network
   // packets: it is a master clock, and it is exact. The AudioReactive
@@ -757,12 +758,10 @@ uint16_t mode_bpm_strobe(void) {
   //
   // What is NOT allowed is a fabricated rate. If neither source is live the
   // effect is inert, because the user wants the strobe locked to real music.
-  float    srcBpm      = 0.0f;      // beats per minute
-  uint8_t  srcBeat     = 0;         // 1..4, 1 = downbeat; 0 = unknown
-  float    srcProgress = 0.0f;      // 0..1 through the current beat
-  bool     srcLive     = false;
-  bool     srcDownbeat = false;     // the downbeat is KNOWN, not a convention
-
+  //
+  // The web GUI's tempo panel reads the same function, so the wall and the
+  // screen cannot disagree about where the beat is.
+  //
   // "Ignore Pro Link": ignore the deck and drive the effect from the
   // AudioReactive tempo model instead.
   //
@@ -770,65 +769,29 @@ uint16_t mode_bpm_strobe(void) {
   // tempo models on the same wall.  The deck's grid is exact and survives a
   // breakdown; the estimator is a measurement of the sound and does not.
   // With a deck connected the estimator is otherwise never heard at all.
-  const bool ignoreProLink = SEGMENT.check2;
+  const ArBeatSource beat = arGetBeatSource(SEGMENT.check2);
 
-  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-  // ProLink v3 globals — file-scope volatile in usermods_list.cpp.
-  // This is the canonical read pattern for future ProLink-aware effects.
-  extern volatile float   prolink_bpm_public;              // beats per minute (0 = unknown)
-  extern volatile uint8_t prolink_beat_public;            // beat-in-measure: 0 = no data, 1..4 = bar position (1 = downbeat) — in the SHIFTED grid, so it is the audible bar
-  extern volatile float   prolink_beat_progress_public;    // 0..1 within the current beat — in the SHIFTED grid, so 0 is the AUDIBLE beat
-  extern volatile bool    prolink_connected_public;        // true while following a master CDJ
-
-  // The beatInMeasure sentinel 0 ("no packet yet, see #BEAT at FX.cpp:7412")
-  // falls through here too, so we don't strobe before the first CDJ hello.
-  if (!ignoreProLink && prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
-    srcBpm      = prolink_bpm_public;
-    srcBeat     = prolink_beat_public;
-    srcProgress = prolink_beat_progress_public;
-    srcLive     = true;
-    srcDownbeat = true;      // a CDJ knows its own downbeat
-  }
-  #endif
-
-  #if defined(USERMOD_AUDIOREACTIVE)
-  // The estimator, when ProLink has not answered.
+  const float    srcBpm      = beat.bpm;          // beats per minute
+  const uint8_t  srcBeat     = beat.beatInBar;    // 1..4, 1 = downbeat; 0 = unknown
+  const float    srcProgress = beat.beatProgress; // 0..1 through the current beat
+  const bool     srcLive     = (beat.live != 0);
+  // The downbeat colour comes from the DECK, or from the USER.
   //
-  // arCopyTempo() returns false when the published frame is not a LIVE
-  // measurement - which is what a board receiving its sound over the network
-  // publishes, because it has no audio to measure. The effect is then inert
-  // rather than strobing to a stale number.
-  if (!srcLive) {
-    ArTempoFrame tf;
-    if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
-        tf.beatInBar >= 1 && tf.beatInBar <= 4) {
-      srcBpm      = tf.bpm;
-      srcBeat     = tf.beatInBar;
-      srcProgress = tf.beatProgress;
-      srcLive     = true;
-      // The downbeat colour comes from the DECK, or from the USER.
-      //
-      // The estimator's OWN downbeat is not used, even when it believes it
-      // has one.  The sound does not know where the bar starts: MEASURED
-      // over sixty windows of real music, the bar profile's t-score sat ON
-      // its null in forty-three per cent of them - chance - so there is
-      // nothing there to find (audio_reactive.h).  The estimator's bar
-      // position also drifts against the deck's, because its rate is a
-      // measurement and not a clock, so it cannot be trusted to name the
-      // downbeat either.
-      //
-      // But the person at the board CAN name it: "the beat sounding now is
-      // beat one" - the 'j' key, or the info pane's "set downbeat" button.
-      // That is not a measurement and it is not a guess; it is the user
-      // saying where the bar starts, and the estimator's numbering is
-      // shifted to match it (ar_tempo.h).  So a downbeat the user SET is
-      // as good as the deck's, and the "Downbeat" option is honoured.
-      //
-      // The debug line below says whether the downbeat colour is in force.
-      srcDownbeat = (tf.downbeatSet != 0);
-    }
-  }
-  #endif
+  // The estimator's OWN downbeat is not used, even when it believes it has
+  // one.  The sound does not know where the bar starts: MEASURED over sixty
+  // windows of real music, the bar profile's t-score sat ON its null in
+  // forty-three per cent of them - chance - so there is nothing there to
+  // find (audio_reactive.h).  The estimator's bar position also drifts
+  // against the deck's, because its rate is a measurement and not a clock,
+  // so it cannot be trusted to name the downbeat either.
+  //
+  // But the person at the board CAN name it: "the beat sounding now is beat
+  // one" - the 'j' key, or the info pane's "set downbeat" button.  That is
+  // not a measurement and it is not a guess; it is the user saying where the
+  // bar starts, and the estimator's numbering is shifted to match it
+  // (ar_tempo.h).  So a downbeat the user SET is as good as the deck's, and
+  // the "Downbeat" option is honoured.
+  const bool     srcDownbeat = (beat.downbeatKnown != 0);
 
   if (!srcLive) {
     SEGMENT.fill(SEGCOLOR(1));                             // off-color

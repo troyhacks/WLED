@@ -803,6 +803,137 @@ input[type=range]::-moz-range-thumb {
 	margin-top: var(--bmt);
 }
 
+/* The TEMPO panel: the beat, the rate, and the three controls.
+ *
+ * It lives in the title bar, to the LEFT of the brightness slider (the
+ * slider is floated right and comes first in the source, so the panel
+ * floats right after it and lands on its left).
+ *
+ * The four boxes are the beat: the ones already passed in this bar are
+ * white, the current one FILLS as the beat goes on, and the ones still
+ * to come are dark grey. The fill is a custom property, so a frame only
+ * touches the box whose level actually changed.
+ */
+#tempowrap {
+	float: right;
+	margin-top: var(--bmt);
+	/* The brightness slider carries a theme icon that is translated 32 px to
+	   the LEFT of the slider, so it hangs 24 px outside its own column. This
+	   margin is that overhang: without it the icon lands on the panel's
+	   right-hand button and the two controls overlap. */
+	margin-right: 26px;
+}
+
+#tempowrap .trow {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding-bottom: 2px;
+}
+
+#tempowrap .tboxes {
+	display: flex;
+	gap: 3px;
+}
+
+#tempowrap .tbox {
+	position: relative;
+	overflow: hidden;
+	width: 10px;
+	height: 26px;
+	border-radius: 2px;
+	background: var(--c-4);
+}
+
+#tempowrap .tbox::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: calc(var(--f, 0) * 100%);
+	background: var(--c-f);
+}
+
+/* The downbeat - beat one - when it is KNOWN: the deck's, or the one the
+   user marked by hand. It is an outline, so the box does not change size
+   when the mark appears. */
+#tempowrap .tbox.db {
+	outline: 1px solid var(--c-l);
+	outline-offset: 0;
+}
+
+#tempoBpm {
+	font-family: monospace;
+	font-size: 16px;
+	font-weight: bold;
+	color: var(--c-f);
+	min-width: 46px;
+	text-align: right;
+}
+
+#tempoDrift {
+	font-family: monospace;
+	font-size: 12px;
+	color: var(--c-c);
+	min-width: 36px;
+	text-align: left;
+}
+
+/* The drift is only interesting while the grid is LOCKED, so the readout
+   is empty the rest of the time - but its space is kept, so locking the
+   grid does not move anything under the user's eyes. */
+#tempoDrift:empty {
+	visibility: hidden;
+}
+
+#tempoMode {
+	font-size: 10px;
+	letter-spacing: 0.5px;
+	color: var(--c-c);
+	border: 1px solid var(--c-4);
+	border-radius: 3px;
+	padding: 2px 5px;
+	white-space: nowrap;
+}
+
+/* The three controls, in the style of the title bar's icons: no chrome
+   of their own, they take the bar's colour, and they light up when they
+   are in effect. */
+#tempowrap .tbtn {
+	width: auto;
+	background-color: transparent;
+	border: none;
+	margin: 0;
+	padding: 4px;
+	min-width: 0;
+	line-height: 0;
+	color: var(--c-c);
+	cursor: pointer;
+	border-radius: 4px;
+	transition: color 0.3s, background-color 0.3s;
+}
+
+#tempowrap .tbtn svg {
+	width: 18px;
+	height: 18px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+#tempowrap .tbtn:hover {
+	background-color: var(--c-tbh);
+	color: var(--c-e);
+}
+
+#tempowrap .tbtn.on {
+	color: var(--c-f);
+	background-color: var(--c-tbh);
+}
+
 #picker {
 	margin-top: 8px !important;
 	max-width: 260px;
@@ -1604,5 +1735,48 @@ TD .checkmark, TD .radiomark {
 		max-width: 183px;
 		text-overflow: ellipsis;
 		overflow-x: clip;
+	}
+}
+
+/* The TEMPO panel on the narrow screens.
+ *
+ * Below 1250px there is no room in the title bar beside the brightness
+ * slider - the buttons, the slider and the panel would not fit on one
+ * line - so the panel takes a row of its own, under the bar, and the
+ * header grows to hold it. --th is the header's height and --tp is the
+ * gap the content leaves for it, so both move together.
+ */
+@media all and (max-width: 1249px) {
+	:root {
+		--th: 126px;
+		--tp: 126px;
+	}
+	/* The slider keeps its full width here: squeezed to its minimum it
+	   wraps its own contents and the header grows by 20px for nothing. */
+	#briwrap {
+		min-width: 299px;
+	}
+	#tempowrap {
+		float: none;
+		width: 100%;
+		clear: both;
+		text-align: center;
+		/* The panel has a row of its own here, so the clearance for the
+		   brightness icon is not wanted - and with the width at 100% it
+		   would push the box past the edge of the page. */
+		margin-right: 0;
+	}
+	#tempowrap .trow {
+		justify-content: center;
+		padding: 3px 0 5px 0;
+	}
+}
+
+/* On a phone the brightness slider is on a row of its own already, so
+   the tempo panel is on the third row. */
+@media all and (max-width: 639px) {
+	:root {
+		--th: 124px;
+		--tp: 124px;
 	}
 }

@@ -192,6 +192,45 @@ struct ArTempoFrame {
 // Publish one whole tempo frame.
 void arPublishTempo(const ArTempoFrame& t);
 
+// The BEAT SOURCE: the board's one answer to "what is the beat?"
+//
+// TWO sources, and the order is the design: ProLink first if it is there,
+// the estimator second, and NEITHER when neither is live.
+//
+// The ProLink usermod gets the tempo from a Pioneer deck's network packets:
+// it is a master clock, and it is exact. The AudioReactive estimator gets
+// it from the sound: it is a measurement, and it is only as good as the
+// music. So when a deck is connected the deck wins - and when it is not,
+// the estimate is better than nothing.
+//
+// What is NOT allowed is a fabricated rate. A board that is receiving its
+// sound over the network has no audio to measure, so it has no tempo, and
+// the answer is "not live" rather than a stale number.
+//
+// This is the ONE arbitration, and everybody reads it: the effect that
+// strobes to the beat (mode_bpm_strobe in wled00/FX.cpp) and the web GUI's
+// tempo panel both call this, so the wall and the screen cannot disagree
+// about where the beat is.
+struct ArBeatSource {
+  float    bpm;             // beats per minute; 0 when there is no beat
+  uint8_t  beatInBar;       // 1..4; 1 is the downbeat; 0 when unknown
+  float    beatProgress;    // 0..1 through the current beat
+  uint8_t  live;            // 1 when there is a beat to show
+  uint8_t  downbeatKnown;   // the downbeat is KNOWN - the deck's, or the user's
+  uint8_t  fromProLink;     // 1 when the DECK is the source, 0 for the estimator
+  uint8_t  locked;          // 1 when the estimator's clock is frozen
+  uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
+  float    driftMs;         // the grid's phase error against the music, ms
+  float    driftPct;        // that error as a percentage of the beat
+};
+
+// The beat, from whichever source is answering.
+//
+// ignoreProLink is the DEBUG switch: it ignores the deck and answers from
+// the estimator instead, so the two tempo models can be heard on the same
+// wall. It is the effect's "Ignore Pro Link" option, passed through.
+ArBeatSource arGetBeatSource(bool ignoreProLink = false);
+
 // Copy the published tempo frame into dest. Returns whether the frame may be
 // USED - false if nothing has been published yet, or if the frame is not a
 // live measurement (see arSetTempoLive below). When it returns false, dest

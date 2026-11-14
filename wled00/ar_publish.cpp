@@ -203,6 +203,66 @@ void arSetTempoLive(bool live) {
   arTempoLive = live;
 }
 
+// The beat source: ProLink first, the estimator second.
+//
+// The two rules are the ones the beat-strobe effect has always used, moved
+// here so that there is only ONE of them. The effect and the web GUI both
+// ask this function, so the wall and the screen cannot disagree about
+// where the beat is.
+ArBeatSource arGetBeatSource(bool ignoreProLink) {
+  ArBeatSource b = {};
+
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+  // ProLink globals - file-scope volatile in usermods_list.cpp. The
+  // beatInMeasure sentinel 0 ("no packet yet") falls through, so there is
+  // no beat before the first CDJ hello.
+  extern volatile float   prolink_bpm_public;            // beats per minute (0 = unknown)
+  extern volatile uint8_t prolink_beat_public;           // beat-in-measure 1..4, in the SHIFTED grid
+  extern volatile float   prolink_beat_progress_public;  // 0..1 within the current beat
+  extern volatile bool    prolink_connected_public;      // true while following a master CDJ
+
+  if (!ignoreProLink && prolink_connected_public &&
+      prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
+    b.bpm           = prolink_bpm_public;
+    b.beatInBar     = prolink_beat_public;
+    b.beatProgress  = prolink_beat_progress_public;
+    b.live          = 1;
+    b.downbeatKnown = 1;      // a CDJ knows its own downbeat
+    b.fromProLink   = 1;
+    return b;
+  }
+  #endif
+
+  // The estimator.
+  //
+  // arCopyTempo() returns false when the published frame is not a LIVE
+  // measurement - which is what a board receiving its sound over the
+  // network publishes, because it has no audio to measure. The answer is
+  // then "not live" rather than a stale number.
+  ArTempoFrame tf;
+  if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
+      tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+    b.bpm          = tf.bpm;
+    b.beatInBar    = tf.beatInBar;
+    b.beatProgress = tf.beatProgress;
+    b.live         = 1;
+    // The downbeat is the DECK's, or the USER's. The estimator's own is
+    // not used, even when it believes it has one: the sound does not know
+    // where the bar starts (audio_reactive.h). A downbeat the user SET is
+    // as good as the deck's.
+    b.downbeatKnown = (tf.downbeatSet != 0) ? 1 : 0;
+    b.downbeatSet   = tf.downbeatSet;
+    b.locked        = tf.hold;
+    b.driftMs       = tf.driftMs;
+    // The drift as a PERCENTAGE of the beat: how far off the beat the
+    // grid is, in units a person can read at a glance. A beat at 120 BPM
+    // is 500 ms, so 10 ms of phase error is 2 %.
+    const float beatMs = 60000.0f / tf.bpm;
+    b.driftPct = (beatMs > 0.0f) ? (tf.driftMs / beatMs * 100.0f) : 0.0f;
+  }
+  return b;
+}
+
 void arResetTempo() {
   ArPublishGuard guard;
   arTempoFrame.bpm = 0.0f;

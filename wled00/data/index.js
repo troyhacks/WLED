@@ -2006,6 +2006,11 @@ function makeWS() {
 		if (e.data instanceof ArrayBuffer) return; // liveview packet
 		var json = JSON.parse(e.data);
 		if (json.leds) return; // JSON liveview packet
+		// The TEMPO stream. The board pushes the beat on its own, at 25 Hz,
+		// because the state broadcast is on a 1.2 s cooldown and four boxes
+		// that light up with the beat cannot wait that long. It is NOT a
+		// state, so it must not go any further down this handler.
+		if (json.tempo) { tempoUpdate(json.tempo); return; }
 		clearTimeout(jsonTimeout);
 		jsonTimeout = null;
 		lastUpdate = new Date();
@@ -2033,6 +2038,10 @@ function makeWS() {
 	ws.onopen = (e)=>{
 		//ws.send("{'v':true}"); // unnecessary (https://github.com/Aircoookie/WLED/blob/master/wled00/ws.cpp#L18)
 		reqsLegal = true;
+		// Ask for the tempo stream: the beat, as fast as the board's own
+		// loop can push it. The board answers with silence - this is a
+		// subscription, not a request.
+		ws.send(JSON.stringify({tempo:true}));
 	}
 }
 
@@ -2345,6 +2354,143 @@ function arToggle(btn, txtOn, txtOff, isOn, cmdOn, cmdOff)
 {
 	btn.innerHTML = isOn ? txtOff : txtOn;
 	requestJson({AudioReactive: isOn ? cmdOff : cmdOn});
+}
+
+// The TEMPO panel.
+//
+// The board pushes a compact tempo frame to the clients that asked for it
+// ({"tempo":true}), as fast as its own main loop manages - on a board with
+// this many LEDs on it, about 14 Hz. The numbers come from the board's ONE
+// arbitration between the deck and the estimator - the same function the
+// beat-strobe effect reads - so the panel and the wall cannot disagree
+// about where the beat is.
+//
+// The panel says three things: where the beat is (the four boxes), how
+// fast it is (the BPM), and where the beat comes from (the badge). The
+// three buttons are the controls: lock the grid, mark the downbeat, and
+// move the grid back onto the music.
+var tempo = {bpm:0, beat:0, prog:0, live:0, lock:0, db:0, dbset:0, plink:0, drift:0};
+var tempoAt = 0;      // when the last frame arrived, on the page's clock
+var tempoBox = -1;    // the box that is filling right now
+
+function tempoShow(id, on)
+{
+	var el = gId(id);
+	if (el) el.style.display = on ? "" : "none";
+}
+
+// Set one box's fill, but only when it has actually changed: the fill is a
+// custom property, and every change costs a style recalculation.
+function tempoBoxFill(i, f)
+{
+	var b = document.getElementsByClassName('tbox')[i];
+	if (!b) return;
+	if (b.style.getPropertyValue('--f') !== String(f))
+		b.style.setProperty('--f', f);
+}
+
+function tempoUpdate(t)
+{
+	tempo = t;
+	tempoAt = performance.now();
+	var live = !!t.live;
+	var proLink = !!t.plink;
+	var boxes = document.getElementsByClassName('tbox');
+	var cur = live ? Math.min(3, Math.max(0, (t.beat|0) - 1)) : -1;
+	tempoBox = cur;
+
+	// The BOXES: the beats already passed in this bar are white, the one
+	// we are in fills as the beat goes on, and the ones still to come are
+	// dark grey.
+	for (var i = 0; i < boxes.length; i++) {
+		var f = 0;
+		if (cur >= 0) {
+			if (i < cur) f = 1;
+			else if (i === cur) f = Math.max(0, Math.min(1, Number(t.prog)));
+		}
+		tempoBoxFill(i, f);
+		// The downbeat is beat one - but only when it is KNOWN at all:
+		// the deck's, or the one the user marked by hand.
+		var isDb = !!t.db && i === 0;
+		if (boxes[i].classList.contains('db') !== isDb)
+			boxes[i].classList.toggle('db', isDb);
+	}
+
+	// The rate.
+	gId('tempoBpm').textContent = live ? Number(t.bpm).toFixed(1) : '--.-';
+
+	// The DRIFT: only while the grid is LOCKED, because that is the only
+	// time it is the number worth reading - it is then the distance
+	// between the frozen grid and the music.
+	var drift = gId('tempoDrift');
+	if (live && t.lock) {
+		var d = Number(t.drift);
+		drift.textContent = (d < 0 ? "-" : "+") + Math.abs(d).toFixed(1) + "%";
+	} else {
+		drift.textContent = "";
+	}
+
+	// Where the beat comes from.
+	gId('tempoMode').textContent = proLink ? "PRO LINK" : "INTERNAL";
+
+	// The CONTROLS. In ProLink the deck IS the clock: there is nothing to
+	// lock, nothing to mark and nothing to correct, so the buttons go.
+	//
+	// Otherwise they are ALWAYS there. Not only while the beat is live: the
+	// estimator can be silent - no signal, or the board is receiving from
+	// another one - and a control that disappears when there is nothing to
+	// hear is a control that cannot be set up before the music starts. The
+	// board decides what a press means; the page only shows the state.
+	tempoShow('tempoLock', !proLink);
+	tempoShow('tempoDown', !proLink);
+	tempoShow('tempoCorr', !proLink);
+	gId('tempoLock').classList.toggle('on', !!t.lock);
+	gId('tempoDown').classList.toggle('on', !!t.dbset);
+}
+
+// The FILL, smooth.
+//
+// The board pushes the beat at whatever rate its own main loop manages, and
+// on a board with 57600 LEDs on it that is about 14 Hz - so the box would
+// step six times in a beat. The beat IS a clock though, so the box is filled
+// from the board's progress plus the time that has passed since the frame
+// arrived, at the display's own rate. The frame corrects it when it lands;
+// between frames the sweep is the clock's own.
+//
+// This is only the picture. The lock, the drift and the downbeat are the
+// board's numbers, and they are exact.
+function tempoTick(now)
+{
+	requestAnimationFrame(tempoTick);
+	if (!tempo.live || tempoBox < 0 || !(tempo.bpm > 0)) return;
+	var beatMs = 60000 / tempo.bpm;
+	var f = Number(tempo.prog) + (now - tempoAt) / beatMs;
+	if (f > 1) f = 1;
+	if (f < 0) f = 0;
+	tempoBoxFill(tempoBox, f);
+}
+requestAnimationFrame(tempoTick);
+
+// Lock the grid, or let it move again.
+//
+// The board's answer comes back in the next tempo frame, so the button
+// never guesses: it is lit from what the board last said.
+function tempoLock()
+{
+	requestJson({AudioReactive: tempo.lock ? {unlockTempo:true} : {lockTempo:true}});
+}
+
+// Mark the beat that is sounding NOW as beat one - or take the mark away.
+function tempoDown()
+{
+	requestJson({AudioReactive: tempo.dbset ? {clearDownbeat:true} : {setDownbeat:true}});
+}
+
+// Move the grid onto the music. The RATE is not touched, so a locked
+// clock stays locked at the tempo the user chose.
+function tempoCorrect()
+{
+	requestJson({AudioReactive: {syncTempo:true}});
 }
 
 function requestJson(command=null)

@@ -83,6 +83,29 @@
 				<output class="sliderbubble"></output>
 			</div>
 		</div>
+		<div id="tempowrap">
+			<p class="hd">Tempo</p>
+			<div class="trow">
+				<div class="tboxes">
+					<span class="tbox"></span>
+					<span class="tbox"></span>
+					<span class="tbox"></span>
+					<span class="tbox"></span>
+				</div>
+				<span id="tempoBpm">--.-</span>
+				<span id="tempoDrift"></span>
+				<span id="tempoMode" title="Where the beat comes from">INTERNAL</span>
+				<button id="tempoLock" class="tbtn" title="Lock the beat grid" onclick="tempoLock()">
+					<svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>
+				</button>
+				<button id="tempoDown" class="tbtn" title="Mark this beat as beat one" onclick="tempoDown()">
+					<svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 9.5 12 14l4.5-4.5"/><path d="M4 19h16"/></svg>
+				</button>
+				<button id="tempoCorr" class="tbtn" title="Move the grid onto the music" onclick="tempoCorrect()">
+					<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg>
+				</button>
+			</div>
+		</div>
 		<iframe id="liveview" src="about:blank"></iframe>
 	</div>
 </div>
