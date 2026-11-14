@@ -2427,12 +2427,19 @@ function tempoUpdate(t)
 	// The DRIFT: only while the grid is LOCKED, because that is the only
 	// time it is the number worth reading - it is then the distance
 	// between the frozen grid and the music.
+	//
+	// When the grid is not locked there is nothing to read, so the readout
+	// is HIDDEN rather than left empty - an empty readout still took up
+	// its width in the row, and left a gap in the panel.
 	var drift = gId('tempoDrift');
-	if (live && t.lock) {
+	var locked = !!t.lock;
+	if (live && locked) {
 		var d = Number(t.drift);
 		drift.textContent = (d < 0 ? "-" : "+") + Math.abs(d).toFixed(1) + "%";
+		drift.style.display = "";
 	} else {
 		drift.textContent = "";
+		drift.style.display = "none";
 	}
 
 	// Where the beat comes from.
@@ -2448,8 +2455,11 @@ function tempoUpdate(t)
 	// board decides what a press means; the page only shows the state.
 	tempoShow('tempoLock', !proLink);
 	tempoShow('tempoDown', !proLink);
-	tempoShow('tempoCorr', !proLink);
-	gId('tempoLock').classList.toggle('on', !!t.lock);
+	// The CORRECT button is the exception: there is nothing to correct
+	// until the grid has been LOCKED to the music, so it appears with the
+	// lock and disappears with it.
+	tempoShow('tempoCorr', !proLink && locked);
+	gId('tempoLock').classList.toggle('on', locked);
 }
 
 // The FILL, smooth.

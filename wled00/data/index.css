@@ -876,10 +876,10 @@ input[type=range]::-moz-range-thumb {
 }
 
 /* The drift is only interesting while the grid is LOCKED, so the readout
-   is empty the rest of the time - but its space is kept, so locking the
-   grid does not move anything under the user's eyes. */
+   is empty the rest of the time - and an empty readout takes no space at
+   all, rather than leaving a gap in the row. */
 #tempoDrift:empty {
-	visibility: hidden;
+	display: none;
 }
 
 #tempoMode {
