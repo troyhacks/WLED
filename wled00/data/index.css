@@ -817,11 +817,6 @@ input[type=range]::-moz-range-thumb {
 #tempowrap {
 	float: right;
 	margin-top: var(--bmt);
-	/* The brightness slider carries a theme icon that is translated 32 px to
-	   the LEFT of the slider, so it hangs 24 px outside its own column. This
-	   margin is that overhang: without it the icon lands on the panel's
-	   right-hand button and the two controls overlap. */
-	margin-right: 26px;
 }
 
 #tempowrap .trow {
@@ -932,6 +927,63 @@ input[type=range]::-moz-range-thumb {
 #tempowrap .tbtn.on {
 	color: var(--c-f);
 	background-color: var(--c-tbh);
+}
+
+/* The panel CENTRED in the title bar.
+ *
+ * Above 1250px there is room for the panel to sit in the MIDDLE of the
+ * bar - between the buttons on the left and the brightness column on the
+ * right - instead of pressed up against the brightness, which is how it
+ * used to sit: the theme icon on the brightness slider hangs 24px out of
+ * its column and there was nothing between it and the panel.
+ *
+ * The bar becomes a flex row and the panel takes the space that is left
+ * over, with its contents centred in it. So the panel ends up in the
+ * middle of the GAP, whatever the window is, and it moves with the
+ * window: the clearance on either side is the same.
+ *
+ * The right-hand padding is that theme icon again: it hangs 24px outside
+ * the brightness column, into the space the panel is in, so the padding
+ * keeps it clear of the panel's last button.
+ */
+@media all and (min-width: 1250px) {
+	.tab.top {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+	}
+
+	/* The buttons are floated, which leaves the group itself with no
+	   width at all - as a flex row they keep it, and they sit in the bar
+	   exactly where they did. */
+	.btnwrap {
+		order: 0;
+		flex: 0 0 auto;
+		display: flex;
+		align-items: flex-start;
+	}
+
+	#tempowrap {
+		order: 1;
+		flex: 1 1 auto;
+		float: none;
+		margin-right: 0;
+		padding-right: 26px;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	#briwrap {
+		order: 2;
+		flex: 0 0 auto;
+	}
+
+	/* The live view keeps the full width of the bar, on its own line. */
+	#liveview {
+		order: 3;
+		flex: 0 0 100%;
+	}
 }
 
 #picker {

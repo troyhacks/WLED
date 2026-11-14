@@ -2016,6 +2016,11 @@ function makeWS() {
 		lastUpdate = new Date();
 		clearErrorToast();
 		gId('connind').style.backgroundColor = "var(--c-l)";
+		// An ACKNOWLEDGEMENT is not a state: there is nothing in it to
+		// draw. Redrawing the interface for one is what makes a small
+		// command freeze the page for half a second - the segment view
+		// alone is the better part of that.
+		if (json.success) return;
 		// json object should contain json.info AND json.state (but may not)
 		// console.log("makeWS onmessage", json); //WLEDMM Debug
 		var i = json.info;
@@ -2445,7 +2450,6 @@ function tempoUpdate(t)
 	tempoShow('tempoDown', !proLink);
 	tempoShow('tempoCorr', !proLink);
 	gId('tempoLock').classList.toggle('on', !!t.lock);
-	gId('tempoDown').classList.toggle('on', !!t.dbset);
 }
 
 // The FILL, smooth.
@@ -2471,26 +2475,54 @@ function tempoTick(now)
 }
 requestAnimationFrame(tempoTick);
 
+// The tempo commands.
+//
+// They are answered by the board's TEMPO frame - the lock, the downbeat
+// and the drift are all in it - so they go out WITHOUT asking for the
+// interface state back. Asking for it brings the whole state back, and
+// the page rebuilds all of it: the segment view alone is half a second,
+// so a button that only moves the beat freezes the GUI for half a
+// second. The board's answer to these is an acknowledgement, which
+// carries nothing to draw.
+function tempoCmd(cmd)
+{
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify(cmd));
+		return;
+	}
+	// No socket: the HTTP path, and the same short answer.
+	fetch((loc?`http://${locip}`:'') + '/json/si', {
+		method: "POST",
+		headers: {"Content-type": "application/json; charset=UTF-8"},
+		body: JSON.stringify(cmd)
+	}).then(r => r.json()).catch(() => showErrorToast());
+}
+
 // Lock the grid, or let it move again.
 //
 // The board's answer comes back in the next tempo frame, so the button
 // never guesses: it is lit from what the board last said.
 function tempoLock()
 {
-	requestJson({AudioReactive: tempo.lock ? {unlockTempo:true} : {lockTempo:true}});
+	tempoCmd({AudioReactive: tempo.lock ? {unlockTempo:true} : {lockTempo:true}});
 }
 
-// Mark the beat that is sounding NOW as beat one - or take the mark away.
+// Mark the beat that is sounding NOW as beat one.
+//
+// This is a COMMAND, not a switch: it marks the beat that is sounding,
+// every time it is pressed. It does not light up, because it is not a
+// state - and the state it would be showing is already on the panel: the
+// beat box that is beat one carries the downbeat's outline.
 function tempoDown()
 {
-	requestJson({AudioReactive: tempo.dbset ? {clearDownbeat:true} : {setDownbeat:true}});
+	tempoCmd({AudioReactive: {setDownbeat:true}});
 }
 
 // Move the grid onto the music. The RATE is not touched, so a locked
 // clock stays locked at the tempo the user chose.
 function tempoCorrect()
 {
-	requestJson({AudioReactive: {syncTempo:true}});
+	tempoCmd({AudioReactive: {syncTempo:true}});
 }
 
 function requestJson(command=null)
