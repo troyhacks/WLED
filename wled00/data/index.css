@@ -797,10 +797,53 @@ input[type=range]::-moz-range-thumb {
 	display: var(--bhd);
 }
 
+/* The brightness column: the theme icon, the slider and the heading.
+ *
+ * It used to be 35px WIDER than the control it holds. The theme icon was
+ * pushed 24px OUTSIDE the column with a transform, and the invisible
+ * value bubble and a 32px pad sat to the RIGHT of the slider - so the
+ * heading was centred over 299px of column while the slider itself was
+ * only 230px wide and sat on the left of it. The group read as off to
+ * the left: 47px off the middle of the page on a phone, and the heading
+ * 39px right of the slider it labels on the desktop.
+ *
+ * The column is now exactly as wide as the group: the icon is INSIDE it,
+ * the bubble is out of the flow, and the heading is centred over the
+ * slider it names.
+ */
 #briwrap {
-	min-width: 267px;
+	min-width: 264px;
 	float: right;
 	margin-top: var(--bmt);
+	padding-right: 16px; /* a little air at the right of the bar */
+}
+
+/* The room for the theme icon, INSIDE the column.
+ *
+ * The track is a FIXED 230px wide, so the column (264px) is the track plus
+ * a 34px band for the icon. For the group - the icon and the track
+ * together - to be centred on the column's middle, the icon has to sit
+ * 4px in from the left of the band and the band has to end 4px before
+ * the right of the column: 4 + 24 (icon) + 2 (gap) + 230 (track) + 4
+ * = 264. The heading is centred over the column, so it lands on the
+ * group's centre too. */
+#briwrap .slider {
+	padding-left: 30px;
+	padding-right: 4px;
+}
+
+/* The theme icon, in that band, at the left of the group. */
+#briwrap .slider-icon {
+	left: 4px;
+}
+
+/* The value bubble sits at the END of the slider, over its handle,
+   instead of in the flow after it - where it was 36px of nothing. */
+#briwrap .sliderbubble {
+	position: absolute;
+	left: auto;
+	right: 0;
+	top: 4px;
 }
 
 /* The TEMPO panel: the beat, the rate, and the three controls.
@@ -933,18 +976,12 @@ input[type=range]::-moz-range-thumb {
  *
  * Above 1250px there is room for the panel to sit in the MIDDLE of the
  * bar - between the buttons on the left and the brightness column on the
- * right - instead of pressed up against the brightness, which is how it
- * used to sit: the theme icon on the brightness slider hangs 24px out of
- * its column and there was nothing between it and the panel.
+ * right - instead of pressed up against the brightness.
  *
  * The bar becomes a flex row and the panel takes the space that is left
  * over, with its contents centred in it. So the panel ends up in the
  * middle of the GAP, whatever the window is, and it moves with the
  * window: the clearance on either side is the same.
- *
- * The right-hand padding is that theme icon again: it hangs 24px outside
- * the brightness column, into the space the panel is in, so the padding
- * keeps it clear of the panel's last button.
  */
 @media all and (min-width: 1250px) {
 	.tab.top {
@@ -968,7 +1005,6 @@ input[type=range]::-moz-range-thumb {
 		flex: 1 1 auto;
 		float: none;
 		margin-right: 0;
-		padding-right: 26px;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -1727,6 +1763,11 @@ TD .checkmark, TD .radiomark {
 		margin: 0 auto !important;
 		float: none;
 		display: inline-block;
+		/* Here the column is CENTRED on the page, so the air at the
+		   right of the bar - which exists to keep the slider off the
+		   edge of the window on a wide screen - would push the group
+		   8px to the left of the middle. */
+		padding-right: 0;
 	}
 	.hd {
 		display: none !important;
@@ -1804,9 +1845,11 @@ TD .checkmark, TD .radiomark {
 		--tp: 126px;
 	}
 	/* The slider keeps its full width here: squeezed to its minimum it
-	   wraps its own contents and the header grows by 20px for nothing. */
+	   wraps its own contents and the header grows by 20px for nothing.
+	   The column is now exactly as wide as the icon and the slider, so
+	   there is nothing extra to keep. */
 	#briwrap {
-		min-width: 299px;
+		min-width: 264px;
 	}
 	#tempowrap {
 		float: none;
