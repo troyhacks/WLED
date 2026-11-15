@@ -128,6 +128,20 @@ button {
 	display: inline-block;
 }
 
+/* The "Quadrants" option's icon.  The icon font is a sparse subset - only
+   24 of its 1280 codes render at all - and it has no grid, so the option
+   that calls itself "Quadrants" gets a drawn one: four columns. */
+#fxopt svg {
+	display: inline-block;
+	vertical-align: middle;
+	width: 24px;
+	height: 24px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.5;
+	stroke-linejoin: round;
+}
+
 .on {
 	color: var(--c-g) !important;
 }

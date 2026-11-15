@@ -573,9 +573,10 @@ static const char _data_FX_MODE_STROBE_RAINBOW[] PROGMEM = "Strobe Rainbow@!;,!;
  *   to the live music; fabricating a 120 BPM when disconnected would make
  *   a half-loaded rig look "alive" when it isn't.
  *
- *   Slider[0] Flashes/Bar  = bucket 0..4 → 1, 2, 4, 8, 16 flashes per bar
- *                            (capped at 16 — beyond that the LED refresh rate
- *                            can't resolve individual flashes anyway)
+ *   Slider[0] Flashes/Bar  = bucket 0..2 → 1, 2 or 4 flashes per bar
+ *                            (capped at 4 — the "Quadrants" option cuts the
+ *                            layout into one region per flash, and more than
+ *                            four regions is not a sweep anyone can read)
  *   Slider[1] Attack       = 0   → instant 100% at the beat (no ramp-up before the flash)
  *                            255 → 50% ramp from 0% → 100% leading INTO the beat
  *   Slider[2] Decay        = 0   → instant 0% after the flash (single-frame peak)
@@ -586,18 +587,26 @@ static const char _data_FX_MODE_STROBE_RAINBOW[] PROGMEM = "Strobe Rainbow@!;,!;
  *                                   SEGCOLOR(0) on beats 2/3/4, SEGCOLOR(1) in dark gap
  *                             (with Palette mode, SEGCOLOR(2) becomes palette[0])
  *
- *   Checkbox[2] Palette     = OFF → colors come from color picker (3 slots above)
- *                             ON  → colors come from active palette:
- *                                   palette[tickIdx] for regular flashes
- *                                   palette[0]      for the downbeat (when Downbeat checked)
- *                                   SEGCOLOR(1) still used in the dark gap
+ *   Checkbox[2] Ignore Pro Link = OFF → the Pro Link deck's grid when a deck
+ *                             is connected, the estimator's grid otherwise
+ *                             ON  → always the estimator's grid
+ *
+ *   Checkbox[3] Quadrants   = OFF → the whole segment flashes at once
+ *                             ON  → the layout is cut into as many vertical
+ *                                   regions as there are flashes per bar - 1
+ *                                   (all of it), 2 (halves) or 4 (quarters) -
+ *                                   and each flash lights the NEXT region,
+ *                                   left to right, so the flash sweeps across
+ *                                   the wall and starts again at the left.
+ *
+ *   The regions are cut on the segment's own grid, so the number of columns
+ *   per region follows the matrix: a 16-wide matrix gives four 4-column
+ *   quarters, a 4-wide one gives four single columns.
  *
  *   Flash positions per bar (4/4 time, the user's confirmed pattern):
  *     1/bar  → 1 alternation, starts on the downbeat              (beat 1)
  *     2/bar  → 2 alternations                                     (beats 1, 3)
  *     4/bar  → 4 alternations                                     (beats 1, 2, 3, 4)
- *     8/bar  → 4 on-beat + 4 half-beat                            (1, 1.5, 2, 2.5, 3, 3.5, 4)
- *     16/bar → 16 evenly-spaced subdivisions                      (1, 1.25, 1.5, ..., 3.75, 4)
  *
  *   Beat 1 is ALWAYS a flash position, regardless of rate.
  *
@@ -644,104 +653,20 @@ static const char _data_FX_MODE_STROBE_RAINBOW[] PROGMEM = "Strobe Rainbow@!;,!;
  *   grid.  So the effect does not care which source it has.
  */
 static uint8_t bpmStrobeFlashesPerBarFromSlider(uint8_t v) {
-  // five monotonic buckets covering 0..255 ~ 51 slider units each.
-  // Capped at 16 flashes/bar — beyond that the LED refresh rate can't
-  // resolve individual flashes anyway (16/bar @ 120 BPM = 8 Hz, well within
-  // 30 fps render budget; 32/bar @ 120 BPM = 16 Hz starts aliasing).
+  // three monotonic buckets: 1, 2 or 4 flashes per bar.
+  // Capped at 4 because the "Quadrants" option cuts the layout into one
+  // region per flash - more than four regions is not a sweep anyone can
+  // read, and a strobe faster than 8 Hz stops being a strobe anyway.
+  //
+  // The bucket edges are where they were with five buckets (51 and 102), so
+  // a slider that was already at 4 flashes per bar stays there: the middle
+  // of the scale is still 4.  The default for a new segment is 255, which is
+  // 4 as well.
   if (v <  51) return 1;   // 0..50
   if (v < 102) return 2;   // 51..101
-  if (v < 153) return 4;   // 102..152
-  if (v < 204) return 8;   // 153..203
-  return 16;               // 204..255
+  return 4;                // 102..255
 }
 
-// ---------------------------------------------------------------------------
-// The BPM readout - the Beat Strobe's third option.
-//
-// The tempo is drawn as a transparent LovyanGFX sprite and blended over the
-// background with the PPA, which is how the Pro Link effect puts its text
-// on the screen.  The sprite is written straight into the bus buffer, so
-// the text lands on the screen (the bus canvas) the way it looks there and
-// not mirrored the way the segment's own pixels are.
-//
-// White, in the middle of the screen, about a tenth of its height tall.
-// ---------------------------------------------------------------------------
-#if defined(SOC_PPA_SUPPORTED)
-static void bpmStrobeDrawBpm(float bpm) {
-  Bus* bus = busses.getBus(0);
-  if (!bus || !bus->isOk()) return;
-  uint8_t* busPixelData = bus->getPixelData();
-  const uint32_t busPixelSize = bus->getPixelDataSize();
-  const int32_t scrW = (int32_t)SEGMENT.maxWidth;          // the screen: the bus canvas
-  const int32_t scrH = (int32_t)SEGMENT.maxHeight;
-  if (!busPixelData || scrW < 16 || scrH < 16) return;
-  if ((uint64_t)scrW * scrH * 3 > (uint64_t)busPixelSize) return;   // not an RGB888 canvas
-
-  // Font0 is 8 px tall, so this scale makes the text a tenth of the screen high.
-  const float scale = ((float)scrH / 10.0f) / 8.0f;
-  if (scale < 1.0f) return;
-
-  static LGFX_Sprite bpmSprite;
-  static int32_t sprW = 0, sprH = 0;
-  static bool    sprOk = false;
-
-  bpmSprite.setFont(&fonts::Font0);
-  bpmSprite.setTextSize(scale, scale);
-
-  char txt[16];
-  snprintf(txt, sizeof(txt), "%.1f", (double)bpm);
-
-  // The sprite is sized for the widest readout and never changes, so the
-  // text can be centred inside it and the buffer is allocated only once.
-  const int32_t needW = bpmSprite.textWidth("999.9");
-  const int32_t needH = bpmSprite.fontHeight();
-  if (needW < 1 || needH < 1) return;
-  if (!sprOk || sprW != needW || sprH != needH) {
-    bpmSprite.setPsram(true);
-    bpmSprite.setColorDepth(32);                            // ARGB8888 - the PPA can blend it
-    sprOk = bpmSprite.createSprite(needW, needH) != nullptr;
-    bpmSprite.setFont(&fonts::Font0);
-    bpmSprite.setTextSize(scale, scale);
-    bpmSprite.setTextColor(TFT_WHITE);
-    sprW = needW;
-    sprH = needH;
-  }
-  if (!sprOk) return;
-
-  bpmSprite.fillScreen(TFT_TRANSPARENT);
-  bpmSprite.drawString(txt, (sprW - bpmSprite.textWidth(txt)) / 2, 0);
-
-  // Blend the sprite over the background, in the middle of the screen.
-  const int32_t x = (scrW - sprW) / 2;
-  const int32_t y = (scrH - sprH) / 2;
-  ppa_blend_oper_config_t blend_config = {};
-  blend_config.in_bg.buffer = busPixelData;
-  blend_config.in_bg.pic_w = scrW;
-  blend_config.in_bg.pic_h = scrH;
-  blend_config.in_bg.block_w = sprW;
-  blend_config.in_bg.block_h = sprH;
-  blend_config.in_bg.block_offset_x = x;
-  blend_config.in_bg.block_offset_y = y;
-  blend_config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
-
-  blend_config.in_fg.buffer = (uint8_t*)bpmSprite.getBuffer();
-  blend_config.in_fg.pic_w = sprW;
-  blend_config.in_fg.pic_h = sprH;
-  blend_config.in_fg.block_w = sprW;
-  blend_config.in_fg.block_h = sprH;
-  blend_config.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_ARGB8888;
-
-  blend_config.out.buffer = busPixelData;
-  blend_config.out.buffer_size = busPixelSize;
-  blend_config.out.pic_w = scrW;
-  blend_config.out.pic_h = scrH;
-  blend_config.out.block_offset_x = x;
-  blend_config.out.block_offset_y = y;
-  blend_config.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
-  blend_config.mode = PPA_TRANS_MODE_BLOCKING;
-  ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_blend(ppa_blend_handle, &blend_config));
-}
-#endif // SOC_PPA_SUPPORTED
 
 uint16_t mode_bpm_strobe(void) {
   // ---- the beat source -------------------------------------------------
@@ -804,6 +729,7 @@ uint16_t mode_bpm_strobe(void) {
   const float    attackStrength = (float)SEGMENT.intensity / 255.0f;  // 0..1
   const float    decayStrength  = (float)SEGMENT.custom1   / 255.0f;  // 0..1
   const bool     downbeatColor  = SEGMENT.check1;                      // SEGCOLOR(2) on beat 1
+  const bool     quadrantMode   = SEGMENT.check3;                      // sweep left to right
 
   // ---- Beat classification & phase ----
   // The source publishes the beat-in-measure (1..4, 1 = downbeat — the same
@@ -889,19 +815,43 @@ uint16_t mode_bpm_strobe(void) {
   const uint8_t  blendAmt   = (uint8_t)((1.0f - intensity) * 255.0f + 0.5f);
   const uint32_t fillColor  = color_blend(peakColor, SEGCOLOR(1), blendAmt);
 
-  for (uint32_t i = 0; i < SEGLEN; i++) {                              // uint32_t matches setPixelColor(uint32_t, uint32_t) unambiguously
-    SEGMENT.setPixelColor(i, fillColor);
-  }
-
-  // ---- The BPM readout (the third option) --------------------------------
+  // ---- The regions (the "Quadrants" option) --------------------------------
   //
-  // The tempo is drawn as a transparent LovyanGFX sprite and blended over
-  // the flash with the PPA - the same trick the Pro Link effect uses for
-  // its text.  White, in the middle of the screen, and about a tenth of
-  // the screen's height tall.
-  #if defined(SOC_PPA_SUPPORTED)
-  if (SEGMENT.check3) bpmStrobeDrawBpm(srcBpm);
-  #endif
+  // The layout is cut into as many vertical regions as there are flashes per
+  // bar - 1 (all of it), 2 (halves) or 4 (quarters) - and each flash lights
+  // the NEXT one, left to right, so the flash sweeps across the wall and
+  // starts again at the left.  The regions are cut on the segment's own grid,
+  // so the number of columns per region follows the matrix: a 16-wide matrix
+  // gives four 4-column quarters, a 4-wide one gives four single columns.
+  //
+  // The 2D path draws with setPixelColorXY(), which is the segment's own
+  // mapping: it knows the mirror, transpose and reverse flags, and it puts
+  // the pixel where the matrix says it is.
+  if (quadrantMode && flashesPerBar > 1) {
+    const uint16_t region = (uint16_t)(tickIdx % flashesPerBar);
+    if (SEGMENT.is2D()) {
+      const uint16_t cols = SEGMENT.virtualWidth();
+      const uint16_t rows = SEGMENT.virtualHeight();
+      // Region r covers the columns [cols*r/N, cols*(r+1)/N).
+      const uint16_t rStart = (uint16_t)(((uint32_t)cols * region) / flashesPerBar);
+      const uint16_t rEnd   = (uint16_t)(((uint32_t)cols * (region + 1)) / flashesPerBar);
+      for (uint16_t y = 0; y < rows; y++) {
+        for (uint16_t x = 0; x < cols; x++) {
+          SEGMENT.setPixelColorXY(x, y, (x >= rStart && x < rEnd) ? fillColor : SEGCOLOR(1));
+        }
+      }
+    } else {
+      // A strip, not a matrix: the same division along its length.
+      for (uint32_t i = 0; i < SEGLEN; i++) {
+        const uint16_t sec = (uint16_t)(((uint32_t)i * flashesPerBar) / SEGLEN);
+        SEGMENT.setPixelColor(i, (sec == region) ? fillColor : SEGCOLOR(1));
+      }
+    }
+  } else {
+    for (uint32_t i = 0; i < SEGLEN; i++) {                            // uint32_t matches setPixelColor(uint32_t, uint32_t) unambiguously
+      SEGMENT.setPixelColor(i, fillColor);
+    }
+  }
 
   return FRAMETIME;
 }
@@ -909,7 +859,7 @@ uint16_t mode_bpm_strobe(void) {
 // The second group is the COLOUR-SLIDER labels - the effect's three colour
 // slots: the flash, the off colour and the downbeat.  The third group is
 // the palette list (none) and the fourth the default palette.
-static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link,Show BPM;Flash,Off,Downbeat;;01;ix=255,c1=255,o1=0,o2=0,o3=0";
+static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link,Quadrants;Flash,Off,Downbeat;;01;sx=255,ix=255,c1=255,o1=0,o2=0,o3=0";
 
 
 /*

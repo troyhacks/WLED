@@ -2262,6 +2262,17 @@ function setEffectParameters(idx)
 			if (5+i<slOnOff.length && slOnOff[5+i]!=='') {
 				gId('opt'+i).classList.remove('hide');
 				gId('optLabel'+i).innerHTML = slOnOff[5+i]=="!" ? 'Option' : slOnOff[5+i].substr(0,16);
+				// The icon font has no grid glyph, so the option that calls
+				// itself "Quadrants" gets a drawn one instead of the heart.
+				if (i == 2) {
+					const isQ = (slOnOff[5+i] === "Quadrants");
+					gId('optIcon2').classList.toggle('hide', isQ);
+					// The SVG is found by its class, not its id: the build
+					// runs SVGO over inline SVG, and SVGO strips an id that
+					// nothing inside the SVG refers to.
+					const qicon = document.querySelector('#opt2 svg');
+					if (qicon) qicon.classList.toggle('hide', !isQ);
+				}
 			} else
 				gId('opt'+i).classList.add('hide');
 		}
