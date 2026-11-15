@@ -549,10 +549,17 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   }
 
   {
-    // First attempt: 15 s.  Cold-boot monitors (especially behind KVM switches
-    // or with slow EDID) can take >5 s before HPD asserts.  Watchdog isn't
-    // armed during setup(), so a long wait is safe here.
-    const uint32_t timeout_ms = 15000, poll_ms = 200;
+    // The wait for the HDMI link: 5 s per attempt.  It used to be 15 s,
+    // because cold-boot monitors (especially behind KVM switches, or with a
+    // slow EDID) can take more than 5 s before HPD asserts - but a board
+    // with no monitor attached then sat there for half a minute before it
+    // gave up and carried on.  It was lowered to 5 s at the user's request
+    // (2026-11-15); put it back if a slow monitor needs the longer wait.
+    //
+    // There are two attempts: this one, and the one inside the rebuild
+    // below, so the worst case is 10 s rather than 30 s.  Watchdog isn't
+    // armed during setup(), so the wait itself is safe.
+    const uint32_t timeout_ms = 5000, poll_ms = 200;
     uint32_t elapsed = 0;
     bool ready = false;
     USER_PRINT("Waiting for HDMI link");
