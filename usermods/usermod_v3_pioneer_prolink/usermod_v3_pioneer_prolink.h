@@ -2350,6 +2350,11 @@ public:
     } else {
       status = "Listening...";
     }
+    // Whether the board is allowed to talk to the decks is the first thing
+    // to know when a deck is misbehaving, so it is on the first line.  It
+    // also says why the phrase line below is missing: the phrase comes from
+    // the metadata, and in safe mode there is no metadata.
+    if (safeMode) status += " (safe mode)";
     infoArr.add(status);
 
     // The pane is for reading at a glance, and it had become a report: the
