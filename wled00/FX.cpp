@@ -828,7 +828,18 @@ uint16_t mode_bpm_strobe(void) {
   // mapping: it knows the mirror, transpose and reverse flags, and it puts
   // the pixel where the matrix says it is.
   if (quadrantMode && flashesPerBar > 1) {
-    const uint16_t region = (uint16_t)(tickIdx % flashesPerBar);
+    // The flash PEAKS at the tick boundary: the last quarter of a tick is
+    // the ramp UP into the next one, and the first quarter of the next tick
+    // is the ramp DOWN from the peak at its start.  So a flash belongs to
+    // the tick it peaks in - the same rule the downbeat colour already
+    // follows.  Without it the rising half of a flash was drawn on one
+    // region and the falling half on the next, and the light handed over
+    // at the peak: a transition from light to light, not a flash.
+    uint16_t flashTick = tickIdx;
+    if (attackDur > 0.0f && withinTick > 1.0f - attackDur) {
+      flashTick = (uint16_t)((tickIdx + 1) % flashesPerBar);
+    }
+    const uint16_t region = (uint16_t)(flashTick % flashesPerBar);
     if (SEGMENT.is2D()) {
       const uint16_t cols = SEGMENT.virtualWidth();
       const uint16_t rows = SEGMENT.virtualHeight();
