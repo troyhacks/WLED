@@ -5567,7 +5567,12 @@ void arAnalysisTask(void * parameter)
       tf.driftBpm     = arTempoDriftBpm();
       tf.hold         = arTempoUserHold() ? 1 : 0;
       tf.beatInBar    = arTempoBeatInBar();
-      tf.valid        = arTempoValid() ? 1 : 0;
+      // The tracker being switched off is the same as having no estimate:
+      // the frame would otherwise stay FROZEN at the last beat and the
+      // effects that lock to it would freeze with it.  A frozen frame is
+      // not a beat, so it is published as invalid and the effects fall
+      // back to their own clocks.
+      tf.valid        = (arFrameSettings.tempoEnabled && arTempoValid()) ? 1 : 0;
       tf.beatInMeasure = arTempoBeatInMeasure();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;

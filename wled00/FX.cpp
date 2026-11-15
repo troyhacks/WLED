@@ -475,6 +475,85 @@ static long map2(long x, long in_min, long in_max, long out_min, long out_max)
 }
 
 
+// ---------------------------------------------------------------------------
+// The beat clock.
+//
+// Every effect that moves with the music asks the SAME question, and gets
+// the SAME answer.  arGetBeatSource() (wled00/ar_publish.cpp) is the ONE
+// arbitration between the Pioneer deck and the AudioReactive estimator, so
+// two effects on the wall cannot disagree about where the beat is.
+//
+// The clock turns that answer into what an effect needs:
+//
+//   beat        1..4, 1 = the downbeat
+//   beatPhase   0..1 through the current BEAT
+//   barPhase    0..1 through the current BAR (four beats)
+//   bpm         the rate
+//   live        1 when the clock is the MUSIC'S
+//
+// When there is no beat, live is 0 and the effect runs its OWN clock - the
+// one it has always run on.  A board with the audio off must still be
+// useful, so nothing here ever fabricates a rate.  The Beat Strobe's rule
+// (no rate, no picture) is kept by NOT answering, not by guessing.
+// ---------------------------------------------------------------------------
+struct BeatClock {
+  float    bpm;
+  float    beatPhase;      // 0..1 through the current beat
+  float    barPhase;       // 0..1 through the bar (four beats)
+  uint8_t  beat;           // 1..4, 1 = downbeat; 0 when there is no beat
+  uint8_t  live;           // 1 when the clock is the music's
+  uint8_t  downbeatKnown;  // 1 when beat 1 is the deck's, or the user's
+  uint8_t  fromProLink;    // 1 when the deck is driving
+};
+
+static BeatClock beatClock(bool ignoreProLink = false) {
+  BeatClock c = {};
+  const ArBeatSource b = arGetBeatSource(ignoreProLink);
+  if (b.live == 0 || b.beatInBar < 1 || b.beatInBar > 4) return c;
+  c.bpm           = b.bpm;
+  c.beat          = b.beatInBar;
+  c.beatPhase     = constrain(b.beatProgress, 0.0f, 1.0f);
+  c.barPhase      = ((float)(b.beatInBar - 1u) + c.beatPhase) * 0.25f;
+  c.live          = 1;
+  c.downbeatKnown = b.downbeatKnown;
+  c.fromProLink   = b.fromProLink;
+  return c;
+}
+
+// The phase of one cycle, 0..1.
+//
+// With a beat, the cycle is the MUSIC'S: a beat or a bar, as the caller
+// asks, measured on the grid - so the pattern lands on the beat and
+// repeats.  Without one, the cycle is the effect's own period, exactly as
+// it was before the beat existed.
+//
+// The phase JUMPS when the beat arrives or leaves: the fallback sits on
+// millis(), the music's sits on the grid.  It happens once, at the moment
+// the rig locks to the music, and that is the moment you want it.
+static float beatCyclePhase(const BeatClock& c, uint32_t fallbackPeriodMs, uint8_t beatsPerCycle) {
+  if (c.live) {
+    return (beatsPerCycle >= 4u) ? c.barPhase : c.beatPhase;
+  }
+  if (fallbackPeriodMs == 0) return 0.0f;
+  return (float)(strip.now % fallbackPeriodMs) / (float)fallbackPeriodMs;
+}
+
+// The downbeat accent: 1.0 on the downbeat, falling to 0 over the decay.
+//
+// It is 0 whenever there is no beat, so an effect that ADDS it to its own
+// output changes nothing at all when the audio is off.  The accent is a
+// bonus, never a change of behaviour.
+//
+// The decay is in MILLISECONDS, not in beats, so the accent looks the same
+// at 90 BPM and at 175.
+static float downbeatAccent(const BeatClock& c, uint32_t decayMs = 300) {
+  if (c.live == 0 || c.beat != 1) return 0.0f;
+  const float bpm   = (c.bpm > 1.0f) ? c.bpm : 60.0f;
+  const float age   = c.beatPhase * (60000.0f / bpm);
+  if (age >= (float)decayMs) return 0.0f;
+  return 1.0f - age / (float)decayMs;
+}
+
 static um_data_t* getAudioData() {
   um_data_t *um_data;
   if (!usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)) {
@@ -501,12 +580,26 @@ static const char _data_FX_MODE_STATIC[] PROGMEM = "Solid";
  * if(strobe == true) then create a strobe effect
  */
 uint16_t blink(uint32_t color1, uint32_t color2, bool strobe, bool do_palette) {
-  uint32_t cycleTime = (255 - SEGMENT.speed)*20;
-  uint32_t onTime = FRAMETIME;
-  if (!strobe) onTime += ((cycleTime * SEGMENT.intensity) >> 8);
-  cycleTime += FRAMETIME*2;
-  uint32_t it = strip.now / cycleTime;
-  uint32_t rem = strip.now % cycleTime;
+  // The cycle.
+  //
+  // With a beat it is ONE BEAT: the blink goes on and off with the
+  // music, and the duty cycle is a fraction of the beat.  Without one it
+  // is the effect's own cycle, exactly as it was.
+  uint32_t it, rem, onTime;
+  const BeatClock clk = beatClock();
+  if (clk.live) {
+    const uint32_t beatMs = (uint32_t)(60000.0f / ((clk.bpm > 1.0f) ? clk.bpm : 60.0f));
+    it     = clk.beat;                                       // 1..4: a new value every beat
+    rem    = (uint32_t)(clk.beatPhase * (float)beatMs);
+    onTime = FRAMETIME + (strobe ? 0 : ((beatMs * SEGMENT.intensity) >> 8));
+  } else {
+    uint32_t cycleTime = (255 - SEGMENT.speed)*20;
+    onTime = FRAMETIME;
+    if (!strobe) onTime += ((cycleTime * SEGMENT.intensity) >> 8);
+    cycleTime += FRAMETIME*2;
+    it  = strip.now / cycleTime;
+    rem = strip.now % cycleTime;
+  }
 
   bool on = false;
   if (it != SEGENV.step //new iteration, force on state for one frame, even if set time is too brief
@@ -534,7 +627,7 @@ uint16_t blink(uint32_t color1, uint32_t color2, bool strobe, bool do_palette) {
 uint16_t mode_blink(void) {
   return blink(SEGCOLOR(0), SEGCOLOR(1), false, true);
 }
-static const char _data_FX_MODE_BLINK[] PROGMEM = "Blink@!,Duty cycle;!,!;!;01";
+static const char _data_FX_MODE_BLINK[] PROGMEM = "Blink@Fallback speed,Duty cycle;!,!;!;01";
 
 
 /*
@@ -543,7 +636,7 @@ static const char _data_FX_MODE_BLINK[] PROGMEM = "Blink@!,Duty cycle;!,!;!;01";
 uint16_t mode_blink_rainbow(void) {
   return blink(SEGMENT.color_wheel(SEGENV.call & 0xFF), SEGCOLOR(1), false, false);
 }
-static const char _data_FX_MODE_BLINK_RAINBOW[] PROGMEM = "Blink Rainbow@Frequency,Blink duration;!,!;!;01";
+static const char _data_FX_MODE_BLINK_RAINBOW[] PROGMEM = "Blink Rainbow@Fallback speed,Blink duration;!,!;!;01";
 
 
 /*
@@ -552,7 +645,7 @@ static const char _data_FX_MODE_BLINK_RAINBOW[] PROGMEM = "Blink Rainbow@Frequen
 uint16_t mode_strobe(void) {
   return blink(SEGCOLOR(0), SEGCOLOR(1), true, true);
 }
-static const char _data_FX_MODE_STROBE[] PROGMEM = "Strobe@!;!,!;!;01";
+static const char _data_FX_MODE_STROBE[] PROGMEM = "Strobe@Fallback speed;!,!;!;01";
 
 
 /*
@@ -873,16 +966,283 @@ uint16_t mode_bpm_strobe(void) {
 static const char _data_FX_MODE_PRO_LINK_STROBE[] PROGMEM = "Beat Strobe ☾🐺@Flashes per Bar,Attack,Decay,,,Downbeat,Ignore Pro Link,Quadrants;Flash,Off,Downbeat;;01;sx=255,ix=255,c1=255,o1=0,o2=0,o3=0";
 
 
+// ---------------------------------------------------------------------------
+// The beat counter.
+//
+// The beat-in-bar, made visible.  Four markers, one for each beat of the
+// bar, and the one the music is on is lit while the other three sit at the
+// off colour.  On a matrix they are four marks on a ring around the
+// middle - a clock face - and on a strip they are four zones along it.
+//
+// This is the one effect that exists to SHOW the beat-in-bar, so it is the
+// one place the downbeat matters: with the "Downbeat" option on, beat one
+// is drawn in the third colour slot, and only when the downbeat is KNOWN -
+// the deck's, or the one the user marked by hand.  When it is not known
+// the four beats are four beats and nothing more.
+//
+// With no beat at all, the four markers are shown and NONE of them is lit.
+// The instrument is there; it is shown as not tracking.  It is never shown
+// as something it is not, and a rate is never invented.
+//
+//   Slider[0] Size     = the size of the lit marker: on a strip the length
+//                        of the lit part of the zone, on a matrix the
+//                        radius of the mark
+//   Slider[1] Progress = the length of the progress bar that shrinks
+//                        towards the beat; 0 = no progress bar
+//   Checkbox[1] Downbeat = ON -> the downbeat is drawn in colour slot 3
+//   Checkbox[2] Circle   = ON -> the markers sit on a ring around the
+//                        middle of the canvas; OFF -> in the four corners
+// ---------------------------------------------------------------------------
+static uint32_t beatMarkerColour(bool isDownbeat, bool downbeatKnown, bool useDownbeat) {
+  if (isDownbeat && useDownbeat && downbeatKnown) return SEGCOLOR(2);
+  return SEGCOLOR(0);
+}
+
+uint16_t mode_beat_counter(void) {
+  const BeatClock clk = beatClock();
+  // The beat the music is on.  Zero when there is no beat: nothing is lit.
+  const uint8_t beat = clk.live ? clk.beat : 0;
+  const bool useDownbeat = SEGMENT.check1;
+  const bool circle = SEGMENT.check2;
+  // The size of the lit marker.  On a strip it is a length in pixels; on a
+  // matrix it is scaled to the canvas.
+  const uint8_t size = SEGMENT.speed;
+  // The progress bar: it is full at the beat and shrinks away over it, so
+  // the beat itself is the moment the bar is longest.
+  const uint8_t progLen = SEGMENT.intensity;
+  const float  progress = 1.0f - clk.beatPhase;   // 1 at the beat, 0 at the next
+
+  if (!SEGMENT.is2D()) {
+    // Four zones along the strip.  The zone of the current beat is lit
+    // from its start, and the lit part SHRINKS over the beat, so it is
+    // longest exactly on the beat.
+    for (uint32_t i = 0; i < SEGLEN; i++) {
+      const uint8_t zone = (uint8_t)((i * 4u) / SEGLEN);
+      const uint32_t zStart = (uint32_t)(((uint32_t)zone * SEGLEN) / 4u);
+      const uint32_t zEnd   = (uint32_t)(((uint32_t)(zone + 1u) * SEGLEN) / 4u);
+      const uint8_t  b      = zone + 1u;
+      uint32_t col = SEGCOLOR(1);
+      if (b == beat) {
+        uint32_t lit = zEnd - zStart;
+        if (size > 0) {
+          const uint32_t maxLit = (uint32_t)size * (zEnd - zStart) / 255u;
+          if (maxLit > 0 && maxLit < lit) lit = maxLit;
+        }
+        lit = (uint32_t)((float)lit * progress);
+        if (i < zStart + lit) {
+          col = beatMarkerColour(b == 1, clk.downbeatKnown, useDownbeat);
+        }
+      }
+      SEGMENT.setPixelColor(i, col);
+    }
+    return FRAMETIME;
+  }
+
+  // ---- a matrix: four marks, on a ring or in the corners ----------------
+  const uint16_t cols = SEGMENT.virtualWidth();
+  const uint16_t rows = SEGMENT.virtualHeight();
+  const int32_t  cx   = cols / 2;
+  const int32_t  cy   = rows / 2;
+  const int32_t  rad  = (int32_t)((float)min((uint32_t)cols, (uint32_t)rows) * 0.32f);
+  const int32_t  mark = (int32_t)(((uint32_t)size * (uint32_t)min((uint32_t)cols, (uint32_t)rows)) / 1020u);
+  // The four directions: beat one at the top, then clockwise, so the
+  // markers read as a clock face.
+  static const int8_t dx[4] = { 0, 1, 0, -1};
+  static const int8_t dy[4] = {-1, 0, 1, 0};
+
+  // The canvas starts again from the off colour, so a mark that moves
+  // leaves nothing behind it.
+  SEGMENT.fill(SEGCOLOR(1));
+
+  // Where the marker for a beat is.
+  auto markerAt = [&](uint8_t b, int32_t* mx, int32_t* my) {
+    if (circle) {
+      *mx = cx + dx[b - 1] * rad;
+      *my = cy + dy[b - 1] * rad;
+    } else {
+      *mx = (dx[b - 1] < 0) ? mark : (int32_t)cols - 1 - mark;
+      *my = (dy[b - 1] < 0) ? mark : (int32_t)rows - 1 - mark;
+      if (dx[b - 1] == 0) *mx = cx;
+      if (dy[b - 1] == 0) *my = cy;
+    }
+    if (*mx < 0) *mx = 0; if (*mx >= (int32_t)cols) *mx = cols - 1;
+    if (*my < 0) *my = 0; if (*my >= (int32_t)rows) *my = rows - 1;
+  };
+
+  // The OFF marks go down first and the LIT one goes down LAST.  On a
+  // small canvas two markers can share a pixel, and the one that is lit
+  // must not be painted over by one that is not.
+  for (uint8_t b = 1; b <= 4; b++) {
+    if (b == beat) continue;
+    int32_t mx, my;
+    markerAt(b, &mx, &my);
+    if (mark > 0) SEGMENT.fillCircle(mx, my, mark, SEGCOLOR(1), false);
+    else          SEGMENT.setPixelColorXY((int)mx, (int)my, SEGCOLOR(1));
+  }
+  if (beat != 0) {
+    int32_t mx, my;
+    markerAt(beat, &mx, &my);
+    const uint32_t col = beatMarkerColour(beat == 1, clk.downbeatKnown, useDownbeat);
+    if (mark > 0) SEGMENT.fillCircle(mx, my, mark, col, false);
+    else          SEGMENT.setPixelColorXY((int)mx, (int)my, col);
+  }
+
+  // The progress: a disc at the middle that is full at the beat and
+  // shrinks away over it.
+  if (progLen > 0 && beat != 0) {
+    const int32_t pr = (int32_t)(((uint32_t)(rad > 1 ? rad - 1 : 0) * (uint32_t)progLen * (uint32_t)(progress * 255.0f)) / 65025u);
+    if (pr > 0) {
+      SEGMENT.fillCircle(cx, cy, pr, beatMarkerColour(beat == 1, clk.downbeatKnown, useDownbeat), false);
+    }
+  }
+
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_BEAT_COUNTER[] PROGMEM = "Beat Counter ☾🐺@Size,Progress,,,Downbeat,Circle;Beat,Off,Downbeat;;12;sx=128,ix=96,c1=255,o1=1,o2=1";
+
+
+// ---------------------------------------------------------------------------
+// The phrase.
+//
+// Sixteen steps to the phrase - four bars of four beats - and the step the
+// music is on is lit while the other fifteen sit at the off colour.
+//
+// The step comes from the estimator's own SIXTEEN-beat measure when it is
+// driving, because that measure is the one the user can move: the tracker's
+// measure is the sixteen beats it has counted, and its start can be set by
+// hand.  With a deck driving there is no such measure, so the position is
+// counted here - a bar is four beats, and the phrase is four bars.
+//
+// With no beat at all, the sixteen markers are shown and NONE of them is
+// lit.  The instrument is there; it is shown as not tracking.
+// ---------------------------------------------------------------------------
+uint16_t mode_phrase(void) {
+  const BeatClock clk = beatClock();
+
+  // The step, 0..15, or 0xFF when there is no beat at all.
+  uint8_t step = 0xFF;
+  if (clk.live) {
+    // The estimator's measure, when the estimator is the one driving.
+    ArTempoFrame tf;
+    if (!clk.fromProLink && arCopyTempo(&tf) && tf.valid != 0 &&
+        tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
+      step = (uint8_t)(tf.beatInMeasure - 1u);
+    } else {
+      // The deck is driving: count the bars here.  A bar is four beats and
+      // the phrase is four bars, and the bar is counted when the beat
+      // index wraps from four back to one.
+      const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
+      if (lastBeat != clk.beat) {
+        if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;   // one bar
+        SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
+      }
+      const uint32_t bars = SEGENV.aux0;
+      step = (uint8_t)(((bars % 4u) * 4u) + (uint32_t)(clk.beat - 1u));
+    }
+  }
+
+  const uint8_t size = SEGMENT.speed;
+  const uint8_t progLen = SEGMENT.intensity;
+  const float  progress = 1.0f - clk.beatPhase;
+
+  if (!SEGMENT.is2D()) {
+    // Sixteen zones along the strip.
+    for (uint32_t i = 0; i < SEGLEN; i++) {
+      const uint8_t z = (uint8_t)((i * 16u) / SEGLEN);
+      const uint32_t zStart = (uint32_t)(((uint32_t)z * SEGLEN) / 16u);
+      const uint32_t zEnd   = (uint32_t)(((uint32_t)(z + 1u) * SEGLEN) / 16u);
+      uint32_t col = SEGCOLOR(1);
+      if (z == step) {
+        uint32_t lit = zEnd - zStart;
+        if (size > 0) {
+          const uint32_t maxLit = (uint32_t)size * (zEnd - zStart) / 255u;
+          if (maxLit > 0 && maxLit < lit) lit = maxLit;
+        }
+        lit = (uint32_t)((float)lit * progress);
+        if (i < zStart + lit) col = SEGCOLOR(0);
+      }
+      SEGMENT.setPixelColor(i, col);
+    }
+    return FRAMETIME;
+  }
+
+  // ---- a matrix: sixteen marks on a ring --------------------------------
+  const uint16_t cols = SEGMENT.virtualWidth();
+  const uint16_t rows = SEGMENT.virtualHeight();
+  const int32_t  cx   = cols / 2;
+  const int32_t  cy   = rows / 2;
+  const int32_t  rad  = (int32_t)((float)min((uint32_t)cols, (uint32_t)rows) * 0.36f);
+  const int32_t  mark = (int32_t)(((uint32_t)size * (uint32_t)min((uint32_t)cols, (uint32_t)rows)) / 2040u);
+
+  // The canvas starts again from the off colour, so a mark that moves
+  // leaves nothing behind it.
+  SEGMENT.fill(SEGCOLOR(1));
+
+  // Where the mark for a step is.  Sixteen marks around the circle, the
+  // first at the top.  The angle is in the 16-bit phase the integer sine
+  // works in, so there is no float trigonometry in a frame that runs
+  // thirty times a second.
+  auto markAt = [&](uint8_t st, int32_t* mx, int32_t* my) {
+    const int32_t  deg = -90 + (int32_t)st * 360 / 16;
+    const uint16_t th  = (uint16_t)(((uint32_t)(deg + 360) * 65536u) / 360u);
+    *mx = cx + (((int32_t)cos16_t(th) * rad) >> 15);
+    *my = cy + (((int32_t)sin16_t(th) * rad) >> 15);
+    if (*mx < 0) *mx = 0; if (*mx >= (int32_t)cols) *mx = cols - 1;
+    if (*my < 0) *my = 0; if (*my >= (int32_t)rows) *my = rows - 1;
+  };
+
+  // The OFF marks go down first and the LIT one goes down LAST.  On a
+  // small canvas two steps can share a pixel, and the one that is lit
+  // must not be painted over by one that is not.
+  for (uint8_t st = 0; st < 16; st++) {
+    if (st == step) continue;
+    int32_t mx, my;
+    markAt(st, &mx, &my);
+    if (mark > 0) SEGMENT.fillCircle(mx, my, mark, SEGCOLOR(1), false);
+    else          SEGMENT.setPixelColorXY((int)mx, (int)my, SEGCOLOR(1));
+  }
+  if (step != 0xFF) {
+    int32_t mx, my;
+    markAt(step, &mx, &my);
+    if (mark > 0) SEGMENT.fillCircle(mx, my, mark, SEGCOLOR(0), false);
+    else          SEGMENT.setPixelColorXY((int)mx, (int)my, SEGCOLOR(0));
+  }
+
+  // The progress: a disc at the middle that is full at the beat.
+  if (progLen > 0 && step != 0xFF) {
+    const int32_t pr = (int32_t)(((uint32_t)(rad > 1 ? rad - 1 : 0) * (uint32_t)progLen * (uint32_t)(progress * 255.0f)) / 65025u);
+    if (pr > 0) SEGMENT.fillCircle(cx, cy, pr, SEGCOLOR(0), false);
+  }
+
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_PHRASE[] PROGMEM = "Phrase ☾🐺@Size,Progress,,,;Step,Off,;12;sx=64,ix=96,c1=255";
+
+
 /*
  * Color wipe function
  * LEDs are turned on (color1) in sequence, then turned off (color2) in sequence.
  * if (bool rev == true) then LEDs are turned off in reverse order
  */
 uint16_t color_wipe(bool rev, bool useRandomColors) {
-  uint32_t cycleTime = 750 + (255 - SEGMENT.speed)*150;
-  uint32_t perc = strip.now % cycleTime;
-  uint16_t prog = (perc * 65535) / cycleTime;
-  bool back = (prog > 32767);
+  // The wipe's position.
+  //
+  // With a beat it is the BAR's position: one sweep per bar, and the
+  // sweep LANDS on the downbeat, which is the whole point - the wall
+  // arrives where the music is, not merely at the right average speed.
+  // Without one it is the effect's own cycle, exactly as it was.
+  uint16_t prog;
+  bool back;
+  const BeatClock clk = beatClock();
+  if (clk.live) {
+    prog = (uint16_t)(clk.barPhase * 65535.0f);
+    back = (prog > 32767);
+  } else {
+    const uint32_t cycleTime = 750 + (255 - SEGMENT.speed)*150;
+    const uint32_t perc = strip.now % cycleTime;
+    prog = (perc * 65535) / cycleTime;
+    back = (prog > 32767);
+  }
   if (back) {
     prog -= 32767;
     if (SEGENV.step == 0) SEGENV.step = 1;
@@ -936,7 +1296,7 @@ uint16_t color_wipe(bool rev, bool useRandomColors) {
 uint16_t mode_color_wipe(void) {
   return color_wipe(false, false);
 }
-static const char _data_FX_MODE_COLOR_WIPE[] PROGMEM = "Wipe@!,!;!,!;!";
+static const char _data_FX_MODE_COLOR_WIPE[] PROGMEM = "Wipe@Fallback speed,!;!,!;!";
 
 
 /*
@@ -945,7 +1305,7 @@ static const char _data_FX_MODE_COLOR_WIPE[] PROGMEM = "Wipe@!,!;!,!;!";
 uint16_t mode_color_sweep(void) {
   return color_wipe(true, false);
 }
-static const char _data_FX_MODE_COLOR_SWEEP[] PROGMEM = "Sweep@!,!;!,!;!";
+static const char _data_FX_MODE_COLOR_SWEEP[] PROGMEM = "Sweep@Fallback speed,!;!,!;!";
 
 
 /*
@@ -955,7 +1315,7 @@ static const char _data_FX_MODE_COLOR_SWEEP[] PROGMEM = "Sweep@!,!;!,!;!";
 uint16_t mode_color_wipe_random(void) {
   return color_wipe(false, true);
 }
-static const char _data_FX_MODE_COLOR_WIPE_RANDOM[] PROGMEM = "Wipe Random@!;;!";
+static const char _data_FX_MODE_COLOR_WIPE_RANDOM[] PROGMEM = "Wipe Random@Fallback speed;;!";
 
 
 /*
@@ -964,7 +1324,7 @@ static const char _data_FX_MODE_COLOR_WIPE_RANDOM[] PROGMEM = "Wipe Random@!;;!"
 uint16_t mode_color_sweep_random(void) {
   return color_wipe(true, true);
 }
-static const char _data_FX_MODE_COLOR_SWEEP_RANDOM[] PROGMEM = "Sweep Random@!;;!";
+static const char _data_FX_MODE_COLOR_SWEEP_RANDOM[] PROGMEM = "Sweep Random@Fallback speed;;!";
 
 
 /*
@@ -1182,6 +1542,15 @@ uint16_t running(uint32_t color1, uint32_t color2, bool theatre = false) {
   uint32_t it = strip.now / cycleTime;
   bool usePalette = color1 == SEGCOLOR(0);
 
+  // The beat the head last saw, so the head can move on the BEAT.
+  //
+  // The BEAT INDEX is the one thing both sources agree on - the deck's
+  // bar position and the tracker's own both count 1,2,3,4 and both change
+  // once a beat - so the head advances when the index moves, and needs no
+  // counter of its own to be told which beat it is.
+  const BeatClock clk = beatClock();
+  const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
+
   for (uint32_t i = 0; i < SEGLEN; i++) {
     uint32_t col = color2;
     if (usePalette) color1 = SEGMENT.color_from_palette(i, true, PALETTE_SOLID_WRAP, 0);
@@ -1194,7 +1563,15 @@ uint16_t running(uint32_t color1, uint32_t color2, bool theatre = false) {
     SEGMENT.setPixelColor(i,col);
   }
 
-  if (it != SEGENV.step) {
+  if (clk.live) {
+    // The head advances on the beat.  The step is the beat index, and it
+    // changes once a beat, so the change IS the beat.
+    if (clk.beat != lastBeat) {
+      SEGENV.aux0 = (SEGENV.aux0 +1) % (theatre ? width : (width<<1));
+      SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
+      SEGENV.step++;   // the rainbow's colour walks with the beat too
+    }
+  } else if (it != SEGENV.step) {
     SEGENV.aux0 = (SEGENV.aux0 +1) % (theatre ? width : (width<<1));
     SEGENV.step = it;
   }
@@ -1209,7 +1586,7 @@ uint16_t running(uint32_t color1, uint32_t color2, bool theatre = false) {
 uint16_t mode_theater_chase(void) {
   return running(SEGCOLOR(0), SEGCOLOR(1), true);
 }
-static const char _data_FX_MODE_THEATER_CHASE[] PROGMEM = "Theater@!,Gap size;!,!;!";
+static const char _data_FX_MODE_THEATER_CHASE[] PROGMEM = "Theater@Fallback speed,Gap size;!,!;!";
 
 
 /*
@@ -1219,7 +1596,7 @@ static const char _data_FX_MODE_THEATER_CHASE[] PROGMEM = "Theater@!,Gap size;!,
 uint16_t mode_theater_chase_rainbow(void) {
   return running(SEGMENT.color_wheel(SEGENV.step), SEGCOLOR(1), true);
 }
-static const char _data_FX_MODE_THEATER_CHASE_RAINBOW[] PROGMEM = "Theater Rainbow@!,Gap size;,!;!";
+static const char _data_FX_MODE_THEATER_CHASE_RAINBOW[] PROGMEM = "Theater Rainbow@Fallback speed,Gap size;,!;!";
 
 
 /*
@@ -1796,7 +2173,7 @@ static const char _data_FX_MODE_CHASE_FLASH_RANDOM[] PROGMEM = "Chase Flash Rnd@
 uint16_t mode_running_color(void) {
   return running(SEGCOLOR(0), SEGCOLOR(1));
 }
-static const char _data_FX_MODE_RUNNING_COLOR[] PROGMEM = "Chase 2@!,Width;!,!;!";
+static const char _data_FX_MODE_RUNNING_COLOR[] PROGMEM = "Chase 2@Fallback speed,Width;!,!;!";
 
 
 /*
@@ -2977,7 +3354,20 @@ static const char _data_FX_MODE_COLORWAVES[] PROGMEM = "Colorwaves@!,Hue;!;!";
 uint16_t mode_bpm() {
   //CRGB fastled_col;
   uint32_t stp = (strip.now / 20) & 0xFF;
-  uint8_t beat = beatsin8_t(SEGMENT.speed, 64, 255);
+  // The pulse.  With a beat, it runs at the MUSIC'S rate and PEAKS ON THE
+  // BEAT - the phase is the beat's own, not the clock's, so the stripes
+  // are bright when the music is, not merely at the right average rate.
+  // Without a beat, the slider is the rate, exactly as it always was.
+  uint8_t beat;
+  const BeatClock clk = beatClock();
+  if (clk.live) {
+    // sin8_t peaks at 64, so the phase is offset by a quarter turn to put
+    // the peak ON the beat rather than half a beat after it.
+    const uint8_t theta = (uint8_t)(64u + (uint16_t)(clk.beatPhase * 256.0f));
+    beat = (uint8_t)(64 + ((191 * (uint16_t)sin8_t(theta)) >> 8));
+  } else {
+    beat = beatsin8_t(SEGMENT.speed, 64, 255);
+  }
   for (uint32_t i = 0; i < SEGLEN; i++) {
     //fastled_col = ColorFromPalette(SEGPALETTE, stp + (i * 2), beat - stp + (i * 10));
     //SEGMENT.setPixelColor(i, fastled_col.red, fastled_col.green, fastled_col.blue);
@@ -2986,7 +3376,7 @@ uint16_t mode_bpm() {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_BPM[] PROGMEM = "Bpm@!;!;!;;sx=64";
+static const char _data_FX_MODE_BPM[] PROGMEM = "Bpm@Fallback BPM;!;!;!;;sx=64";
 
 
 uint16_t mode_fillnoise8() {
@@ -4784,23 +5174,49 @@ static const char _data_FX_MODE_PERCENT[] PROGMEM = "Percent@,% of fill,,,,One c
  * (unimplemented?) tries to draw an ECG approximation on a 2D matrix
  */
 uint16_t mode_heartbeat(void) {
-  uint8_t bpm = 40 + (SEGMENT.speed >> 3);
-  uint32_t msPerBeat = (60000L / bpm);
-  uint32_t secondBeat = (msPerBeat / 3);
-  uint32_t bri_lower = SEGENV.aux1;
-  unsigned long beatTimer = strip.now - SEGENV.step;
+  const BeatClock clk = beatClock();
+  if (clk.live) {
+    // The pulse, on the music's beat.
+    //
+    // The DECAY is the effect's own, unchanged: a multiplicative fall per
+    // frame, set by the intensity.  Only the PULSE moves - it is injected
+    // on the beat, and again a third of the way through it, so the
+    // lub-dub lands on the music instead of on a timer of its own.
+    //
+    // The state is packed into SEGENV.step, which the timer path below
+    // does not need: the low byte is the beat we last saw, and bit 8 says
+    // the dub for this beat has already fired.
+    SEGENV.aux1 = (uint16_t)(SEGENV.aux1 * 2042 / (2048 + SEGMENT.intensity));
 
-  bri_lower = bri_lower * 2042 / (2048 + SEGMENT.intensity);
-  SEGENV.aux1 = bri_lower;
+    const uint8_t lastBeat = (uint8_t)(SEGENV.step & 0xFF);
+    const bool    dubDone  = (SEGENV.step & 0x100) != 0;
+    if (clk.beat != lastBeat) {
+      SEGENV.aux1 = UINT16_MAX;              // the LUB, on the beat
+      SEGENV.step = (uint32_t)clk.beat;      // and the dub is due again
+    } else if (!dubDone && clk.beatPhase > 0.3333f) {
+      SEGENV.aux1 = UINT16_MAX;              // the DUB, a third of a beat in
+      SEGENV.step |= 0x100;
+    }
+  } else {
+    // No beat to lock to: the old clock, exactly as it was.
+    uint8_t bpm = 40 + (SEGMENT.speed >> 3);
+    uint32_t msPerBeat = (60000L / bpm);
+    uint32_t secondBeat = (msPerBeat / 3);
+    uint32_t bri_lower = SEGENV.aux1;
+    unsigned long beatTimer = strip.now - SEGENV.step;
 
-  if ((beatTimer > secondBeat) && !SEGENV.aux0) { // time for the second beat?
-    SEGENV.aux1 = UINT16_MAX; //3/4 bri
-    SEGENV.aux0 = 1;
-  }
-  if (beatTimer > msPerBeat) { // time to reset the beat timer?
-    SEGENV.aux1 = UINT16_MAX; //full bri
-    SEGENV.aux0 = 0;
-    SEGENV.step = strip.now;
+    bri_lower = bri_lower * 2042 / (2048 + SEGMENT.intensity);
+    SEGENV.aux1 = bri_lower;
+
+    if ((beatTimer > secondBeat) && !SEGENV.aux0) { // time for the second beat?
+      SEGENV.aux1 = UINT16_MAX; //3/4 bri
+      SEGENV.aux0 = 1;
+    }
+    if (beatTimer > msPerBeat) { // time to reset the beat timer?
+      SEGENV.aux1 = UINT16_MAX; //full bri
+      SEGENV.aux0 = 0;
+      SEGENV.step = strip.now;
+    }
   }
 
   for (uint32_t i = 0; i < SEGLEN; i++) {
@@ -4809,7 +5225,7 @@ uint16_t mode_heartbeat(void) {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_HEARTBEAT[] PROGMEM = "Heartbeat@!,!;!,!;!;01;m12=1"; //Bar
+static const char _data_FX_MODE_HEARTBEAT[] PROGMEM = "Heartbeat@Fallback BPM,!;!,!;!;01;m12=1"; //Bar
 
 
 //  "Pacifica"
@@ -7010,7 +7426,7 @@ uint16_t mode_2DSunradiation(void) {                   // By: ldirko https://edi
 
   const uint16_t cols = SEGMENT.virtualWidth();
   const uint16_t rows = SEGMENT.virtualHeight();
-  const int minSize = min(cols, rows);          // WLEDMM
+  const int minSize = min((uint32_t)cols, (uint32_t)rows);          // WLEDMM
   const int magnify = (minSize <= 32) ? 8 : 46; // WLEDMM
 
   if (!SEGENV.allocateData(sizeof(byte)*(cols+2)*(rows+2))) return mode_static(); //allocation failed
@@ -7353,7 +7769,7 @@ uint16_t mode_2Dfloatingblobs(void) {
 
   SEGMENT.fadeToBlackBy(20);
   bool drawAA = (SEGMENT.custom1 > 0) && (SEGMENT.custom1 < 6); //WLEDMM
-  const uint16_t minDim = min(cols, rows); // WLEDMM use smaller dimension to find good blob size
+  const uint16_t minDim = min((uint32_t)cols, (uint32_t)rows); // WLEDMM use smaller dimension to find good blob size
   float max_grow = min(minDim/4.f,2.f);
   if (minDim>=24) max_grow =(minDim/8.0f);   // WLEDMM allow bigger blobs
 
@@ -7948,7 +8364,7 @@ uint16_t mode_2Ddriftrose(void) {
   const float CX = (cols-cols%2)/2.f - .5f;
   const float CY = (rows-rows%2)/2.f - .5f;
 
-  unsigned L2 = SEGENV.check3 ? max(cols, rows) : min(cols, rows);  // WLEDMM we use "max" to use the complete segment
+  unsigned L2 = SEGENV.check3 ? max(cols, rows) : min((uint32_t)cols, (uint32_t)rows);  // WLEDMM we use "max" to use the complete segment
   if (SEGENV.check3 && (abs(int(cols) - int(rows)) < 4)) L2 = L2 * 1.4142f;    // WLEDMM make "expand" look a bit bigger on square panels
   const float L = L2 / 2.f;
   // WLEDMM pre-calculate some values
@@ -9338,6 +9754,12 @@ uint16_t mode_2DGEQ(void) {
     SEGMENT.setUpLeds();
   }
 
+  // The downbeat accent: the spectrum stands up a little further on the
+  // downbeat, so it breathes with the bar.  It is 0 whenever there is no
+  // beat, so with the audio off this changes nothing at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
+
   bool rippleTime = false;
   if (strip.now - SEGENV.step >= (256U - SEGMENT.intensity)) {
     SEGENV.step = strip.now;
@@ -9383,14 +9805,22 @@ uint16_t mode_2DGEQ(void) {
 
     if (barHeight > previousBarHeight[x]) previousBarHeight[x] = barHeight;
 
+    // The accent is applied to what is DRAWN, not to what is measured, so
+    // the peak hold stays an honest measurement of the music.
+    uint16_t drawHeight = barHeight;
+    if (accent > 0.0f) {
+      drawHeight = (uint16_t)((float)barHeight * (1.0f + accent * 0.35f));
+      if (drawHeight > rows) drawHeight = rows;
+    }
+
     // --- Drawing ---
     if (use_draw_line) {
-      if (barHeight > 0) {
+      if (drawHeight > 0) {
         uint32_t ledColor = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
-        SEGMENT.drawLine(x, rows - barHeight, x, rows - 1, ledColor, false);
+        SEGMENT.drawLine(x, rows - drawHeight, x, rows - 1, ledColor, false);
       }
     } else {
-      for (int y = 0; y < barHeight; y++) {
+      for (int y = 0; y < drawHeight; y++) {
         uint16_t finalColorIndex = use_vertical_color ? map(y, 0, rows - 1, 0, 255) : colorIndex;
         uint32_t ledColor = SEGMENT.color_from_palette(finalColorIndex, false, PALETTE_SOLID_WRAP, 0);
         setFlatPixelXY(flatMode, x, rows - 1 - y, ledColor, cols, rows, offset);
@@ -9542,7 +9972,15 @@ uint16_t mode_2DAkemi(void) {
   if (um_data && um_data->u_data) {
     memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));
   }
-  const uint8_t fftBase = fftResult[0];
+  uint8_t fftBase = fftResult[0];
+  // The downbeat accent: the dance hits harder on the downbeat.  It is 0
+  // whenever there is no beat, so with the audio off this changes nothing
+  // at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
+  if (accent > 0.0f) {
+    fftBase = (uint8_t)constrain((int)fftBase + (int)((float)fftBase * accent * 0.5f), 0, 255);
+  }
   const bool isDancing = (SEGMENT.intensity > 128 && fftBase > 128);
 
   // --- Main drawing loop ---
@@ -9933,10 +10371,19 @@ uint16_t mode_GEQLASER(void) {
 
   uint8_t heights[NUM_GEQ_CHANNELS] = { 0 };
   const uint8_t maxHeight = roundf(float(rows) * ((rows<18) ? 0.75f : 0.85f));           // slightly reduce bar height on small panels 
+  // The downbeat accent: the spectrum stands up a little further on the
+  // downbeat.  It is 0 whenever there is no beat, so with the audio off
+  // this changes nothing at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
   for (int i=0; i<NUM_BANDS; i++) {
     unsigned band = i;
     if (NUM_BANDS < NUM_GEQ_CHANNELS) band = map2(band, 0, NUM_BANDS - 1, 0, NUM_GEQ_CHANNELS-1); // always use full range.
     heights[i] = map8(fftResult[band],0,maxHeight); // cache fftResult[] as data might be updated in parallel by the audioreactive core
+    if (accent > 0.0f) {
+      const uint32_t boosted = (uint32_t)((float)heights[i] * (1.0f + accent * 0.35f));
+      heights[i] = (uint8_t)min(boosted, (uint32_t)maxHeight);
+    }
   }
 
 
@@ -10202,6 +10649,12 @@ uint16_t mode_GEQPPA() {
 
   uint8_t scaler = 1;
 
+  // The downbeat accent: the bars stand up a little further on the
+  // downbeat.  It is 0 whenever there is no beat, so with the audio off
+  // this changes nothing at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
+
   // Draw bars
   for (int i = 0; i < bars; i++) {
     int x_start = (i * ctx.width) / (bars * scaler);
@@ -10209,6 +10662,13 @@ uint16_t mode_GEQPPA() {
     int bar_width = x_end - x_start;
 
     uint32_t unscaled_bar_height = (uint32_t)values[i] * ctx.height / 255;
+    // The downbeat accent: the bars stand up a little further on the
+    // downbeat.  It is 0 whenever there is no beat, so with the audio off
+    // this changes nothing at all.
+    if (accent > 0.0f) {
+      unscaled_bar_height = (uint32_t)((float)unscaled_bar_height * (1.0f + accent * 0.35f));
+      if (unscaled_bar_height > (uint32_t)ctx.height) unscaled_bar_height = ctx.height;
+    }
     uint32_t scaled_bar_height = unscaled_bar_height / scaler;
 
     if (bar_width == 0 || scaled_bar_height == 0) continue;
@@ -11788,6 +12248,14 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
     uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
     memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));  // WLEDMM snapshot: publisher may recycle the buffer
     fftBase = fftResult[0];
+  }
+  // The downbeat accent: the dance hits harder on the downbeat.  It is 0
+  // whenever there is no beat, so with the audio off this changes nothing
+  // at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
+  if (accent > 0.0f) {
+    fftBase = (uint8_t)constrain((int)fftBase + (int)((float)fftBase * accent * 0.5f), 0, 255);
   }
   const bool isDancing = (SEGMENT.intensity > 128 && fftBase > 128);
 
@@ -14922,6 +15390,12 @@ static uint16_t mode_RTAMeter(void) {
   ArLoudnessFrame loud;
   const bool haveLoud  = arCopyLoudness(&loud);
 
+  // The downbeat accent: the programme marker flashes on the downbeat.
+  // It is 0 whenever there is no beat, so with the audio off this changes
+  // nothing at all.
+  const BeatClock clk = beatClock();
+  const float accent = downbeatAccent(clk);
+
   // ---- the window --------------------------------------------------------
   //
   // The range is set by two sliders: the upper and the lower, in the
@@ -15134,9 +15608,19 @@ static uint16_t mode_RTAMeter(void) {
     }
 
     // The programme loudness, as a marker across the meter.
+    //
+    // On the downbeat it is drawn a little taller.  The POSITION is the
+    // measurement and does not move: the flash says the beat, and the
+    // scale is not bent to say it.
     if (loud.programme > winBot) {
       const int32_t y = (int32_t)(H - (loud.programme - winBot) / mspan * H);
-      if (y >= 0 && y < H) fillRect(meterColX, y, meterColW, 1, RTA_COL_CAP);
+      if (y >= 0 && y < H) {
+        fillRect(meterColX, y, meterColW, 1, RTA_COL_CAP);
+        if (accent > 0.0f) {
+          const int32_t hh = 1 + (int32_t)(accent * 3.0f);   // up to four pixels
+          fillRect(meterColX, y - hh + 1, meterColW, hh, RTA_COL_CAP);
+        }
+      }
     }
   }
 
@@ -15634,6 +16118,8 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_PPA_IMAGEPLAYER, &mode_PPA_IMAGEPLAYER, _data_FX_MODE_PPA_IMAGEPLAYER); // audio
   addEffect(FX_MODE_PRO_LINK, &mode_PRO_LINK, _data_FX_MODE_PRO_LINK); // audio
   addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // beats: ProLink if a deck is connected, the AR's estimator otherwise
+  addEffect(FX_MODE_BEAT_COUNTER, &mode_beat_counter, _data_FX_MODE_BEAT_COUNTER); // beats: the beat-in-bar, shown
+  addEffect(FX_MODE_PHRASE, &mode_phrase, _data_FX_MODE_PHRASE); // beats: the sixteen-step phrase, shown
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   addEffect(FX_MODE_RTA_METER, &mode_RTAMeter, _data_FX_MODE_RTA_METER); // audio: the analyser view
