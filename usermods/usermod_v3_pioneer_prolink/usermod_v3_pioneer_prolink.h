@@ -305,6 +305,24 @@ private:
   bool enableBeatFlash = true;
   bool enableRandomPreset = false;
   bool enableHighResArtwork = false;
+
+  // SAFE MODE: the board only LISTENS to the decks.
+  //
+  // The decks broadcast their beat and status packets, so the tempo, the
+  // beat number and the beat's position all arrive with the board saying
+  // nothing at all.  What the board sends is the ANNOUNCE - so that the
+  // decks know there is a player on the network - and the TCP queries for
+  // the track's metadata, its waveform and its artwork.
+  //
+  // In safe mode none of that leaves the board: it listens, and nothing
+  // else.  The cost is the metadata - no title, no artist, no artwork and
+  // no waveform - and the gain is that a board on the same network cannot
+  // disturb a deck that is being used for something else.
+  //
+  // DEFAULT: ON.  A board that talks to a deck it was not asked to talk to
+  // is the surprising thing; a board that only listens is not.
+  bool safeMode = true;
+
   String playerIPOverride = "";
   uint8_t virtualDeckNumber = WLED_DEVICE_ID_DEFAULT;
 
@@ -381,6 +399,7 @@ private:
   static const char _fillPlaylist[];
   static const char _phaseOffset[];
   static const char _anchorMaxBeats[];
+  static const char _safeMode[];
 
   // Protocol constants
   const uint8_t DBSERVER_MAGIC[5] = { 0x11, 0x87, 0x23, 0x49, 0xae };
@@ -586,6 +605,8 @@ private:
   // --- Network Functions ---
 
   void sendKeepAlive() {
+    // SAFE MODE: the board only listens, so it does not announce itself.
+    if (safeMode) return;
     if (!Network.isConnected()) return;
 
     uint8_t deckNum = getVirtualDeckNumber();
@@ -827,6 +848,9 @@ private:
   }
 
   void startMetadataFetch() {
+    // SAFE MODE: no queries to the decks, so there is nothing to fetch and
+    // no TCP connection to make.
+    if (safeMode) return;
     IPAddress targetIP = getTargetPlayerIP();
     if (targetIP[0] == 0) {
       if (enableDebug) Serial.println(F("[ProLink] No target player IP"));
@@ -861,6 +885,8 @@ private:
   }
 
   void sendDBQuery(uint16_t type, uint32_t* args, uint8_t argCount) {
+    // SAFE MODE: the board only listens.
+    if (safeMode) return;
     if (!dbClient.connected()) return;
     txId++;
 
@@ -1373,6 +1399,17 @@ private:
   // --- State Machine ---
 
   void handleFetchStateMachine() {
+    // SAFE MODE: the board only listens.  A fetch that was already running
+    // when the mode was switched on is dropped here rather than allowed to
+    // connect - closing a socket is not a query.
+    if (safeMode) {
+      if (fetchState != IDLE) {
+        cleanupTcpConnection();
+        fetchState = IDLE;
+      }
+      return;
+    }
+
     if (fetchState == RETRY_WAIT) {
       if (millis() - stateTimer > FETCH_RETRY_DELAY_MS+hw_random(1000,2000)) startMetadataFetch();
       return;
@@ -2182,6 +2219,7 @@ public:
     top[FPSTR(_fillPlaylist)]   = prolinkFillPlaylistId_cfg;
     top[FPSTR(_phaseOffset)]    = phaseOffsetMs;
     top[FPSTR(_anchorMaxBeats)] = anchorMaxBeats;
+    top[FPSTR(_safeMode)]       = safeMode;
   }
 
   bool readFromConfig(JsonObject& root) {
@@ -2197,6 +2235,14 @@ public:
     playerIPOverride = top[FPSTR(_ipOverride)] | "";
     virtualDeckNumber = top[FPSTR(_deckNumber)] | WLED_DEVICE_ID_DEFAULT;
     virtualDeckNumber = constrain(virtualDeckNumber, 1, 127);
+
+    // The safe mode is read with getJsonValue() and NOT with the `|`
+    // idiom the flags above use.  `variant | flag` can only ever turn a
+    // flag ON - a false value leaves the old one standing - so a checkbox
+    // that has to be able to turn the flag OFF cannot use it.  getJsonValue()
+    // reads a real bool and the string "false" the settings page posts for
+    // an unchecked box, and leaves the value alone when the key is absent.
+    getJsonValue(top[FPSTR(_safeMode)], safeMode);
 
     // The phase offset: how far the deck's grid is moved back so the flash
     // lands on the audible beat.  Constrained to a quarter of a second
@@ -2484,3 +2530,4 @@ const char ProLinkUsermodV3::_effectPlaylist[] PROGMEM = "Effect_Playlist_Id";
 const char ProLinkUsermodV3::_fillPlaylist[] PROGMEM = "Fill_Playlist_Id";
 const char ProLinkUsermodV3::_phaseOffset[] PROGMEM = "Phase_Offset_ms";
 const char ProLinkUsermodV3::_anchorMaxBeats[] PROGMEM = "Anchor_Max_Beats";
+const char ProLinkUsermodV3::_safeMode[] PROGMEM = "Safe_Mode";
