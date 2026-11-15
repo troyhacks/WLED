@@ -176,6 +176,22 @@ static void lt8912b_write_reg(esp_lcd_panel_io_handle_t io, uint8_t reg, uint8_t
 }
 
 // ============================================================
+// Is a monitor attached?
+// The LT8912B reports cable presence (HPD) in MAIN register 0xC1, bit 7.
+// The driver's own esp_lcd_panel_lt8912b_is_ready() reads exactly this
+// bit and returns it, so the two always agree.
+//
+// This is the single source of truth for "is there anything on the other
+// end of the cable".  The display stack is built whether or not a monitor
+// is there, so the Art-Net fallback has to follow the LINK, not the build.
+// ============================================================
+static bool hdmi_monitor_present() {
+  if (!lt8912b_io_main) return false;
+  uint8_t r_c1 = lt8912b_read_reg(lt8912b_io_main, 0xC1);
+  return ((r_c1 >> 7) & 1) != 0;
+}
+
+// ============================================================
 // EDID reading and parsing.
 // The LT8912B proxies the connected monitor's EDID at I2C address 0x50.
 // Standard EDID block = 128 bytes.  CEA-861 extension = another 128 bytes.
@@ -575,6 +591,21 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
     USER_PRINTF(ready ? " OK (%ums)\n" : " TIMEOUT — no monitor detected, continuing anyway\n", elapsed);
   }
 
+  // ── Where the pixels go ────────────────────────────────────────────────
+  // The network bus doubles as the board's Art-Net output, and dummy mode
+  // keeps the pixels in the buffer (for the blit) but holds them off the
+  // wire.  With a monitor attached there is a display to show them on, so
+  // they stay there; with no monitor there is nothing to show them on, so
+  // they go out over the network instead.
+  //
+  // This used to be latched on at the top of this function, which meant the
+  // Art-Net fallback could never happen - a board with no monitor sat
+  // silent forever.  It follows the link from here on.
+  busNetworkDummyMode = hdmi_monitor_present();
+  USER_PRINTF("HDMI: %s — Art-Net output %s\n",
+      busNetworkDummyMode ? "monitor connected" : "no monitor (HPD=0)",
+      busNetworkDummyMode ? "held back (HDMI display)" : "to the network");
+
   // Read and parse EDID from the connected monitor.
   // Must happen after HDMI link lock (DDC channel is only live once HPD is asserted).
   hdmi_edid_init();
@@ -735,6 +766,23 @@ void hdmi_switch_mode(int mode) {
 // ============================================================
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
 void hdmi_blit() {
+  // ── Follow the link, not the build ──────────────────────────────────────
+  // Polled before the early-out below so it keeps running even when there
+  // is no framebuffer to blit into.  Unplugging the monitor starts the
+  // Art-Net output; plugging it back in stops it again.
+  static uint32_t link_poll_ms = 0;
+  uint32_t link_t_ms = millis();
+  if (lt8912b_io_main && link_t_ms - link_poll_ms >= 5000) {
+    link_poll_ms = link_t_ms;
+    bool present = hdmi_monitor_present();
+    if (present != busNetworkDummyMode) {
+      USER_PRINTF("HDMI: monitor %s — Art-Net output %s\n",
+          present ? "connected" : "disconnected",
+          present ? "held back (HDMI display)" : "to the network");
+    }
+    busNetworkDummyMode = present;
+  }
+
   // Capture globals into locals immediately — deinit may NULL the globals at any time.
   uint8_t* back_fb = display_framebuffer;
   esp_lcd_panel_handle_t ph = panel_handle;
