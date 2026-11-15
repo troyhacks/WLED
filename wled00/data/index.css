@@ -834,12 +834,14 @@ input[type=range]::-moz-range-thumb {
 
 /* The theme icon, in that band, at the left of the group.
  *
- * It also sits 6px lower than it used to: the icon's ink was 4px above
- * the middle of the track it belongs to, so it read as perched on the
- * top of the slider rather than on its line. */
+ * It also sits lower than it used to: the icon's INK was 4px above the
+ * line of the track it belongs to, so it read as perched on the top of
+ * the slider rather than on its line. Measuring the pixels (the gear's
+ * ink against the slider's bar) put it 2px too low at first, and this
+ * is the setting that lands the ink's centre on the bar's centre. */
 #briwrap .slider-icon {
 	left: 4px;
-	bottom: -1px;
+	bottom: 1px;
 }
 
 /* The value bubble sits at the END of the slider, over its handle,
