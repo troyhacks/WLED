@@ -1747,16 +1747,31 @@ uint16_t mode_beat_sweep(void) {
   const bool cycle = (cycleBars > 0);
   uint8_t sub = SEGMENT.custom3;
   if (cycle) {
+    const uint8_t lastSub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
     if (clk.live) {
-      // The sub-effect is a FUNCTION of the master's bar number, so the
-      // walk through the thirty-two is anchored to the measure and it
-      // starts again when the measure does.  Which is what marking the
-      // downbeat does.
-      sub = (uint8_t)(((bar / cycleBars) & 31u));
+      // The SLOT comes from the master tempo's bar number, so the change
+      // lands on the master's bars - and the mark moves it with them.
+      //
+      // WHICH sub-effect is a different matter: it is a RANDOM one, and
+      // never the same one twice running.  Counting one to thirty-one
+      // walks past the whole set in a fixed order, and a lot of these
+      // effects are near neighbours of each other - a shuffle is livelier
+      // than a list, and it is the same set every time.
+      //
+      // The offset is one to thirty-one, so the walk always MOVES: the
+      // next sub-effect is never the one on the wall now.
+      const uint32_t slot = bar / cycleBars;
+      if (slot != (uint32_t)SEGENV.aux0) {
+        const uint8_t offset = (uint8_t)(1u + (random8() % 31u));
+        sub = (uint8_t)((lastSub + offset) & 31u);
+        SEGENV.aux0 = (uint16_t)slot;
+      } else {
+        sub = lastSub;
+      }
     } else {
       // No beat: hold the last one, rather than jumping back to the
       // slider's.
-      sub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
+      sub = lastSub;
     }
     SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0x00FF) | ((uint16_t)sub << 8));
   }

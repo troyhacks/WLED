@@ -6,7 +6,7 @@ are the switches:
 
 | control | what it is |
 |---|---|
-| Cycle | 0 = off; 1..8 = the sub-effect changes every N BARS, so all thirty-two can be watched in order |
+| Cycle | 0 = off; 1..8 = the sub-effect changes every N BARS.  The next one is a RANDOM one of the thirty-two, never the same twice running - a shuffle, not a list, because a lot of these are near neighbours of each other |
 | Sensitivity | how deep the spectrum's ribbon goes |
 | Width | the size of the light and its tail together (the tail is twice the width) |
 | Hue | 0 = AUTO (the colour comes from the band under the light); 1..254 = that hue; **255 = white** |
