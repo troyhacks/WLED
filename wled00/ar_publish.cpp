@@ -354,12 +354,32 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     b.live          = 1;
     b.downbeatKnown = 1;      // a CDJ knows its own downbeat
     b.fromProLink   = 1;
+
+    // THE USER'S OVERRIDE OF THE DECK'S NUMBERING.
+    //
+    // The deck's beat one, two, three and four are still used - the deck
+    // is still the clock, and its tempo and its phase are its own - but
+    // the beat the user marked by ear is the downbeat, so the deck's
+    // numbering is ROTATED to it.  That is the whole of the override: an
+    // offset from the deck's packets, and nothing else.
+    const bool override = haveTf && tf.deckOverride != 0;
+    b.deckOverride = override ? 1 : 0;
+    if (override) {
+      b.beatInBar = (uint8_t)((((uint32_t)prolink_beat_public - 1u + 4u
+                                - (uint32_t)tf.deckDownbeat) & 3u) + 1u);
+    }
+
     // The THIRTY-TWO: the deck's beat in the song, which we ASSUME is set
     // to a measure start.  But the USER's mark of the downbeat overrides
     // it: he has said by ear where the bar starts, and that beats the
-    // deck's numbering.
-    if (haveTf && tf.downbeatSet != 0) {
+    // deck's numbering.  With the override on, the thirty-two is counted
+    // from the mark - the deck's beat count at the moment he marked it.
+    if (haveTf && tf.downbeatSet != 0 && !override) {
       b.beatInMeasure32 = tf.beatInMeasure32;
+    } else if (override && tf.deckElapsedAtMark > 0u &&
+               prolink_beats_elapsed_public > tf.deckElapsedAtMark) {
+      b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public
+                                      - tf.deckElapsedAtMark - 1u) % 32u) + 1u);
     } else if (prolink_beats_elapsed_public > 0u) {
       b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public - 1u) % 32u) + 1u);
     }

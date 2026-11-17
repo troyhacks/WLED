@@ -77,10 +77,11 @@ static void wsSendTempo(void) {
   char buf[192];
   int n = snprintf(buf, sizeof(buf),
     "{\"tempo\":{\"bpm\":%.1f,\"beat\":%u,\"prog\":%.3f,\"live\":%u,\"lock\":%u,"
-    "\"db\":%u,\"dbset\":%u,\"plink\":%u,\"drift\":%.2f}}",
+    "\"db\":%u,\"dbset\":%u,\"dbo\":%u,\"plink\":%u,\"drift\":%.2f}}",
     (double)b.bpm, (unsigned)b.beatInBar, (double)b.beatProgress,
     (unsigned)b.live, (unsigned)b.locked, (unsigned)b.downbeatKnown,
-    (unsigned)b.downbeatSet, (unsigned)b.fromProLink, (double)b.driftPct);
+    (unsigned)b.downbeatSet, (unsigned)b.deckOverride,
+    (unsigned)b.fromProLink, (double)b.driftPct);
   if (n < 1 || n >= (int)sizeof(buf)) return;
 
   for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {

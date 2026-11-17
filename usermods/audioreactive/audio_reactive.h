@@ -5577,6 +5577,9 @@ void arAnalysisTask(void * parameter)
       tf.beatInMeasure32 = arTempoBeatInMeasure32();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;
+      tf.deckOverride  = arTempoDeckOverride() ? 1 : 0;
+      tf.deckDownbeat  = arTempoDeckDownbeat();
+      tf.deckElapsedAtMark = arTempoDeckElapsedAtMark();
       tf.downbeatT    = arTempoDownbeatT();
       tf.beatCount    = arTempoBeatCount();
       tf.refBpm       = arTempoRefBpm();
@@ -7970,6 +7973,12 @@ class AudioReactive : public Usermod {
         // tell a mark the person made from a downbeat the tracker measured
         // (which is at chance level, and is not acted on).
         t["downbeat_set"]  = tf.downbeatSet != 0;
+        // The ProLink OVERRIDE: the user marked a downbeat by ear while a
+        // deck was playing, so the deck's numbering is rotated to the beat
+        // they marked.  It is an offset from the deck's packets, and
+        // nothing else - the deck's tempo and phase are still its own.
+        t["deck_override"] = tf.deckOverride != 0;
+        t["deck_downbeat"] = (int)tf.deckDownbeat;
         // The beats counted since the lock - the number the scrolling text's
         // #BPOS macro shows, and the number the bars are counted from.
         t["beat_count"]    = (int)tf.beatCount;

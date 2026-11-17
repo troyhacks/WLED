@@ -175,6 +175,13 @@ struct ArTempoFrame {
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
+  // The ProLink OVERRIDE: the user marked a downbeat while the deck was
+  // playing, so the deck's numbering is rotated to the beat they marked.
+  // It is an OFFSET from the deck's packets - the deck's tempo, phase and
+  // thirty-two are still the deck's own.
+  uint8_t  deckOverride;    // 1 when the override is on
+  uint8_t  deckDownbeat;    // the DECK's beat that was marked, 0..3
+  uint32_t deckElapsedAtMark; // the deck's beat count when it was marked
   float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
   uint32_t beatCount;       // beats counted since the lock (the monotonic counter)
   // The ProLink reference: the deck's grid, measured against ours.  All zero
@@ -222,6 +229,7 @@ struct ArBeatSource {
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
+  uint8_t  deckOverride;    // 1 when the user's mark overrides the DECK's numbering
   float    driftMs;         // the grid's phase error against the music, ms
   float    driftPct;        // that error as a percentage of the beat
   // The bar's phase in BEATS - 0 at the downbeat, 4 at the top of the bar -

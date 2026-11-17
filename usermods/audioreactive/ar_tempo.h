@@ -173,6 +173,7 @@ extern volatile float   prolink_bpm_public;              // beats per minute (0 
 extern volatile uint8_t prolink_beat_public;            // beat in the bar, 1..4 (1 = downbeat); 0 = no packet yet
 extern volatile float   prolink_beat_progress_public;    // 0..1 through the deck's current beat
 extern volatile bool    prolink_connected_public;        // true while following a master CDJ
+extern volatile uint32_t prolink_beats_elapsed_public;   // the deck's beat in the song
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1137,6 +1138,19 @@ struct ArTempoState {
   uint32_t measureApplyAt;                // ... and the measure's, over sixteen
   uint32_t measure32ApplyAt;              // the beat the THIRTY-TWO begins at
 
+  // ---- the ProLink OVERRIDE ----
+  //
+  // The deck numbers the beats its own way, and the board's own numbering
+  // is only a convention.  When the user marks a downbeat by ear while a
+  // deck is playing, the mark is an OFFSET from the deck's packets: the
+  // deck's beat one, two, three and four are still used, but the one the
+  // user marked is the downbeat.  This is where that offset lives - the
+  // deck's beat that was marked, and the deck's beat count at the moment
+  // it was marked, so the thirty-two can be counted from there too.
+  bool     deckOverride;                  // the user has overridden the deck
+  uint8_t  deckDownbeat;                  // the DECK's beat they marked, 0..3
+  uint32_t deckElapsedAtMark;             // the deck's beat count at that moment
+
   // ---- the gate ----
   uint16_t gateShutFrames;                // how long the gate has been shut
 
@@ -1654,6 +1668,9 @@ static void arTempoReset(void) {
   arTempo.downbeatApplyAt = 0;
   arTempo.measureApplyAt = 0;
   arTempo.measure32ApplyAt = 0;
+  arTempo.deckOverride = false;
+  arTempo.deckDownbeat = 0;
+  arTempo.deckElapsedAtMark = 0;
   arTempo.locked      = false;
   arTempo.gateShutFrames = 0;
   arTempo.refBpm      = 0.0f;
@@ -1921,6 +1938,9 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
     arTempo.measure32ApplyAt = 0;
+    arTempo.deckOverride = false;
+    arTempo.deckDownbeat = 0;
+    arTempo.deckElapsedAtMark = 0;
     arTempo.bpm = bpm;
     // The follower starts here: the grid is new.
     arTempo.lastSlewFrame = (uint32_t)now;
@@ -1950,6 +1970,9 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
       arTempo.measureKnown    = false;
       arTempo.measureApplyAt  = 0;
       arTempo.measure32ApplyAt = 0;
+      arTempo.deckOverride    = false;
+      arTempo.deckDownbeat    = 0;
+      arTempo.deckElapsedAtMark = 0;
       for (int i = 0; i < 4; i++) {
         arTempo.barSum[i] = 0.0f;
         arTempo.barSq[i]  = 0.0f;
@@ -2973,6 +2996,7 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     arTempo.downbeatManual  = false;
     arTempo.downbeatKnown   = false;
     arTempo.downbeatApplyAt = 0xFFFFFFFFu;
+    arTempo.deckOverride    = false;
   }
 
   // THE USER'S LOCK, applied here for the same reason: the clock belongs to
@@ -3042,6 +3066,13 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
   // Clearing it puts the numbering back to the CONVENTION (the first beat
   // after the lock is beat one) and lets the bar profile find a downbeat
   // again if it ever can.
+  //
+  // WITH A DECK, THE MARK IS AN OVERRIDE OF THE DECK'S NUMBERING.  The
+  // deck's beat one, two, three and four are still used - the deck is
+  // still the clock - but the one the user marked is the downbeat, so the
+  // deck's numbering is rotated to it.  That is an OFFSET, and it is the
+  // only thing the mark changes: the deck's tempo, its phase and its
+  // thirty-two are the deck's own.
   {
     const uint8_t dbr = arTempoDownbeatRequest.exchange(0, std::memory_order_relaxed);
     if (dbr == 1) {
@@ -3051,10 +3082,26 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         arTempo.downbeatManual  = true;
         arTempo.downbeatKnown   = true;
         // The beat the user marked is also the FIRST beat of the
-        // thirty-two.  He set it by ear, on the bar's start, so the
-        // thirty-two begins there - and a global quantiser will want
-        // exactly this: one place that says where the measure starts.
+        // sixteen-beat measure and of the thirty-two.  He set it by ear,
+        // on the bar's start, so the measure begins there - and a global
+        // quantiser will want exactly this: one place that says where the
+        // measure starts.
+        arTempo.measureKnown     = true;
+        arTempo.measurePos       = 0;
+        arTempo.measureApplyAt   = arTempo.beatIndex;
         arTempo.measure32ApplyAt = arTempo.beatIndex;
+        // And with a deck: remember WHICH of the deck's beats he marked,
+        // and where the deck's beat count was when he did, so the
+        // thirty-two can be counted from the mark and not from the deck's
+        // own idea of where the track started.
+        arTempo.deckOverride = false;
+        if (prolink_connected_public && prolink_beat_public >= 1 && prolink_beat_public <= 4) {
+          arTempo.deckOverride      = true;
+          arTempo.deckDownbeat      = (uint8_t)(prolink_beat_public - 1u);
+          arTempo.deckElapsedAtMark = prolink_beats_elapsed_public;
+          USER_PRINTF("tempo: downbeat set - the deck's beat %u is beat 1 now\n",
+                      (unsigned)prolink_beat_public);
+        }
         USER_PRINTF("tempo: downbeat set - the beat sounding now (was %u) is beat 1\n",
                     (unsigned)(arTempo.beatIndex % 4u) + 1u);
       } else {
@@ -3064,6 +3111,9 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
       arTempo.downbeatManual  = false;
       arTempo.downbeatKnown   = false;
       arTempo.downbeatApplyAt = 0xFFFFFFFFu;   // nothing applies until a new one is set
+      // The deck's numbering goes back to the deck's own - that is what
+      // "back to the Pro Link broadcast data" means.
+      arTempo.deckOverride    = false;
       USER_PRINTLN("tempo: downbeat cleared - the numbering is the convention again");
     }
   }
@@ -3471,6 +3521,11 @@ static float arTempoBeatProgress(void) {
 
 // The reference, for the publisher.
 static float arTempoRefBpm(void)      { return arTempo.refBpm; }
+// The ProLink OVERRIDE, for the publisher: the deck's beat the user
+// marked as the downbeat (0..3), and whether the override is on at all.
+static bool arTempoDeckOverride(void) { return arTempo.deckOverride; }
+static uint8_t arTempoDeckDownbeat(void) { return arTempo.deckDownbeat; }
+static uint32_t arTempoDeckElapsedAtMark(void) { return arTempo.deckElapsedAtMark; }
 static float arTempoRefErrMs(void)    { return arTempo.refErrMs; }
 static uint8_t arTempoRefBeat(void)   { return arTempo.refBeat; }
 static uint8_t arTempoRefOurBeat(void){ return arTempo.refOurBeat; }

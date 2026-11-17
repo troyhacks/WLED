@@ -2385,7 +2385,7 @@ function arToggle(btn, txtOn, txtOff, isOn, cmdOn, cmdOff)
 // fast it is (the BPM), and where the beat comes from (the badge). The
 // three buttons are the controls: lock the grid, mark the downbeat, and
 // move the grid back onto the music.
-var tempo = {bpm:0, beat:0, prog:0, live:0, lock:0, db:0, dbset:0, plink:0, drift:0};
+var tempo = {bpm:0, beat:0, prog:0, live:0, lock:0, db:0, dbset:0, dbo:0, plink:0, drift:0};
 var tempoAt = 0;      // when the last frame arrived, on the page's clock
 var tempoBox = -1;    // the box that is filling right now
 
@@ -2473,9 +2473,15 @@ function tempoUpdate(t)
 	// lock and disappears with it.
 	tempoShow('tempoCorr', !proLink && locked);
 	gId('tempoLock').classList.toggle('on', locked);
-	// The downbeat's mark IS a state now - it is a toggle - so the
-	// button says which way it is.
-	gId('tempoDown').classList.toggle('on', !!t.dbset);
+	// The downbeat's MARK is a state only with a deck.  With the
+	// estimator the button is one-shot: it always marks the beat that is
+	// sounding, and it never lights up, because there is nothing to turn
+	// off - the mark is simply where the user said the bar starts.
+	//
+	// With a deck it IS a toggle: the deck's numbering is the live one,
+	// and the mark OVERRIDES it, so the button lights up while the
+	// override is on and goes out when the mark is taken back.
+	gId('tempoDown').classList.toggle('on', !!proLink && !!t.dbo);
 }
 
 // The FILL, smooth.
@@ -2533,20 +2539,30 @@ function tempoLock()
 	tempoCmd({AudioReactive: tempo.lock ? {unlockTempo:true} : {lockTempo:true}});
 }
 
-// Mark the beat that is sounding NOW as beat one - or take the mark
-// back.
+// Mark the beat that is sounding NOW as beat one.
 //
-// This is a TOGGLE.  Pressing it marks the beat that is sounding as beat
-// one - and that beat is ALSO the first beat of the thirty-two, so the
-// whole measure is numbered from where the user says it starts.  Pressing
-// it again takes the mark away, and the numbering goes back to what the
-// music says: with a deck connected, the deck's own beat position.
+// It depends on where the beat comes from.
 //
-// It lights up because it IS a state now, and the state is on the tempo
-// frame.
+// WITH THE ESTIMATOR it is ONE-SHOT.  The board's own beat numbering is
+// only a convention - it cannot know where the bar starts - so the mark
+// simply says where the bar starts, and the beat and the sixteen-beat
+// measure are numbered from there.  There is nothing to turn off, so the
+// button never lights up: pressing it again marks the beat that is
+// sounding NOW, which is what "reset the beat and the measure" means.
+//
+// WITH A DECK it is a TOGGLE.  The deck's numbering is the live one, so
+// the mark OVERRIDES it: the deck's beat one, two, three and four are
+// still used, but the one the user marked is the downbeat - an offset
+// from the deck's packets and nothing else.  The button lights up while
+// the override is on, and pressing it again goes back to the deck's own
+// numbering.
 function tempoDown()
 {
-	tempoCmd({AudioReactive: tempo.dbset ? {clearDownbeat:true} : {setDownbeat:true}});
+	if (tempo.plink && tempo.dbo) {
+		tempoCmd({AudioReactive: {clearDownbeat:true}});
+	} else {
+		tempoCmd({AudioReactive: {setDownbeat:true}});
+	}
 }
 
 // Move the grid onto the music. The RATE is not touched, so a locked
