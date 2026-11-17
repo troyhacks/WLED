@@ -10,6 +10,8 @@
 #include "ar_publish.h"
 
 #include <atomic>
+#include <esp_timer.h>     // the native timer, for the handoff's decay
+#include <math.h>
 #include <string.h>
 
 // The one publish lock.
@@ -204,6 +206,95 @@ void arSetTempoLive(bool live) {
   arTempoLive = live;
 }
 
+// The HANDOFF: the correction that keeps the light from teleporting when
+// the grid changes hands.
+//
+// The grid is either the deck's or the estimator's, and when it changes,
+// the BAR's phase changes with it - because the two number the beats
+// differently.  The deck's numbering is the track's real one (the downbeat
+// is where the downbeat is); the estimator's is a convention (an
+// audio-only tracker cannot know where the bar starts, so its beat one is
+// the first beat after the lock).  The two are therefore normally a beat
+// or two apart, and a light that shows the bar's position would JUMP a
+// quarter of the bar when the deck takes over.
+//
+// It does not jump: the phase is CORRECTED, and the correction decays
+// towards zero over about a bar.  So the light travels to the new grid
+// instead of teleporting to it - and because the correction decays over
+// four beats while the bar turns over in four, the light never goes
+// BACKWARDS.  It just runs a little slower for a bar and then carries on
+// as if it had always been there.
+//
+// The beat NUMBER is not corrected: it may change when the deck takes
+// over, and that is information - the deck's downbeat is the real one -
+// not a glitch.
+static float    arHandoffCorr   = 0.0f;   // the correction, in beats
+static uint32_t arHandoffAt     = 0;      // when it was set, ms
+static uint8_t  arHandoffSrc    = 0;      // 0 none, 1 the estimator, 2 the deck
+static float    arHandoffPhase  = 0.0f;   // the phase last seen, in beats
+static uint32_t arHandoffPhaseAt = 0;     // when it was seen, ms
+static float    arHandoffBpm    = 0.0f;   // the tempo of that source
+
+// How fast the correction is let go, in BEATS.  Four beats is a bar: the
+// light slows for a bar and is back on the grid by the next one.
+#define AR_HANDOFF_TAU_BEATS 4.0f
+
+static void arApplyHandoff(ArBeatSource* b) {
+  const uint8_t src = b->live ? (b->fromProLink ? 2 : 1) : 0;
+  const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+
+  if (src == 0) {
+    // No beat at all: the effects are on their own clocks, so there is
+    // nothing to correct, and the next beat starts from scratch.
+    arHandoffSrc = 0;
+    b->phaseBeats = 0.0f;
+    return;
+  }
+
+  const float phase = (float)(b->beatInBar - 1u) + b->beatProgress;
+
+  if (src != arHandoffSrc) {
+    if (arHandoffSrc == 0) {
+      // The first beat of a run: nothing to correct.
+      arHandoffCorr = 0.0f;
+    } else {
+      // The grid changed hands.  The phase jumped by the difference
+      // between the two grids - and the CORRECTION is that difference
+      // taken back, so the phase we show does not move at all at this
+      // instant.  It moves afterwards, as the correction is let go.
+      //
+      // The two phases are compared at the SAME INSTANT: the phase we
+      // last saw belongs to the old grid, and it has been running on
+      // since.  This function is called from more than one place - the
+      // effects, and the JSON - and they call it at very different
+      // rates, so the old phase can be a long way behind.  Without the
+      // catch-up the comparison would be of two moments seconds apart,
+      // and the correction would be a whole number of beats wrong.
+      const float oldBeatMs = (arHandoffBpm > 1.0f) ? (60000.0f / arHandoffBpm) : 500.0f;
+      const float elapsedBeats = (float)(now - arHandoffPhaseAt) / oldBeatMs;
+      float diff = phase - (arHandoffPhase + elapsedBeats);
+      while (diff >  2.0f) diff -= 4.0f;   // the short way round the bar
+      while (diff < -2.0f) diff += 4.0f;
+      arHandoffCorr = -diff;
+      arHandoffAt   = now;
+    }
+    arHandoffSrc = src;
+  } else {
+    // The correction is let go, so the phase glides onto the new grid.
+    const float beatMs = (b->bpm > 1.0f) ? (60000.0f / b->bpm) : 500.0f;
+    const float elapsedBeats = (float)(now - arHandoffAt) / beatMs;
+    arHandoffCorr *= expf(-elapsedBeats / AR_HANDOFF_TAU_BEATS);
+  }
+
+  float p = phase + arHandoffCorr;
+  while (p >= 4.0f) p -= 4.0f;
+  while (p <  0.0f) p += 4.0f;
+  b->phaseBeats   = p;
+  arHandoffPhase  = p;
+  arHandoffPhaseAt = now;
+  arHandoffBpm    = b->bpm;
+}
+
 // The beat source: ProLink first, the estimator second.
 //
 // The two rules are the ones the beat-strobe effect has always used, moved
@@ -245,6 +336,7 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     } else if (prolink_beats_elapsed_public > 0u) {
       b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public - 1u) % 32u) + 1u);
     }
+    arApplyHandoff(&b);
     return b;
   }
   #endif
@@ -276,11 +368,18 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     const float beatMs = 60000.0f / tf.bpm;
     b.driftPct = (beatMs > 0.0f) ? (tf.driftMs / beatMs * 100.0f) : 0.0f;
   }
+  arApplyHandoff(&b);
   return b;
 }
 
 void arResetTempo() {
   ArPublishGuard guard;
+  // The handoff correction goes too: after a reset there is no grid to
+  // be out of step with.
+  arHandoffCorr  = 0.0f;
+  arHandoffAt    = 0;
+  arHandoffSrc   = 0;
+  arHandoffPhase = 0.0f;
   arTempoFrame.bpm = 0.0f;
   arTempoFrame.beatProgress = 0.0f;
   arTempoFrame.score = 0.0f;

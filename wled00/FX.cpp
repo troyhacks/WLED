@@ -513,7 +513,12 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.bpm           = b.bpm;
   c.beat          = b.beatInBar;
   c.beatPhase     = constrain(b.beatProgress, 0.0f, 1.0f);
-  c.barPhase      = ((float)(b.beatInBar - 1u) + c.beatPhase) * 0.25f;
+  // The bar's phase comes from the PUBLISH layer, not from the beat
+  // number: the publish layer carries the handoff correction, so the
+  // light travels to the new grid instead of teleporting to it when the
+  // deck arrives or leaves.  The beat NUMBER above is still the
+  // source's - the deck's real downbeat is information, not a glitch.
+  c.barPhase      = b.phaseBeats * 0.25f;
   c.live          = 1;
   c.downbeatKnown = b.downbeatKnown;
   c.fromProLink   = b.fromProLink;
@@ -1374,10 +1379,12 @@ uint16_t mode_bar_mover(void) {
   const float   fr = head - (float)i0;
 
   for (uint32_t i = 0; i < n; i++) {
-    // How far behind the head this pixel is, the short way round.
+    // How far behind the head this pixel is.  It has to be BEHIND: a
+    // pixel in front of the head is not part of the tail, and letting it
+    // in would light everything from the head to the end of the strip.
     float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
-    if (d < (float)trail) {
+    if (d >= 0.0f && d < (float)trail) {
       w = 1.0f - d / (float)trail;
       w = w * w;              // a softer tail
     }
@@ -1520,7 +1527,7 @@ uint16_t mode_tracker(void) {
   for (uint32_t i = 0; i < n; i++) {
     float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
-    if (d < (float)trail) {
+    if (d >= 0.0f && d < (float)trail) {
       w = 1.0f - d / (float)trail;
       // A good grid gives a smooth tail; a bad one a ragged one.
       const float soft = 0.25f + 0.75f * quality;
@@ -1577,7 +1584,7 @@ uint16_t mode_phrase_mover(void) {
   for (uint32_t i = 0; i < n; i++) {
     float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
-    if (d < (float)trail) {
+    if (d >= 0.0f && d < (float)trail) {
       w = 1.0f - d / (float)trail;
       w = w * w;
     }

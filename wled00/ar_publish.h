@@ -224,6 +224,16 @@ struct ArBeatSource {
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   float    driftMs;         // the grid's phase error against the music, ms
   float    driftPct;        // that error as a percentage of the beat
+  // The bar's phase in BEATS - 0 at the downbeat, 4 at the top of the bar -
+  // and CONTINUOUS.  It is the source's phase with the handoff correction
+  // on it, so it does not jump when the grid changes hands.
+  //
+  // It is a separate number from the beat number on purpose: the beat
+  // NUMBER may change when the deck takes over (the deck's numbering is
+  // the track's real one, and the estimator's is only a convention) and
+  // that is information, not a glitch.  The POSITION of the light is not
+  // information - it is where the music is - so it glides.
+  float    phaseBeats;
 };
 
 // The beat, from whichever source is answering.

@@ -38,16 +38,22 @@ The packets, as the v3 usermod reads them:
       0x5C  the beat number, 1..4
 
 Usage:
-    python tools/prolink_fake.py --host 192.168.6.249 --bpm 128
-    python tools/prolink_fake.py --bpm 128 --delay 40 --start-beat 2
-    python tools/prolink_fake.py --bpm 128 --watch     # follow the tempo
+    python usermods/audioreactive/prolink_fake.py --host 192.168.6.249 --bpm 128
+    python usermods/audioreactive/prolink_fake.py --bpm 128 --delay 40 --start-beat 2
+    python usermods/audioreactive/prolink_fake.py --bpm 128 --watch     # follow the tempo
 
 --delay is how late the beat packet arrives, in milliseconds.  A real
 deck's packet is about 40 ms late, and the board shifts its grid back
 onto the audible beat by that amount, so a fake deck with --delay 40
 exercises the same path.
+
+It lives here, next to the AudioReactive usermod, because it is a way
+to TEST the beat source without a Pioneer rig: the usermod's tempo
+tracker arbitrates the deck's grid against its own estimate, and this
+is a deck-shaped clock the tracker can be pointed at.
 """
 import argparse
+import json
 import os
 import socket
 import struct
@@ -129,6 +135,13 @@ def main():
                     help="how late the beat packet arrives, in ms")
     ap.add_argument("--start-beat", type=int, default=1,
                     help="the beat number to start on, 1..4")
+    ap.add_argument("--beat-offset", type=int, default=0,
+                    help="rotate the deck's bar numbering against the board's, "
+                         "in beats (0..3).  A real deck's downbeat is the "
+                         "track's real downbeat, and the board's own numbering "
+                         "is only a convention, so the two are normally "
+                         "rotated against each other.  This is what puts that "
+                         "rotation on the wire.")
     ap.add_argument("--start-elapsed", type=int, default=0,
                     help="the beats elapsed to start on")
     ap.add_argument("--phrase-beats", type=int, default=BEATS_PER_PHRASE,
@@ -145,22 +158,40 @@ def main():
     # over the board's clock, because every beat packet re-anchors it,
     # and the grid ends up jumping between the two.  That looks like the
     # lights going crazy, and it is not the music.
-    lock = os.path.join(tempfile.gettempdir(), "prolink_fake_%d.lock" % os.getpid())
-    if os.path.exists(lock):
-        try:
-            os.remove(lock)
-        except OSError:
-            pass
-    for other in os.listdir(tempfile.gettempdir()):
+    #
+    # The lock is a file in the temp directory holding the PID.  A lock
+    # whose process is GONE is not a lock - that is a deck that was
+    # killed rather than stopped - so it is cleared and the new deck
+    # starts.  Otherwise a test that ends by killing the deck would
+    # leave the next one unable to start.
+    tmp = tempfile.gettempdir()
+    lock = os.path.join(tmp, "prolink_fake_%d.lock" % os.getpid())
+    for other in os.listdir(tmp):
         if not other.startswith("prolink_fake_") or not other.endswith(".lock"):
             continue
-        path = os.path.join(tempfile.gettempdir(), other)
+        path = os.path.join(tmp, other)
         try:
-            age = time.time() - os.path.getmtime(path)
-            if age < 3600:
-                print("another fake deck is already running (%s, %d s old) - "
-                      "stop it first" % (path, age))
+            with open(path) as f:
+                pid = int(f.read().strip())
+            alive = True
+            if os.name == "nt":
+                import subprocess
+                r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid],
+                                   capture_output=True, text=True)
+                alive = str(pid) in (r.stdout or "")
+            else:
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    alive = False
+            if alive:
+                print("another fake deck is already running (pid %d) - "
+                      "stop it first" % pid)
                 return
+        except Exception:
+            pass
+        try:
+            os.remove(path)
         except OSError:
             pass
     with open(lock, "w") as f:
@@ -200,7 +231,12 @@ def main():
         # be put ON the audible beat: the beat packet goes out the delay
         # AFTER the beat the board hears, which is what a real deck does.
         if args.watch and now >= next_watch:
-            next_watch = now + 0.5
+            # Every two seconds: the board's web server wedges after
+            # roughly sixty GETs, and a test that reads the board too
+            # often is what takes it down.  The phase is re-anchored from
+            # the board's own beat, so two seconds is plenty - the drift
+            # between the anchors is a fraction of a millisecond.
+            next_watch = now + 2.0
             try:
                 import urllib.request
                 with urllib.request.urlopen(
@@ -218,7 +254,14 @@ def main():
                     # does, or the board has nothing to shift back.
                     remaining = (1.0 - float(prog)) * beat_period
                     next_beat = now + remaining + args.delay / 1000.0
-                    beat_no = int(tt.get("beat_in_bar"))
+                    # The deck's own numbering, ROTATED against the board's.
+                    # The board's beat-in-bar is a convention (an audio-only
+                    # tracker cannot know the downbeat); the deck's is the
+                    # track's real one.  So the two are normally a beat or
+                    # two apart, and that is what --beat-offset puts on the
+                    # wire.
+                    bb = int(tt.get("beat_in_bar"))
+                    beat_no = ((bb - 1 + args.beat_offset) % BEATS_PER_BAR) + 1
             except Exception:
                 pass
         # The announce: the board needs a peer before it will believe a
@@ -248,3 +291,15 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nstopped")
         sys.exit(0)
+    finally:
+        # The lock goes when the deck does, however it goes - a deck that
+        # is killed still has to be able to be replaced.
+        for f in os.listdir(tempfile.gettempdir()):
+            if f.startswith("prolink_fake_") and f.endswith(".lock"):
+                p = os.path.join(tempfile.gettempdir(), f)
+                try:
+                    with open(p) as fh:
+                        if int(fh.read().strip()) == os.getpid():
+                            os.remove(p)
+                except Exception:
+                    pass

@@ -44,3 +44,5 @@ tools/ar_sim/__pycache__/
 tools/ar_sim/_rev_odf_cache/
 tools/ar_sim/*.out
 tools/ar_sim/*.log
+__pycache__/
+*.pyc

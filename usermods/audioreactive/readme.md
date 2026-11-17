@@ -201,6 +201,49 @@ answering ping. A flash resets it.
 
 ---
 
+## The beat grid, and testing it without a deck
+
+The usermod tracks the music's tempo and where the beat falls in the bar, and
+publishes it for the effects to read. The grid itself comes from ONE of two
+places, and the choice is made in one place (`arGetBeatSource()` in
+`wled00/ar_publish.cpp`):
+
+- **the deck**, when a Pioneer DJ Link master is on the network, or
+- **the internal estimator**, which listens to the audio.
+
+`/json/ar` → `AudioReactive` → `tempo` says which one is driving: `source`
+(`INTERNAL`, `PRO LINK` or `--`), with `source_bpm`, `source_beat` and
+`source_32` beside it. `ref_err_ms` is the difference between the deck's grid
+and the estimator's, in milliseconds.
+
+**`prolink_fake.py` is a fake deck, in this folder.** It speaks enough of the
+Pioneer DJ Link protocol that the ProLink usermod believes a CDJ is on the
+network: it announces itself, sends status packets, and sends a BEAT packet
+on every beat — and the BEAT packet has to LAND on the beat, because that is
+where the board anchors the deck's clock.
+
+```
+python usermods/audioreactive/prolink_fake.py --host 192.168.6.249 --bpm 128 --delay 40
+```
+
+| flag | what it is |
+|---|---|
+| `--bpm` | the tempo the fake deck claims |
+| `--delay` | how late the beat packet arrives, in ms — a real deck is about 40 ms late, and the board shifts its grid back onto the audible beat by that much |
+| `--watch` | follow the tempo the board is hearing, so the two grids stay together and the comparison between them means something |
+| `--start-beat` / `--start-elapsed` | which beat to start on, and how many beats to say have elapsed |
+| `--quiet` | announce but send no beats |
+
+The audio will not match what it sends — it is a clock and a number, not a
+track — but the deck path is exercised completely: the BPM, the beat in the
+bar, the beat number and the thirty-two all come from it.
+
+Only one fake deck at a time. Two decks beating at once do not make a louder
+wall, they FIGHT over the board's clock, because every beat packet re-anchors
+it. The script refuses to start a second one.
+
+---
+
 ## The serial console
 
 Single characters, because the display is tuned while it is watched: every
