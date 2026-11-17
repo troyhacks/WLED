@@ -46,3 +46,4 @@ tools/ar_sim/*.out
 tools/ar_sim/*.log
 __pycache__/
 *.pyc
+tools/beat_handoff_frames.json
