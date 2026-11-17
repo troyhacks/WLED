@@ -1301,11 +1301,16 @@ static const char _data_FX_MODE_PHRASE[] PROGMEM = "Phrase ☾🐺@Size,Progress
 //   Phrase Mover   the same, on the sixteen-beat phrase instead of the bar
 // ---------------------------------------------------------------------------
 
-// A colour at a weight: the light's colour dimmed towards the off colour.
+// A colour at a weight: the light's colour dimmed towards BLACK.
+//
+// And towards BLACK, not towards the off colour: with a palette on, the
+// colour SLOTS belong to the palette, so fading towards a slot fades
+// towards a palette colour - and a white light came out yellow because
+// of it.  Black is the only thing that is always black.
 static uint32_t beatFade(uint32_t c, float w) {
-  if (w <= 0.0f) return SEGCOLOR(1);
+  if (w <= 0.0f) return 0x000000u;
   if (w >= 1.0f) return c;
-  return color_blend(c, SEGCOLOR(1), (uint16_t)((1.0f - w) * 255.0f));
+  return color_blend(c, 0x000000u, (uint16_t)((1.0f - w) * 255.0f));
 }
 
 // Where a strip effect draws: along the segment's WIDTH on its first row.
@@ -1914,6 +1919,7 @@ uint16_t mode_beat_sweep(void) {
   // ---- the light's colour ------------------------------------------------
   const float bandHere = bandAt((uint16_t)constrain(headX, 0, (int)n - 1));
   uint32_t col = SEGCOLOR(0);
+  bool whiteLight = false;      // the hue is at 255: the light is WHITE
   switch (colourSrc) {
     case 0:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     case 1:  col = SEGMENT.color_from_palette((uint8_t)constrain(mapf(logf(max(20.0f, majorPeak)), 4.6f, 9.06f, 0, 255), 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
@@ -1928,10 +1934,13 @@ uint16_t mode_beat_sweep(void) {
       if (hue == 0) {
         col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0);
       } else if (hue == 255) {
-        // The literal, and not RGBW32(): the macro's argument order is
-        // not the same in every scope it is defined in, and white built
-        // the wrong way round comes out yellow.
-        col = 0xFFFFFFu;
+        // White.  0x00FEFEFE and not 0x00FFFFFF, because the liveview
+        // PREVIEW drops the all-ones colour and shows nothing at all for
+        // it - the strip itself shows white perfectly well, so the
+        // preview is the thing that is wrong, and 254 buys a preview
+        // that agrees with the bar.
+        col = 0x00FEFEFEu;
+        whiteLight = true;
       } else {
         col = SEGMENT.color_wheel(hue);
       }
@@ -2052,7 +2061,11 @@ uint16_t mode_beat_sweep(void) {
         const float b = bandAt(x);
         c = SEGMENT.color_from_palette((uint8_t)(b * 255.0f), false, PALETTE_SOLID_WRAP, 0);
       }
-      beatRowPut(x, beatFade(c, w));
+      // The WHITE light is drawn as the literal, with no fade towards
+      // anything: a palette owns the colour slots, and anything that
+      // fades towards one comes out the colour of the palette.
+      if (whiteLight && w > 0.7f) beatRowPut(x, 0x00FEFEFEu);
+      else beatRowPut(x, beatFade(c, w));
     }
   }
 
