@@ -1700,18 +1700,25 @@ uint16_t mode_beat_sweep(void) {
   const uint32_t bar = SEGENV.aux0;
 
   // ---- the cycle --------------------------------------------------------
-  // With the "Cycle" option on, the sub-effect steps on every FOUR BARS -
-  // sixteen beats - so all thirty-two can be watched in order.  It starts
+  // With the cycle on, the sub-effect steps on every few BARS - sixteen
+  // beats at four - so all thirty-two can be watched in order.  It starts
   // at zero and counts up to thirty-one and round again.
+  //
+  // The FIRST SLIDER is the cycle: zero for off, and then the number of
+  // BARS each sub-effect is shown for.  It is one control because it is
+  // one thing - how often the sub-effect changes - and it is what the
+  // fallback speed used to be, which this effect does not need: a
+  // thirty-two-in-one effect can assume it has a beat.
   //
   // The sub-effect it is showing lives in the TOP BYTE of SEGENV.aux1,
   // which is otherwise free, so the slider is not fought over: the
   // slider is what you choose, and the cycle is what is running.
+  const uint8_t cycleBars = (uint8_t)map(SEGMENT.speed, 0, 255, 0, 8);
+  const bool cycle = (cycleBars > 0);
   uint8_t sub = SEGMENT.custom3;
-  const bool cycle = SEGMENT.check3;
   if (cycle) {
     if (newBar) SEGENV.step++;
-    if (SEGENV.step >= 4) {
+    if (SEGENV.step >= cycleBars) {
       SEGENV.step = 0;
       const uint8_t next = (uint8_t)((((SEGENV.aux1 >> 8) + 1u) & 31u));
       SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0x00FF) | ((uint16_t)next << 8));
@@ -1727,18 +1734,34 @@ uint16_t mode_beat_sweep(void) {
   // of the bar - the light has to stop at the edge - so the two are not
   // just a different shape, they are a different rule about wrapping.
   const bool loopMode = SEGMENT.check2;
+  // A pass is one BEAT or one BAR.  The light crosses the strip in a pass
+  // and turns round at the end of it, so a bounce is two passes.
+  const bool perBeat = SEGMENT.check3;
 
   float pos;
   int dir;
   if (clk.live) {
-    const float bp = clk.barPhase;                 // 0..1 through this bar
-    if (loopMode) { pos = bp;         dir = 1;  }  // always one way, wrapping
-    else if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
-    else          { pos = bp;         dir = 1;  }  // this bar: left to right
+    if (perBeat) {
+      // One beat a pass: beats one and three go right, two and four go
+      // left, so the bounce is a beat long.
+      if (clk.beat & 1) { pos = clk.beatPhase;         dir = 1;  }
+      else              { pos = 1.0f - clk.beatPhase; dir = -1; }
+    } else {
+      const float bp = clk.barPhase;                 // 0..1 through this bar
+      if (loopMode) { pos = bp;         dir = 1;  }  // always one way, wrapping
+      else if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
+      else          { pos = bp;         dir = 1;  }  // this bar: left to right
+    }
+    if (loopMode) {
+      // The loop always goes the same way and wraps.
+      pos = perBeat ? clk.beatPhase : clk.barPhase;
+      dir = 1;
+    }
   } else {
-    // No beat to lock to: the sweep runs on its own clock.
-    const uint32_t period = map(SEGMENT.speed, 0, 255, 8000, 500);
-    pos = beatCyclePhase(clk, period, 1u);
+    // No beat to lock to.  This is a thirty-two-in-one effect and it
+    // assumes it has a beat, so the light simply waits at the end of the
+    // strip rather than inventing a rate.
+    pos = 0.0f;
     dir = 1;
   }
 
@@ -1796,7 +1819,7 @@ uint16_t mode_beat_sweep(void) {
     case 11: layer = 6; intensitySrc = 3; colourSrc = 6; break;   // Breathe
     // --- the strip --------------------------------------------------------
     case 12: layer = 1; colourSrc = 6; break;                     // Ribbon
-    case 13: layer = 0; colourSrc = 0; break;                     // Inverse
+    case 13: layer = 0; colourSrc = 0; intensitySrc = 1; glowSrc = 1; break;  // Inverse: the bass pumps it
     case 14: layer = 2; colourSrc = 6; break;                     // Mirror
     case 15: layer = 3; colourSrc = 6; break;                     // Steps
     // --- the sweep --------------------------------------------------------
@@ -1898,7 +1921,21 @@ uint16_t mode_beat_sweep(void) {
     case 3:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     case 4:  col = SEGMENT.color_from_palette((uint8_t)(headF * 255.0f / (float)n), false, PALETTE_SOLID_WRAP, 0); break;
     case 5:  col = SEGMENT.color_from_palette((uint8_t)(peakBand * 16), false, PALETTE_SOLID_WRAP, 0); break;
-    case 6:  col = SEGMENT.color_wheel(hue); break;
+    case 6:
+      // The HUE picker: zero is AUTO - the colour comes from the band
+      // under the light - and 255 is WHITE, because a hue wheel has no
+      // white on it and white is worth having.
+      if (hue == 0) {
+        col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0);
+      } else if (hue == 255) {
+        // The literal, and not RGBW32(): the macro's argument order is
+        // not the same in every scope it is defined in, and white built
+        // the wrong way round comes out yellow.
+        col = 0xFFFFFFu;
+      } else {
+        col = SEGMENT.color_wheel(hue);
+      }
+      break;
     case 7:  col = SEGCOLOR(0); break;
     case 8:  col = SEGMENT.color_from_palette((uint8_t)(bass * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     default: col = SEGMENT.color_wheel(hue); break;
@@ -1943,10 +1980,14 @@ uint16_t mode_beat_sweep(void) {
 
   if (layer == 4) {
     // The bass blob: the lowest band, drawn as a soft patch at the low
-    // end of the strip, its width and its brightness the bass.
+    // end of the strip, its width and its brightness the bass.  It is
+    // MIRRORED at the high end as well, so the meter reads from BOTH ends
+    // and the strip is symmetric.
     const uint16_t w = (uint16_t)max(1.0f, bass * (float)n * 0.4f);
     for (uint16_t x = 0; x < w; x++) {
-      beatRowPut(x, beatFade(col, sens * bass * (1.0f - (float)x / (float)w)));
+      const float f = sens * bass * (1.0f - (float)x / (float)w);
+      beatRowPut(x, beatFade(col, f));
+      beatRowPut((uint32_t)(n - 1 - x), beatFade(col, f));
     }
   }
 
@@ -2028,7 +2069,7 @@ uint16_t mode_beat_sweep(void) {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Width,Hue,Effect,Trail,Loop,Cycle;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=96,c2=0,c3=12,o1=1,o2=0,o3=0,pal=11";
+static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Cycle,Sensitivity,Width,Hue,Effect,Trail,Loop,Beat;Light,BG,Downbeat;;1v;sx=128,ix=128,c1=96,c2=0,c3=12,o1=1,o2=0,o3=0,pal=11";
 
 
 /*

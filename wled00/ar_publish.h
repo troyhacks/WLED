@@ -172,6 +172,7 @@ struct ArTempoFrame {
   uint8_t  beatInBar;       // 1..4; 1 is the downbeat
   uint8_t  valid;           // 1 when the estimate is a real measurement
   uint8_t  beatInMeasure;   // 1..16; 1 is the measure's own beat
+  uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
@@ -218,6 +219,7 @@ struct ArBeatSource {
   uint8_t  live;            // 1 when there is a beat to show
   uint8_t  downbeatKnown;   // the downbeat is KNOWN - the deck's, or the user's
   uint8_t  fromProLink;     // 1 when the DECK is the source, 0 for the estimator
+  uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   float    driftMs;         // the grid's phase error against the music, ms

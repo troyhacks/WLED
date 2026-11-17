@@ -6,14 +6,18 @@ are the switches:
 
 | control | what it is |
 |---|---|
-| Fallback speed | the sweep's period when there is no beat |
+| Cycle | 0 = off; 1..8 = the sub-effect changes every N BARS, so all thirty-two can be watched in order |
 | Sensitivity | how deep the spectrum's ribbon goes |
-| Width | the size of the light and its tail together |
-| Hue | a simple 0..255 hue picker for the light |
+| Width | the size of the light and its tail together (the tail is twice the width) |
+| Hue | 0 = AUTO (the colour comes from the band under the light); 1..254 = that hue; **255 = white** |
 | **Effect** | **the sub-effect, 0..31** |
 | Trail | the tail behind the light |
 | Loop | ON: the light loops and wraps off the end; OFF: it bounces and stops at the edges |
-| Cycle | ON: the sub-effect steps on every four bars, so all thirty-two can be watched in order |
+| Beat | ON: one BEAT a pass; OFF: one BAR a pass |
+
+There is no fallback speed: this is a thirty-two-in-one effect and it
+assumes it has a beat.  With no beat the light waits at the end of the
+strip rather than inventing a rate.
 
 The default palette is **Rainbow** (index 11), and the palette and the
 colour slots work **together** - the palette gives the spectrum its colours
@@ -27,7 +31,7 @@ and the slots stay yours.  The three colour buttons are **Light**, **BG**
 | **0** | **Bass glow** | One colour; the light's brightness is the lowest of the sixteen bands - the pressure point |
 | **1** | **Bass colour** | The colour is the palette at the bass level |
 | **2** | **Bass width** | The light swells with the bass |
-| **3** | **Bass line** | The bass is drawn on the strip as a soft patch at the low end |
+| **3** | **Bass line** | The bass is drawn on the strip as a soft patch at the low end - and MIRRORED at the high end, so the meter reads from both ends |
 | **4** | **Peak colour** | The colour is the palette at the **dominant frequency** |
 | **5** | **Peak spot** | A second light sits on the dominant band while the sweep carries on |
 | **6** | **Peak glow** | The light's brightness is the dominant band's level |
@@ -37,7 +41,7 @@ and the slots stay yours.  The three colour buttons are **Light**, **BG**
 | **10** | **Level tail** | The tail's length is the volume |
 | **11** | **Breathe** | The whole strip breathes with the level |
 | **12** | **Ribbon** | The sixteen bands as a ribbon; the light is a fixed colour |
-| **13** | **Inverse** | The plain BG; only the light reacts, taking the colour of the band it is over |
+| **13** | **Inverse** | The plain BG; only the light reacts, taking the colour of the band it is over - and it PUMPS with the bass, in brightness and in width |
 | **14** | **Mirror** | The ribbon, mirrored about the middle |
 | **15** | **Steps** | One flat block per band |
 | **16** | **Stepped** | The light jumps from pixel to pixel |
@@ -78,7 +82,7 @@ and the slots stay yours.  The three colour buttons are **Light**, **BG**
 | the palette at the band's own value | 3 |
 | the palette at the light's position | 4 |
 | the palette at the dominant band | 5 |
-| **the Hue slider** | 6 |
+| **the Hue slider** (0 = auto, 255 = white) | 6 |
 | **the Light colour slot** | 7 |
 
 ## What to rank
@@ -96,4 +100,17 @@ The ones most likely to need fixing, and what to look at:
 - **the colours** - with the default Rainbow palette, every palette-indexed
   colour is a different hue.  Palette 0 on this board is a BLUE gradient,
   so on 0 the spectrum reads monochrome.
-- **the cycle** - four bars (sixteen beats) per sub-effect.
+- **the cycle** - the Cycle slider says how many bars each sub-effect gets.
+- **the pass** - the Beat checkbox: one beat a pass or one bar a pass.
+
+## The thirty-two in the tempo
+
+The tempo now publishes a **thirty-two** as well as the sixteen: the
+beat's place in the measure, counted from the downbeat the USER marked by
+ear.  With Pro DJ Link the position comes from the deck's own beat in the
+song, which is assumed to be set to a measure start - unless the user has
+marked the downbeat, which overrides it.
+
+The GUI's downbeat button is a TOGGLE now, and it is there in Pro DJ
+Link mode too: it turns green when the mark is on, and pressing it again
+takes the mark back.

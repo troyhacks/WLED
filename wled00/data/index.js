@@ -2465,12 +2465,17 @@ function tempoUpdate(t)
 	// hear is a control that cannot be set up before the music starts. The
 	// board decides what a press means; the page only shows the state.
 	tempoShow('tempoLock', !proLink);
-	tempoShow('tempoDown', !proLink);
+	// The downbeat's MARK is there even with a deck connected: the deck
+	// numbers the beats, and the user can override it by ear.
+	tempoShow('tempoDown', true);
 	// The CORRECT button is the exception: there is nothing to correct
 	// until the grid has been LOCKED to the music, so it appears with the
 	// lock and disappears with it.
 	tempoShow('tempoCorr', !proLink && locked);
 	gId('tempoLock').classList.toggle('on', locked);
+	// The downbeat's mark IS a state now - it is a toggle - so the
+	// button says which way it is.
+	gId('tempoDown').classList.toggle('on', !!t.dbset);
 }
 
 // The FILL, smooth.
@@ -2528,15 +2533,20 @@ function tempoLock()
 	tempoCmd({AudioReactive: tempo.lock ? {unlockTempo:true} : {lockTempo:true}});
 }
 
-// Mark the beat that is sounding NOW as beat one.
+// Mark the beat that is sounding NOW as beat one - or take the mark
+// back.
 //
-// This is a COMMAND, not a switch: it marks the beat that is sounding,
-// every time it is pressed. It does not light up, because it is not a
-// state - and the state it would be showing is already on the panel: the
-// beat box that is beat one carries the downbeat's outline.
+// This is a TOGGLE.  Pressing it marks the beat that is sounding as beat
+// one - and that beat is ALSO the first beat of the thirty-two, so the
+// whole measure is numbered from where the user says it starts.  Pressing
+// it again takes the mark away, and the numbering goes back to what the
+// music says: with a deck connected, the deck's own beat position.
+//
+// It lights up because it IS a state now, and the state is on the tempo
+// frame.
 function tempoDown()
 {
-	tempoCmd({AudioReactive: {setDownbeat:true}});
+	tempoCmd({AudioReactive: tempo.dbset ? {clearDownbeat:true} : {setDownbeat:true}});
 }
 
 // Move the grid onto the music. The RATE is not touched, so a locked

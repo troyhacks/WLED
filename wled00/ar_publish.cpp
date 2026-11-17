@@ -170,7 +170,8 @@ void arCopyTempoLocked(ArTempoFrame* dest) {
     dest->driftMs = 0.0f; dest->driftBpm = 0.0f;
     dest->hold = 0;
     dest->beatInBar = 0; dest->valid = 0;
-    dest->beatInMeasure = 0; dest->downbeatKnown = 0; dest->downbeatSet = 0;
+    dest->beatInMeasure = 0; dest->beatInMeasure32 = 0;
+    dest->downbeatKnown = 0; dest->downbeatSet = 0;
     dest->downbeatT = 0.0f; dest->beatCount = 0;
     dest->refBpm = 0.0f; dest->refErrMs = 0.0f;
     dest->refBeat = 0; dest->refOurBeat = 0;
@@ -212,6 +213,11 @@ void arSetTempoLive(bool live) {
 ArBeatSource arGetBeatSource(bool ignoreProLink) {
   ArBeatSource b = {};
 
+  // The estimator's frame, read first: even when the DECK is the clock,
+  // the user's own mark of the downbeat lives in it.
+  ArTempoFrame tf;
+  const bool haveTf = arCopyTempo(&tf);
+
   #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
   // ProLink globals - file-scope volatile in usermods_list.cpp. The
   // beatInMeasure sentinel 0 ("no packet yet") falls through, so there is
@@ -220,6 +226,7 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   extern volatile uint8_t prolink_beat_public;           // beat-in-measure 1..4, in the SHIFTED grid
   extern volatile float   prolink_beat_progress_public;  // 0..1 within the current beat
   extern volatile bool    prolink_connected_public;      // true while following a master CDJ
+  extern volatile uint32_t prolink_beats_elapsed_public;   // the deck's beat in the song
 
   if (!ignoreProLink && prolink_connected_public &&
       prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
@@ -229,6 +236,15 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     b.live          = 1;
     b.downbeatKnown = 1;      // a CDJ knows its own downbeat
     b.fromProLink   = 1;
+    // The THIRTY-TWO: the deck's beat in the song, which we ASSUME is set
+    // to a measure start.  But the USER's mark of the downbeat overrides
+    // it: he has said by ear where the bar starts, and that beats the
+    // deck's numbering.
+    if (haveTf && tf.downbeatSet != 0) {
+      b.beatInMeasure32 = tf.beatInMeasure32;
+    } else if (prolink_beats_elapsed_public > 0u) {
+      b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public - 1u) % 32u) + 1u);
+    }
     return b;
   }
   #endif
@@ -239,8 +255,7 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   // measurement - which is what a board receiving its sound over the
   // network publishes, because it has no audio to measure. The answer is
   // then "not live" rather than a stale number.
-  ArTempoFrame tf;
-  if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f &&
+  if (haveTf && tf.valid != 0 && tf.bpm > 0.0f &&
       tf.beatInBar >= 1 && tf.beatInBar <= 4) {
     b.bpm          = tf.bpm;
     b.beatInBar    = tf.beatInBar;
@@ -252,6 +267,7 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // as good as the deck's.
     b.downbeatKnown = (tf.downbeatSet != 0) ? 1 : 0;
     b.downbeatSet   = tf.downbeatSet;
+    b.beatInMeasure32 = tf.beatInMeasure32;
     b.locked        = tf.hold;
     b.driftMs       = tf.driftMs;
     // The drift as a PERCENTAGE of the beat: how far off the beat the

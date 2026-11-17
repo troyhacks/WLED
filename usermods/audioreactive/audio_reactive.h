@@ -5574,6 +5574,7 @@ void arAnalysisTask(void * parameter)
       // back to their own clocks.
       tf.valid        = (arFrameSettings.tempoEnabled && arTempoValid()) ? 1 : 0;
       tf.beatInMeasure = arTempoBeatInMeasure();
+      tf.beatInMeasure32 = arTempoBeatInMeasure32();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;
       tf.downbeatT    = arTempoDownbeatT();
@@ -7961,6 +7962,7 @@ class AudioReactive : public Usermod {
         // The USER'S LOCK: the clock is frozen, the estimate keeps running.
         t["hold"]         = (int)tf.hold;
         t["beat_in_measure"] = (int)tf.beatInMeasure;
+        t["beat_in_measure32"] = (int)tf.beatInMeasure32;
         t["downbeat_known"] = tf.downbeatKnown != 0;
         t["downbeat_t"]   = (double)tf.downbeatT;
         // The downbeat the USER marked: "the beat sounding now is beat one".

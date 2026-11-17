@@ -1135,6 +1135,7 @@ struct ArTempoState {
   uint32_t downbeatEvalIndex;             // the beat the profiles were scored at
   uint32_t downbeatApplyAt;               // the beat the numbering shifts at
   uint32_t measureApplyAt;                // ... and the measure's, over sixteen
+  uint32_t measure32ApplyAt;              // the beat the THIRTY-TWO begins at
 
   // ---- the gate ----
   uint16_t gateShutFrames;                // how long the gate has been shut
@@ -1652,6 +1653,7 @@ static void arTempoReset(void) {
   arTempo.downbeatEvalIndex = 0;
   arTempo.downbeatApplyAt = 0;
   arTempo.measureApplyAt = 0;
+  arTempo.measure32ApplyAt = 0;
   arTempo.locked      = false;
   arTempo.gateShutFrames = 0;
   arTempo.refBpm      = 0.0f;
@@ -1918,6 +1920,7 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     arTempo.downbeatEvalIndex = 0;
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
+    arTempo.measure32ApplyAt = 0;
     arTempo.bpm = bpm;
     // The follower starts here: the grid is new.
     arTempo.lastSlewFrame = (uint32_t)now;
@@ -1946,6 +1949,7 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
       arTempo.downbeatApplyAt = 0xFFFFFFFFu;
       arTempo.measureKnown    = false;
       arTempo.measureApplyAt  = 0;
+      arTempo.measure32ApplyAt = 0;
       for (int i = 0; i < 4; i++) {
         arTempo.barSum[i] = 0.0f;
         arTempo.barSq[i]  = 0.0f;
@@ -3046,6 +3050,11 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         arTempo.downbeatApplyAt = arTempo.beatIndex;
         arTempo.downbeatManual  = true;
         arTempo.downbeatKnown   = true;
+        // The beat the user marked is also the FIRST beat of the
+        // thirty-two.  He set it by ear, on the bar's start, so the
+        // thirty-two begins there - and a global quantiser will want
+        // exactly this: one place that says where the measure starts.
+        arTempo.measure32ApplyAt = arTempo.beatIndex;
         USER_PRINTF("tempo: downbeat set - the beat sounding now (was %u) is beat 1\n",
                     (unsigned)(arTempo.beatIndex % 4u) + 1u);
       } else {
@@ -3393,6 +3402,20 @@ static uint8_t arTempoBeatInMeasure(void) {
                       ? (arTempo.beatIndex - (uint32_t)arTempo.measurePos)
                       : arTempo.beatIndex;
   return (uint8_t)((base % 16) + 1);
+}
+
+// The beat in the thirty-two: the measure the user set by ear.
+//
+// The downbeat the USER marked is the first beat of the thirty-two, so
+// the position is counted from there.  Without a mark it is the
+// CONVENTION: the first beat after the lock is beat one.
+static uint8_t arTempoBeatInMeasure32(void) {
+  if (!arTempo.locked) return 0;
+  const uint32_t base = (arTempo.measure32ApplyAt != 0u
+                       && arTempo.beatIndex >= arTempo.measure32ApplyAt)
+                      ? (arTempo.beatIndex - arTempo.measure32ApplyAt)
+                      : arTempo.beatIndex;
+  return (uint8_t)((base % 32) + 1);
 }
 
 // How sure is the downbeat?  The t-score of the bar's profile: zero when
