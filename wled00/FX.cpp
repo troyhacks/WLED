@@ -1091,15 +1091,27 @@ uint16_t mode_beat_counter(void) {
   static const int8_t dx[4] = { 0, 1, 0, -1};
   static const int8_t dy[4] = {-1, 0, 1, 0};
 
+  // A clock face needs a canvas with the HEIGHT for it.  A bar that is
+  // two rows tall has not - and worse, a ring on it would collapse every
+  // marker onto the same pixel - so on a canvas too short for the ring
+  // the four markers are laid out along the WIDTH instead, one in each
+  // quarter of the strip.  It is the same reading, and it works on any
+  // bar.
+  const bool ring = circle && (rows >= 4) && (rad >= 1);
+
   // The canvas starts again from the off colour, so a mark that moves
   // leaves nothing behind it.
   SEGMENT.fill(SEGCOLOR(1));
 
   // Where the marker for a beat is.
   auto markerAt = [&](uint8_t b, int32_t* mx, int32_t* my) {
-    if (circle) {
+    if (ring) {
       *mx = cx + dx[b - 1] * rad;
       *my = cy + dy[b - 1] * rad;
+    } else if (circle) {
+      // The strip layout: one marker in each quarter of the width.
+      *mx = (int32_t)(((uint32_t)(b - 1u) * (uint32_t)cols) / 4u) + (int32_t)(cols / 8u);
+      *my = 0;
     } else {
       *mx = (dx[b - 1] < 0) ? mark : (int32_t)cols - 1 - mark;
       *my = (dy[b - 1] < 0) ? mark : (int32_t)rows - 1 - mark;
@@ -1203,6 +1215,13 @@ uint16_t mode_phrase(void) {
   const int32_t  rad  = (int32_t)((float)min((uint32_t)cols, (uint32_t)rows) * 0.36f);
   const int32_t  mark = (int32_t)(((uint32_t)size * (uint32_t)min((uint32_t)cols, (uint32_t)rows)) / 2040u);
 
+  // A ring of sixteen needs a canvas with the HEIGHT for it, or the
+  // marks land on each other.  A bar that is two rows tall has not, so
+  // there the sixteen marks are laid out along the WIDTH instead, one in
+  // each sixteenth of the strip.  It is the same reading, and it works on
+  // any bar.
+  const bool ring = (rad >= 8);
+
   // The canvas starts again from the off colour, so a mark that moves
   // leaves nothing behind it.
   SEGMENT.fill(SEGCOLOR(1));
@@ -1212,10 +1231,16 @@ uint16_t mode_phrase(void) {
   // works in, so there is no float trigonometry in a frame that runs
   // thirty times a second.
   auto markAt = [&](uint8_t st, int32_t* mx, int32_t* my) {
-    const int32_t  deg = -90 + (int32_t)st * 360 / 16;
-    const uint16_t th  = (uint16_t)(((uint32_t)(deg + 360) * 65536u) / 360u);
-    *mx = cx + (((int32_t)cos16_t(th) * rad) >> 15);
-    *my = cy + (((int32_t)sin16_t(th) * rad) >> 15);
+    if (ring) {
+      const int32_t  deg = -90 + (int32_t)st * 360 / 16;
+      const uint16_t th  = (uint16_t)(((uint32_t)(deg + 360) * 65536u) / 360u);
+      *mx = cx + (((int32_t)cos16_t(th) * rad) >> 15);
+      *my = cy + (((int32_t)sin16_t(th) * rad) >> 15);
+    } else {
+      // The strip layout: one mark in each sixteenth of the width.
+      *mx = (int32_t)(((uint32_t)st * (uint32_t)cols) / 16u);
+      *my = 0;
+    }
     if (*mx < 0) *mx = 0; if (*mx >= (int32_t)cols) *mx = cols - 1;
     if (*my < 0) *my = 0; if (*my >= (int32_t)rows) *my = rows - 1;
   };
@@ -5532,12 +5557,20 @@ uint16_t mode_heartbeat(void) {
     // the dub for this beat has already fired.
     SEGENV.aux1 = (uint16_t)(SEGENV.aux1 * 2042 / (2048 + SEGMENT.intensity));
 
-    const uint8_t lastBeat = (uint8_t)(SEGENV.step & 0xFF);
-    const bool    dubDone  = (SEGENV.step & 0x100) != 0;
+    //
+    // The pulse is a LUB on the DOWNBEAT and a DUB a third of a beat
+    // later.  A heartbeat that thumped on every BEAT would be a flutter
+    // at 130 BPM - far too fast to read as a heart - so it thumps once
+    // per BAR, on the downbeat, and stays in time with the music.
+    const uint8_t lastBeat = (uint8_t)(SEGENV.step & 0x0F);
     if (clk.beat != lastBeat) {
-      SEGENV.aux1 = UINT16_MAX;              // the LUB, on the beat
-      SEGENV.step = (uint32_t)clk.beat;      // and the dub is due again
-    } else if (!dubDone && clk.beatPhase > 0.3333f) {
+      if (clk.beat == 1) {
+        SEGENV.aux1 = UINT16_MAX;            // the LUB, on the downbeat
+        SEGENV.step = 1u;                    // and the dub is due again
+      } else {
+        SEGENV.step = (SEGENV.step & 0x100) | (uint32_t)clk.beat;
+      }
+    } else if (clk.beat == 1 && !(SEGENV.step & 0x100) && clk.beatPhase > 0.3333f) {
       SEGENV.aux1 = UINT16_MAX;              // the DUB, a third of a beat in
       SEGENV.step |= 0x100;
     }
