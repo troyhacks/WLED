@@ -377,8 +377,12 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FX_MODE_RTA_METER              234
 #define FX_MODE_BEAT_COUNTER           235
 #define FX_MODE_PHRASE                 236
+#define FX_MODE_BAR_MOVER              237
+#define FX_MODE_BEAT_WAVE              238
+#define FX_MODE_TRACKER                239
+#define FX_MODE_PHRASE_MOVER           240
 
-#define MODE_COUNT                     237
+#define MODE_COUNT                     241
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,

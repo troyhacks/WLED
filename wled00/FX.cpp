@@ -554,6 +554,47 @@ static float downbeatAccent(const BeatClock& c, uint32_t decayMs = 300) {
   return 1.0f - age / (float)decayMs;
 }
 
+// The PHRASE's position, 0..1 through the sixteen beats.
+//
+// The estimator's own sixteen-beat measure is the best answer when it is
+// driving, because that measure is the one the user can move.  With a
+// deck driving there is no such measure, so the position is counted here:
+// a bar is four beats and the phrase is four bars.
+//
+// The bar counter lives in SEGENV.aux0, so it is per segment.
+static float beatPhrasePhase(const BeatClock& c) {
+  if (c.live == 0) return 0.0f;
+  ArTempoFrame tf;
+  if (!c.fromProLink && arCopyTempo(&tf) && tf.valid != 0 &&
+      tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
+    return ((float)(tf.beatInMeasure - 1u) + c.beatPhase) * 0.0625f;
+  }
+  const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
+  if (lastBeat != c.beat) {
+    if (lastBeat == 4 && c.beat == 1) SEGENV.aux0++;   // one bar
+    SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | c.beat);
+  }
+  const uint32_t bars = SEGENV.aux0;
+  return ((float)((bars % 4u) * 4u + (uint32_t)(c.beat - 1u)) + c.beatPhase) * 0.0625f;
+}
+
+// The grid's own quality and error: how well the music explains the
+// running grid, and how far the grid is from the music in milliseconds.
+//
+// These come from the ESTIMATOR even when a deck is driving - the deck
+// has no quality of its own, and the estimator is still measuring the
+// same music.
+static void beatGridQuality(float* quality, float* driftMs) {
+  *quality = 0.0f;
+  *driftMs = 0.0f;
+  ArTempoFrame tf;
+  if (arCopyTempo(&tf) && tf.valid != 0) {
+    *quality = constrain(tf.quality, 0.0f, 1.0f);
+    *driftMs = tf.driftMs;
+  }
+}
+
+
 static um_data_t* getAudioData() {
   um_data_t *um_data;
   if (!usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE)) {
@@ -1098,7 +1139,7 @@ uint16_t mode_beat_counter(void) {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_BEAT_COUNTER[] PROGMEM = "Beat Counter ☾🐺@Size,Progress,,,Downbeat,Circle;Beat,Off,Downbeat;;12;sx=128,ix=96,c1=255,o1=1,o2=1";
+static const char _data_FX_MODE_BEAT_COUNTER[] PROGMEM = "Beat Counter ☾🐺@Size,Progress,,,,Downbeat,Circle;Beat,Off,Downbeat;;12;sx=128,ix=96,c1=255,o1=1,o2=1";
 
 
 // ---------------------------------------------------------------------------
@@ -1119,26 +1160,14 @@ static const char _data_FX_MODE_BEAT_COUNTER[] PROGMEM = "Beat Counter ☾🐺@S
 uint16_t mode_phrase(void) {
   const BeatClock clk = beatClock();
 
-  // The step, 0..15, or 0xFF when there is no beat at all.
+  // The step, 0..15, or 0xFF when there is no beat at all.  The position
+  // comes from the shared helper, so the Phrase and the Phrase Mover are
+  // always on the same sixteen beats.
   uint8_t step = 0xFF;
   if (clk.live) {
-    // The estimator's measure, when the estimator is the one driving.
-    ArTempoFrame tf;
-    if (!clk.fromProLink && arCopyTempo(&tf) && tf.valid != 0 &&
-        tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
-      step = (uint8_t)(tf.beatInMeasure - 1u);
-    } else {
-      // The deck is driving: count the bars here.  A bar is four beats and
-      // the phrase is four bars, and the bar is counted when the beat
-      // index wraps from four back to one.
-      const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
-      if (lastBeat != clk.beat) {
-        if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;   // one bar
-        SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
-      }
-      const uint32_t bars = SEGENV.aux0;
-      step = (uint8_t)(((bars % 4u) * 4u) + (uint32_t)(clk.beat - 1u));
-    }
+    const float phrase = beatPhrasePhase(clk);
+    const int32_t st = (int32_t)(phrase * 16.0f);
+    step = (uint8_t)((st < 0) ? 0 : ((st > 15) ? 15 : st));
   }
 
   const uint8_t size = SEGMENT.speed;
@@ -1217,6 +1246,321 @@ uint16_t mode_phrase(void) {
   return FRAMETIME;
 }
 static const char _data_FX_MODE_PHRASE[] PROGMEM = "Phrase ☾🐺@Size,Progress,,,;Step,Off,;12;sx=64,ix=96,c1=255";
+
+
+// ---------------------------------------------------------------------------
+// The movers.
+//
+// The flash effects answer "when is the beat".  These answer "WHERE in
+// the beat" - and the answer is a POSITION, not a trigger, so the light
+// travels instead of blinking.
+//
+// The bar's phase is continuous: it is where in the bar the music is, from
+// 0 at the downbeat to 1 just before the next one.  Put a light at that
+// position and it crosses the strip exactly once per bar, arriving on the
+// downbeat.  Nothing about that needs a flash.
+//
+// These are STRIP effects drawn through setPixelColorXY, so a segment
+// that is set up as a "fake 2D" - a matrix that is really a strip - runs
+// the strip along its first row, and the segment's own mirror, reverse
+// and transpose apply to it, the way they do to any other 2D effect.
+//
+//   Bar Mover      the light's position is the BAR's phase: one pass per
+//                  bar, and it arrives on the downbeat
+//   Beat Wave      the whole strip undulates on a curve whose period is
+//                  the beat - a pulse that never falls to zero
+//   Tracker        the same motion, but it shows the grid's QUALITY: the
+//                  trail is tight when the music explains the grid and
+//                  loose when it does not, and the light slides with the
+//                  grid's own measured error
+//   Phrase Mover   the same, on the sixteen-beat phrase instead of the bar
+// ---------------------------------------------------------------------------
+
+// A colour at a weight: the light's colour dimmed towards the off colour.
+static uint32_t beatFade(uint32_t c, float w) {
+  if (w <= 0.0f) return SEGCOLOR(1);
+  if (w >= 1.0f) return c;
+  return color_blend(c, SEGCOLOR(1), (uint16_t)((1.0f - w) * 255.0f));
+}
+
+// Where a strip effect draws: along the segment's WIDTH on its first row.
+//
+// On a strip that is the whole strip.  On a matrix it is the first row,
+// which is what a strip on a matrix is for.
+static inline uint16_t beatRowLength(void) {
+  return SEGMENT.is2D() ? SEGMENT.virtualWidth() : (uint16_t)SEGLEN;
+}
+
+static inline void beatRowPut(uint32_t i, uint32_t c) {
+  if (SEGMENT.is2D()) SEGMENT.setPixelColorXY((int)i, 0, c);
+  else              SEGMENT.setPixelColor(i, c);
+}
+
+/*
+ * Bar Mover.
+ *
+ * The light's position IS the bar's phase.  One pass per bar, and it
+ * arrives on the downbeat - so the strip shows, continuously, where in
+ * the bar the music is.
+ *
+ *   Slider[0] Trail     = the length of the tail behind the light, in
+ *                          pixels; 0 = the light alone
+ *   Checkbox[1] Round   = ON -> the light goes there and back, a
+ *                          pendulum, one swing per bar; OFF -> one way
+ *   Checkbox[2] Downbeat = ON -> the light is the third colour when the
+ *                          bar's first beat is the one it is on
+ *   Checkbox[3] Steps   = ON -> the position is quantised to the four
+ *                          beats, so it steps instead of gliding
+ */
+uint16_t mode_bar_mover(void) {
+  const BeatClock clk = beatClock();
+  const uint16_t n = beatRowLength();
+  if (n < 2) return mode_static();
+
+  const uint16_t trail = (uint16_t)map(SEGMENT.speed, 0, 255, 1, n);
+  const bool     round = SEGMENT.check1;
+  const bool     downbeatCol = SEGMENT.check2;
+  const bool     steps = SEGMENT.check3;
+
+  // The position along the strip, 0..1.
+  float pos = clk.live ? clk.barPhase : beatCyclePhase(clk, 4000u, 4u);
+  if (round) {
+    // There and back: the light goes out at one end and comes back.
+    pos = 1.0f - fabsf(2.0f * pos - 1.0f);
+  }
+  if (steps && clk.live) {
+    // On the beat, not between it.
+    pos = (float)(clk.beat - 1u) * 0.25f;
+  }
+
+  const uint32_t col = (downbeatCol && clk.live && clk.beat == 1)
+      ? SEGCOLOR(2) : SEGCOLOR(0);
+
+  SEGMENT.fill(SEGCOLOR(1));
+
+  // The head, in pixels.
+  const float head = pos * (float)n;
+  const int32_t i0 = (int32_t)head;
+  const float   fr = head - (float)i0;
+
+  for (uint32_t i = 0; i < n; i++) {
+    // How far behind the head this pixel is, the short way round.
+    float d = head - (float)i;
+    if (d < 0.0f) d += (float)n;
+    float w = 0.0f;
+    if (d < (float)trail) {
+      w = 1.0f - d / (float)trail;
+      w = w * w;              // a softer tail
+    }
+    // The head itself is split between the two pixels it is between.
+    if ((int32_t)i == i0) w = max(w, 1.0f - fr);
+    if ((int32_t)i == i0 + 1) w = max(w, fr);
+    beatRowPut(i, beatFade(col, w));
+  }
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_BAR_MOVER[] PROGMEM = "Bar Mover ☾🐺@Trail,,,,,Round,Downbeat,Steps;Light,Off,Downbeat;;1;sx=96,ix=0,c1=255,o1=0,o2=1,o3=0";
+
+
+/*
+ * Beat Wave.
+ *
+ * The whole strip undulates on a curve whose period is the beat.  It is
+ * a WAVE and not a flash: it never falls to zero, so there is always
+ * light, and the crest is where the beat is.
+ *
+ *   Slider[0] Width     = the crest's width, as a fraction of the strip
+ *   Slider[1] Sharp     = how sharp the crest is; 0 = a smooth sine,
+ *                          255 = a tight pulse
+ *   Checkbox[1] Travel  = ON -> a crest travels along the strip, one pass
+ *                          per beat; OFF -> the whole strip undulates
+ *                          together
+ *   Checkbox[2] Bar     = ON -> one pass per BAR instead of per beat
+ */
+uint16_t mode_beat_wave(void) {
+  const BeatClock clk = beatClock();
+  const uint16_t n = beatRowLength();
+  if (n < 2) return mode_static();
+
+  const float width = mapf(SEGMENT.speed, 0, 255, 0.03f, 1.0f);
+  const float sharp = mapf(SEGMENT.intensity, 0, 255, 0.0f, 1.0f);
+  const bool  travel = SEGMENT.check1;
+  const bool  perBar  = SEGMENT.check2;
+
+  // The phase the wave runs at: the beat's, or the bar's.
+  float phase = 0.0f;
+  if (clk.live) phase = perBar ? clk.barPhase : clk.beatPhase;
+  else          phase = beatCyclePhase(clk, 4000u, perBar ? 4u : 1u);
+
+  SEGMENT.fill(SEGCOLOR(1));
+
+  const float wdt = max(0.02f, width);
+  for (uint32_t i = 0; i < n; i++) {
+    float u;
+    if (travel) {
+      // A crest TRAVELLING along the strip: the distance from it, in
+      // phase units, and the crest is at the position the phase says.
+      float d = phase - (float)i / (float)n;
+      if (d < -1.0f) d += 1.0f;
+      if (d >  1.0f) d -= 1.0f;
+      u = 1.0f - fabsf(d) / wdt;
+      if (u < 0.0f) u = 0.0f;
+      u = u * u * (3.0f - 2.0f * u);
+    } else {
+      // The whole strip undulates TOGETHER: a cosine of the phase, so it
+      // is at its brightest on the beat and at its dimmest half a beat
+      // later, and it never falls to nothing.  The sharp setting pulls it
+      // towards a pulse instead.
+      const float wave = 0.5f + 0.5f * cosf(2.0f * 3.14159265f * phase);
+      float pulse = 1.0f - phase / wdt;
+      if (pulse < 0.0f) pulse = 0.0f;
+      pulse = pulse * pulse * (3.0f - 2.0f * pulse);
+      u = wave + (pulse - wave) * sharp;
+    }
+    beatRowPut(i, beatFade(SEGCOLOR(0), u));
+  }
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_BEAT_WAVE[] PROGMEM = "Beat Wave ☾🐺@Width,Sharp,,,,Travel,Bar;Wave,Off,;1;sx=64,ix=32,c1=255,o1=1,o2=0";
+
+
+/*
+ * Tracker.
+ *
+ * The Bar Mover's motion, but it shows the grid's QUALITY.
+ *
+ * When the music explains the running grid the trail is long and tight;
+ * when it does not - a breakdown, a rubato, a change of tempo - the trail
+ * is short and ragged.  And the light slides with the grid's own MEASURED
+ * error, so a grid that is slipping shows a light that is slipping.
+ *
+ * This is the only thing on the wall that shows the tracker working, or
+ * losing it.  The quality is the ESTIMATOR's, because a deck has no
+ * quality of its own.
+ *
+ *   Slider[0] Trail     = the trail's length at full quality
+ *   Slider[1] Drift     = how much of the grid's error is shown, as a
+ *                          fraction of the beat
+ *   Checkbox[1] Colour  = ON -> the colour shows the quality too
+ *   Checkbox[2] Wobble  = ON -> the light wobbles as the quality falls
+ */
+uint16_t mode_tracker(void) {
+  const BeatClock clk = beatClock();
+  const uint16_t n = beatRowLength();
+  if (n < 2) return mode_static();
+
+  float quality = 0.0f, driftMs = 0.0f;
+  beatGridQuality(&quality, &driftMs);
+
+  const uint16_t trailMax = (uint16_t)map(SEGMENT.speed, 0, 255, 1, n);
+  const float    driftAmt = mapf(SEGMENT.intensity, 0, 255, 0.0f, 1.0f);
+  const bool     colourByQuality = SEGMENT.check1;
+  const bool     wobble = SEGMENT.check2;
+
+  float pos = clk.live ? clk.barPhase : beatCyclePhase(clk, 4000u, 4u);
+
+  // The grid's own error, as a fraction of the beat: a late grid shows a
+  // late light.
+  if (clk.live && driftAmt > 0.0f) {
+    const float beatMs = 60000.0f / ((clk.bpm > 1.0f) ? clk.bpm : 60.0f);
+    pos += (driftMs / beatMs) * driftAmt;
+    pos -= floorf(pos);
+  }
+  // The wobble: the light shakes as the grid gets worse.
+  if (wobble && clk.live) {
+    const float shake = (1.0f - quality) * 0.08f;
+    pos += shake * sinf((float)strip.now * 0.02f);
+    pos -= floorf(pos);
+  }
+
+  // The trail: long and tight when the grid is good.
+  const uint16_t trail = (uint16_t)max(1.0f, (float)trailMax * (0.25f + 0.75f * quality));
+
+  uint32_t col = SEGCOLOR(0);
+  if (colourByQuality) {
+    // The quality reads as a ramp along the strip's palette.
+    col = SEGMENT.color_from_palette((uint8_t)(quality * 255.0f), false, PALETTE_SOLID_WRAP, 0);
+  }
+
+  SEGMENT.fill(SEGCOLOR(1));
+
+  const float head = pos * (float)n;
+  const int32_t i0 = (int32_t)head;
+  const float   fr = head - (float)i0;
+
+  for (uint32_t i = 0; i < n; i++) {
+    float d = head - (float)i;
+    if (d < 0.0f) d += (float)n;
+    float w = 0.0f;
+    if (d < (float)trail) {
+      w = 1.0f - d / (float)trail;
+      // A good grid gives a smooth tail; a bad one a ragged one.
+      const float soft = 0.25f + 0.75f * quality;
+      w = (w * w) + (w - w * w) * soft;
+    }
+    if ((int32_t)i == i0) w = max(w, 1.0f - fr);
+    if ((int32_t)i == i0 + 1) w = max(w, fr);
+    beatRowPut(i, beatFade(col, w));
+  }
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_TRACKER[] PROGMEM = "Tracker ☾🐺@Trail,Drift,,,,Colour,Wobble;Light,Off,;1;sx=96,ix=0,c1=255,o1=0,o2=1";
+
+
+/*
+ * Phrase Mover.
+ *
+ * The Bar Mover on the sixteen-beat phrase: one pass per phrase, four
+ * bars long, instead of one per bar.  It is the long ruler - the strip
+ * shows where in the sixteen the music is.
+ *
+ *   Slider[0] Trail     = the length of the tail behind the light
+ *   Checkbox[1] Bars    = ON -> one pass per bar instead of per phrase
+ *   Checkbox[2] Downbeat = ON -> the light is the third colour on the
+ *                          downbeat
+ */
+uint16_t mode_phrase_mover(void) {
+  const BeatClock clk = beatClock();
+  const uint16_t n = beatRowLength();
+  if (n < 2) return mode_static();
+
+  const uint16_t trail = (uint16_t)map(SEGMENT.speed, 0, 255, 1, n);
+  const bool perBar = SEGMENT.check1;
+  const bool downbeatCol = SEGMENT.check2;
+
+  float pos;
+  if (!clk.live) {
+    pos = beatCyclePhase(clk, 4000u, 4u);
+  } else if (perBar) {
+    pos = clk.barPhase;
+  } else {
+    pos = beatPhrasePhase(clk);
+  }
+
+  const uint32_t col = (downbeatCol && clk.live && clk.beat == 1)
+      ? SEGCOLOR(2) : SEGCOLOR(0);
+
+  SEGMENT.fill(SEGCOLOR(1));
+
+  const float head = pos * (float)n;
+  const int32_t i0 = (int32_t)head;
+  const float   fr = head - (float)i0;
+
+  for (uint32_t i = 0; i < n; i++) {
+    float d = head - (float)i;
+    if (d < 0.0f) d += (float)n;
+    float w = 0.0f;
+    if (d < (float)trail) {
+      w = 1.0f - d / (float)trail;
+      w = w * w;
+    }
+    if ((int32_t)i == i0) w = max(w, 1.0f - fr);
+    if ((int32_t)i == i0 + 1) w = max(w, fr);
+    beatRowPut(i, beatFade(col, w));
+  }
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_PHRASE_MOVER[] PROGMEM = "Phrase Mover ☾🐺@Trail,,,,,Bars,Downbeat;Light,Off,Downbeat;;1;sx=96,ix=0,c1=255,o1=0,o2=1";
 
 
 /*
@@ -16120,6 +16464,10 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_PRO_LINK_STROBE, &mode_bpm_strobe, _data_FX_MODE_PRO_LINK_STROBE); // beats: ProLink if a deck is connected, the AR's estimator otherwise
   addEffect(FX_MODE_BEAT_COUNTER, &mode_beat_counter, _data_FX_MODE_BEAT_COUNTER); // beats: the beat-in-bar, shown
   addEffect(FX_MODE_PHRASE, &mode_phrase, _data_FX_MODE_PHRASE); // beats: the sixteen-step phrase, shown
+  addEffect(FX_MODE_BAR_MOVER, &mode_bar_mover, _data_FX_MODE_BAR_MOVER); // beats: the light's position is the bar's phase
+  addEffect(FX_MODE_BEAT_WAVE, &mode_beat_wave, _data_FX_MODE_BEAT_WAVE); // beats: a wave whose period is the beat
+  addEffect(FX_MODE_TRACKER, &mode_tracker, _data_FX_MODE_TRACKER); // beats: the motion shows the grid's quality
+  addEffect(FX_MODE_PHRASE_MOVER, &mode_phrase_mover, _data_FX_MODE_PHRASE_MOVER); // beats: the light's position is the phrase's
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   addEffect(FX_MODE_RTA_METER, &mode_RTAMeter, _data_FX_MODE_RTA_METER); // audio: the analyser view
