@@ -504,6 +504,13 @@ struct BeatClock {
   uint8_t  live;           // 1 when the clock is the music's
   uint8_t  downbeatKnown;  // 1 when beat 1 is the deck's, or the user's
   uint8_t  fromProLink;    // 1 when the deck is driving
+  // The BEAT COUNTER: the master's, for the source that is driving.
+  //
+  // It is the number to count on.  It RESTARTS when the user marks the
+  // downbeat - that is the master tempo's own rule - so an effect that
+  // counts on it realigns with the mark instead of carrying on from
+  // wherever it had got to.
+  uint32_t beatCount;
 };
 
 static BeatClock beatClock(bool ignoreProLink = false) {
@@ -522,6 +529,7 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.live          = 1;
   c.downbeatKnown = b.downbeatKnown;
   c.fromProLink   = b.fromProLink;
+  c.beatCount     = b.beatCount;
   return c;
 }
 
@@ -563,10 +571,11 @@ static float downbeatAccent(const BeatClock& c, uint32_t decayMs = 300) {
 //
 // The estimator's own sixteen-beat measure is the best answer when it is
 // driving, because that measure is the one the user can move.  With a
-// deck driving there is no such measure, so the position is counted here:
-// a bar is four beats and the phrase is four bars.
-//
-// The bar counter lives in SEGENV.aux0, so it is per segment.
+// deck driving the position comes from the MASTER TEMPO's beat counter
+// instead: sixteen beats is the phrase, and the counter is the master's -
+// so the phrase is where the master tempo says it is, and it restarts
+// with the mark rather than carrying on from wherever the effect had
+// got to.
 static float beatPhrasePhase(const BeatClock& c) {
   if (c.live == 0) return 0.0f;
   ArTempoFrame tf;
@@ -574,13 +583,12 @@ static float beatPhrasePhase(const BeatClock& c) {
       tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
     return ((float)(tf.beatInMeasure - 1u) + c.beatPhase) * 0.0625f;
   }
-  const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
-  if (lastBeat != c.beat) {
-    if (lastBeat == 4 && c.beat == 1) SEGENV.aux0++;   // one bar
-    SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | c.beat);
-  }
-  const uint32_t bars = SEGENV.aux0;
-  return ((float)((bars % 4u) * 4u + (uint32_t)(c.beat - 1u)) + c.beatPhase) * 0.0625f;
+  // With a deck driving, the position comes from the MASTER TEMPO's beat
+  // counter: sixteen beats is the phrase, and the counter is the
+  // master's - so the phrase is where the master tempo says it is, and
+  // it restarts with the mark rather than carrying on from wherever the
+  // effect had got to.
+  return ((float)(c.beatCount & 15u) + c.beatPhase) * 0.0625f;
 }
 
 // The grid's own quality and error: how well the music explains the
@@ -1701,15 +1709,25 @@ uint16_t mode_beat_sweep(void) {
   };
 
   // ---- the movement -----------------------------------------------------
-  // The bar counter.  The beat index wrapping from four back to one is
-  // one bar, and the sweep turns round on the bar line.
-  const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
-  bool newBar = false;
-  if (clk.live && lastBeat != clk.beat) {
-    if (lastBeat == 4 && clk.beat == 1) { SEGENV.aux0++; newBar = true; }
-    SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
-  }
-  const uint32_t bar = SEGENV.aux0;
+  // The BAR is the MASTER TEMPO's bar, not one of this effect's own.
+  //
+  // The effect used to count its own bars, and that gave it a life of its
+  // own: marking the downbeat restarts the master tempo's beat counter,
+  // and the effect carried on counting from wherever it had got to.  So
+  // its bars were not the music's bars, and the walk through the
+  // thirty-two was anchored to nothing the user could see - it just
+  // lined up with the first beat of the bar and went on its own way.
+  //
+  // Now the bar comes from the master tempo's beat counter, so the
+  // effect is where the music is: mark the downbeat and the counter
+  // restarts, and the effect restarts with it - the walk through the
+  // thirty-two begins again from the first, and it is aligned to the
+  // measure.
+  //
+  // The bar is the master's, so it advances when the master's counter
+  // does - four beats to the bar - and the sweep turns round on the bar
+  // line.
+  const uint32_t bar = clk.beatCount / 4u;
 
   // ---- the cycle --------------------------------------------------------
   // With the cycle on, the sub-effect steps on every few BARS - sixteen
@@ -1729,13 +1747,18 @@ uint16_t mode_beat_sweep(void) {
   const bool cycle = (cycleBars > 0);
   uint8_t sub = SEGMENT.custom3;
   if (cycle) {
-    if (newBar) SEGENV.step++;
-    if (SEGENV.step >= cycleBars) {
-      SEGENV.step = 0;
-      const uint8_t next = (uint8_t)((((SEGENV.aux1 >> 8) + 1u) & 31u));
-      SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0x00FF) | ((uint16_t)next << 8));
+    if (clk.live) {
+      // The sub-effect is a FUNCTION of the master's bar number, so the
+      // walk through the thirty-two is anchored to the measure and it
+      // starts again when the measure does.  Which is what marking the
+      // downbeat does.
+      sub = (uint8_t)(((bar / cycleBars) & 31u));
+    } else {
+      // No beat: hold the last one, rather than jumping back to the
+      // slider's.
+      sub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
     }
-    sub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
+    SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0x00FF) | ((uint16_t)sub << 8));
   }
 
   // The movement: a LOOP (left to right, left to right, and the light

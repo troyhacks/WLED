@@ -369,6 +369,17 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
                                 - (uint32_t)tf.deckDownbeat) & 3u) + 1u);
     }
 
+    // The BEAT COUNT: the deck's beat in the song.  With the override on
+    // it is counted from the MARK, so it restarts when the user marks
+    // the downbeat - the same thing the master's counter does, and the
+    // reason an effect that counts on this realigns with the mark.
+    uint32_t deckBeats = prolink_beats_elapsed_public;
+    if (override && tf.deckElapsedAtMark > 0u &&
+        prolink_beats_elapsed_public > tf.deckElapsedAtMark) {
+      deckBeats = prolink_beats_elapsed_public - tf.deckElapsedAtMark;
+    }
+    b.beatCount = deckBeats;
+
     // The THIRTY-TWO: the deck's beat in the song, which we ASSUME is set
     // to a measure start.  But the USER's mark of the downbeat overrides
     // it: he has said by ear where the bar starts, and that beats the
@@ -376,12 +387,8 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // from the mark - the deck's beat count at the moment he marked it.
     if (haveTf && tf.downbeatSet != 0 && !override) {
       b.beatInMeasure32 = tf.beatInMeasure32;
-    } else if (override && tf.deckElapsedAtMark > 0u &&
-               prolink_beats_elapsed_public > tf.deckElapsedAtMark) {
-      b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public
-                                      - tf.deckElapsedAtMark - 1u) % 32u) + 1u);
-    } else if (prolink_beats_elapsed_public > 0u) {
-      b.beatInMeasure32 = (uint8_t)(((prolink_beats_elapsed_public - 1u) % 32u) + 1u);
+    } else if (deckBeats > 0u) {
+      b.beatInMeasure32 = (uint8_t)(((deckBeats - 1u) % 32u) + 1u);
     }
     arApplyHandoff(&b);
     return b;
@@ -406,6 +413,10 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // as good as the deck's.
     b.downbeatKnown = (tf.downbeatSet != 0) ? 1 : 0;
     b.downbeatSet   = tf.downbeatSet;
+    // The master's BEAT COUNTER: it restarts when the user marks the
+    // downbeat, so it is the number an effect counts on to stay with
+    // the mark.
+    b.beatCount      = tf.beatCount;
     b.beatInMeasure32 = tf.beatInMeasure32;
     b.locked        = tf.hold;
     b.driftMs       = tf.driftMs;

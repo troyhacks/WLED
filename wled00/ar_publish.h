@@ -230,6 +230,13 @@ struct ArBeatSource {
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   uint8_t  deckOverride;    // 1 when the user's mark overrides the DECK's numbering
+  // The beat COUNTER - the master's, for the source that is driving.
+  //
+  // It is what the effects count on: the bars are this divided by four,
+  // and the master tempo's counter RESTARTS when the user marks the
+  // downbeat, so an effect that counts on this realigns with the mark
+  // instead of carrying on from wherever it had got to.
+  uint32_t beatCount;
   float    driftMs;         // the grid's phase error against the music, ms
   float    driftPct;        // that error as a percentage of the beat
   // The bar's phase in BEATS - 0 at the downbeat, 4 at the top of the bar -
