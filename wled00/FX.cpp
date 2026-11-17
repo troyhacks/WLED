@@ -1589,6 +1589,235 @@ static const char _data_FX_MODE_PHRASE_MOVER[] PROGMEM = "Phrase Mover ☾🐺@T
 
 
 /*
+ * Beat Sweep.
+ *
+ * The MOVEMENT is a sweep: the light goes LEFT to RIGHT across one bar
+ * and RIGHT to LEFT across the next, and round again.  Two bars out and
+ * two bars back is a movement that reads as a sweep rather than a jump,
+ * and it is in time with the music because the bar is the music's.
+ *
+ * The AUDIO is on the strip at the same time.  The sixteen display
+ * bands - the ones the analyser draws, not the thirty-one third-octave
+ * bands this build publishes separately - are laid along the strip as a
+ * ribbon, and the light sweeps over them.
+ *
+ * The sub-effect slider picks ONE of thirty-two, and it is two choices
+ * at once:
+ *
+ *   the LAYER (the high three bits) - what the strip shows of the
+ *   audio, and it is the FIRST layer that is the INVERSE: the plain
+ *   background, with only the moving light reacting to the music
+ *     0  the INVERSE: the background is the BG colour and nothing is
+ *        drawn on it but the light
+ *     1  the sixteen bands as a RIBBON along the strip
+ *     2  the same, MIRRORED about the middle
+ *     3  the same as STEPS: one flat block per band
+ *
+ *   the COLOUR (the low three bits) - where the light's colour comes
+ * from:
+ *     0  the palette at the band under the light
+ *     1  the palette at the DOMINANT FREQUENCY
+ *     2  the palette at the volume
+ *     3  the palette at the band's own value
+ *     4  the palette at the light's position
+ *     5  the palette at the DOMINANT BAND
+ *     6  fixed, the first colour slot
+ *     7  fixed, the second colour slot
+ *
+ * So the slider's FIRST position is the inverse: a plain BG with the
+ * light taking the colour of the band it is over.
+ *
+ *   Slider[0] Fallback speed = the sweep's period when there is no beat
+ *   Slider[1] Sensitivity   = how deep the audio's ribbon goes
+ *   Slider[2] Glow          = the width of the light's falloff
+ *   Slider[3] Tail          = the length of the tail behind the light
+ *   Slider[4] Effect        = 0..31: the layer and the colour mapping
+ *   Checkbox[1] Trail       = the tail behind the light
+ *   Checkbox[2] Peak        = a mark at the dominant band
+ *   Checkbox[3] Downbeat    = the third colour on the downbeat
+ */
+uint16_t mode_beat_sweep(void) {
+  const BeatClock clk = beatClock();
+  const uint16_t n = beatRowLength();
+  if (n < 2) return mode_static();
+
+  // ---- the audio --------------------------------------------------------
+  // The SIXTEEN display bands - the ones the analyser draws - not the
+  // thirty-one third-octave bands this build publishes separately.
+  um_data_t *um_data = getAudioData();
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  float volume = 0.0f;
+  float majorPeak = 0.0f;
+  if (um_data && um_data->u_data != nullptr) {
+    memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));
+    volume = *(float*)um_data->u_data[0];
+    majorPeak = *(float*)um_data->u_data[4];
+  }
+
+  // The band that is loudest: the DOMINANT BAND.
+  int peakBand = 0;
+  uint8_t peakVal = 0;
+  for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
+    if (fftResult[i] > peakVal) { peakVal = fftResult[i]; peakBand = i; }
+  }
+
+  // The band's value at a pixel, interpolated between the two bands it
+  // falls between, so the ribbon is smooth.
+  auto bandAt = [&](uint16_t x) -> float {
+    const float f = ((float)x + 0.5f) * (float)NUM_GEQ_CHANNELS / (float)n - 0.5f;
+    const int i0 = (int)f;
+    const float fr = f - (float)i0;
+    const int a = fftResult[constrain(i0, 0, NUM_GEQ_CHANNELS - 1)];
+    const int b = fftResult[constrain(i0 + 1, 0, NUM_GEQ_CHANNELS - 1)];
+    return (float)a + ((float)b - (float)a) * fr;
+  };
+
+  // ---- the movement -----------------------------------------------------
+  // The bar counter.  The beat index wrapping from four back to one is
+  // one bar, and the sweep turns round on the bar line, so the counter
+  // has to be the effect's own.
+  const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
+  if (clk.live && lastBeat != clk.beat) {
+    if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;   // one bar
+    SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
+  }
+  const uint32_t bar = SEGENV.aux0;
+
+  // The position along the strip, 0..1, and the way it is going.
+  float pos;
+  int dir;
+  if (clk.live) {
+    const float bp = clk.barPhase;                 // 0..1 through this bar
+    if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
+    else          { pos = bp;         dir = 1;  }  // this bar: left to right
+  } else {
+    // No beat to lock to: the sweep runs on its own clock.
+    const uint32_t period = map(SEGMENT.speed, 0, 255, 8000, 500);
+    pos = beatCyclePhase(clk, period, 1u);
+    dir = 1;
+  }
+
+  // ---- the sub-effect ---------------------------------------------------
+  const uint8_t sub = SEGMENT.custom3;              // 0..31
+  const uint8_t layer = sub / 8u;                   // 0 = the inverse
+  const uint8_t colourMode = sub % 8u;
+
+  const float sens    = mapf(SEGMENT.intensity, 0, 255, 0.05f, 1.0f);
+  // The light is a POINT.  A wide glow on a 28-pixel bar is a smear, and
+  // a smear with a tail on top of it is a mess - so the glow is narrow
+  // by default and the tail is short.
+  const float glow    = mapf(SEGMENT.custom1, 0, 255, 0.6f, (float)n * 0.5f);
+  const int   tailLen = (int)map(SEGMENT.custom2, 0, 255, 0, n);
+  const bool  trail      = SEGMENT.check1;
+  const bool  peakMark   = SEGMENT.check2;
+  const bool  downbeatCol = SEGMENT.check3;
+
+  const float headF = pos * (float)n;
+  const int   headX = (int)headF;
+
+  // ---- the light's colour ------------------------------------------------
+  const float bandHere = bandAt((uint16_t)constrain(headX, 0, (int)n - 1));
+  uint32_t col = SEGCOLOR(0);
+  switch (colourMode) {
+    case 0:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f / 256.0f), false, PALETTE_SOLID_WRAP, 0); break;
+    case 1:  col = SEGMENT.color_from_palette((uint8_t)constrain(mapf(logf(max(20.0f, majorPeak)), 4.6f, 9.06f, 0, 255), 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
+    case 2:  col = SEGMENT.color_from_palette((uint8_t)constrain(volume, 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
+    case 3:  col = SEGMENT.color_from_palette((uint8_t)constrain(bandHere, 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
+    case 4:  col = SEGMENT.color_from_palette((uint8_t)(headF * 255.0f / (float)n), false, PALETTE_SOLID_WRAP, 0); break;
+    case 5:  col = SEGMENT.color_from_palette((uint8_t)(peakBand * 16), false, PALETTE_SOLID_WRAP, 0); break;
+    case 6:  col = SEGCOLOR(0); break;
+    default: col = SEGCOLOR(1); break;
+  }
+  if (downbeatCol && clk.live && clk.beat == 1 && colourMode < 6) col = SEGCOLOR(2);
+
+  SEGMENT.fill(SEGCOLOR(1));
+
+  // ---- the ribbon: the audio along the strip -----------------------------
+  //
+  // The ribbon is SMOOTHED, twice over, and it has to be.  A spectrum is
+  // spiky, and a spiky ribbon drawn on a 28-pixel bar is noise; and the
+  // bands are auto-ranged, so they jump about from frame to frame and
+  // the ribbon flickers.  So the bands are averaged across their
+  // neighbours, and the result is averaged over time, and what is left
+  // is a shape that FLOWS along the strip with the music.
+  if (layer != 0) {
+    if (!SEGENV.allocateData(n)) return mode_static();
+    uint8_t *ribbon = (uint8_t*)SEGENV.data;
+    for (uint16_t x = 0; x < n; x++) {
+      const uint16_t src = (layer == 2) ? (uint16_t)(n - 1 - x) : x;
+      const int centre = (int)(((float)src + 0.5f) * (float)NUM_GEQ_CHANNELS / (float)n - 0.5f);
+      float v;
+      if (layer == 3) {
+        // Steps: one flat block per band, not a smooth ribbon.
+        v = (float)fftResult[constrain(centre, 0, NUM_GEQ_CHANNELS - 1)] / 255.0f;
+      } else {
+        // The average of the band and its two neighbours.  Any wider
+        // and the sixteen bands blur into one flat shape on a strip this
+        // short.
+        float sum = 0.0f;
+        int cnt = 0;
+        for (int k = -1; k <= 1; k++) {
+          const int b = centre + k;
+          if (b < 0 || b >= NUM_GEQ_CHANNELS) continue;
+          sum += (float)fftResult[b];
+          cnt++;
+        }
+        v = cnt ? (sum / (float)cnt) / 255.0f : 0.0f;
+      }
+      // And the average over time: the old value three parts, the new one.
+      // The bands are auto-ranged, so they jump about from frame to frame,
+      // and without this the ribbon flickers instead of flowing.
+      ribbon[x] = (uint8_t)(((uint32_t)ribbon[x] * 3u + (uint32_t)(v * 255.0f)) / 4u);
+      // The ribbon's COLOUR is the palette at the band under it, so the
+      // strip reads as a spectrum; its BRIGHTNESS is how loud that band
+      // is.  It sits UNDER the light, so it never hides it.
+      const uint32_t ribCol = SEGMENT.color_from_palette(
+          (uint8_t)(constrain(centre, 0, NUM_GEQ_CHANNELS - 1) * 16), false, PALETTE_SOLID_WRAP, 0);
+      // No floor under it: where the music is quiet the band is BLACK,
+      // so the strip is dark and the loud bands are the shape.  A floor
+      // would leave the whole strip lit all the time and the light
+      // sweeping over it would have nothing to stand out from.
+      beatRowPut(x, beatFade(ribCol, sens * 0.55f * ((float)ribbon[x] / 255.0f)));
+    }
+  }
+
+  // ---- the peak: a mark at the band that is loudest ----------------------
+  if (peakMark && peakVal > 8) {
+    const uint16_t px = (uint16_t)(((uint32_t)peakBand * n) / NUM_GEQ_CHANNELS + n / (2u * NUM_GEQ_CHANNELS));
+    beatRowPut((uint32_t)constrain((int)px, 0, (int)n - 1), beatFade(col, 0.75f));
+  }
+
+  // ---- the light, and the tail behind it --------------------------------
+  for (uint16_t x = 0; x < n; x++) {
+    // How far from the head, the short way round the strip.
+    float d = (float)x - headF;
+    if (d > (float)n * 0.5f) d -= (float)n;
+    if (d < -(float)n * 0.5f) d += (float)n;
+
+    float w = 0.0f;
+    const float dd = fabsf(d);
+    if (dd <= glow) {
+      w = 1.0f - dd / glow;
+      w = w * w * (3.0f - 2.0f * w);       // a smooth falloff
+    }
+    // The tail: behind the light, the way it came.
+    if (trail && tailLen > 0) {
+      const float along = (dir > 0) ? -d : d;
+      if (along > 0.0f && along <= (float)tailLen) {
+        float tw = 1.0f - along / (float)tailLen;
+        tw = tw * tw * 0.6f;                // dimmer than the head
+        if (tw > w) w = tw;
+      }
+    }
+    if (w > 0.0f) beatRowPut(x, beatFade(col, w));
+  }
+
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Glow,Tail,Effect;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=32,c2=32,c3=14,o1=1,o2=0,o3=0";
+
+
+/*
  * Color wipe function
  * LEDs are turned on (color1) in sequence, then turned off (color2) in sequence.
  * if (bool rev == true) then LEDs are turned off in reverse order
@@ -16501,6 +16730,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_BEAT_WAVE, &mode_beat_wave, _data_FX_MODE_BEAT_WAVE); // beats: a wave whose period is the beat
   addEffect(FX_MODE_TRACKER, &mode_tracker, _data_FX_MODE_TRACKER); // beats: the motion shows the grid's quality
   addEffect(FX_MODE_PHRASE_MOVER, &mode_phrase_mover, _data_FX_MODE_PHRASE_MOVER); // beats: the light's position is the phrase's
+  addEffect(FX_MODE_BEAT_SWEEP, &mode_beat_sweep, _data_FX_MODE_BEAT_SWEEP); // beats + audio: a sweep across the bar, over the spectrum
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   addEffect(FX_MODE_RTA_METER, &mode_RTAMeter, _data_FX_MODE_RTA_METER); // audio: the analyser view
