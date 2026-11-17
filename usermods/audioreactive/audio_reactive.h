@@ -8021,6 +8021,16 @@ class AudioReactive : public Usermod {
         // our grid double-advancing.  A locked count that tracks the
         // comparison count and a slip count of zero means the two grids
         // advance together, beat for beat.
+        // The BEAT SOURCE: the grid the effects are actually reading.
+        // ProLink first when a deck is there, the estimator otherwise,
+        // and NEITHER when neither is live - a rate is never invented.
+        {
+          const ArBeatSource bs = arGetBeatSource(false);
+          t["source"]       = bs.fromProLink ? "PRO LINK" : (bs.live ? "INTERNAL" : "--");
+          t["source_bpm"]   = (double)bs.bpm;
+          t["source_beat"]  = (int)bs.beatInBar;
+          t["source_32"]    = (int)bs.beatInMeasure32;
+        }
         t["ref_bpm"]      = (double)tf.refBpm;
         t["ref_valid"]    = (int)tf.refValid;
         t["ref_err_ms"]   = (double)tf.refErrMs;
