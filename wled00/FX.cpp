@@ -1370,8 +1370,7 @@ uint16_t mode_bar_mover(void) {
 
   for (uint32_t i = 0; i < n; i++) {
     // How far behind the head this pixel is, the short way round.
-    float d = head - (float)i;
-    if (d < 0.0f) d += (float)n;
+    float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
     if (d < (float)trail) {
       w = 1.0f - d / (float)trail;
@@ -1514,8 +1513,7 @@ uint16_t mode_tracker(void) {
   const float   fr = head - (float)i0;
 
   for (uint32_t i = 0; i < n; i++) {
-    float d = head - (float)i;
-    if (d < 0.0f) d += (float)n;
+    float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
     if (d < (float)trail) {
       w = 1.0f - d / (float)trail;
@@ -1572,8 +1570,7 @@ uint16_t mode_phrase_mover(void) {
   const float   fr = head - (float)i0;
 
   for (uint32_t i = 0; i < n; i++) {
-    float d = head - (float)i;
-    if (d < 0.0f) d += (float)n;
+    float d = head - (float)i;      // no wrap: a sweep stops at the edge
     float w = 0.0f;
     if (d < (float)trail) {
       w = 1.0f - d / (float)trail;
@@ -1646,49 +1643,76 @@ uint16_t mode_beat_sweep(void) {
   // thirty-one third-octave bands this build publishes separately.
   um_data_t *um_data = getAudioData();
   uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
-  float volume = 0.0f;
-  float majorPeak = 0.0f;
+  float volume = 0.0f, majorPeak = 0.0f, agc = 0.0f;
+  uint8_t onset = 0;
   if (um_data && um_data->u_data != nullptr) {
     memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));
     volume = *(float*)um_data->u_data[0];
     majorPeak = *(float*)um_data->u_data[4];
+    onset = *(uint8_t*)um_data->u_data[3];
+    agc = *(float*)um_data->u_data[10];
   }
 
-  // The band that is loudest: the DOMINANT BAND.
+  // The lowest of the sixteen is the PRESSURE POINT: the bass, and the
+  // thing that says how hard the music is pushing.
+  const float bass   = (float)fftResult[0] / 255.0f;
+  const float treble = (float)fftResult[NUM_GEQ_CHANNELS - 1] / 255.0f;
+  const float level  = constrain(volume / 255.0f, 0.0f, 1.0f);
+  // The AGC's gain: how hard the input is being pushed.  It goes the
+  // OTHER way from the level, because the gain comes down when the music
+  // gets loud.
+  const float pressure = constrain(agc / 255.0f, 0.0f, 1.0f);
+
   int peakBand = 0;
   uint8_t peakVal = 0;
   for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
     if (fftResult[i] > peakVal) { peakVal = fftResult[i]; peakBand = i; }
   }
+  const float peakLevel = (float)peakVal / 255.0f;
+
+  // The grid's own quality: how well the music explains the running grid.
+  float quality = 0.0f;
+  {
+    ArTempoFrame tfq;
+    if (arCopyTempo(&tfq) && tfq.valid != 0) quality = constrain(tfq.quality, 0.0f, 1.0f);
+  }
 
   // The band's value at a pixel, interpolated between the two bands it
-  // falls between, so the ribbon is smooth.
+  // falls between.
   auto bandAt = [&](uint16_t x) -> float {
     const float f = ((float)x + 0.5f) * (float)NUM_GEQ_CHANNELS / (float)n - 0.5f;
     const int i0 = (int)f;
     const float fr = f - (float)i0;
     const int a = fftResult[constrain(i0, 0, NUM_GEQ_CHANNELS - 1)];
     const int b = fftResult[constrain(i0 + 1, 0, NUM_GEQ_CHANNELS - 1)];
-    return (float)a + ((float)b - (float)a) * fr;
+    return ((float)a + ((float)b - (float)a) * fr) / 255.0f;
   };
 
   // ---- the movement -----------------------------------------------------
   // The bar counter.  The beat index wrapping from four back to one is
-  // one bar, and the sweep turns round on the bar line, so the counter
-  // has to be the effect's own.
+  // one bar, and the sweep turns round on the bar line.
   const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
   if (clk.live && lastBeat != clk.beat) {
-    if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;   // one bar
+    if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;
     SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
   }
   const uint32_t bar = SEGENV.aux0;
 
-  // The position along the strip, 0..1, and the way it is going.
+  // The movement: a LOOP (left to right, left to right, and the light
+  // wraps off the end and back on) or a BOUNCE (left to right to left to
+  // right, and the light stops at the edges).
+  //
+  // The wrap belongs to the LOOP.  A bounce must NOT paint the far end
+  // of the bar - the light has to stop at the edge - so the two are not
+  // just a different shape, they are a different rule about wrapping.
+  const bool loopMode = SEGMENT.check2;
+
   float pos;
   int dir;
   if (clk.live) {
     const float bp = clk.barPhase;                 // 0..1 through this bar
-    if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
+    if (loopMode) { pos = bp;         dir = 1;  }  // always one way, wrapping
+    else if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
     else          { pos = bp;         dir = 1;  }  // this bar: left to right
   } else {
     // No beat to lock to: the sweep runs on its own clock.
@@ -1697,20 +1721,142 @@ uint16_t mode_beat_sweep(void) {
     dir = 1;
   }
 
-  // ---- the sub-effect ---------------------------------------------------
-  const uint8_t sub = SEGMENT.custom3;              // 0..31
-  const uint8_t layer = sub / 8u;                   // 0 = the inverse
-  const uint8_t colourMode = sub % 8u;
+  // The sixteen-step phrase's position, 0..1.
+  float phrasePhase = 0.0f;
+  {
+    ArTempoFrame tf;
+    if (!clk.fromProLink && arCopyTempo(&tf) && tf.valid != 0 &&
+        tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
+      phrasePhase = ((float)(tf.beatInMeasure - 1u) + clk.beatPhase) * 0.0625f;
+    } else {
+      phrasePhase = ((float)((bar % 4u) * 4u + (uint32_t)(clk.beat - 1u)) + clk.beatPhase) * 0.0625f;
+    }
+  }
+
+  // ---- what the sub-effect says -----------------------------------------
+  // layer        what the strip shows
+  //   0 nothing   1 the ribbon   2 the ribbon mirrored   3 the steps
+  //   4 the bass blob   5 the peak line   6 the rail
+  // colourSrc    where the light's colour comes from
+  //   0 the band under it  1 the dominant frequency  2 the volume
+  //   3 the band's value   4 its position   5 the dominant band
+  //   6 fixed, the first slot   7 fixed, the second   8 the bass
+  // intensitySrc what sets the light's brightness
+  //   0 full   1 the bass   2 the band under it   3 the volume
+  //   4 the onset   5 the beat's phase   6 the grid's quality   7 the peak
+  //   8 the AGC's pressure
+  // glowSrc      what sets the light's width
+  //   0 the slider   1 the bass   2 the level   3 the peak
+  // tailSrc      what sets the tail's length
+  //   0 the slider   1 the level
+  // movement     how the sweep behaves
+  //   0 the bar-locked sweep   1 stepped   2 narrow   3 leaning
+  // extra        what else is drawn
+  //   0 nothing   1 the downbeat flash   2 the peak spot   3 the drift
+  //   4 the comet's colours
+  uint8_t layer = 0, colourSrc = 6, intensitySrc = 0, glowSrc = 0;
+  uint8_t tailSrc = 0, movement = 0, extra = 0;
+
+  switch (SEGMENT.custom3) {
+    // --- the bass, the pressure point -----------------------------------
+    case 0:  intensitySrc = 1; colourSrc = 6; break;              // Bass glow
+    case 1:  colourSrc = 8; break;                                // Bass colour
+    case 2:  glowSrc = 1; colourSrc = 6; break;                   // Bass width
+    case 3:  layer = 4; colourSrc = 6; break;                     // Bass line
+    // --- the peak, the dominant frequency -------------------------------
+    case 4:  colourSrc = 1; break;                                // Peak colour
+    case 5:  extra = 2; colourSrc = 6; break;                     // Peak spot
+    case 6:  intensitySrc = 7; colourSrc = 6; break;              // Peak glow
+    case 7:  layer = 5; colourSrc = 6; break;                     // Peak line
+    // --- the level and the onsets ---------------------------------------
+    case 8:  intensitySrc = 4; colourSrc = 6; break;              // Onset flash
+    case 9:  intensitySrc = 3; colourSrc = 6; break;              // Level glow
+    case 10: tailSrc = 1; colourSrc = 6; break;                   // Level tail
+    case 11: layer = 6; intensitySrc = 3; colourSrc = 6; break;   // Breathe
+    // --- the strip --------------------------------------------------------
+    case 12: layer = 1; colourSrc = 6; break;                     // Ribbon
+    case 13: layer = 0; colourSrc = 0; break;                     // Inverse
+    case 14: layer = 2; colourSrc = 6; break;                     // Mirror
+    case 15: layer = 3; colourSrc = 6; break;                     // Steps
+    // --- the sweep --------------------------------------------------------
+    case 16: movement = 1; colourSrc = 6; break;                 // Stepped
+    case 17: movement = 2; colourSrc = 6; break;                 // Narrow
+    case 18: glowSrc = 2; colourSrc = 6; break;                  // Wide
+    case 19: movement = 3; colourSrc = 6; break;                 // Lean
+    // --- the tempo --------------------------------------------------------
+    case 20: extra = 1; colourSrc = 6; break;                    // Downbeat
+    case 21: intensitySrc = 5; colourSrc = 6; break;              // Swell
+    case 22: extra = 6; colourSrc = 6; break;                    // Phrase
+    case 23: extra = 3; colourSrc = 6; break;                    // Drift
+    // --- the colour -------------------------------------------------------
+    case 24: colourSrc = 6; intensitySrc = 2; break;              // One colour
+    case 25: colourSrc = 0; break;                                // Under
+    case 26: colourSrc = 1; break;                                // Frequency
+    case 27: colourSrc = 2; break;                                // Level
+    // --- the composites ---------------------------------------------------
+    case 28: layer = 1; colourSrc = 0; intensitySrc = 1; break;   // Full
+    case 29: layer = 1; colourSrc = 6; extra = 4; break;          // Comet
+    case 30: layer = 6; colourSrc = 0; break;                     // Rail
+    default:  layer = 0; colourSrc = 6; intensitySrc = 8; break;  // Pressure
+  }
 
   const float sens    = mapf(SEGMENT.intensity, 0, 255, 0.05f, 1.0f);
-  // The light is a POINT.  A wide glow on a 28-pixel bar is a smear, and
-  // a smear with a tail on top of it is a mess - so the glow is narrow
-  // by default and the tail is short.
-  const float glow    = mapf(SEGMENT.custom1, 0, 255, 0.6f, (float)n * 0.5f);
-  const int   tailLen = (int)map(SEGMENT.custom2, 0, 255, 0, n);
+  const float glowMin = mapf(SEGMENT.custom1, 0, 255, 0.6f, (float)n * 0.5f);
+  const int   tailMax = (int)map(SEGMENT.custom2, 0, 255, 0, n);
   const bool  trail      = SEGMENT.check1;
-  const bool  peakMark   = SEGMENT.check2;
   const bool  downbeatCol = SEGMENT.check3;
+
+  // ---- the light's brightness ------------------------------------------
+  float bright = 1.0f;
+  switch (intensitySrc) {
+    case 1:  bright = bass; break;
+    case 2:  bright = bandAt((uint16_t)constrain((int)(pos * (float)n), 0, (int)n - 1)); break;
+    case 3:  bright = level; break;
+    case 4:  bright = onset ? 1.0f : 0.0f; break;
+    case 5:  bright = 0.5f + 0.5f * cosf(2.0f * 3.14159265f * clk.beatPhase); break;
+    case 6:  bright = 0.35f + 0.65f * quality; break;
+    case 7:  bright = peakLevel; break;
+    case 8:  bright = pressure; break;
+    default:  bright = 1.0f; break;
+  }
+  bright = 0.15f + 0.85f * constrain(bright, 0.0f, 1.0f);
+
+  // ---- the light's width ------------------------------------------------
+  float glow = glowMin;
+  if (glowSrc == 1) glow = 0.8f + bass * (float)n * 0.25f;
+  else if (glowSrc == 2) glow = 0.8f + level * (float)n * 0.25f;
+  else if (glowSrc == 3) glow = 0.8f + peakLevel * (float)n * 0.25f;
+  if (movement == 2) glow = 0.6f;                    // Narrow
+
+  // ---- the tail ---------------------------------------------------------
+  int tailLen = trail ? tailMax : 0;
+  if (tailSrc == 1) tailLen = trail ? (int)((float)tailMax * (0.25f + 0.75f * level)) : 0;
+
+  // ---- the movement -----------------------------------------------------
+  if (movement == 3) {
+    // Leaning: the direction follows the music - right when the treble is
+    // the loudest thing, left when the bass is.  The difference has to be
+    // worth something, or the sweep jitters on every frame.  It is a
+    // LOOP, so it wraps.
+    if (treble - bass > 0.20f)      { dir = 1; }
+    else if (bass - treble > 0.20f) { dir = -1; pos = 1.0f - pos; }
+  }
+  if (movement == 1) {
+    // Stepped: the light jumps from pixel to pixel.
+    pos = (float)((int)(pos * (float)n)) / (float)n;
+  }
+
+  // ---- the drift --------------------------------------------------------
+  if (extra == 3 && clk.live) {
+    // The grid's own measured error: a slipping grid shows a slipping
+    // light.
+    const float beatMs = 60000.0f / ((clk.bpm > 1.0f) ? clk.bpm : 60.0f);
+    ArTempoFrame tf;
+    if (arCopyTempo(&tf) && tf.valid != 0) {
+      pos += (tf.driftMs / beatMs) * 0.5f;
+      pos -= floorf(pos);
+    }
+  }
 
   const float headF = pos * (float)n;
   const int   headX = (int)headF;
@@ -1718,29 +1864,29 @@ uint16_t mode_beat_sweep(void) {
   // ---- the light's colour ------------------------------------------------
   const float bandHere = bandAt((uint16_t)constrain(headX, 0, (int)n - 1));
   uint32_t col = SEGCOLOR(0);
-  switch (colourMode) {
-    case 0:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f / 256.0f), false, PALETTE_SOLID_WRAP, 0); break;
+  switch (colourSrc) {
+    case 0:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     case 1:  col = SEGMENT.color_from_palette((uint8_t)constrain(mapf(logf(max(20.0f, majorPeak)), 4.6f, 9.06f, 0, 255), 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
-    case 2:  col = SEGMENT.color_from_palette((uint8_t)constrain(volume, 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
-    case 3:  col = SEGMENT.color_from_palette((uint8_t)constrain(bandHere, 0, 255), false, PALETTE_SOLID_WRAP, 0); break;
+    case 2:  col = SEGMENT.color_from_palette((uint8_t)(level * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
+    case 3:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     case 4:  col = SEGMENT.color_from_palette((uint8_t)(headF * 255.0f / (float)n), false, PALETTE_SOLID_WRAP, 0); break;
     case 5:  col = SEGMENT.color_from_palette((uint8_t)(peakBand * 16), false, PALETTE_SOLID_WRAP, 0); break;
-    case 6:  col = SEGCOLOR(0); break;
-    default: col = SEGCOLOR(1); break;
+    case 7:  col = SEGCOLOR(1); break;
+    case 8:  col = SEGMENT.color_from_palette((uint8_t)(bass * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
+    default: col = SEGCOLOR(0); break;
   }
-  if (downbeatCol && clk.live && clk.beat == 1 && colourMode < 6) col = SEGCOLOR(2);
+  if (extra == 6) {
+    // The phrase: the colour walks the sixteen steps.
+    col = SEGMENT.color_from_palette((uint8_t)(phrasePhase * 255.0f), false, PALETTE_SOLID_WRAP, 0);
+  }
+  if (downbeatCol && clk.live && clk.beat == 1 && colourSrc != 7) col = SEGCOLOR(2);
 
   SEGMENT.fill(SEGCOLOR(1));
 
-  // ---- the ribbon: the audio along the strip -----------------------------
-  //
-  // The ribbon is SMOOTHED, twice over, and it has to be.  A spectrum is
-  // spiky, and a spiky ribbon drawn on a 28-pixel bar is noise; and the
-  // bands are auto-ranged, so they jump about from frame to frame and
-  // the ribbon flickers.  So the bands are averaged across their
-  // neighbours, and the result is averaged over time, and what is left
-  // is a shape that FLOWS along the strip with the music.
-  if (layer != 0) {
+  // ---- the strip --------------------------------------------------------
+  if (layer == 1 || layer == 2 || layer == 3) {
+    // The ribbon, smoothed across the bands and over time, so it FLOWS
+    // instead of flickering.
     if (!SEGENV.allocateData(n)) return mode_static();
     uint8_t *ribbon = (uint8_t*)SEGENV.data;
     for (uint16_t x = 0; x < n; x++) {
@@ -1748,12 +1894,9 @@ uint16_t mode_beat_sweep(void) {
       const int centre = (int)(((float)src + 0.5f) * (float)NUM_GEQ_CHANNELS / (float)n - 0.5f);
       float v;
       if (layer == 3) {
-        // Steps: one flat block per band, not a smooth ribbon.
+        // Steps: one flat block per band.
         v = (float)fftResult[constrain(centre, 0, NUM_GEQ_CHANNELS - 1)] / 255.0f;
       } else {
-        // The average of the band and its two neighbours.  Any wider
-        // and the sixteen bands blur into one flat shape on a strip this
-        // short.
         float sum = 0.0f;
         int cnt = 0;
         for (int k = -1; k <= 1; k++) {
@@ -1764,57 +1907,104 @@ uint16_t mode_beat_sweep(void) {
         }
         v = cnt ? (sum / (float)cnt) / 255.0f : 0.0f;
       }
-      // And the average over time: the old value three parts, the new one.
-      // The bands are auto-ranged, so they jump about from frame to frame,
-      // and without this the ribbon flickers instead of flowing.
       ribbon[x] = (uint8_t)(((uint32_t)ribbon[x] * 3u + (uint32_t)(v * 255.0f)) / 4u);
-      // The ribbon's COLOUR is the palette at the band under it, so the
-      // strip reads as a spectrum; its BRIGHTNESS is how loud that band
-      // is.  It sits UNDER the light, so it never hides it.
       const uint32_t ribCol = SEGMENT.color_from_palette(
           (uint8_t)(constrain(centre, 0, NUM_GEQ_CHANNELS - 1) * 16), false, PALETTE_SOLID_WRAP, 0);
-      // No floor under it: where the music is quiet the band is BLACK,
-      // so the strip is dark and the loud bands are the shape.  A floor
-      // would leave the whole strip lit all the time and the light
-      // sweeping over it would have nothing to stand out from.
       beatRowPut(x, beatFade(ribCol, sens * 0.55f * ((float)ribbon[x] / 255.0f)));
     }
   }
 
-  // ---- the peak: a mark at the band that is loudest ----------------------
-  if (peakMark && peakVal > 8) {
+  if (layer == 4) {
+    // The bass blob: the lowest band, drawn as a soft patch at the low
+    // end of the strip, its width and its brightness the bass.
+    const uint16_t w = (uint16_t)max(1.0f, bass * (float)n * 0.4f);
+    for (uint16_t x = 0; x < w; x++) {
+      beatRowPut(x, beatFade(col, sens * bass * (1.0f - (float)x / (float)w)));
+    }
+  }
+
+  if (layer == 6) {
+    // The rail: the whole strip lit at the level, under the light.
+    for (uint16_t x = 0; x < n; x++) {
+      beatRowPut(x, beatFade(col, sens * level * 0.35f));
+    }
+  }
+
+  if (layer == 5 && peakVal > 8) {
+    // The peak line: a mark on the ribbon at the band that is loudest.
     const uint16_t px = (uint16_t)(((uint32_t)peakBand * n) / NUM_GEQ_CHANNELS + n / (2u * NUM_GEQ_CHANNELS));
     beatRowPut((uint32_t)constrain((int)px, 0, (int)n - 1), beatFade(col, 0.75f));
   }
 
-  // ---- the light, and the tail behind it --------------------------------
-  for (uint16_t x = 0; x < n; x++) {
-    // How far from the head, the short way round the strip.
-    float d = (float)x - headF;
-    if (d > (float)n * 0.5f) d -= (float)n;
-    if (d < -(float)n * 0.5f) d += (float)n;
+  // ---- the downbeat flash ------------------------------------------------
+  if (extra == 1) {
+    // The whole strip flashes on the downbeat.
+    const uint32_t now = millis();
+    if (clk.live && clk.beat == 1 && lastBeat != 1) SEGENV.step = now;
+    const uint32_t since = now - SEGENV.step;
+    if (since < 200) {
+      const float f = 1.0f - (float)since / 200.0f;
+      for (uint16_t x = 0; x < n; x++) beatRowPut(x, beatFade(col, f * 0.55f));
+    }
+  }
 
+  // ---- the light, and the tail behind it --------------------------------
+  //
+  // NOTHING WRAPS.  The head's glow stops at the edge of the strip and
+  // the tail ends there too: a sweep that goes back and forth must not
+  // paint the far end of the bar.  Wrapping is for things that LOOP.
+  // A LOOP wraps: the light's glow and its tail carry on past the end of
+  // the strip and come back on at the other end, because a loop goes off
+  // the edge and on again.  A BOUNCE does not: it stops at the edge.
+  const bool wrapMode = loopMode || (movement == 3);
+  for (uint16_t x = 0; x < n; x++) {
+    float d = (float)x - headF;
+    if (wrapMode) {
+      // The short way round.
+      if (d > (float)n * 0.5f) d -= (float)n;
+      if (d < -(float)n * 0.5f) d += (float)n;
+    }
     float w = 0.0f;
     const float dd = fabsf(d);
     if (dd <= glow) {
-      w = 1.0f - dd / glow;
+      w = (1.0f - dd / glow);
       w = w * w * (3.0f - 2.0f * w);       // a smooth falloff
+      w *= bright;
     }
     // The tail: behind the light, the way it came.
-    if (trail && tailLen > 0) {
+    if (tailLen > 0) {
       const float along = (dir > 0) ? -d : d;
       if (along > 0.0f && along <= (float)tailLen) {
         float tw = 1.0f - along / (float)tailLen;
-        tw = tw * tw * 0.6f;                // dimmer than the head
+        tw = tw * tw * 0.6f * bright;      // dimmer than the head
         if (tw > w) w = tw;
       }
     }
-    if (w > 0.0f) beatRowPut(x, beatFade(col, w));
+    if (w > 0.0f) {
+      uint32_t c = col;
+      if (extra == 4) {
+        // The comet: the tail is coloured by the band it passed over.
+        const float b = bandAt(x);
+        c = SEGMENT.color_from_palette((uint8_t)(b * 255.0f), false, PALETTE_SOLID_WRAP, 0);
+      }
+      beatRowPut(x, beatFade(c, w));
+    }
+  }
+
+  // ---- the peak spot: a second light on the dominant band ---------------
+  if (extra == 2 && peakVal > 8) {
+    const uint16_t px = (uint16_t)(((uint32_t)peakBand * n) / NUM_GEQ_CHANNELS + n / (2u * NUM_GEQ_CHANNELS));
+    const int32_t p = (int32_t)constrain((int)px, 0, (int)n - 1);
+    for (int k = -1; k <= 1; k++) {
+      const int32_t q = p + k;
+      if (q < 0 || q >= (int)n) continue;
+      beatRowPut((uint32_t)q, beatFade(SEGCOLOR(0), (k == 0) ? 0.9f : 0.4f));
+    }
   }
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Glow,Tail,Effect;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=32,c2=32,c3=14,o1=1,o2=0,o3=0";
+static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Glow,Tail,Effect,Trail,Loop,Downbeat;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=32,c2=32,c3=12,o1=1,o2=0,o3=0";
 
 
 /*
