@@ -8,14 +8,16 @@ are the switches:
 |---|---|
 | Fallback speed | the sweep's period when there is no beat |
 | Sensitivity | how deep the spectrum's ribbon goes |
-| Glow | the width of the light |
-| Tail | the length of the tail behind it |
+| Width | the size of the light and its tail together |
+| Hue | a simple 0..255 hue picker for the light |
 | **Effect** | **the sub-effect, 0..31** |
 | Trail | the tail behind the light |
 | Loop | ON: the light loops and wraps off the end; OFF: it bounces and stops at the edges |
-| Downbeat | the third colour on beat one |
+| Cycle | ON: the sub-effect steps on every four bars, so all thirty-two can be watched in order |
 
-The colours are the three buttons in the GUI's colour menu: **Light**, **BG**
+The default palette is **Rainbow** (index 11), and the palette and the
+colour slots work **together** - the palette gives the spectrum its colours
+and the slots stay yours.  The three colour buttons are **Light**, **BG**
 (the background) and **Downbeat**.
 
 ## The thirty-two
@@ -46,7 +48,7 @@ The colours are the three buttons in the GUI's colour menu: **Light**, **BG**
 | **21** | **Swell** | The light's brightness swells through the beat |
 | **22** | **Phrase** | The colour walks the sixteen-step phrase |
 | **23** | **Drift** | The light slides early or late with the grid's measured error |
-| **24** | **One colour** | One colour (the first slot); the brightness is the band under the light |
+| **24** | **One colour** | One colour (the Light slot); the brightness is the band under the light |
 | **25** | **Under** | The colour is the palette at the band under the light |
 | **26** | **Frequency** | The colour is the palette at the dominant frequency |
 | **27** | **Level** | The colour is the palette at the volume |
@@ -66,6 +68,19 @@ The colours are the three buttons in the GUI's colour menu: **Light**, **BG**
 | the AGC's gain | `u_data[10]` |
 | the beat and the bar | the published tempo frame - the beat, the progress through it, the place in the bar, the grid's quality and its drift |
 
+## The colour, two ways
+
+| where the light's colour comes from | |
+|---|---|
+| the palette at the band under it | 0 |
+| the palette at the dominant frequency | 1 |
+| the palette at the volume | 2 |
+| the palette at the band's own value | 3 |
+| the palette at the light's position | 4 |
+| the palette at the dominant band | 5 |
+| **the Hue slider** | 6 |
+| **the Light colour slot** | 7 |
+
 ## What to rank
 
 The ones most likely to need fixing, and what to look at:
@@ -78,5 +93,7 @@ The ones most likely to need fixing, and what to look at:
   for a sweep that goes back and forth.
 - **the movement** - one bar a pass, right and then left.  Is that the right
   speed, and should it be per beat instead?
-- **the colours** - palette 0 on this board is a BLUE gradient, so every
-  palette-indexed colour comes out blue; palette 1 is the rainbow.
+- **the colours** - with the default Rainbow palette, every palette-indexed
+  colour is a different hue.  Palette 0 on this board is a BLUE gradient,
+  so on 0 the spectrum reads monochrome.
+- **the cycle** - four bars (sixteen beats) per sub-effect.

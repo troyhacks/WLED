@@ -1692,11 +1692,32 @@ uint16_t mode_beat_sweep(void) {
   // The bar counter.  The beat index wrapping from four back to one is
   // one bar, and the sweep turns round on the bar line.
   const uint8_t lastBeat = (uint8_t)(SEGENV.aux1 & 0xFF);
+  bool newBar = false;
   if (clk.live && lastBeat != clk.beat) {
-    if (lastBeat == 4 && clk.beat == 1) SEGENV.aux0++;
+    if (lastBeat == 4 && clk.beat == 1) { SEGENV.aux0++; newBar = true; }
     SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0xFF00) | clk.beat);
   }
   const uint32_t bar = SEGENV.aux0;
+
+  // ---- the cycle --------------------------------------------------------
+  // With the "Cycle" option on, the sub-effect steps on every FOUR BARS -
+  // sixteen beats - so all thirty-two can be watched in order.  It starts
+  // at zero and counts up to thirty-one and round again.
+  //
+  // The sub-effect it is showing lives in the TOP BYTE of SEGENV.aux1,
+  // which is otherwise free, so the slider is not fought over: the
+  // slider is what you choose, and the cycle is what is running.
+  uint8_t sub = SEGMENT.custom3;
+  const bool cycle = SEGMENT.check3;
+  if (cycle) {
+    if (newBar) SEGENV.step++;
+    if (SEGENV.step >= 4) {
+      SEGENV.step = 0;
+      const uint8_t next = (uint8_t)((((SEGENV.aux1 >> 8) + 1u) & 31u));
+      SEGENV.aux1 = (uint16_t)((SEGENV.aux1 & 0x00FF) | ((uint16_t)next << 8));
+    }
+    sub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
+  }
 
   // The movement: a LOOP (left to right, left to right, and the light
   // wraps off the end and back on) or a BOUNCE (left to right to left to
@@ -1757,7 +1778,7 @@ uint16_t mode_beat_sweep(void) {
   uint8_t layer = 0, colourSrc = 6, intensitySrc = 0, glowSrc = 0;
   uint8_t tailSrc = 0, movement = 0, extra = 0;
 
-  switch (SEGMENT.custom3) {
+  switch (sub) {
     // --- the bass, the pressure point -----------------------------------
     case 0:  intensitySrc = 1; colourSrc = 6; break;              // Bass glow
     case 1:  colourSrc = 8; break;                                // Bass colour
@@ -1801,10 +1822,16 @@ uint16_t mode_beat_sweep(void) {
   }
 
   const float sens    = mapf(SEGMENT.intensity, 0, 255, 0.05f, 1.0f);
-  const float glowMin = mapf(SEGMENT.custom1, 0, 255, 0.6f, (float)n * 0.5f);
-  const int   tailMax = (int)map(SEGMENT.custom2, 0, 255, 0, n);
+  // The WIDTH is the light and its tail together - a comet's head and its
+  // tail are one thing - so the tail is twice the glow.
+  const float glowMin = mapf(SEGMENT.custom1, 0, 255, 0.6f, (float)n * 0.25f);
+  int   tailMax = (int)(glowMin * 2.0f);
+  if (tailMax > n) tailMax = n;
+  // The HUE.  A palette takes the colour slots away from the user - the
+  // GUI shows the palette in the colour picker - so a simple hue picker
+  // is the easy way to say what colour the light is.
+  const uint8_t hue = SEGMENT.custom2;
   const bool  trail      = SEGMENT.check1;
-  const bool  downbeatCol = SEGMENT.check3;
 
   // ---- the light's brightness ------------------------------------------
   float bright = 1.0f;
@@ -1871,15 +1898,15 @@ uint16_t mode_beat_sweep(void) {
     case 3:  col = SEGMENT.color_from_palette((uint8_t)(bandHere * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
     case 4:  col = SEGMENT.color_from_palette((uint8_t)(headF * 255.0f / (float)n), false, PALETTE_SOLID_WRAP, 0); break;
     case 5:  col = SEGMENT.color_from_palette((uint8_t)(peakBand * 16), false, PALETTE_SOLID_WRAP, 0); break;
-    case 7:  col = SEGCOLOR(1); break;
+    case 6:  col = SEGMENT.color_wheel(hue); break;
+    case 7:  col = SEGCOLOR(0); break;
     case 8:  col = SEGMENT.color_from_palette((uint8_t)(bass * 255.0f), false, PALETTE_SOLID_WRAP, 0); break;
-    default: col = SEGCOLOR(0); break;
+    default: col = SEGMENT.color_wheel(hue); break;
   }
   if (extra == 6) {
     // The phrase: the colour walks the sixteen steps.
     col = SEGMENT.color_from_palette((uint8_t)(phrasePhase * 255.0f), false, PALETTE_SOLID_WRAP, 0);
   }
-  if (downbeatCol && clk.live && clk.beat == 1 && colourSrc != 7) col = SEGCOLOR(2);
 
   SEGMENT.fill(SEGCOLOR(1));
 
@@ -1937,15 +1964,12 @@ uint16_t mode_beat_sweep(void) {
   }
 
   // ---- the downbeat flash ------------------------------------------------
-  if (extra == 1) {
-    // The whole strip flashes on the downbeat.
-    const uint32_t now = millis();
-    if (clk.live && clk.beat == 1 && lastBeat != 1) SEGENV.step = now;
-    const uint32_t since = now - SEGENV.step;
-    if (since < 200) {
-      const float f = 1.0f - (float)since / 200.0f;
-      for (uint16_t x = 0; x < n; x++) beatRowPut(x, beatFade(col, f * 0.55f));
-    }
+  if (extra == 1 && clk.live && clk.beat == 1 && clk.beatPhase < 0.18f) {
+    // The whole strip flashes on the downbeat.  It is measured against
+    // the beat's own phase, so it needs no timer of its own and it
+    // scales with the music.
+    const float f = 1.0f - clk.beatPhase / 0.18f;
+    for (uint16_t x = 0; x < n; x++) beatRowPut(x, beatFade(SEGCOLOR(2), f * 0.55f));
   }
 
   // ---- the light, and the tail behind it --------------------------------
@@ -2004,7 +2028,7 @@ uint16_t mode_beat_sweep(void) {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Glow,Tail,Effect,Trail,Loop,Downbeat;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=32,c2=32,c3=12,o1=1,o2=0,o3=0";
+static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Fallback speed,Sensitivity,Width,Hue,Effect,Trail,Loop,Cycle;Light,BG,Downbeat;;1v;sx=255,ix=128,c1=96,c2=0,c3=12,o1=1,o2=0,o3=0,pal=11";
 
 
 /*
