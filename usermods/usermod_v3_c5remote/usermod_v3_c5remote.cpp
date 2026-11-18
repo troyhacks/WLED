@@ -1602,7 +1602,10 @@ void C5RemoteUsermod::readFromJsonState(JsonObject &obj) {
       applyWifiBand();
       // And it is remembered: the band is what the board comes up with,
       // and the band is what makes the connection quick.
-      serializeConfig();
+      //
+      // The flag, not serializeConfig() itself: the JSON handler is
+      // holding the document's lock, and the save needs it.
+      doSerializeConfig = true;
     }
   }
   if (me["page"].is<int>()) {
@@ -1667,6 +1670,7 @@ void C5RemoteUsermod::addToJsonAr(JsonObject &obj) {
   // How long it took to come up.
   me["wifi_ms"]  = (unsigned long)_wifiMs;
   me["setup_ms"] = (unsigned long)_setupMs;
+  me["wifi_band"] = _wifiBand;
   // The TF card.
   JsonObject sd = me.createNestedObject("sd");
   sd["mounted"] = _sd.mounted();

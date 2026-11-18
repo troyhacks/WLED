@@ -23,11 +23,18 @@ so it listens for the audio sync packets and shows them.
 
 | Page     | What it shows                                                             |
 |----------|---------------------------------------------------------------------------|
-| `SYNC`   | the boards that are sending audio sync packets, how many packets each has sent, how fast, and how long ago - the sixteen bands of the last packet as a meter - and **the cadence of the packets**: how far apart they are, and whether they are spread out or arriving in bunches |
+| `SYNC`   | the boards that are sending audio sync packets, how many packets each has sent, how fast, and how long ago - and the sixteen bands of the last packet as a meter |
 | `BEAT`   | the tempo of the board that has the tracker: the rate, the beat, the quality, the drift, and whether the clock is locked |
-| `BOARD`  | this board: the network, the uptime, the memory, the IMU and the expander's battery reading |
+| `BOARD`  | this board: the network, the uptime, the memory, the IMU, the expander's battery reading and the TF card |
 | `BUTTONS`| **the button debug**: every button the board has, what it is doing now, and a log of what has been pressed |
+| `PACKETS`| **the cadence of the audio sync packets**: how far apart they are, and whether they are spread out or arriving in bunches |
 | `TEST`   | the colour bars: whether the panel is being driven at all |
+
+The `SYNC` page is the one that is watched, so it is kept cheap: the
+packet cadence is a picture that changes every frame, and that is
+drawing cycles the meter needs.  The `SYNC` page says only whether the
+packets are bunched - which is nothing, most of the time - and the
+`PACKETS` page has the picture.
 
 ## The memory on this board
 
@@ -215,14 +222,43 @@ them are published:
   [ 10, 11, 9, 10, 12, 9, ... ]      the milliseconds between the packets
 ```
 
-and the `SYNC` page draws them: a strip of the last quarter of a second
-with a tick for each packet.  Evenly spaced packets are an even comb of
-ticks; bunches are ticks that crowd together.  The line above it says
-what the gaps are - the average, the smallest and the largest - and
-whether they are `even` or `BUNCHED`.
+and the `PACKETS` page draws them: a strip of the last quarter of a
+second with a tick for each packet, and below it the gaps as bars.
+Evenly spaced packets are an even comb of ticks; bunches are ticks that
+crowd together.  The line above says what the gaps are - the average,
+the smallest and the largest - and whether they are `even` or `BUNCHED`.
 
 On the P4's own board, sending 94 packets a second, the gaps come out at
-9 to 15 ms with an average of about 10.6, and the comb is even.
+8 to 14 ms with an average of about 10.6, and the comb is even.
+
+**At boot the packets arrive in a bunch** - the first ones come out of
+the network stack together - and the gaps are zero for a moment.  That
+is the one thing this catches that a rate would hide.
+
+## The beat, counted here
+
+The `BEAT` page shows which beat it is.  That number is **not** asked
+for: the board with the tracker is asked every few seconds, so what it
+says about the beat is a few seconds old by the time it is on the
+screen - and a beat that is three seconds old is not a beat.
+
+The beat's **period** is known, though: the rate is in the answer.  So
+the place in the beat is worked out from the answer and kept up to date
+here:
+
+```
+beats = the place in the beat it gave + the time since / the period
+```
+
+and the beat count and the beat in the bar follow from it.  The answer
+was made somewhere between the asking and the getting, so the middle of
+the two is when it was made - a better guess than the moment it
+arrived.
+
+What this cannot do is follow a grid that is moving: the P4's own grid
+can drift, and this walks the last rate it was told about.  Over the
+three seconds between the answers that is a small error, and it is an
+error in the same direction every time.
 
 ## The presets, and the sync
 
@@ -242,6 +278,54 @@ What the notifier carries is the look - the brightness, the colour, the
 effect, the palette - and not the preset: that is WLED's sync, and it has
 always been that way.
 
+
+## The TF card
+
+The card is on the **same SPI bus as the panel**: the same clock, the
+same data lines, and only the card's chip select is its own (GPIO9).  The
+bus carries one transaction at a time, so the two must not talk at once -
+the panel's picture and the card's protocol would interleave, and both
+would be wrong.
+
+So the card is mounted **once, at boot**, between the panel's bring-up
+(which makes the bus) and the first picture (which is sent in the loop),
+and it is not touched again while the panel is running.
+
+It is mounted with ESP-IDF's FAT filesystem over the SPI card driver -
+`esp_vfs_fat_sdspi_mount()`, the same way the vendor's own demo mounts it
+- and what is on it is read at the same time.  The `BOARD` page says
+what it found:
+
+```
+tf: 116 MB  4 files
+```
+
+and the JSON has the lot:
+
+```
+/json/ar  ->  C5Remote.sd
+  { "mounted": true, "status": "mounted", "size_mb": 116, "files": 4,
+    "listing": "System Volume Information ALPHATHETA REC PIONEER Contents" }
+```
+
+**The card is never formatted.**  `format_if_mount_failed` is off: a card
+that cannot be mounted is a card that is reported, not one that is
+wiped.
+
+**The headers are not where the P4 gets them.**  The P4's build (Troy's
+own Arduino-ESP32) has FATFS's include path in the framework's list;
+the C5's build (the platform's own) has the SD card drivers but not
+FATFS, so two include paths are added to the C5's environment:
+
+```
+-I $PROJECT_PACKAGES_DIR/framework-arduinoespressif32-libs/esp32c5/include/fatfs/src
+-I $PROJECT_PACKAGES_DIR/framework-arduinoespressif32-libs/esp32c5/include/fatfs/vfs
+```
+
+The SD headers themselves need nothing extra: `driver/sdspi_host.h` and
+`driver/sdmmc_host.h` are already on the path.  (In IDF 5.5
+`sdmmc_host.h` lives in `driver/`, under `esp_driver_sdmmc`, not in
+`sdmmc/` - that is where the C5's copy is, and where the P4's is too.)
 
 ## The board's hardware
 
