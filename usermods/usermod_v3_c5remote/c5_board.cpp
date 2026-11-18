@@ -95,6 +95,14 @@ uint8_t C5IoExpander::readRtcInt() {
   return (uint8_t)(v & 0xFF);
 }
 
+uint16_t C5IoExpander::batteryMillivolts(uint16_t counts) {
+  // The pin's voltage: the CH32V003's ADC is twelve bits on a 3.3 V
+  // reference.
+  const uint32_t pinMv = (uint32_t)counts * 3300 / 4096;
+  // The rail is three times the pin: the divider is 200K over 100K.
+  return (uint16_t)(pinMv * 3);
+}
+
 // ---------------------------------------------------------------------------
 // The TF card
 // ---------------------------------------------------------------------------

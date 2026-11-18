@@ -102,6 +102,19 @@ class C5IoExpander {
     uint16_t readAdc();
     uint8_t  readRtcInt();
 
+    // The battery, in millivolts.
+    //
+    // The expander's ADC reads the BAT_ADC pin, which is the BAT rail
+    // through a divider - the schematic says BAT --R21 200K-- BAT_ADC
+    // --R25 100K-- GND - so the rail is three times the pin.
+    //
+    // The CH32V003's ADC is twelve bits on a 3.3 V reference, so a raw
+    // count of 1090 is 0.88 V at the pin and 2.63 V on the rail.
+    //
+    // The vendor's firmware does not say what it puts in the register, and
+    // the raw value is published as well, so it can be checked.
+    uint16_t batteryMillivolts(uint16_t counts);
+
   private:
     bool writeWord(uint8_t reg, uint16_t value);
     bool readWord(uint8_t reg, uint16_t &value);

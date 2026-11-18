@@ -404,8 +404,48 @@ LCD's backlight (a PWM output), and its own IO4..IO14 are on the header.
 | 0x03 OUTPUT  | 16 bits, the value driven on the outputs. |
 | 0x04 INPUT   | 16 bits, what the inputs read. |
 | 0x05 PWM     | 1 byte, the backlight's duty (0..255). |
-| 0x06 ADC     | 16 bits, the battery's voltage. |
+| 0x06 ADC     | 16 bits, the battery's voltage - see below. |
 | 0x07 RTCINT  | 16 bits, the RTC's interrupt state. |
+
+### The battery
+
+The ADC register is the battery, through a divider.  The schematic says:
+
+```
+  BAT --R21 200K 1%-- BAT_ADC --R25 100K 1%-- GND
+```
+
+so the rail is **three times** the pin.  The CH32V003's ADC is twelve
+bits (right-aligned by default) on a 3.3 V reference, so a raw count of
+1090 is 0.88 V at the pin and **2.63 V on the rail**.
+
+That is what the display shows: `batt 3.24 V` is a count of about 1310.
+
+**One assumption.**  The vendor's firmware does not say what it puts in
+the register, and its own demo hands the value over raw without
+converting it - so the reading is taken to be the raw count, which is
+the simplest thing for the firmware to do (the way the PWM register
+works: the register holds the duty and the ESP32 side does the
+percent).  If the firmware is already scaling it to **millivolts**, then
+1090 is 1.09 V at the pin and **3.27 V on the rail**, and the display
+should be counting the register up by three instead.
+
+The raw count is published as well, so one reading with a meter settles
+it:
+
+```
+/json/ar  ->  C5Remote.battery
+  { "adc": 1310, "mv": 3168 }
+```
+
+### The charger
+
+The CH32V003 is not only the IO expander: it is the battery's **charger**
+as well.  `ISET` has 820K on it (a trickle - about a milliamp) and
+`STAT` reports the state back.  The `BAT` rail is the USB's 5 V through
+an ideal-diode FET when there is no battery, so the reading wobbles with
+the board's own current draw, and it is not the battery while it is
+charging.
 
 ### GPIO27 is a boot strap
 

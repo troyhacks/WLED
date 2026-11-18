@@ -1300,8 +1300,10 @@ void C5RemoteUsermod::drawBoardPage() {
 
   // The expander's battery reading and the sync counters.
   if (_ioexpOk) {
-    snprintf_P(line, sizeof(line), PSTR("battery %u"), (unsigned)_ioexp.readAdc());
-    _panel.drawText(2, 80, line, C5_DIM, C5_BG);
+    const uint16_t adc = _ioexp.readAdc();
+    const uint16_t mv = _ioexp.batteryMillivolts(adc);
+    snprintf_P(line, sizeof(line), PSTR("batt %u.%02u V"), (unsigned)(mv / 1000), (unsigned)(mv % 1000));
+    _panel.drawText(2, 80, line, C5_TEXT, C5_BG);
   }
 
   // The board with the tracker.
@@ -1677,6 +1679,14 @@ void C5RemoteUsermod::addToJsonAr(JsonObject &obj) {
   me["expander"]  = _ioexpOk;
   me["imu"]       = _imuOk;
   me["expander_inputs"] = (unsigned)_ioInputsStable;
+  // The battery: the raw count from the expander's ADC, and what that
+  // works out as in millivolts.
+  {
+    const uint16_t adc = _ioexpOk ? _ioexp.readAdc() : 0;
+    JsonObject bat = me.createNestedObject("battery");
+    bat["adc"] = (unsigned)adc;
+    bat["mv"]  = (unsigned long)_ioexp.batteryMillivolts(adc);
+  }
   // The panel's timings.  The panel is the slow part of this board, and
   // these are what say so - and they are here rather than only on the
   // console because reading the console means resetting the board.
@@ -1708,8 +1718,7 @@ void C5RemoteUsermod::addToJsonAr(JsonObject &obj) {
   bt["key_l"]   = _btnDown[0];
   bt["key_r"]   = _btnDown[1];
   bt["boot"]    = _btnDown[2];
-  JsonArray bl = bt.createNestedArray("log");
-  char name[8];
+  JsonArray bl = bt.createNestedArray("log");  char name[8];
   char entry[40];
   for (uint8_t i = 0; i < C5_BTN_LOG_LEN && i < _btnLogCount; i++) {
     const uint8_t idx = (uint8_t)((_btnLogHead + C5_BTN_LOG_LEN - 1 - i) % C5_BTN_LOG_LEN);
