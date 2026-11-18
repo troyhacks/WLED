@@ -27,7 +27,7 @@ bool UsermodManager::buttonState(uint8_t index, bool &pressed) {
   return false;
 }
 // WLEDMM: ask the usermods whether one of them owns this button action.
-bool UsermodManager::handleButtonAction(uint8_t action) {
+bool UsermodManager::handleButtonAction(uint16_t action) {
   bool handled = false;
   for (unsigned i = 0; i < numMods; i++) {
     if (ums[i]->handleButtonAction(action)) handled = true;

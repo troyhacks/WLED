@@ -19,7 +19,7 @@ static const char _mqtt_topic_button[] PROGMEM = "%s/button/%d";  // optimize fl
 // WLED_BTN_ACTION_BASE is an ACTION instead: it is offered to the usermods,
 // and the one that owns it does it. An action nobody owns does nothing - and
 // says so, once, so a mistyped action is visible instead of silent.
-static bool runButtonMacro(uint8_t macro)
+static bool runButtonMacro(uint16_t macro)
 {
   if (macro >= WLED_BTN_ACTION_BASE) {
     if (usermods.handleButtonAction(macro)) return true;

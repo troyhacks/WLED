@@ -9149,7 +9149,7 @@ class AudioReactive : public Usermod {
     // the network has no grid of its own to lock - and that board (the
     // ESP32-C5 remote) sends the action to the board that does have one.
     // ---------------------------------------------------------------------
-    bool handleButtonAction(uint8_t action) override {
+    bool handleButtonAction(uint16_t action) override {
       if (!initDone || !enabled) return false;
       if (audioSource == nullptr || !audioSource->isInitialized()) return false;
 

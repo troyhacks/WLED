@@ -15,18 +15,23 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
   // The frame buffer is in PSRAM: 200 KB is a lot to ask of the chip's
   // internal RAM, and the picture is not looked at often enough for the
   // slower memory to matter.
-  _fb = (uint16_t *)heap_caps_malloc((size_t)C5_PANEL_W * C5_PANEL_H * sizeof(uint16_t),
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  const size_t pixels = (size_t)C5_PANEL_W * C5_PANEL_H * sizeof(uint16_t);
+  _fb = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (_fb == nullptr) {
     // No PSRAM: the picture still fits, but it is tight.
-    _fb = (uint16_t *)heap_caps_malloc((size_t)C5_PANEL_W * C5_PANEL_H * sizeof(uint16_t),
-                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    _fb = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   }
-  if (_fb == nullptr) {
+  // The second picture: the panel is sent one while the next is drawn.
+  _fbShow = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (_fbShow == nullptr) {
+    _fbShow = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  if (_fb == nullptr || _fbShow == nullptr) {
     USER_PRINTLN("C5: no memory for the panel's picture");
     return false;
   }
-  memset(_fb, 0, (size_t)C5_PANEL_W * C5_PANEL_H * sizeof(uint16_t));
+  memset(_fb, 0, pixels);
+  memset(_fbShow, 0, pixels);
 
   // The transfer buffer has to be in internal RAM: the SPI's DMA reads it.
   // One row is enough - the panel is sent a row at a time.
@@ -99,7 +104,7 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
   // The backlight. The vendor caps the duty at 97 %.
   ioexp.setPwm(97);
 
-  markAllDirty();
+  _frameReady = true;
   USER_PRINTLN("C5: the panel is up (320x320, ILI9488 over SPI)");
   return true;
 }
@@ -131,7 +136,7 @@ inline void C5Panel::plot(int x, int y, uint16_t color) {
 void C5Panel::clear(uint16_t color) {
   if (_fb == nullptr) return;
   for (size_t i = 0; i < (size_t)C5_PANEL_W * C5_PANEL_H; i++) _fb[i] = color;
-  markAllDirty();
+  _frameReady = true;
 }
 
 void C5Panel::fillRect(int x, int y, int w, int h, uint16_t color) {
@@ -142,7 +147,7 @@ void C5Panel::fillRect(int x, int y, int w, int h, uint16_t color) {
     uint16_t *row = &_fb[(size_t)yy * C5_PANEL_W];
     for (int xx = x0; xx < x1; xx++) row[xx] = color;
   }
-  markDirty(x, y, w, h);
+  _frameReady = true;
 }
 
 void C5Panel::drawRect(int x, int y, int w, int h, uint16_t color) {
@@ -178,7 +183,7 @@ void C5Panel::drawText(int x, int y, const char *text, uint16_t fg, uint16_t bg)
       }
     }
   }
-  markDirty(x, y, textWidth(text), C5_FONT_H);
+  _frameReady = true;
 }
 
 void C5Panel::drawTextRight(int xRight, int y, const char *text, uint16_t fg, uint16_t bg) {
@@ -193,62 +198,74 @@ void C5Panel::drawTextCentre(int xCentre, int y, const char *text, uint16_t fg, 
 // Getting it onto the panel
 // ---------------------------------------------------------------------------
 
-void C5Panel::markDirty(int x, int y, int w, int h) {
-  if (_fb == nullptr) return;
-  int x0 = max(0, x), y0 = max(0, y);
-  int x1 = min(C5_PANEL_W - 1, x + w - 1), y1 = min(C5_PANEL_H - 1, y + h - 1);
-  if (x1 < x0 || y1 < y0) return;
-  if (!_dirty) {
-    _dx0 = x0; _dy0 = y0; _dx1 = x1; _dy1 = y1;
-    _dirty = true;
-    _nextRow = _dy0;
-  } else {
-    if (x0 < _dx0) _dx0 = x0;
-    if (y0 < _dy0) _dy0 = y0;
-    if (x1 > _dx1) _dx1 = x1;
-    if (y1 > _dy1) _dy1 = y1;
-  }
-}
-
-void C5Panel::markAllDirty() {
-  if (_fb == nullptr) return;
-  _dx0 = 0; _dy0 = 0; _dx1 = C5_PANEL_W - 1; _dy1 = C5_PANEL_H - 1;
-  _dirty = true;
-  _nextRow = 0;
-}
-
-bool C5Panel::sendRows(int x, int y0, int y1, int x1) {
+bool C5Panel::sendRows(int x, int y0, int y1, int x1, const uint16_t *fb) {
   // One row at a time. The panel's address counter does wrap from the end
   // of a row to the start of the next one, but a row at a time does not
   // need that to be true, and a row is small enough that the command
   // overhead does not matter.
   const int w = x1 - x + 1;
   for (int row = y0; row <= y1; row++) {
-    memcpy(_dma, &_fb[(size_t)row * C5_PANEL_W + x], (size_t)w * sizeof(uint16_t));
+    memcpy(_dma, &fb[(size_t)row * C5_PANEL_W + x], (size_t)w * sizeof(uint16_t));
+    // The bytes of each pixel go out the other way round.
+    //
+    // The picture is held as the chip holds it - little-endian, so the low
+    // byte (the blue) is first - and the panel takes the high byte first
+    // (the red).  In 18 bit mode the driver does the conversion and gets
+    // this right; in 16 bit mode it hands the picture over as it is, so
+    // the swap is ours to do.
+    {
+      uint8_t *d = (uint8_t *)_dma;
+      for (int i = 0; i < w; i++) {
+        const uint8_t t = d[0]; d[0] = d[1]; d[1] = t;
+        d += 2;
+      }
+    }
     esp_err_t ret = esp_lcd_panel_draw_bitmap(_panel, x, row, x1 + 1, row + 1, _dma);
-    if (ret != ESP_OK) return false;
+    if (ret != ESP_OK) {
+      if (_errors < 8) {
+        USER_PRINTF("C5: the panel refused a row (%d)\n", (int)ret);
+        _errors++;
+      }
+      return false;
+    }
   }
   return true;
 }
 
+// Sending a frame.
+//
+// The picture that is sent is the one that was finished, and the drawing
+// goes into the other buffer, so the panel never sees half of one picture
+// and half of the next.
+//
+// The rows go in order, and the send picks up where it left off when the
+// budget ran out - so a full screen goes out over a few loops instead of
+// stalling one of them.
 void C5Panel::flush(unsigned budgetMs) {
-  if (_panel == nullptr || !_dirty) return;
+  if (_panel == nullptr) return;
+
+  // A frame that is on its way keeps going.
+  if (!_sending) {
+    if (!_frameReady) return;
+    // The picture that was drawn is the one to send; the other buffer is
+    // where the next one goes.
+    uint16_t *swap = _fbShow;
+    _fbShow = _fb;
+    _fb = swap;
+    _frameReady = false;
+    _sending = true;
+    _sendRow = 0;
+    _sendPtr = _fbShow;
+  }
 
   const int64_t start = esp_timer_get_time();
-  // The rows go in order, and the flush picks up where it left off when the
-  // budget ran out - so a full screen goes out over a few loops instead of
-  // stalling one of them.
-  while (_nextRow <= _dy1) {
-    if (!sendRows(_dx0, _nextRow, _nextRow, _dx1)) {
-      _dirty = false;
+  while (_sendRow < C5_PANEL_H) {
+    if (!sendRows(0, _sendRow, _sendRow, C5_PANEL_W - 1, _sendPtr)) {
+      _sending = false;
       return;
     }
-    _nextRow++;
-    if ((esp_timer_get_time() - start) / 1000 >= (int64_t)budgetMs) break;
+    _sendRow++;
+    if ((esp_timer_get_time() - start) / 1000 >= (int64_t)budgetMs) return;
   }
-
-  if (_nextRow > _dy1) {
-    _dirty = false;
-    _nextRow = 0;
-  }
+  _sending = false;
 }

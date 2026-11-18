@@ -41,6 +41,9 @@
 #define C5_PANEL_W 320
 #define C5_PANEL_H 320
 
+// The screen comes over HTTP in tiles of this many rows.
+#define C5_TILE_ROWS 40
+
 // The console font: 6 wide, 8 tall, and one pixel of space between the
 // characters.
 #define C5_FONT_W      6
@@ -74,8 +77,12 @@ class C5Panel {
     void end();
     bool ready() const { return _panel != nullptr && _fb != nullptr; }
 
-    // The frame buffer, for the screen snapshot over HTTP.
-    const uint16_t *framebuffer() const { return _fb; }
+    // The picture that is on the panel, for the screen snapshot over HTTP.
+    //
+    // It is the FINISHED picture, not the one being drawn into: the
+    // snapshot is taken a row at a time over eight requests, and a picture
+    // that is being drawn into changes under it.
+    const uint16_t *framebuffer() const { return _fbShow ? _fbShow : _fb; }
 
     // ---- drawing (into the frame buffer) ----
     void clear(uint16_t color);
@@ -90,23 +97,30 @@ class C5Panel {
     static int textHeight() { return C5_FONT_H; }
 
     // ---- and getting it onto the panel ----
-    void markDirty(int x, int y, int w, int h);
-    void markAllDirty();
     // Sends what changed. The budget is there so a full screen does not
     // stall WLED's main loop for a whole frame.
     void flush(unsigned budgetMs = 12);
 
   private:
     void plot(int x, int y, uint16_t color);
-    bool sendRows(int x, int y0, int y1, int x1);
+    bool sendRows(int x, int y0, int y1, int x1, const uint16_t *fb);
 
     esp_lcd_panel_handle_t _panel = nullptr;
     esp_lcd_panel_io_handle_t _io = nullptr;
-    uint16_t *_fb = nullptr;      // the picture, in PSRAM
+    // TWO picture buffers.
+    //
+    // The drawing goes into one and the panel is sent the other, and they
+    // are swapped when a frame is finished.  With one buffer the panel can
+    // be sent half of one picture and half of the next - the screen tears,
+    // and a page that changes (the page does) shows as a mixture of both.
+    uint16_t *_fb = nullptr;      // what is drawn into, in PSRAM
+    uint16_t *_fbShow = nullptr;  // what is sent, in PSRAM
     uint16_t *_dma = nullptr;     // the transfer buffer, in internal RAM
-    bool _dirty = false;
-    int _dx0 = 0, _dy0 = 0, _dx1 = 0, _dy1 = 0;   // the dirty box, inclusive
-    int _nextRow = 0;             // where the flush got to
+    bool _frameReady = false;    // there is a picture waiting to be sent
+    bool _sending = false;       // and one is on its way
+    int  _sendRow = 0;           // how far it has got
+    const uint16_t *_sendPtr = nullptr;  // the picture being sent
+    uint32_t _errors = 0;      // how many times the panel refused a row
 };
 
 #include "c5_panel.cpp"

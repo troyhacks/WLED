@@ -400,7 +400,7 @@ class Usermod {
     //
     // Macro values at or above WLED_BTN_ACTION_BASE are actions; the usermods
     // are asked which of them they own, and the one that owns it does it.
-    virtual bool handleButtonAction(uint8_t action) { (void)action; return false; }
+    virtual bool handleButtonAction(uint16_t action) { (void)action; return false; }
     virtual bool getUMData(um_data_t **data) { if (data) *data = nullptr; return false; }; // usermod data exchange [see examples for audio effects]
     virtual void connected() {}                                              // called when WiFi is (re)connected
     virtual void appendConfigData() {}                                       // helper function called from usermod settings page to add metadata for entry fields
@@ -447,7 +447,7 @@ class UsermodManager {
     // WLEDMM: ask the usermods whether one of them owns this button.
     bool buttonState(uint8_t index, bool &pressed);
     // WLEDMM: ask the usermods whether one of them owns this button action.
-    bool handleButtonAction(uint8_t action);
+    bool handleButtonAction(uint16_t action);
     bool getUMData(um_data_t **um_data, uint8_t mod_id = USERMOD_ID_RESERVED); // USERMOD_ID_RESERVED will poll all usermods
     void setup();
     void connected();

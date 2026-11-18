@@ -110,7 +110,8 @@ class C5RemoteUsermod : public Usermod {
 
     // The actions: the tempo's are forwarded to the board that has the
     // tracker, the rest are this board's own.
-    bool handleButtonAction(uint8_t action) override;
+    bool handleButtonAction(uint16_t action) override;
+    bool performAction(uint16_t action);
 
     void addToJsonAr(JsonObject &obj) override;
     void addToJsonState(JsonObject &obj) override;
@@ -165,6 +166,8 @@ class C5RemoteUsermod : public Usermod {
     // ---- what the buttons did ----
     String  _lastAction;
     uint32_t _lastActionMs = 0;
+    uint16_t _pendingAction = 0;     // an action asked for elsewhere
+    bool    _pendingActionSet = false;
 
     // ---- the Zigbee radio ----
 #if defined(USERMOD_ZIGBEE)

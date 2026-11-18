@@ -44,9 +44,12 @@ static bool c5HttpGet(const char *url, String &out, int *statusOut) {
 
   bool ok = false;
   if (esp_http_client_open(client, 0) >= 0) {
-    const int status = esp_http_client_get_status_code(client);
-    if (statusOut) *statusOut = status;
+    // The headers have to be fetched BEFORE the status code is asked
+    // for: the status line is in the headers, so asking first always
+    // answers zero.
     if (esp_http_client_fetch_headers(client) >= 0) {
+      const int status = esp_http_client_get_status_code(client);
+      if (statusOut) *statusOut = status;
       char buf[512];
       int len;
       while ((len = esp_http_client_read(client, buf, sizeof(buf))) > 0) {
@@ -67,7 +70,7 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
   esp_http_client_config_t cfg = {};
   cfg.url = url;
   cfg.method = HTTP_METHOD_POST;
-  cfg.timeout_ms = 1500;
+  cfg.timeout_ms = 5000;
   cfg.buffer_size = 512;
   cfg.buffer_size_tx = 512;
 
@@ -75,18 +78,17 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
   if (client == nullptr) return false;
 
   bool ok = false;
-  if (esp_http_client_open(client, 0) >= 0) {
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
-    const int status = esp_http_client_get_status_code(client);
-    if (statusOut) *statusOut = status;
-    if (esp_http_client_fetch_headers(client) >= 0) {
-      char buf[256];
-      while (esp_http_client_read(client, buf, sizeof(buf)) > 0) {}
-    }
-    ok = (status == 200);
-    esp_http_client_close(client);
-  }
+  // The body goes on before the request is sent, and the request is made
+  // with perform(): the blocking open()+fetch_headers() pair never sends
+  // the body at all, so the other board would get an empty one and
+  // answer with a 400.
+  const int len = (int)strlen(body);
+  esp_http_client_set_header(client, "Content-Type", "application/json");
+  esp_http_client_set_post_field(client, body, len);
+  esp_http_client_perform(client);
+  const int status = esp_http_client_get_status_code(client);
+  if (statusOut) *statusOut = status;
+  ok = (status == 200);
   esp_http_client_cleanup(client);
   return ok;
 }
@@ -163,42 +165,61 @@ void C5RemoteUsermod::setup() {
   // as a picture.  It is the only way to see the screen without looking
   // at the screen.
   //
+  // It comes in TILES: "row=<n>" is 40 rows of the picture, and the
+  // whole screen is eight of them.  A quarter of a megabyte in one request
+  // is more than this board's Wi-Fi likes - the driver gives up in the
+  // middle of it - and a tile goes over without trouble.
+  //
   // The picture is built in one buffer that is made once and kept: the
   // web server reads it while it sends it, so it has to stay where it is.
-  _bmp = (uint8_t *)heap_caps_malloc(54 + (size_t)C5_PANEL_W * C5_PANEL_H * 2,
+  _bmp = (uint8_t *)heap_caps_malloc(54 + (size_t)C5_PANEL_W * C5_TILE_ROWS * 3,
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   server.on("/c5screen.bmp", HTTP_GET, [this](AsyncWebServerRequest *request) {
     if (!_panel.ready() || _bmp == nullptr) {
       request->send(503, "text/plain", "no panel");
       return;
     }
+    // Which tile? 40 rows at a time, from the top.
+    int row = 0;
+    if (request->hasParam("row")) row = request->getParam("row")->value().toInt();
+    if (row < 0) row = 0;
+    if (row > C5_PANEL_H - C5_TILE_ROWS) row = C5_PANEL_H - C5_TILE_ROWS;
+
     // A BMP is the simplest picture there is: a 54 byte header and the
     // pixels, bottom row first.
-    const size_t px = (size_t)C5_PANEL_W * C5_PANEL_H;
-    const size_t len = 54 + px * 2;
+    const size_t len = 54 + (size_t)C5_PANEL_W * C5_TILE_ROWS * 3;
     uint8_t *bmp = _bmp;
     const uint16_t *fb = _panel.framebuffer();
-    // The file header
+    // The file header: "BM", the file's size, and the offset of the
+    // pixels.  Then the info header: the size, the width, the height,
+    // the planes, the bits per pixel and the compression.
+    //
+    // The whole 54 bytes are written every time: the buffer is kept
+    // between the requests, and a byte left over from the last one is a
+    // byte that says something else.
+    memset(bmp, 0, 54);
     bmp[0] = 'B'; bmp[1] = 'M';
     uint32_t size = (uint32_t)len;
     bmp[2] = (uint8_t)(size & 0xFF);       bmp[3] = (uint8_t)((size >> 8) & 0xFF);
     bmp[4] = (uint8_t)((size >> 16) & 0xFF); bmp[5] = (uint8_t)((size >> 24) & 0xFF);
-    // The info header
-    bmp[10] = 40;                                        // the header's size
+    bmp[10] = 54;                                       // where the pixels start
     bmp[14] = (uint8_t)(C5_PANEL_W & 0xFF); bmp[15] = (uint8_t)((C5_PANEL_W >> 8) & 0xFF);
-    bmp[18] = (uint8_t)(C5_PANEL_H & 0xFF); bmp[19] = (uint8_t)((C5_PANEL_H >> 8) & 0xFF);
+    bmp[18] = (uint8_t)(C5_TILE_ROWS & 0xFF); bmp[19] = (uint8_t)((C5_TILE_ROWS >> 8) & 0xFF);
+    bmp[22] = 1;                                         // the planes
     bmp[26] = 1;                                         // the planes
     bmp[28] = 16;                                        // the bits per pixel
     bmp[30] = 0; bmp[31] = 3;                             // the compression: none
     // The pixels, bottom row first, and in BGR.
     uint8_t *p = bmp + 54;
-    for (int y = C5_PANEL_H - 1; y >= 0; y--) {
-      const uint16_t *row = fb + (size_t)y * C5_PANEL_W;
+    for (int y = row + C5_TILE_ROWS - 1; y >= row; y--) {
+      const uint16_t *r = fb + (size_t)y * C5_PANEL_W;
       for (int x = 0; x < C5_PANEL_W; x++) {
-        uint16_t c = row[x];
-        *p++ = (uint8_t)((c & 0x1F) << 3);    // the blue, moved up
-        *p++ = (uint8_t)(c & 0xFF00);         // the green
-        *p++ = (uint8_t)((c >> 8) & 0xF8);    // the red, moved down
+        // RGB565 to 8 bits per colour.  The green is the awkward one: its
+        // six bits sit three in the high byte and three in the low one.
+        uint16_t c = r[x];
+        *p++ = (uint8_t)((c & 0x1F) << 3);                              // the blue
+        *p++ = (uint8_t)(((c >> 3) & 0xE0) | ((c >> 5) & 0x1F));         // the green
+        *p++ = (uint8_t)((c >> 8) & 0xF8);                              // the red
       }
     }
     request->send(request->beginResponse_P(200, "image/bmp", bmp, len));
@@ -312,7 +333,23 @@ void C5RemoteUsermod::noteAction(const char *what) {
   _redraw = true;
 }
 
-bool C5RemoteUsermod::handleButtonAction(uint8_t action) {
+// The action is NOT done here.
+//
+// This runs in whatever task asked for it, and the tempo's actions make an
+// HTTP request to the other board - and when the request came in over the
+// network, that request would be made from the web server's own task,
+// inside the handling of a request.  The HTTP client wants the network
+// task, which is this one, so it waits for an answer that cannot come
+// until it returns: the board falls over.
+//
+// So the action is remembered and the main loop does it.
+bool C5RemoteUsermod::handleButtonAction(uint16_t action) {
+  _pendingAction = action;
+  _pendingActionSet = true;
+  return true;
+}
+
+bool C5RemoteUsermod::performAction(uint16_t action) {
   switch (action) {
     // ---- this board's own ----
     case C5_ACT_PAGE_PREV:
@@ -402,9 +439,18 @@ bool C5RemoteUsermod::trackerPostRaw(const char *body) {
   if (_p4Host.length() == 0) return false;
   const String url = "http://" + _p4Host + ":" + String(_p4Port) + "/json";
   int status = 0;
-  const bool ok = c5HttpPost(url.c_str(), body, &status);
+  USER_PRINTF("C5: asking the board: %s\n", body);
+  bool ok = c5HttpPost(url.c_str(), body, &status);
+  if (!ok) {
+    // The other board's web server has one JSON buffer, and a poll that is
+    // still being answered holds it.  So: wait a moment and try again.
+    delay(400);
+    ok = c5HttpPost(url.c_str(), body, &status);
+  }
+  USER_PRINTF("C5: the board answered %d\n", status);
   if (!ok) {
     _p4Online = false;
+    USER_PRINTF("C5: the board did not take it (status %d)\n", status);
     return false;
   }
   _p4Online = true;
@@ -432,7 +478,7 @@ void C5RemoteUsermod::pollTracker() {
   const uint32_t now = millis();
   // Two seconds is often enough for a beat to move on the screen, and it
   // is slow enough not to be a chore on a small chip.
-  if (now - _lastPoll < 2000) return;
+  if (now - _lastPoll < 3000) return;
   _lastPoll = now;
 
   if (_p4Host.length() == 0) return;
@@ -612,6 +658,10 @@ void C5RemoteUsermod::drawBars(const uint8_t *bands, int x, int y, int w, int h)
 void C5RemoteUsermod::drawSyncPage() {
   char line[64];
 
+  // The page is wiped first: what was on it is not necessarily on it
+  // now (a sender that went quiet leaves its line behind otherwise).
+  _panel.clear(C5_BG);
+
   // The sender table is written in the network's task and read here, so it
   // is read under its lock.
   bool locked = (arSyncSenderLock != nullptr) &&
@@ -681,6 +731,10 @@ void C5RemoteUsermod::drawSyncPage() {
 void C5RemoteUsermod::drawBeatPage() {
   char line[64];
 
+  // The page is wiped first: what was on it is not necessarily on it
+  // now (a sender that went quiet leaves its line behind otherwise).
+  _panel.clear(C5_BG);
+
   if (!_p4Online) {
     drawHeader("BEAT", "no board");
     _panel.drawText(2, 24, "the board with the tracker", C5_DIM, C5_BG);
@@ -727,13 +781,23 @@ void C5RemoteUsermod::drawBeatPage() {
 void C5RemoteUsermod::drawBoardPage() {
   char line[64];
 
+  // The page is wiped first: what was on it is not necessarily on it
+  // now (a sender that went quiet leaves its line behind otherwise).
+  _panel.clear(C5_BG);
+
   drawHeader("BOARD", _p4Online ? "linked" : "alone");
 
   // The network.
+  // The network it is on, and the address it has there.
+  //
+  // The address comes from WLED's own network object: the Arduino's
+  // WiFi.localIP() answers 0.0.0.0 on this chip, and the C5's core does
+  // not report the SSID at all, so the network it was given is used
+  // instead.
   _panel.drawText(2, 20, "wifi:", C5_DIM, C5_BG);
-  _panel.drawText(38, 20, WiFi.SSID().c_str(), C5_TEXT, C5_BG);
+  _panel.drawText(38, 20, clientSSID, C5_TEXT, C5_BG);
   _panel.drawText(2, 30, "ip:", C5_DIM, C5_BG);
-  _panel.drawText(38, 30, WiFi.localIP().toString().c_str(), C5_TEXT, C5_BG);
+  _panel.drawText(38, 30, Network.localIP().toString().c_str(), C5_TEXT, C5_BG);
 
   // The uptime and the memory.
   const uint32_t up = millis() / 1000;
@@ -802,16 +866,25 @@ void C5RemoteUsermod::loop() {
   pollZigbee();
 #endif
 
-  // The IMU goes to the console, once a second.
+  // The IMU goes to the console, once a second, with the memory's numbers
+  // beside it - this board has 327 KB of RAM and everything counts.
   static uint32_t lastImu = 0;
   if (_imuOk && (now - lastImu >= 1000)) {
     lastImu = now;
     float acc[3] = {0, 0, 0}, gyr[3] = {0, 0, 0};
     if (_imu.read(acc, gyr)) {
-      USER_PRINTF("C5: acc %+.2f %+.2f %+.2f m/s2   gyr %+.3f %+.3f %+.3f rad/s\n",
+      USER_PRINTF("C5: acc %+.2f %+.2f %+.2f m/s2   gyr %+.3f %+.3f %+.3f rad/s   heap %u (largest %u)\n",
                   (double)acc[0], (double)acc[1], (double)acc[2],
-                  (double)gyr[0], (double)gyr[1], (double)gyr[2]);
+                  (double)gyr[0], (double)gyr[1], (double)gyr[2],
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     }
+  }
+
+  // An action that was asked for elsewhere.
+  if (_pendingActionSet) {
+    _pendingActionSet = false;
+    performAction(_pendingAction);
   }
 
   // The screen. Ten times a second is plenty, and the live parts (the
@@ -869,6 +942,27 @@ void C5RemoteUsermod::readFromJsonState(JsonObject &obj) {
   if (me["page"].is<int>()) {
     const int p = me["page"];
     if (p >= 0 && p < C5_PAGE_COUNT) { _page = (uint8_t)p; _redraw = true; }
+  }
+
+  // An ACTION, by name.
+  //
+  // The same thing a button does, so that the remote can be asked to do it
+  // over the network - and so that a test can press a button without
+  // pressing one.
+  if (me["action"].is<const char *>()) {
+    const char *what = me["action"];
+    if      (!strcmp(what, "downbeat")) handleButtonAction(WLED_ACT_TEMPO_DOWNBEAT);
+    else if (!strcmp(what, "clear"))    handleButtonAction(WLED_ACT_TEMPO_CLEAR_DOWNBEAT);
+    else if (!strcmp(what, "lock"))     handleButtonAction(WLED_ACT_TEMPO_LOCK);
+    else if (!strcmp(what, "unlock"))   handleButtonAction(WLED_ACT_TEMPO_UNLOCK);
+    else if (!strcmp(what, "toggle"))   handleButtonAction(WLED_ACT_TEMPO_TOGGLE_LOCK);
+    else if (!strcmp(what, "relock"))   handleButtonAction(WLED_ACT_TEMPO_RELOCK);
+    else if (!strcmp(what, "sync"))     handleButtonAction(WLED_ACT_TEMPO_SYNC);
+    else if (!strcmp(what, "djset"))    handleButtonAction(WLED_ACT_TEMPO_MODE_DJ);
+    else if (!strcmp(what, "playlist")) handleButtonAction(WLED_ACT_TEMPO_MODE_PLAYLIST);
+    else if (!strcmp(what, "page"))     handleButtonAction(C5_ACT_PAGE_NEXT);
+    else if (!strcmp(what, "preset"))   handleButtonAction(C5_ACT_PRESET_NEXT);
+    else if (!strcmp(what, "bright"))   handleButtonAction(C5_ACT_BRIGHT_UP);
   }
 }
 
