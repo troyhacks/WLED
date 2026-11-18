@@ -386,6 +386,21 @@ class Usermod {
     virtual void loop2() {}                                                  // WLEDMM called just before effects will be processed
     virtual void handleOverlayDraw() {}                                      // called after all effects have been processed, just before strip.show()
     virtual bool handleButton(uint8_t b) { return false; }                   // button overrides are possible here
+    // WLEDMM: a button that is not on a GPIO of the chip.
+    //
+    // The core asks the usermods first: a usermod that owns the button
+    // answers for it and the core does not read the pin. This is how the
+    // IO expander on the C5 remote becomes a set of real WLED buttons - the
+    // debounce, the long press, the double press and the macro (a preset, or
+    // an action) all stay the core's.
+    //
+    // Return true when the button is answered for, and write the state.
+    virtual bool buttonState(uint8_t index, bool &pressed) { (void)index; (void)pressed; return false; }
+    // WLEDMM: a button macro that is an ACTION rather than a preset number.
+    //
+    // Macro values at or above WLED_BTN_ACTION_BASE are actions; the usermods
+    // are asked which of them they own, and the one that owns it does it.
+    virtual bool handleButtonAction(uint8_t action) { (void)action; return false; }
     virtual bool getUMData(um_data_t **data) { if (data) *data = nullptr; return false; }; // usermod data exchange [see examples for audio effects]
     virtual void connected() {}                                              // called when WiFi is (re)connected
     virtual void appendConfigData() {}                                       // helper function called from usermod settings page to add metadata for entry fields
@@ -429,6 +444,10 @@ class UsermodManager {
     void loop2();   // WLEDMM loop just before drawing effects (presets and everything already handled)
     void handleOverlayDraw();
     bool handleButton(uint8_t b);
+    // WLEDMM: ask the usermods whether one of them owns this button.
+    bool buttonState(uint8_t index, bool &pressed);
+    // WLEDMM: ask the usermods whether one of them owns this button action.
+    bool handleButtonAction(uint8_t action);
     bool getUMData(um_data_t **um_data, uint8_t mod_id = USERMOD_ID_RESERVED); // USERMOD_ID_RESERVED will poll all usermods
     void setup();
     void connected();

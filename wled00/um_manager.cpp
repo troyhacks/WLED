@@ -18,6 +18,22 @@ bool UsermodManager::handleButton(uint8_t b) {
   }
   return overrideIO;
 }
+// WLEDMM: ask the usermods whether one of them owns this button. The first
+// one that answers for it wins - a button belongs to exactly one owner.
+bool UsermodManager::buttonState(uint8_t index, bool &pressed) {
+  for (unsigned i = 0; i < numMods; i++) {
+    if (ums[i]->buttonState(index, pressed)) return true;
+  }
+  return false;
+}
+// WLEDMM: ask the usermods whether one of them owns this button action.
+bool UsermodManager::handleButtonAction(uint8_t action) {
+  bool handled = false;
+  for (unsigned i = 0; i < numMods; i++) {
+    if (ums[i]->handleButtonAction(action)) handled = true;
+  }
+  return handled;
+}
 bool UsermodManager::getUMData(um_data_t **data, uint8_t mod_id) {
   for (unsigned i = 0; i < numMods; i++) {
     if (mod_id > 0 && ums[i]->getId() != mod_id) continue;  // only get data form requested usermod if provided

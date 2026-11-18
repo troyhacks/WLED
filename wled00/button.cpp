@@ -13,6 +13,24 @@
 
 static const char _mqtt_topic_button[] PROGMEM = "%s/button/%d";  // optimize flash usage
 
+// WLEDMM: run a button macro.
+//
+// A macro is normally a preset number. A macro at or above
+// WLED_BTN_ACTION_BASE is an ACTION instead: it is offered to the usermods,
+// and the one that owns it does it. An action nobody owns does nothing - and
+// says so, once, so a mistyped action is visible instead of silent.
+static bool runButtonMacro(uint8_t macro)
+{
+  if (macro >= WLED_BTN_ACTION_BASE) {
+    if (usermods.handleButtonAction(macro)) return true;
+    USER_PRINTF("Button action %u is not owned by any usermod.\n", (unsigned)macro);
+    return true; // the macro was consumed - it is not a preset
+  }
+  unloadPlaylist(); // applying a preset unloads the playlist
+  applyPreset(macro, CALL_MODE_BUTTON_PRESET);
+  return true;
+}
+
 void shortPressAction(uint8_t b)
 {
   if (!macroButton[b]) {
@@ -21,8 +39,7 @@ void shortPressAction(uint8_t b)
       case 1: ++effectCurrent %= strip.getModeCount(); stateChanged = true; colorUpdated(CALL_MODE_BUTTON); break;
     }
   } else {
-    unloadPlaylist(); // applying a preset unloads the playlist
-    applyPreset(macroButton[b], CALL_MODE_BUTTON_PRESET);
+    runButtonMacro(macroButton[b]);
   }
 
 }
@@ -35,8 +52,7 @@ void longPressAction(uint8_t b)
       case 1: bri += 8; stateUpdated(CALL_MODE_BUTTON); buttonPressedTime[b] = millis(); break; // repeatable action
     }
   } else {
-    unloadPlaylist(); // applying a preset unloads the playlist
-    applyPreset(macroLongPress[b], CALL_MODE_BUTTON_PRESET);
+    runButtonMacro(macroLongPress[b]);
   }
 
 }
@@ -49,8 +65,7 @@ void doublePressAction(uint8_t b)
       case 1: ++effectPalette %= strip.getPaletteCount(); colorUpdated(CALL_MODE_BUTTON); break;
     }
   } else {
-    unloadPlaylist(); // applying a preset unloads the playlist
-    applyPreset(macroDoublePress[b], CALL_MODE_BUTTON_PRESET);
+    runButtonMacro(macroDoublePress[b]);
   }
 
 }
@@ -58,6 +73,13 @@ void doublePressAction(uint8_t b)
 bool isButtonPressed(uint8_t i)
 {
   if (btnPin[i]<0) return false;
+
+  // WLEDMM: a usermod may own this button - an IO expander's pin, for
+  // instance, which is not a GPIO of this chip. It answers for the button
+  // and the pin is never read.
+  bool pressed = false;
+  if (usermods.buttonState(i, pressed)) return pressed;
+
   uint8_t pin = btnPin[i];
 
   switch (buttonType[i]) {
@@ -93,12 +115,12 @@ void handleSwitch(uint8_t b)
 
   if (millis() - buttonPressedTime[b] > WLED_DEBOUNCE_THRESHOLD) { //fire edge event only after 50ms without change (debounce)
     if (!buttonPressedBefore[b]) { // on -> off
-      if (macroButton[b]) applyPreset(macroButton[b], CALL_MODE_BUTTON_PRESET);
+      if (macroButton[b]) runButtonMacro(macroButton[b]);
       else { //turn on
         if (!bri) {toggleOnOff(); stateUpdated(CALL_MODE_BUTTON);}
       }
     } else {  // off -> on
-      if (macroLongPress[b]) applyPreset(macroLongPress[b], CALL_MODE_BUTTON_PRESET);
+      if (macroLongPress[b]) runButtonMacro(macroLongPress[b]);
       else { //turn off
         if (bri) {toggleOnOff(); stateUpdated(CALL_MODE_BUTTON);}
       }

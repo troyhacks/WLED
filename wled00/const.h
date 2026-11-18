@@ -7,6 +7,42 @@
 
 #define GRADIENT_PALETTE_COUNT 62 //WLEDMM netmindz ar palette +3, ewowi Random Smooth palette +1
 
+// WLEDMM: button macros at or above this value are ACTIONS, not presets.
+//
+// A button macro is normally a preset number. The low numbers (1..249) are
+// presets, and 247..250 are already spoken for by the core (palette, effect
+// intensity, effect speed, global brightness), so the actions start at 300:
+// far above any preset a config can hold, and clear of the core's own
+// specials. An action is offered to the usermods, and the one that owns it
+// does it - a button can therefore do something no preset can.
+#define WLED_BTN_ACTION_BASE 300
+
+// WLEDMM: the actions that are about the TEMPO.
+//
+// They are here, and not in the usermod that does them, because more than
+// one usermod has to know them: the AudioReactive usermod acts on them
+// when it owns a tempo tracker, and the ESP32-C5 remote sends them to the
+// board that does.
+//
+//   DOWNBEAT        "the beat sounding now is beat one"
+//   CLEAR_DOWNBEAT  take the mark away - the numbering is the convention
+//   LOCK            freeze the clock: the grid stays, the estimate runs
+//   UNLOCK          let the grid move again
+//   TOGGLE_LOCK     whichever of the two is not the case now
+//   RELOCK          throw the grid away and find it again
+//   SYNC            move the grid onto the estimate's phase (not the rate)
+//   MODE_DJ         the tracker remembers a continuous mix
+//   MODE_PLAYLIST   the tracker remembers that anything can shuffle in
+#define WLED_ACT_TEMPO_DOWNBEAT        (WLED_BTN_ACTION_BASE +  0)
+#define WLED_ACT_TEMPO_CLEAR_DOWNBEAT  (WLED_BTN_ACTION_BASE +  1)
+#define WLED_ACT_TEMPO_LOCK            (WLED_BTN_ACTION_BASE +  2)
+#define WLED_ACT_TEMPO_UNLOCK          (WLED_BTN_ACTION_BASE +  3)
+#define WLED_ACT_TEMPO_TOGGLE_LOCK     (WLED_BTN_ACTION_BASE +  4)
+#define WLED_ACT_TEMPO_RELOCK          (WLED_BTN_ACTION_BASE +  5)
+#define WLED_ACT_TEMPO_SYNC            (WLED_BTN_ACTION_BASE +  6)
+#define WLED_ACT_TEMPO_MODE_DJ         (WLED_BTN_ACTION_BASE +  7)
+#define WLED_ACT_TEMPO_MODE_PLAYLIST   (WLED_BTN_ACTION_BASE +  8)
+
 //Defaults
 #define DEFAULT_CLIENT_SSID "Your_Network"
 #define DEFAULT_AP_SSID     "WLED-AP"
@@ -150,6 +186,7 @@
 #define USERMOD_ID_PIONEER_PROLINK       95     //Usermod "usermod_v2_pioneer_prolink.h"
 #define USERMOD_ID_ARTNETMAP             95     //Usermod "usermod_v2_artnetmap.h"
 #define USERMOD_ID_MIDI_USB              96     //Usermod "usermod_v3_midi.h" — USB-MIDI control surface (ESP32-P4)
+#define USERMOD_ID_C5REMOTE              97     //Usermod "usermod_v3_c5remote.h" — the ESP32-C5 remote (panel, IO expander, IMU)
 
 //Access point behavior
 #define AP_BEHAVIOR_BOOT_NO_CONN          0     //Open AP when no connection after boot
