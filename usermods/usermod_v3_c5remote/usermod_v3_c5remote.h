@@ -90,8 +90,9 @@ static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP
 #define C5_PAGE_BEAT  1
 #define C5_PAGE_BOARD 2
 #define C5_PAGE_BUTTONS 3
-#define C5_PAGE_TEST  4
-#define C5_PAGE_COUNT 5
+#define C5_PAGE_PACKETS 4
+#define C5_PAGE_TEST  5
+#define C5_PAGE_COUNT 6
 
 // The first button index the expander's buttons take.  The three on the
 // chip come first.
@@ -154,6 +155,7 @@ class C5RemoteUsermod : public Usermod {
     C5Panel      _panel;
     C5IoExpander _ioexp;
     C5Imu        _imu;
+    C5SdCard     _sd;
     bool         _ioexpOk = false;
     bool         _imuOk = false;
     uint16_t     _ioInputs = 0;      // the expander's input register
@@ -168,6 +170,17 @@ class C5RemoteUsermod : public Usermod {
     uint16_t     _expanderLongAction[C5_IOEXP_BTN_COUNT] = {0};
     uint8_t     *_bmp = nullptr;         // the screen's picture, for the HTTP snapshot
     uint8_t      _wifiBand = 0;          // 0 = both bands, 1 = 5 GHz only, 2 = 2.4 GHz only
+
+    // ---- how long it takes to come up ----
+    //
+    // The times are from the app's own start - millis() is zero when the
+    // app starts - so they say what the board did with its own time.  The
+    // time BEFORE that (the ROM, the bootloader) is only visible from
+    // outside, and the difference between the two is the interesting
+    // part.
+    uint32_t _wifiMs = 0;     // the app's start to the Wi-Fi connected
+    uint32_t _setupMs = 0;    // the app's start to the end of the setup
+    bool     _rebootAsked = false;
 
     // ---- the pages ----
     uint8_t _page = C5_PAGE_SYNC;
@@ -194,6 +207,16 @@ class C5RemoteUsermod : public Usermod {
     bool    _hold = false;
     bool    _downbeatSet = false;
     String  _modeName = "";
+    // The beat, as the board with the tracker last reported it, and WHEN.
+    //
+    // The answer is a few seconds old by the time it is on the screen, so
+    // the beat is counted ON here from the answer and the rate: the beat's
+    // period is known, so where in the beat we are can be worked out and
+    // kept up to date between the polls.
+    uint32_t _tempoAtMs = 0;       // when the answer arrived
+    uint32_t _tempoBeatCount = 0;  // the beat count it gave
+    int     _tempoBeatInBar = 0;   // the beat in the bar it gave
+    float   _tempoProgress = 0.0f; // the place in the beat it gave
     int     _preset = 0;
     int     _p4Brightness = 0;
     String  _p4Name = "";
@@ -239,6 +262,21 @@ class C5RemoteUsermod : public Usermod {
 #endif
 
     // ---- the helpers ----
+    // The newest sender: its packets, its bands, and when they arrived.
+    //
+    // The table is written in the network's task and read here, so it is
+    // read under its lock.
+    struct C5SenderInfo {
+      uint32_t ip = 0;
+      uint32_t packets = 0;
+      uint32_t rate = 0;
+      uint32_t lastMs = 0;
+      uint8_t  level = 0;
+      uint8_t  bands[16] = {0};
+      uint8_t  timeCount = 0;
+      uint32_t times[AR_SYNC_CADENCE_LEN] = {0};
+    };
+    bool readNewestSender(C5SenderInfo &out);
     void setupButtons();
     void pollExpander();
     void pollTracker();
@@ -254,7 +292,8 @@ class C5RemoteUsermod : public Usermod {
     void drawBoardPage();
     void drawTestPage();
     void drawButtonPage();
-    void clearPageArea(int y1 = 130);
+    void drawPacketsPage();
+    void clearPageArea(int y0 = 0, int y1 = 130);
     void drawHeader(const char *title, const char *right);
     void drawFooter(const char *left, const char *right);
     void drawBars(const uint8_t *bands, int x, int y, int w, int h);
@@ -265,6 +304,8 @@ class C5RemoteUsermod : public Usermod {
     void noteButton(uint8_t id, bool pressed, uint32_t now);
     void logButton(uint8_t id, uint8_t kind, uint32_t heldMs, uint32_t now);
     void primeExpanderButtons(uint16_t inputs);
+    // Where the beat is NOW, worked out from the last answer.
+    void beatNow(float &progress, int &beatInBar, uint32_t &beatCount);
 };
 
 #include "usermod_v3_c5remote.cpp"

@@ -14,6 +14,10 @@ static const uint16_t C5_BG        = 0x0000;   // black
 static const uint16_t C5_PANEL_BG  = 0x0861;   // very dark blue
 static const uint16_t C5_TITLE_BG  = 0x01E0;   // dark teal
 static const uint16_t C5_FOOT_BG   = 0x1082;   // dark grey-blue
+// The meter's place: the bottom of the SYNC page.  A page that has no
+// meter has to cover it.
+#define C5_METER_TOP (C5_PANEL_H - 12 - 98)
+#define C5_METER_H   98
 static const uint16_t C5_TEXT      = 0xFFFF;
 static const uint16_t C5_DIM       = 0x8410;
 static const uint16_t C5_ACCENT    = 0x07FF;   // cyan
@@ -157,8 +161,31 @@ void C5RemoteUsermod::setup() {
     USER_PRINTLN("C5: the I2C bus did not come up");
   }
 
+  // How long each step takes.  The setup is a fifth of the time the
+  // board takes to come up, and it is worth knowing which part of it is
+  // the time.
+  uint32_t tStep = millis();
+  #define C5_STEP(name) do { const uint32_t now = millis(); \
+      USER_PRINTF("C5: setup: %s took %u ms", name, (unsigned)(now - tStep)); \
+      USER_PRINTLN(""); tStep = now; } while (0)
+
+  // The radio's band, as soon as the radio is up.
+  //
+  // The band is what makes the connection quick - the C5 is a dual-band
+  // chip and the network it is after is a 5 GHz one - and it has to be
+  // set BEFORE the scan that looks for the network.
+  //
+  // It cannot be set here: the radio comes up after the usermods' setup
+  // (the log says so: "Starting WiFi STA mode" is after this).  So it
+  // is set when the radio says it has started, which is before the
+  // scan.
+  WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t) {
+    if (event == ARDUINO_EVENT_WIFI_STA_START) applyWifiBand();
+  }, ARDUINO_EVENT_WIFI_STA_START);
+
   // The IO expander: the panel's reset and its backlight live there.
   _ioexpOk = _ioexp.begin(Wire);
+  C5_STEP("the expander");
   if (!_ioexpOk) {
     USER_PRINTLN("C5: no IO expander at 0x24 - the panel's reset and backlight are not there");
   }
@@ -167,9 +194,25 @@ void C5RemoteUsermod::setup() {
   if (_ioexpOk && _panel.begin(_ioexp)) {
     _panel.clear(C5_BG);
   }
+  C5_STEP("the panel");
 
-  // The IMU. For the console for now.
-  _imuOk = _imu.begin();
+  // The TF card.
+  //
+  // It is on the panel's SPI bus, so it is mounted NOW: the bus is up
+  // (the panel's bring-up made it) and the panel is not sending anything
+  // yet - the first picture goes out in the loop, after this.
+  //
+  // It is not touched again: the card and the panel cannot talk at the
+  // same time, and the panel is what this board is for.
+  _sd.begin();
+  C5_STEP("the TF card");
+
+  // The IMU. In a task of its own: the driver's calibration waits two
+  // and a quarter seconds for the chip to finish, and the radio is
+  // waiting for the network for longer than that - so the two waits
+  // overlap instead of adding up.
+  _imuOk = _imu.beginAsync();
+  C5_STEP("the IMU");
 
   // THE BOARD'S OWN NETWORK, when the config has none.
   //
@@ -197,6 +240,7 @@ void C5RemoteUsermod::setup() {
   esp_log_level_set("transport_base", ESP_LOG_NONE);
 
   setupButtons();
+  C5_STEP("the buttons");
 
 #if defined(USERMOD_ZIGBEE)
   // The radio. It is started last: it wants the flash's Zigbee partitions
@@ -267,6 +311,25 @@ void C5RemoteUsermod::setup() {
     }
     request->send(request->beginResponse_P(200, "image/bmp", bmp, len));
   });
+
+  // A REBOOT, over the network.
+  //
+  // How long the board takes to come up is worth measuring, and the only
+  // way to measure it is to start it from nothing - so the board has to
+  // be able to be started from nothing.
+  //
+  // The answer goes first and the reboot happens in the loop, so the
+  // request is answered and the board is down before the caller is
+  // waiting for it.
+  server.on("/c5reboot", HTTP_POST, [this](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "rebooting");
+    _rebootAsked = true;
+  });
+
+  // How long the setup took: the app's start to here.  The web server
+  // starts after this, so this is when the board is nearly up.
+  _setupMs = millis();
+  USER_PRINTF("C5: the setup took %u ms\n", (unsigned)_setupMs);
 
   USER_PRINTF("C5: the remote is up - the panel is %s, the expander is %s, the IMU is %s\n",
               _panel.ready() ? "there" : "not there",
@@ -458,6 +521,11 @@ void C5RemoteUsermod::applyWifiBand() {
 }
 
 void C5RemoteUsermod::connected() {
+  // How long the radio took: the app's start to here.
+  if (_wifiMs == 0) {
+    _wifiMs = millis();
+    USER_PRINTF("C5: the Wi-Fi is up: %u ms after the app started\n", (unsigned)_wifiMs);
+  }
   // The band can only be set once the radio is up, which is here.
   applyWifiBand();
 }
@@ -681,6 +749,7 @@ void C5RemoteUsermod::pollTracker() {
   const String stateUrl = "http://" + _p4Host + ":" + String(_p4Port) + "/json/state";
   String body;
   int status = 0;
+  const uint32_t asked = millis();
   if (!c5HttpGet(url.c_str(), body, &status)) {
     _p4Online = false;
     _p4Failures++;
@@ -718,6 +787,19 @@ void C5RemoteUsermod::pollTracker() {
     _hold        = (tempo["hold"] | 0) != 0;
     _downbeatSet = (tempo["downbeat_set"] | false);
     _modeName    = tempo["mode_name"] | "";
+    // The beat, and when the answer was made.
+    //
+    // The answer is a few seconds old by the time it is on the screen, so
+    // the beat is counted ON here: the period is known, so the place in
+    // the beat is worked out from this answer and kept up to date.
+    //
+    // The answer was made somewhere between the asking and the getting,
+    // so the middle of the two is when it was made - which is a better
+    // guess than the moment it arrived.
+    _tempoAtMs      = (asked + millis()) / 2;
+    _tempoBeatCount = (uint32_t)(tempo["beat_count"] | 0);
+    _tempoBeatInBar = _beatInBar;
+    _tempoProgress  = _beatProgress;
   }
 
   // The state is a small document (a few hundred bytes) and it is where the
@@ -819,6 +901,37 @@ void C5RemoteUsermod::pollZigbee() {
 // The pages
 // ---------------------------------------------------------------------------
 
+// Where the beat is NOW.
+//
+// The board with the tracker is asked every few seconds, so what it says
+// about the beat is a few seconds old by the time it is on the screen -
+// and a beat that is three seconds old is not a beat.
+//
+// The beat's period is known - the rate is in the answer - so the place in
+// the beat can be worked out from the answer and kept up to date here.
+// The beat count and the beat in the bar follow from it.
+//
+// What this cannot do is follow a grid that is moving: the P4's own grid
+// can drift, and this walks the last rate it was told about.  Over the
+// three seconds between the answers that is a small error, and it is an
+// error in the same direction every time.
+void C5RemoteUsermod::beatNow(float &progress, int &beatInBar, uint32_t &beatCount) {
+  progress = 0.0f;
+  beatInBar = 0;
+  beatCount = 0;
+  if (!_tempoUsable || _bpm <= 0.0f) return;
+  const float period = 60000.0f / _bpm;      // the beat, in ms
+  if (period <= 0.0f) return;
+  const float elapsed = (float)(millis() - _tempoAtMs);
+  // The beats since the answer: the place in the beat it gave, plus the
+  // time since.
+  const float beats = _tempoProgress + (elapsed / period);
+  const uint32_t whole = (uint32_t)beats;    // the whole beats
+  progress  = beats - (float)whole;         // and the part of a beat
+  beatCount = _tempoBeatCount + whole;
+  beatInBar = (int)((((uint32_t)(_tempoBeatInBar > 0 ? _tempoBeatInBar : 1) - 1 + whole) % 4) + 1);
+}
+
 void C5RemoteUsermod::drawHeader(const char *title, const char *right) {
   _panel.fillRect(0, 0, C5_PANEL_W, 14, C5_TITLE_BG);
   _panel.drawText(2, 3, title, C5_ACCENT, C5_TITLE_BG);
@@ -853,15 +966,52 @@ void C5RemoteUsermod::drawBars(const uint8_t *bands, int x, int y, int w, int h)
 //
 // The exception is a page CHANGE: the new page may draw where the old
 // one did not, so then the whole screen is wiped.
-void C5RemoteUsermod::clearPageArea(int y1) {
+void C5RemoteUsermod::clearPageArea(int y0, int y1) {
   if (_drawnPage != _page) {
     _drawnPage = _page;
     _panel.clear(C5_BG);
     return;
   }
-  // The rows the pages draw their text in.  The meter and the footer are
-  // painted over completely by the pages that use them.
-  _panel.clearRows(0, y1, C5_BG);
+  // The rows the page has to wipe before it draws.
+  //
+  // Only the rows that are NOT painted over again need wiping: a page
+  // that fills its own panels covers them, and wiping them is the most
+  // expensive thing this board does.
+  _panel.clearRows(y0, y1, C5_BG);
+  // The meter is at the bottom of the SYNC page.  A page that does not
+  // have one has to cover it: a stale meter on another page is a lie.
+  // (Unless the page's own wipe already covers it.)
+  if (_page != C5_PAGE_SYNC && y1 < C5_METER_TOP) {
+    _panel.fillRect(0, C5_METER_TOP, C5_PANEL_W, C5_METER_H, C5_BG);
+  }
+}
+
+// The newest sender: its packets, its bands, and when they arrived.
+//
+// The table is written in the network's task and read here, so it is read
+// under its lock.
+bool C5RemoteUsermod::readNewestSender(C5SenderInfo &out) {
+  if (arSyncSenderLock == nullptr) return false;
+  if (xSemaphoreTake(arSyncSenderLock, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+  const ArSyncSender *s = nullptr;
+  for (uint8_t i = 0; i < arSyncSenderCount; i++) {
+    if (s == nullptr || arSyncSenders[i].lastMs > s->lastMs) s = &arSyncSenders[i];
+  }
+  if (s != nullptr) {
+    out.ip = s->ip;
+    out.packets = s->packets;
+    out.rate = s->rate;
+    out.lastMs = s->lastMs;
+    out.level = s->level;
+    memcpy(out.bands, s->bands, sizeof(out.bands));
+    out.timeCount = s->timeCount;
+    const uint8_t start = (uint8_t)((s->timeIdx + AR_SYNC_CADENCE_LEN - out.timeCount) % AR_SYNC_CADENCE_LEN);
+    for (uint8_t k = 0; k < out.timeCount; k++) {
+      out.times[k] = s->times[(start + k) % AR_SYNC_CADENCE_LEN];
+    }
+  }
+  xSemaphoreGive(arSyncSenderLock);
+  return s != nullptr;
 }
 
 void C5RemoteUsermod::drawSyncPage() {
@@ -871,10 +1021,6 @@ void C5RemoteUsermod::drawSyncPage() {
   // now (a sender that went quiet leaves its line behind otherwise).
   clearPageArea();
 
-  // The sender table is written in the network's task and read here, so it
-  // is read under its lock.
-  bool locked = (arSyncSenderLock != nullptr) &&
-                (xSemaphoreTake(arSyncSenderLock, pdMS_TO_TICKS(5)) == pdTRUE);
   const uint8_t count = arSyncSenderCount;
   const bool live = (count > 0);
 
@@ -907,49 +1053,21 @@ void C5RemoteUsermod::drawSyncPage() {
     y += 28;
   }
 
-  // The meter: the sixteen bands of the last packet, from whichever board
-  // sent most recently.
-  uint8_t bands[16] = {0};
-  uint8_t level = 0;
-  bool haveBands = false;
-  uint32_t newest = 0;
-  // When that board's packets arrived, for the cadence.
-  uint32_t times[AR_SYNC_CADENCE_LEN] = {0};
-  uint8_t  timeCount = 0;
-  uint32_t lastMs = 0;
-  for (uint8_t i = 0; i < count; i++) {
-    if (arSyncSenders[i].lastMs >= newest) {
-      newest = arSyncSenders[i].lastMs;
-      memcpy(bands, arSyncSenders[i].bands, sizeof(bands));
-      level = arSyncSenders[i].level;
-      haveBands = true;
-      // The arrival times, oldest first.
-      const ArSyncSender &s = arSyncSenders[i];
-      timeCount = s.timeCount;
-      lastMs = s.lastMs;
-      const uint8_t start = (uint8_t)((s.timeIdx + AR_SYNC_CADENCE_LEN - timeCount) % AR_SYNC_CADENCE_LEN);
-      for (uint8_t k = 0; k < timeCount; k++) {
-        times[k] = s.times[(start + k) % AR_SYNC_CADENCE_LEN];
-      }
-    }
-  }
-  if (locked) xSemaphoreGive(arSyncSenderLock);
+  // The newest sender: the bands for the meter, and the times for the
+  // cadence.
+  C5SenderInfo newest;
+  const bool haveSender = readNewestSender(newest);
 
-  // The cadence: how the packets are spaced out.
+  // The cadence of the packets.
   //
-  // The audio sync goes out at the analysis rate, so the packets should be
-  // evenly spaced - one every ten milliseconds or so.  A sender that
-  // bunches them up (or leaves gaps between them) is a sender whose
-  // timing is off, and the arrivals are drawn as ticks on a strip of
-  // time: evenly spaced packets are an even comb of ticks, and bunches are
-  // ticks that crowd together.
-  const int cadTop = 112;
-  _panel.fillRect(0, cadTop, C5_PANEL_W, 60, C5_PANEL_BG);
-
+  // Not drawn here: the strip of ticks is a picture that changes every
+  // frame, and that is drawing cycles the meter needs.  The PACKETS page
+  // has it, and all this page says is whether there is anything to look
+  // at - which is nothing, most of the time.
   uint32_t gapSum = 0, gapMin = 0xFFFFFFFF, gapMax = 0;
   uint8_t gapCount = 0;
-  for (uint8_t k = 1; k < timeCount; k++) {
-    const uint32_t g = times[k] - times[k - 1];
+  for (uint8_t k = 1; k < newest.timeCount; k++) {
+    const uint32_t g = newest.times[k] - newest.times[k - 1];
     gapSum += g;
     if (g < gapMin) gapMin = g;
     if (g > gapMax) gapMax = g;
@@ -959,43 +1077,123 @@ void C5RemoteUsermod::drawSyncPage() {
     const uint32_t mean = gapSum / gapCount;
     // Bunched: two packets within a few milliseconds of each other, or a
     // gap a long way bigger than the rest.
-    const bool bunched = (gapMin < 4) || (gapMax > mean * 3);
-    snprintf_P(line, sizeof(line), PSTR("packets %lu ms apart  (%lu..%lu)  %s"),
-               (unsigned long)mean, (unsigned long)gapMin, (unsigned long)gapMax,
-               bunched ? "BUNCHED" : "even");
-    _panel.drawText(2, cadTop + 2, line, bunched ? C5_WARN : C5_TEXT, C5_PANEL_BG);
-  } else {
-    _panel.drawText(2, cadTop + 2, "no packets yet", C5_DIM, C5_PANEL_BG);
-  }
-
-  // The strip: the last quarter of a second, with a tick for each packet.
-  const int stripTop = cadTop + 14;
-  const int stripH = 30;
-  const uint32_t window = 250;   // ms
-  if (timeCount > 0) {
-    const uint32_t startMs = (lastMs > window) ? (lastMs - window) : 0;
-    _panel.drawHLine(4, stripTop + stripH, C5_PANEL_W - 8, C5_DIM);
-    for (uint8_t k = 0; k < timeCount; k++) {
-      if (times[k] < startMs) continue;   // older than the window
-      const int x = 4 + (int)(((times[k] - startMs) * (C5_PANEL_W - 8)) / window);
-      _panel.fillRect(x, stripTop, 2, stripH, C5_ACCENT);
+    if (gapMin < 4 || gapMax > mean * 3) {
+      _panel.drawText(2, y, "packets in bunches - see PACKETS", C5_WARN, C5_BG);
+      y += 12;
     }
   }
-  _panel.drawText(2, stripTop + stripH + 4, "each tick is a packet, the last 250 ms",
-                   C5_DIM, C5_PANEL_BG);
 
   const int meterTop = C5_PANEL_H - 12 - 96;
   _panel.fillRect(0, meterTop - 2, C5_PANEL_W, 98, C5_PANEL_BG);
-  drawBars(haveBands ? bands : nullptr, 4, meterTop, C5_PANEL_W - 8, 92);
+  drawBars(haveSender ? newest.bands : nullptr, 4, meterTop, C5_PANEL_W - 8, 92);
 
   // The level of the last packet.
-  if (haveBands) {
-    snprintf_P(line, sizeof(line), PSTR("level %d"), level);
+  if (haveSender) {
+    snprintf_P(line, sizeof(line), PSTR("level %d"), newest.level);
     _panel.drawTextRight(C5_PANEL_W - 4, meterTop + 2, line, C5_DIM, C5_PANEL_BG);
   }
 
   // The footer: what the buttons do on this page.
   drawFooter("< prev   next >", "beats >");
+}
+
+// ---------------------------------------------------------------------------
+// The packets page
+// ---------------------------------------------------------------------------
+//
+// How the audio sync packets are spaced out.
+//
+// The audio sync goes out at the analysis rate, so the packets SHOULD be
+// evenly spaced - one every ten milliseconds or so.  Whether they are is
+// worth knowing: a sender that bunches them up, or leaves gaps between
+// them, is a sender whose timing is off.
+//
+// The strip is the arrivals: the last quarter of a second, with a tick
+// for each packet.  Evenly spaced packets are an even comb of ticks;
+// bunches are ticks that crowd together.
+
+void C5RemoteUsermod::drawPacketsPage() {
+  char line[64];
+
+  clearPageArea(0, 307);
+
+  C5SenderInfo s;
+  const bool have = readNewestSender(s);
+
+  // The gaps between the packets.
+  uint32_t gapSum = 0, gapMin = 0xFFFFFFFF, gapMax = 0;
+  uint8_t gapCount = 0;
+  for (uint8_t k = 1; k < s.timeCount; k++) {
+    const uint32_t g = s.times[k] - s.times[k - 1];
+    gapSum += g;
+    if (g < gapMin) gapMin = g;
+    if (g > gapMax) gapMax = g;
+    gapCount++;
+  }
+  const uint32_t mean = gapCount ? (gapSum / gapCount) : 0;
+  // Bunched: two packets within a few milliseconds of each other, or a
+  // gap a long way bigger than the rest.
+  const bool bunched = gapCount && (gapMin < 4 || gapMax > mean * 3);
+
+  drawHeader("PACKETS", have ? (bunched ? "BUNCHED" : "even") : "no packets");
+
+  if (!have) {
+    _panel.drawText(2, 24, "waiting for a board to send", C5_DIM, C5_BG);
+    drawFooter("< prev   next >", "");
+    return;
+  }
+
+  // Who, and how fast.
+  const String name = senderName(s.ip);
+  _panel.drawText(2, 20, name.c_str(), C5_TEXT, C5_BG);
+  snprintf_P(line, sizeof(line), PSTR("%lu/s   %lu pkts"), (unsigned long)s.rate, (unsigned long)s.packets);
+  _panel.drawTextRight(C5_PANEL_W - 2, 20, line, C5_DIM, C5_BG);
+
+  // The gaps themselves.
+  if (gapCount > 0) {
+    snprintf_P(line, sizeof(line), PSTR("%lu ms apart   %lu..%lu   %s"),
+               (unsigned long)mean, (unsigned long)gapMin, (unsigned long)gapMax,
+               bunched ? "BUNCHED" : "even");
+    _panel.drawText(2, 32, line, bunched ? C5_WARN : C5_GOOD, C5_BG);
+  } else {
+    _panel.drawText(2, 32, "no packets yet", C5_DIM, C5_BG);
+  }
+
+  // The strip: the last quarter of a second, with a tick for each packet.
+  const int stripTop = 46, stripH = 62;
+  const uint32_t window = 250;   // ms
+  _panel.fillRect(0, stripTop, C5_PANEL_W, stripH + 2, C5_PANEL_BG);
+  _panel.drawHLine(4, stripTop + stripH, C5_PANEL_W - 8, C5_DIM);
+  if (s.timeCount > 0) {
+    const uint32_t startMs = (s.lastMs > window) ? (s.lastMs - window) : 0;
+    for (uint8_t k = 0; k < s.timeCount; k++) {
+      if (s.times[k] < startMs) continue;   // older than the window
+      const int x = 4 + (int)(((s.times[k] - startMs) * (C5_PANEL_W - 8)) / window);
+      _panel.fillRect(x, stripTop + 2, 2, stripH - 2, C5_ACCENT);
+    }
+  }
+  _panel.drawText(2, stripTop + stripH + 6, "each tick is a packet, the last 250 ms",
+                  C5_DIM, C5_PANEL_BG);
+
+  // The gaps, one bar each: the shape of the spread.
+  const int histTop = 140, histH = 56;
+  _panel.fillRect(0, histTop, C5_PANEL_W, histH + 2, C5_PANEL_BG);
+  if (gapCount > 0) {
+    const int bars = gapCount;
+    const int slot = (C5_PANEL_W - 8) / bars;
+    for (uint8_t k = 0; k < gapCount; k++) {
+      const uint32_t g = s.times[k + 1] - s.times[k];
+      int h = (int)((uint32_t)histH * g / (gapMax ? gapMax : 1));
+      if (h < 2) h = 2;
+      if (h > histH) h = histH;
+      _panel.fillRect(4 + k * slot, histTop + histH - h, slot - 2, h,
+                      g < 4 ? C5_WARN : C5_ACCENT);
+    }
+  }
+  _panel.drawText(2, histTop + histH + 6, "the gaps between the packets, the newest on the right",
+                  C5_DIM, C5_PANEL_BG);
+
+  drawFooter("< prev   next >", "");
 }
 
 void C5RemoteUsermod::drawBeatPage() {
@@ -1020,29 +1218,30 @@ void C5RemoteUsermod::drawBeatPage() {
   snprintf_P(line, sizeof(line), PSTR("%.1f BPM"), (double)_bpm);
   _panel.drawText(2, 20, line, _tempoUsable ? C5_GOOD : C5_DIM, C5_BG);
 
-  // Where the beat is: the beat in the bar, and how far through it.
-  snprintf_P(line, sizeof(line), PSTR("beat %d of 4"), _beatInBar);
-  _panel.drawText(2, 34, line, C5_TEXT, C5_BG);
-  snprintf_P(line, sizeof(line), PSTR("quality %.2f   drift %+.0f ms"), (double)_quality, (double)_driftMs);
-  _panel.drawText(2, 44, line, C5_DIM, C5_BG);
+  // Where the beat is.
+  //
+  // COUNTED HERE, not asked for: the answer is a few seconds old, and the
+  // beat's period is known, so the place in the beat is worked out from
+  // the answer and kept up to date.
+  float progress = 0.0f;
+  int beatInBar = 0;
+  uint32_t beatCount = 0;
+  beatNow(progress, beatInBar, beatCount);
+  snprintf_P(line, sizeof(line), PSTR("beat %d of 4   #%lu"), beatInBar, (unsigned long)beatCount);
+  _panel.drawText(2, 34, line, _tempoUsable ? C5_TEXT : C5_DIM, C5_BG);
 
-  // The beat progress: a bar with the beat's place in it.
-  const int barX = 2, barY = 58, barW = C5_PANEL_W - 4, barH = 16;
-  _panel.fillRect(barX, barY, barW, barH, C5_PANEL_BG);
-  const int beatW = (int)(_beatProgress * barW);
-  _panel.fillRect(barX, barY, beatW, barH, C5_ACCENT);
-  _panel.drawRect(barX, barY, barW, barH, C5_DIM);
-  // The downbeat's mark, when there is one.
-  if (_downbeatSet) _panel.fillRect(barX, barY, 2, barH, C5_WARN);
+  // How good the estimate is, and how far the grid has drifted.
+  snprintf_P(line, sizeof(line), PSTR("quality %.2f   drift %+.0f ms"), (double)_quality, (double)_driftMs);
+  _panel.drawText(2, 46, line, C5_DIM, C5_BG);
 
   // The mode, and whether the downbeat has been marked.
   snprintf_P(line, sizeof(line), PSTR("mode: %s"), _modeName.c_str());
-  _panel.drawText(2, 80, line, C5_DIM, C5_BG);
-  _panel.drawText(2, 90, _downbeatSet ? "downbeat: marked" : "downbeat: not marked",
+  _panel.drawText(2, 62, line, C5_DIM, C5_BG);
+  _panel.drawText(2, 74, _downbeatSet ? "downbeat: marked" : "downbeat: not marked",
                  _downbeatSet ? C5_GOOD : C5_DIM, C5_BG);
   // What the board is showing: the preset and the brightness.
   snprintf_P(line, sizeof(line), PSTR("preset %d   bri %d"), _preset, _p4Brightness);
-  _panel.drawText(2, 104, line, C5_DIM, C5_BG);
+  _panel.drawText(2, 90, line, C5_DIM, C5_BG);
 
   // What the buttons do here.
   drawFooter("BOOT: downbeat", "hold: lock");
@@ -1095,11 +1294,22 @@ void C5RemoteUsermod::drawBoardPage() {
 
   // The board with the tracker.
   _panel.drawText(2, 94, "board:", C5_DIM, C5_BG);
-  _panel.drawText(38, 94, _p4Host.c_str(), _p4Online ? C5_TEXT : C5_DIM, C5_BG);
+  _panel.drawText(46, 94, _p4Host.c_str(), _p4Online ? C5_TEXT : C5_DIM, C5_BG);
+
+  // The TF card.
+  if (_sd.mounted()) {
+    snprintf_P(line, sizeof(line), PSTR("tf: %lu MB  %u files"),
+               (unsigned long)(_sd.sizeBytes() / (1024ULL * 1024ULL)),
+               (unsigned)_sd.fileCount());
+    _panel.drawText(2, 104, line, C5_GOOD, C5_BG);
+  } else {
+    snprintf_P(line, sizeof(line), PSTR("tf: %s"), _sd.status());
+    _panel.drawText(2, 104, line, C5_DIM, C5_BG);
+  }
 
   // The last thing a button did.
   if (_lastAction.length() && (millis() - _lastActionMs) < 3000) {
-    _panel.drawText(2, 110, _lastAction.c_str(), C5_ACCENT, C5_BG);
+    _panel.drawText(2, 116, _lastAction.c_str(), C5_ACCENT, C5_BG);
   }
 
   drawFooter("< prev   next >", "");
@@ -1177,7 +1387,7 @@ void C5RemoteUsermod::drawButtonPage() {
   char name[8];
 
   // The page uses most of the screen, so it wipes most of it.
-  clearPageArea(270);
+  clearPageArea(176, 307);
 
   // How many are down at this moment.
   uint8_t down = 0;
@@ -1250,6 +1460,19 @@ void C5RemoteUsermod::drawButtonPage() {
 // The loop
 // ---------------------------------------------------------------------------
 void C5RemoteUsermod::loop() {
+  // A reboot that was asked for over the network.
+  //
+  // It is done here and not in the handler: the handler runs in the web
+  // server's task, and a restart from there takes the server with it
+  // before the answer is out.
+  if (_rebootAsked) {
+    _rebootAsked = false;
+    USER_PRINTF("C5: rebooting on request\n");
+    delay(100);
+    ESP.restart();
+    return;
+  }
+
   if (!_panel.ready()) return;
 
   const uint32_t now = millis();
@@ -1320,8 +1543,9 @@ void C5RemoteUsermod::loop() {
     switch (_page) {
       case C5_PAGE_SYNC:  drawSyncPage(); break;
       case C5_PAGE_BEAT:  drawBeatPage(); break;
-      case C5_PAGE_TEST:  drawTestPage(); break;
       case C5_PAGE_BUTTONS: drawButtonPage(); break;
+      case C5_PAGE_PACKETS: drawPacketsPage(); break;
+      case C5_PAGE_TEST:  drawTestPage(); break;
       default:            drawBoardPage(); break;
     }
     _drawMs = (uint32_t)((esp_timer_get_time() - drawStart) / 1000);
@@ -1376,6 +1600,9 @@ void C5RemoteUsermod::readFromJsonState(JsonObject &obj) {
     if (b >= 0 && b <= 2 && (uint8_t)b != _wifiBand) {
       _wifiBand = (uint8_t)b;
       applyWifiBand();
+      // And it is remembered: the band is what the board comes up with,
+      // and the band is what makes the connection quick.
+      serializeConfig();
     }
   }
   if (me["page"].is<int>()) {
@@ -1429,6 +1656,24 @@ void C5RemoteUsermod::addToJsonAr(JsonObject &obj) {
   me["expander"]  = _ioexpOk;
   me["imu"]       = _imuOk;
   me["expander_inputs"] = (unsigned)_ioInputsStable;
+  // The panel's timings.  The panel is the slow part of this board, and
+  // these are what say so - and they are here rather than only on the
+  // console because reading the console means resetting the board.
+  me["panel_ms"]     = (unsigned long)_panel.lastFrameMs();
+  me["panel_bands"]  = (unsigned long)_panel.lastBandCount();
+  me["panel_frames"] = (unsigned long)_panel.frameCount();
+  me["panel_clear_ms"] = (unsigned long)_panel.lastClearMs();
+  me["draw_ms"]      = (unsigned long)_drawMs;
+  // How long it took to come up.
+  me["wifi_ms"]  = (unsigned long)_wifiMs;
+  me["setup_ms"] = (unsigned long)_setupMs;
+  // The TF card.
+  JsonObject sd = me.createNestedObject("sd");
+  sd["mounted"] = _sd.mounted();
+  sd["status"]  = _sd.status();
+  sd["size_mb"] = (unsigned long)(_sd.sizeBytes() / (1024ULL * 1024ULL));
+  sd["files"]   = _sd.fileCount();
+  sd["listing"] = _sd.listing();
   // The buttons: what is pressed at this moment, and what has happened.
   //
   // The screen shows the same thing, but this is the version that can be

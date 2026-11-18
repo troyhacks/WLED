@@ -355,6 +355,11 @@ void C5Panel::flush(unsigned budgetMs) {
     _sendRow = 0;
     _sendPtr = _fbShow;
     _frameStart = esp_timer_get_time();
+    // The bands are counted for THIS frame: a frame that goes out over
+    // several flushes is still one frame, and the count is what says how
+    // much of the screen had to go on the wire.
+    _bandMs = 0;
+    _bandCount = 0;
     // Which ROWS are different from the ones the panel already has.
     //
     // The panel's own copy is the picture it was last sent, and that is
