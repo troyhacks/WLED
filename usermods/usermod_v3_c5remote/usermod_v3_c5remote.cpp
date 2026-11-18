@@ -28,6 +28,17 @@ C5RemoteUsermod::C5RemoteUsermod() : Usermod("C5Remote", false) {}
 // ---------------------------------------------------------------------------
 
 // A GET. The body comes back in the string.
+// The task watchdog.
+//
+// The main task is the one that makes the requests, and a request that
+// waits for an answer holds it - and the task watchdog does not care what
+// the task is waiting for.  So the watchdog is fed around the requests.
+static void c5FeedWatchdog() {
+#if defined(CONFIG_ESP_TASK_WDT_TIMEOUT_S) && (CONFIG_ESP_TASK_WDT_TIMEOUT_S > 0)
+  esp_task_wdt_reset();
+#endif
+}
+
 static bool c5HttpGet(const char *url, String &out, int *statusOut) {
   out = "";
   if (statusOut) *statusOut = 0;
@@ -35,13 +46,14 @@ static bool c5HttpGet(const char *url, String &out, int *statusOut) {
   esp_http_client_config_t cfg = {};
   cfg.url = url;
   cfg.method = HTTP_METHOD_GET;
-  cfg.timeout_ms = 2000;
+  cfg.timeout_ms = 1500;
   cfg.buffer_size = 1024;
   cfg.buffer_size_tx = 1024;
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == nullptr) return false;
 
+  c5FeedWatchdog();
   bool ok = false;
   if (esp_http_client_open(client, 0) >= 0) {
     // The headers have to be fetched BEFORE the status code is asked
@@ -70,7 +82,7 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
   esp_http_client_config_t cfg = {};
   cfg.url = url;
   cfg.method = HTTP_METHOD_POST;
-  cfg.timeout_ms = 5000;
+  cfg.timeout_ms = 1500;
   cfg.buffer_size = 512;
   cfg.buffer_size_tx = 512;
 
@@ -85,7 +97,9 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
   const int len = (int)strlen(body);
   esp_http_client_set_header(client, "Content-Type", "application/json");
   esp_http_client_set_post_field(client, body, len);
+  c5FeedWatchdog();
   esp_http_client_perform(client);
+  c5FeedWatchdog();
   const int status = esp_http_client_get_status_code(client);
   if (statusOut) *statusOut = status;
   ok = (status == 200);
@@ -859,9 +873,6 @@ void C5RemoteUsermod::loop() {
     pollExpander();
   }
 
-  // The board that has the tracker.
-  pollTracker();
-
 #if defined(USERMOD_ZIGBEE)
   pollZigbee();
 #endif
@@ -882,9 +893,16 @@ void C5RemoteUsermod::loop() {
   }
 
   // An action that was asked for elsewhere.
+  //
+  // The action goes before the poll: both of them make a request, and two
+  // requests in one turn of the loop is more waiting than the task
+  // watchdog likes.
   if (_pendingActionSet) {
     _pendingActionSet = false;
     performAction(_pendingAction);
+  } else {
+    // The board that has the tracker.
+    pollTracker();
   }
 
   // The screen. Ten times a second is plenty, and the live parts (the
