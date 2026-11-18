@@ -8,10 +8,11 @@
  *
  * HOW IT IS PUT TOGETHER
  * ----------------------
- * The picture lives in a frame buffer in PSRAM (320 x 320 x 2 bytes, RGB565),
- * the drawing happens there, and only the part that changed is sent to the
- * panel. The transfer goes through a small buffer in internal RAM, because
- * the SPI's DMA cannot read the frame buffer where it is.
+ * The picture lives in frame buffers in PSRAM (320 x 320 x 2 bytes, RGB565),
+ * the drawing happens there, and only the ROWS that changed are sent to
+ * the panel. The panel is run in 18 bit mode, and the driver converts the
+ * picture to RGB666 on the way out, so the picture in the frame buffer is
+ * still RGB565 and there is no conversion to do here.
  *
  * The panel itself is driven by ESP-IDF's esp_lcd, with the ILI9488's panel
  * driver in wled00/src/dependencies/esp_lcd_ili9488.
@@ -43,14 +44,6 @@
 
 // How many rows go out at a time.
 //
-// The panel's window is set ONCE for the whole frame and the picture is
-// then streamed into it.  The panel's address counter walks the window on
-// its own, so the rows do not each need a window of their own - which is
-// what made the screen crawl: six hundred and forty round trips for one
-// screen, each one waiting for the last.
-//
-// How many rows go out at a time.
-//
 // The panel's window is set for every band, and that is not an accident:
 // the panel starts each block of pixels at the start of the window, so a
 // window set once for the whole screen has every band land on the same
@@ -62,6 +55,9 @@
 // trip that waits for the one before it.  Six hundred and forty of them
 // for one screen, and the screen took a second.  A band at a time is
 // forty.
+//
+// The band is also the driver's limit: it converts a whole rectangle at
+// a time and will not take one larger than its buffer.
 #define C5_PANEL_BAND_ROWS 8
 
 // How many bands a full screen is: 320 rows, eight to a band.
@@ -156,7 +152,7 @@ class C5Panel {
 
     esp_lcd_panel_handle_t _panel = nullptr;
     esp_lcd_panel_io_handle_t _io = nullptr;
-    // TWO picture buffers.
+    // TWO picture buffers, plus the one the panel has.
     //
     // The drawing goes into one and the panel is sent the other, and they
     // are swapped when a frame is finished.  With one buffer the panel can

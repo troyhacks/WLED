@@ -50,14 +50,19 @@ The board has no LEDs, so it has no output bus either
 (`DEFAULT_LED_TYPE=TYPE_NONE`): an Art-Net sender on a board with nothing
 to send is just noise on the network and in the console.
 
-And the **JSON document** is 40 KB (`JSON_BUFFER_SIZE`) rather than the 54 KB
+And the **JSON document** is 20 KB (`JSON_BUFFER_SIZE`) rather than the 54 KB
 the boards with more RAM use.  It is a static array in DRAM, and every byte
-of it comes out of the heap that the tasks have to be carved out of: with
-54 KB the heap had 15 KB in one piece, the web task took 12 KB of it, and
-the two UDP tasks - the audio sync's listener and the notifier's - had
-nothing left ("listen(): failed to start task").  Without a listener there
-is no audio sync, and without the web server there is no way to see the
-screen.
+of it comes out of the heap that the tasks have to be carved out of.  At
+40 KB the heap was down to **7 KB** and the web server could not allocate
+anything at all - the board answered every request with an empty reply
+(`curl: (52) Empty reply from server`).  At 20 KB the heap has 56 KB and
+the server is there.
+
+Moving the document to PSRAM would be the obvious answer, and it does not
+work: WLED's own `PSRAM_Allocator` is disabled in `wled00/wled.h` with a
+"TroyHacks: P4 FIXME: JSON in PSRAM is borked for some reason on v5.5",
+and turning it back on made the heap **worse** (6 KB) and left the server
+dead.
 
 The heap's *largest block* is the number that matters here, not the heap's
 free total: a task's stack has to be one piece.  The console prints it
@@ -204,16 +209,62 @@ WLEDMM's display layer is the P4's: a DSI/PPA pipeline that scales the LED
 bus into a monitor's framebuffer. It has no drawing primitives in it at all,
 and this board is a different chip with an SPI panel, so it gets its own:
 
-* the picture lives in a frame buffer in PSRAM (320 x 320 x 2 bytes, RGB565),
+* the picture lives in frame buffers in PSRAM (320 x 320 x 2 bytes, RGB565),
 * the drawing happens there,
-* only the part that changed is sent to the panel, through a buffer in
-  internal RAM (the SPI's DMA cannot read the frame buffer where it is),
+* only the **rows** that changed are sent to the panel,
 * the text is WLED's own console font (`wled00/src/font/console_font_6x8.h`).
 
 The panel itself is ESP-IDF's `esp_lcd` with the ILI9488's panel driver in
-`wled00/src/dependencies/esp_lcd_ili9488`, in 16 bit mode, so the picture
-goes out as it is with no conversion in between. The panel's **reset line is
-on the IO expander**, so the expander is what resets it.
+`wled00/src/dependencies/esp_lcd_ili9488`, in **18 bit mode**. The panel's
+**reset line is on the IO expander**, so the expander is what resets it.
+
+### 18 bits, not 16
+
+The vendor's own demo for this board runs the panel at 18 bits
+(`COLMOD=0x66`, RGB666) and that is what works.  16 bit mode was tried
+first and gave **a flat grey screen**: the panel was told `COLMOD=0x55`
+and fed RGB565 bytes, and this panel does not show that.  There is also
+no `esp_lcd_panel_reset()` in the vendor's flow without it, so the panel
+never came out of its reset state.
+
+In 18 bit mode the driver converts the picture from RGB565 to RGB666 on
+the way out, into a buffer of its own (a band's worth of pixels, three
+bytes a pixel), so **the picture in the frame buffer is still RGB565** and
+the conversion is the driver's business.
+
+### The window is set for every band
+
+The panel **starts each block of pixels at the start of the window**, so a
+window set once for the whole screen has every band land on the same
+rows.  That is what the grey screen with a picture that never went past
+the top was: a window set once, streaming the whole picture into it.
+
+So the window is set for **every band** - eight rows at a time, forty
+bands to a screen.  A row at a time was tried first and was far too slow:
+the window has to be set before every block of pixels, and each of those
+is a round trip that waits for the one before it.  Six hundred and forty
+of them for one screen, and the screen took a second.  A band at a time
+is forty.
+
+The band is also the driver's limit: it converts a whole rectangle at a
+time and will not take one larger than its buffer.
+
+### Only the rows that changed
+
+The panel keeps what it was last given, so the board keeps a **third**
+copy of the picture - what the panel is showing now - and compares the
+new picture with it **row by row**.  Only the rows that differ go over
+the wire, in runs of consecutive dirty rows.
+
+A row is the finest grain that is worth it: the window can be set to any
+run of rows, and a row is 320 pixels.  The meter moves by a pixel or two
+at a time, so sending whole bands for it would send most of the screen
+for nothing.  In practice a moving meter sends a handful of bands, not
+forty.
+
+The frames go out **asynchronously**, with a budget: the send picks up
+where it left off when the budget runs out, so a full screen goes out
+over a few loops of the main loop instead of stalling one of them.
 
 ### Seeing the screen without looking at it
 
@@ -231,16 +282,25 @@ the screen from a desk.
 
 ### What the panel is sent
 
-The picture is held as the chip holds it - little-endian, so the low byte
-of a pixel is the blue - and the ILI9488's 16 bit mode takes the high
-byte first, so the bytes are swapped on the way out. (In 18 bit mode the
-driver does the conversion itself and gets this right; in 16 bit mode it
-hands the picture over as it is, so the swap is ours to do.)
+**Three** pictures are kept, all of them in PSRAM (200 KB each):
 
-Two pictures are kept, one to draw into and one to send, and they are
+| Buffer        | What it is                                                    |
+|---------------|---------------------------------------------------------------|
+| `_fb`         | what is drawn into                                            |
+| `_fbShow`     | what is sent - the finished picture                           |
+| `_fbPanel`    | what the panel is showing now - the picture the new one is compared against |
+
+The drawing goes into one and the panel is sent the other, and they are
 swapped when a frame is finished: with one picture the panel can be sent
 half of one frame and half of the next, and a page that changes shows as a
 mixture of both.
+
+The bytes go out as the chip holds them - little-endian, so the low byte
+of a pixel is the blue - and in 18 bit mode **the driver does the
+conversion itself** (RGB565 to RGB666), so there is no swapping to do
+here.  (In 16 bit mode the driver hands the picture over as it is, and
+the swap would be ours to do.  That mode does not show anything on this
+panel, so the question does not arise.)
 
 RGB565 puts three of the green's six bits in the low byte and three in
 the high one, so the green is the awkward colour and has to be put
