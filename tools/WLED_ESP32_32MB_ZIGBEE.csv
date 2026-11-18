@@ -1,0 +1,21 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# 32 MB flash (the ESP32-C5-WROOM-1-N32R8 on the WaveShare ESP32-C5-LCD-2.73)
+# with room for the Zigbee stack.
+#
+# The Zigbee network lives in two partitions of its own - zb_storage and
+# zb_fct - and the framework's own zigbee* schemes have them at the end of
+# the flash, after a filesystem that is much smaller than this board's.  So
+# the table is this board's, with the two Zigbee partitions added after the
+# filesystem.
+#
+# The Zigbee storage is FAT (the framework's schemes use data/fat for them),
+# and it is where the network's keys and its devices live - a build without
+# it forgets the network every time it starts.
+nvs,        data, nvs,     0x9000,  0x5000,
+otadata,    data, ota,     0xe000,  0x2000,
+app0,       app,  ota_0,   0x10000, 0x400000,
+app1,       app,  ota_1,   0x410000,0x400000,
+spiffs,     data, spiffs,  0x810000,0x1400000,
+zb_storage, data, fat,     0x1C10000,0x4000,
+zb_fct,     data, fat,     0x1C14000,0x1000,
+coredump,   data, coredump,,64K

@@ -42,6 +42,27 @@
 #include "c5_board.h"
 #include "c5_panel.h"
 
+// The Zigbee radio.
+//
+// The Arduino core ships the whole Zigbee stack for the ESP32-C5 - ZBOSS,
+// the headers and the compiled libraries - so this is a build flag
+// (-DZIGBEE_MODE_ED) and a partition scheme, and the endpoints below are
+// the core's own Zigbee library.
+//
+// The board joins the network as an END DEVICE.  Espressif rates a router
+// next to Wi-Fi as "supported but performance is unstable" - a router keeps
+// unsynchronised links with its neighbours and wants to hear them all the
+// time - and this board is serving WLED's Wi-Fi the whole while.
+#if defined(USERMOD_ZIGBEE)
+#include "Zigbee.h"
+
+#define C5_ZIGBEE_EP_TEMPO   1   // the tempo, as an analog input
+#define C5_ZIGBEE_EP_MOTION  2   // motion, as an occupancy sensor
+
+static ZigbeeAnalog          c5ZigbeeTempo  = ZigbeeAnalog(C5_ZIGBEE_EP_TEMPO);
+static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP_MOTION);
+#endif
+
 // The HTTP client.
 //
 // The Arduino HTTPClient is not in this board's build: its library declares
@@ -144,6 +165,16 @@ class C5RemoteUsermod : public Usermod {
     // ---- what the buttons did ----
     String  _lastAction;
     uint32_t _lastActionMs = 0;
+
+    // ---- the Zigbee radio ----
+#if defined(USERMOD_ZIGBEE)
+    bool    _zigbeeStarted = false;
+    bool    _zigbeeMotion = false;
+    float   _zigbeeMotionMag = 0.0f;
+    uint32_t _zigbeeLastTempo = 0;
+    void    setupZigbee();
+    void    pollZigbee();
+#endif
 
     // ---- the helpers ----
     void setupButtons();

@@ -153,6 +153,12 @@ void C5RemoteUsermod::setup() {
 
   setupButtons();
 
+#if defined(USERMOD_ZIGBEE)
+  // The radio. It is started last: it wants the flash's Zigbee partitions
+  // to be there, and the board's own setup first.
+  setupZigbee();
+#endif
+
   // The screen, over HTTP: /c5screen.bmp is what the panel is showing,
   // as a picture.  It is the only way to see the screen without looking
   // at the screen.
@@ -511,6 +517,70 @@ String C5RemoteUsermod::senderName(uint32_t ip) {
 }
 
 // ---------------------------------------------------------------------------
+// The Zigbee radio
+// ---------------------------------------------------------------------------
+#if defined(USERMOD_ZIGBEE)
+
+void C5RemoteUsermod::setupZigbee() {
+  // The tempo: an analog input, so that Home Assistant has a number to
+  // show.  The description says what the number is; there is no unit for
+  // "beats per minute" in the Zigbee clusters, and a wrong unit would be
+  // worse than none.
+  c5ZigbeeTempo.addAnalogInput();
+  c5ZigbeeTempo.setAnalogInputDescription("BPM");
+  c5ZigbeeTempo.setAnalogInputMinMax(40.0f, 220.0f);
+  c5ZigbeeTempo.setAnalogInputResolution(0.1f);
+
+  // Motion: an occupancy sensor, which is the one thing the Zigbee
+  // clusters model well.  The IMU is what notices it.
+  c5ZigbeeMotion.setManufacturerAndModel("Troy", "WLED C5 remote");
+
+  Zigbee.addEndpoint(&c5ZigbeeTempo);
+  Zigbee.addEndpoint(&c5ZigbeeMotion);
+
+  if (!Zigbee.begin(ZIGBEE_END_DEVICE)) {
+    USER_PRINTLN("C5: the Zigbee stack did not start");
+    return;
+  }
+  _zigbeeStarted = true;
+  USER_PRINTLN("C5: the Zigbee stack is up - looking for a network");
+}
+
+void C5RemoteUsermod::pollZigbee() {
+  if (!_zigbeeStarted) return;
+
+  // The tempo, every few seconds.
+  const uint32_t now = millis();
+  if (now - _zigbeeLastTempo > 5000) {
+    _zigbeeLastTempo = now;
+    if (Zigbee.connected() && _tempoUsable) {
+      c5ZigbeeTempo.setAnalogInput(_bpm);
+      c5ZigbeeTempo.reportAnalogInput();
+    }
+  }
+
+  // Motion, from the IMU: the board was moved.
+  if (_imuOk) {
+    float acc[3] = {0, 0, 0}, gyr[3] = {0, 0, 0};
+    if (_imu.read(acc, gyr)) {
+      const float mag = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+      // A board lying still reads about one g.  A tenth of a g away from
+      // that is the board being touched.
+      const bool moved = fabsf(mag - 9.81f) > 1.0f;
+      if (moved != _zigbeeMotion) {
+        _zigbeeMotion = moved;
+        if (Zigbee.connected()) {
+          c5ZigbeeMotion.setOccupancy(moved);
+          c5ZigbeeMotion.report();
+        }
+      }
+    }
+  }
+}
+
+#endif  // USERMOD_ZIGBEE
+
+// ---------------------------------------------------------------------------
 // The pages
 // ---------------------------------------------------------------------------
 
@@ -727,6 +797,10 @@ void C5RemoteUsermod::loop() {
 
   // The board that has the tracker.
   pollTracker();
+
+#if defined(USERMOD_ZIGBEE)
+  pollZigbee();
+#endif
 
   // The IMU goes to the console, once a second.
   static uint32_t lastImu = 0;
