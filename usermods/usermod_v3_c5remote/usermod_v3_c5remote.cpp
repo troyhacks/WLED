@@ -179,9 +179,17 @@ void C5RemoteUsermod::setup() {
   // (the log says so: "Starting WiFi STA mode" is after this).  So it
   // is set when the radio says it has started, which is before the
   // scan.
-  WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t) {
-    if (event == ARDUINO_EVENT_WIFI_STA_START) applyWifiBand();
-  }, ARDUINO_EVENT_WIFI_STA_START);
+  // The radio's band.
+  //
+  // The band is what makes the connection quick - the C5 is a dual-band
+  // chip and the network it is after is a 5 GHz one - and it has to be
+  // set BEFORE the scan that looks for the network.
+  //
+  // It cannot be set here: the radio comes up after the usermods' setup
+  // (the log says so: "Starting WiFi STA mode" is after this).  So the
+  // loop tries, until the radio is there to be told.  The loop runs
+  // before the radio starts, so the band is set before the scan.
+  _bandSet = false;
 
   // The IO expander: the panel's reset and its backlight live there.
   _ioexpOk = _ioexp.begin(Wire);
@@ -512,12 +520,16 @@ void C5RemoteUsermod::applyWifiBand() {
   const char *name = "both bands";
   if (_wifiBand == 1) { mode = WIFI_BAND_MODE_5G_ONLY; name = "5 GHz only"; }
   else if (_wifiBand == 2) { mode = WIFI_BAND_MODE_2G_ONLY; name = "2.4 GHz only"; }
-  // The radio has to be up before it can be told: the framework's setter
-  // says so and does nothing otherwise.
-  if (!WiFi.STA.started() && !WiFi.AP.started()) return;
-  if (WiFi.setBandMode(mode)) {
-    USER_PRINTF("C5: the radio is on %s\n", name);
-  }
+  // The radio has to be up before it can be told: the driver has to be
+  // there.  This is the IDF's own call rather than the framework's,
+  // because the framework's setter wants the STA to be started and it
+  // is not - the STA's mode is set later, and the scan that looks for
+  // the network goes with it.
+  if (esp_wifi_set_band_mode(mode) != ESP_OK) return;
+  wifi_band_mode_t now = WIFI_BAND_MODE_AUTO;
+  if (esp_wifi_get_band_mode(&now) == ESP_OK && now != mode) return;
+  USER_PRINTF("C5: the radio is on %s\n", name);
+  _bandSet = true;
 }
 
 void C5RemoteUsermod::connected() {
@@ -1474,6 +1486,12 @@ void C5RemoteUsermod::loop() {
   }
 
   if (!_panel.ready()) return;
+
+  // The radio's band, until it has been set.
+  //
+  // The radio comes up after the setup, and the band has to be set before
+  // the scan that looks for the network.
+  if (!_bandSet) applyWifiBand();
 
   const uint32_t now = millis();
 

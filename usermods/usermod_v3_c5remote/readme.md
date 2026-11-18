@@ -135,6 +135,49 @@ skips a button whose pin is negative before it asks the usermods about
 one, so the expander's buttons are read by the usermod itself, and their
 debounce, their long press and their macros are done there.
 
+## How long it takes to come up
+
+The board is started from nothing and the time until it answers on the
+network is measured:
+
+```
+python tools/c5_boottime.py            reboot it and time it
+python tools/c5_boottime.py --flash    flash it and time it
+```
+
+It says where the time went, because the board's own numbers come back
+with the answer: the radio (`wifi_ms`), the end of the setup
+(`setup_ms`), and the difference between the time out here and the
+board's uptime - which is the time BEFORE the app started, the ROM and
+the bootloader, and is only visible from out here.
+
+**It is about fifteen seconds**, and it is nearly all the radio:
+
+| Where                | How long |
+|----------------------|----------|
+| the ROM and the bootloader | about half a second |
+| the setup            | 3.2 s    |
+| the radio            | 12 s     |
+
+Two things were in the way and are not any more:
+
+* **The IMU's calibration was in the setup** - two and a quarter seconds
+  of it, waiting for the chip.  It is in a task of its own now, so it
+  happens while the radio is looking for the network.
+* **The radio was scanning both bands.**  The C5 is a dual-band chip and
+  the network it is after is a 5 GHz one, and the band has to be set
+  BEFORE the scan that looks for the network - which the framework's
+  setter will not do, because it wants the STA to have started, and the
+  STA's mode is set later than the driver comes up.  So the band is set
+  through the IDF's own call, from the loop, until it takes.
+
+The band is a setting of the board's own and it is remembered:
+
+```
+POST http://<the C5>/json
+{"C5Remote":{"wifi_band":1}}      0 = both, 1 = 5 GHz only, 2 = 2.4 GHz only
+```
+
 ## The tempo actions
 
 The tempo's actions are **button macros that are not preset numbers**. A

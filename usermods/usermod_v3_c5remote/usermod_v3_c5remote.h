@@ -178,6 +178,7 @@ class C5RemoteUsermod : public Usermod {
     // time BEFORE that (the ROM, the bootloader) is only visible from
     // outside, and the difference between the two is the interesting
     // part.
+    bool     _bandSet = false;  // has the radio's band been set?
     uint32_t _wifiMs = 0;     // the app's start to the Wi-Fi connected
     uint32_t _setupMs = 0;    // the app's start to the end of the setup
     bool     _rebootAsked = false;
