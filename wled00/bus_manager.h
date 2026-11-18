@@ -538,6 +538,44 @@ class BusHub75Matrix : public Bus {
 };
 #endif
 
+// ============================================================
+// The picture the bus can hold.
+//
+// The bus holds the LEDs.  The matrix can be bigger than the LED count - a
+// board with 84 LEDs in an 84x4 matrix - and then the matrix's picture does
+// not fit the bus's buffer.  The PPA refuses a picture that does not fit its
+// buffer, and it refuses it once a frame: an error for every frame, forever.
+//
+// The picture the bus really has is the matrix's width and as many rows as
+// the LEDs fill.  An effect draws into that, and into the part of it that the
+// segment covers - so the segment's area is clamped to it.
+// ============================================================
+struct ppa_bus_picture_t {
+  uint32_t w;   // the picture's width  (the matrix's width)
+  uint32_t h;   // the picture's height (the rows the LEDs fill)
+  uint32_t dw;  // the segment's area in it, clamped (0 = nothing to draw)
+  uint32_t dh;
+};
+
+inline ppa_bus_picture_t ppaBusPicture(Bus* bus, uint32_t matrixWidth, uint32_t segWidth, uint32_t segHeight) {
+  ppa_bus_picture_t p = {1, 1, 0, 0};
+  if (!bus) return p;
+  const uint32_t len  = bus->getLength();
+  const uint32_t size = bus->getPixelDataSize();
+  uint32_t w = matrixWidth ? matrixWidth : 1;
+  uint32_t h = len / w;
+  if (!h) h = 1;
+  // The buffer has to hold the picture.  Its size is padded to the cache
+  // line, so this only bites when the last row is not full.
+  while (h > 1 && (uint64_t)w * h * 3 > size) h--;
+  p.w = w;
+  p.h = h;
+  // The segment's area, clamped to the picture.
+  p.dw = (segWidth  < w) ? segWidth  : w;
+  p.dh = (segHeight < h) ? segHeight : h;
+  return p;
+}
+
 class BusManager {
   public:
     BusManager() {};

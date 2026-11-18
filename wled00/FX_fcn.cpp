@@ -1430,7 +1430,6 @@ bool Segment::ppaFill(uint32_t color) {
   if (!busData) return false;
 
   const uint16_t matrixWidth = Segment::maxWidth;
-  const uint16_t matrixHeight = Segment::maxHeight;
   const uint16_t x0 = start;
   const uint16_t y0 = startY;
   const uint16_t w = stop - start;
@@ -1438,7 +1437,12 @@ bool Segment::ppaFill(uint32_t color) {
 
   // Sanity checks
   if (w == 0 || h == 0) return false;
-  if (x0 + w > matrixWidth || y0 + h > matrixHeight) return false;
+
+  // The bus holds the LEDs and the matrix can be bigger than the LED count,
+  // so the picture the PPA may write into is the one the bus really has -
+  // and the block has to fit in it (see ppaBusPicture).
+  ppa_bus_picture_t pic = ppaBusPicture(bus, matrixWidth, w, h);
+  if (x0 + w > pic.w || y0 + h > pic.h) return false;
 
   const bool isRGBW = bus->hasWhite();
   const uint8_t bpp = isRGBW ? 4 : 3;
@@ -1462,8 +1466,8 @@ bool Segment::ppaFill(uint32_t color) {
       .out = {
           .buffer = busData,
           .buffer_size = bufferSize,
-          .pic_w = matrixWidth,
-          .pic_h = matrixHeight,
+          .pic_w = pic.w,
+          .pic_h = pic.h,
           .block_offset_x = x0,
           .block_offset_y = y0,
           .fill_cm = isRGBW ? PPA_FILL_COLOR_MODE_ARGB8888 : PPA_FILL_COLOR_MODE_RGB888,

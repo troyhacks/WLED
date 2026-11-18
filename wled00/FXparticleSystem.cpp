@@ -644,18 +644,25 @@ void ParticleSystem2D::render() {
     return;
   }
 
+  // The bus holds the LEDs and the matrix can be bigger than the LED count
+  // (a board with 84 LEDs in an 84x4 matrix), so the picture the PPA may
+  // write into is the one the bus really has (see ppaBusPicture).
+  ppa_bus_picture_t pic = ppaBusPicture(bus, SEGMENT.maxWidth, SEGMENT.maxWidth, SEGMENT.maxHeight);
+  if (!pic.w || !pic.h) return;
+
   ppa_srm_oper_config_t srm_config = {};
   srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
   srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
   srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
   srm_config.out.buffer = busPixelData;
   srm_config.out.buffer_size = busPixelSize;
-  srm_config.out.pic_w = SEGMENT.maxWidth;
-  srm_config.out.pic_h = SEGMENT.maxHeight;
+  srm_config.out.pic_w = pic.w;
+  srm_config.out.pic_h = pic.h;
   srm_config.out.block_offset_x = 0;
   srm_config.out.block_offset_y = 0;
-  srm_config.scale_x = 1;
-  srm_config.scale_y = 1;
+  // The canvas has to fit the bus's picture - if it does not, it is scaled.
+  srm_config.scale_x = (SEGMENT.maxWidth  > pic.w) ? (float)pic.w / SEGMENT.maxWidth  : 1.0f;
+  srm_config.scale_y = (SEGMENT.maxHeight > pic.h) ? (float)pic.h / SEGMENT.maxHeight : 1.0f;
   srm_config.mirror_x = false;
   srm_config.mirror_y = false;
   srm_config.rgb_swap = 0;

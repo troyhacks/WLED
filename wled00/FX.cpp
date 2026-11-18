@@ -106,6 +106,12 @@ struct PPAEffectContext {
   // State
   bool needs_transform_buffer;
   bool valid;
+  uint32_t bus_pic_w;   // the picture the bus can hold (see ppaBusPicture)
+  uint32_t bus_pic_h;
+  uint32_t bus_dw;      // the segment's area in it, clamped
+  uint32_t bus_dh;
+  uint32_t dst_w;       // the area the effect draws into
+  uint32_t dst_h;
 };
 
 // Static buffer management (persists across calls)
@@ -152,6 +158,14 @@ inline bool ppaEffectBegin(PPAEffectContext& ctx) {
   // Determine if we need transform buffer
   ctx.needs_transform_buffer = ctx.transpose || ctx.mirror_x || ctx.mirror_y || ctx.reverse_x || ctx.reverse_y || ctx.start_x || ctx.start_y;
 
+  // The picture the bus can hold - not the matrix, which can be bigger than
+  // the LED count (see ppaBusPicture).
+  ppa_bus_picture_t pic = ppaBusPicture(bus, ctx.max_width, ctx.width, ctx.height);
+  ctx.bus_pic_w = pic.w;
+  ctx.bus_pic_h = pic.h;
+  ctx.bus_dw = pic.dw;
+  ctx.bus_dh = pic.dh;
+
   if (ctx.needs_transform_buffer) {
     uint32_t needed = ctx.full_width * ctx.full_height * 3;
     if (_ppa_transform_buffer_size != needed) {
@@ -169,11 +183,15 @@ inline bool ppaEffectBegin(PPAEffectContext& ctx) {
     ctx.effectBufferSize = _ppa_transform_buffer_size;
     ctx.render_pic_w = ctx.full_width;
     ctx.render_pic_h = ctx.full_height;
+    ctx.dst_w = ctx.full_width;
+    ctx.dst_h = ctx.full_height;
   } else {
     ctx.effectBuffer = ctx.busPixelData;
     ctx.effectBufferSize = ctx.busPixelSize;
-    ctx.render_pic_w = ctx.max_width;
-    ctx.render_pic_h = ctx.max_height;
+    ctx.render_pic_w = ctx.bus_pic_w;
+    ctx.render_pic_h = ctx.bus_pic_h;
+    ctx.dst_w = ctx.bus_dw;
+    ctx.dst_h = ctx.bus_dh;
   }
 
   ctx.valid = true;
@@ -199,11 +217,11 @@ inline void ppaEffectClear(PPAEffectContext& ctx) {
     fill_config.fill_block_w = ctx.full_width;
     fill_config.fill_block_h = ctx.full_height;
   } else {
-    // Clear only the segment area on bus
+    // Clear only the segment area on bus - clamped to what the bus holds.
     fill_config.out.block_offset_x = ctx.start_x;
     fill_config.out.block_offset_y = ctx.start_y;
-    fill_config.fill_block_w = ctx.width;
-    fill_config.fill_block_h = ctx.height;
+    fill_config.fill_block_w = ctx.bus_dw;
+    fill_config.fill_block_h = ctx.bus_dh;
   }
 
   fill_config.fill_argb_color.r = 0;
@@ -379,12 +397,14 @@ inline void ppaEffectEnd(PPAEffectContext& ctx) {
 
     srm.out.buffer = ctx.busPixelData;
     srm.out.buffer_size = ctx.busPixelSize;
-    srm.out.pic_w = ctx.max_width;
-    srm.out.pic_h = ctx.max_height;
+    srm.out.pic_w = ctx.bus_pic_w;
+    srm.out.pic_h = ctx.bus_pic_h;
     srm.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
 
-    srm.scale_x = 1;
-    srm.scale_y = 1;
+    // The canvas has to fit the bus's picture: the matrix can be bigger than
+    // the LED count, and then it does not.
+    srm.scale_x = (ctx.full_width  > ctx.bus_pic_w) ? (float)ctx.bus_pic_w / ctx.full_width  : 1.0f;
+    srm.scale_y = (ctx.full_height > ctx.bus_pic_h) ? (float)ctx.bus_pic_h / ctx.full_height : 1.0f;
     srm.rgb_swap = 0;
     srm.byte_swap = 0;
     srm.alpha_update_mode = PPA_ALPHA_NO_CHANGE;
@@ -11827,12 +11847,14 @@ uint16_t mode_GEQPPA() {
   }
 
   // Set Target Dimensions (PPA will scale 16x16 -> Width x Height)
-  scale_config.out.pic_w = ctx.width;
-  scale_config.out.pic_h = ctx.height;
+  // The picture is the one the buffer really has - the matrix can be bigger
+  // than the LED count - and the target is the area the effect draws into.
+  scale_config.out.pic_w = ctx.render_pic_w;
+  scale_config.out.pic_h = ctx.render_pic_h;
 
-  if (ctx.width > 0 && ctx.height > 0) {
-    scale_config.scale_x = (float)ctx.width / 16.0f;
-    scale_config.scale_y = (float)ctx.height / 16.0f;
+  if (ctx.dst_w > 0 && ctx.dst_h > 0) {
+    scale_config.scale_x = (float)ctx.dst_w / 16.0f;
+    scale_config.scale_y = (float)ctx.dst_h / 16.0f;
   } else {
     return mode_static(); // Safety check to prevent div/0
   }
@@ -12119,17 +12141,27 @@ uint16_t mode_PPA_IMAGEPLAYER() {
 
   if (bass_average == 0 && bass_peak > 10) bass_average = bass_peak / 2;
 
+  // The bus holds the LEDs, and the matrix can be bigger than the LED count
+  // (a board with 84 LEDs in an 84x4 matrix).  The PPA refuses a picture that
+  // does not fit its buffer - once a frame, with an error for every frame -
+  // so the destination is the picture the bus really has, and the segment's
+  // area is clamped to it.
+  ppa_bus_picture_t pic = ppaBusPicture(bus, SEGMENT.maxWidth, width, height);
+  const uint32_t dstW = pic.dw;   // the segment's area in the bus, clamped
+  const uint32_t dstH = pic.dh;
+  if (!dstW || !dstH) return FRAMETIME;  // the bus has nothing for us to draw in
+
   if (1 || width != header_info.width || height != header_info.height) { // force this always until PPA scaling is mathed out so we always fill the frame.
 
     ppa_fill_oper_config_t fill_config = {};
     fill_config.out.buffer = busPixelData;
     fill_config.out.buffer_size = busPixelSize;
-    fill_config.out.pic_w = width;
-    fill_config.out.pic_h = height;
+    fill_config.out.pic_w = pic.w;
+    fill_config.out.pic_h = pic.h;
     fill_config.out.fill_cm = PPA_FILL_COLOR_MODE_RGB888;
     fill_config.mode = PPA_TRANS_MODE_BLOCKING; // PPA_TRANS_MODE_BLOCKING;
-    fill_config.fill_block_w = width;
-    fill_config.fill_block_h = height;
+    fill_config.fill_block_w = dstW;
+    fill_config.fill_block_h = dstH;
 
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_fill(ppa_fill_handle, &fill_config)); // fill black
 
@@ -12143,8 +12175,8 @@ uint16_t mode_PPA_IMAGEPLAYER() {
   srm_config.in.block_offset_y = 0;
   srm_config.out.buffer = busPixelData;
   srm_config.out.buffer_size = busPixelSize;
-  srm_config.out.pic_w = width;
-  srm_config.out.pic_h = height;
+  srm_config.out.pic_w = pic.w;
+  srm_config.out.pic_h = pic.h;
   srm_config.out.block_offset_x = 0;
   srm_config.out.block_offset_y = 0;
   srm_config.scale_x = 1;
@@ -12162,8 +12194,8 @@ uint16_t mode_PPA_IMAGEPLAYER() {
   srm_config.in.block_w = header_info.width;
   srm_config.in.block_h = header_info.height;
 
-  srm_config.scale_x = float(float(width) / float(header_info.width));
-  srm_config.scale_y = float(float(height) / float(header_info.height));
+  srm_config.scale_x = float(float(dstW) / float(header_info.width));
+  srm_config.scale_y = float(float(dstH) / float(header_info.height));
 
   if (SEGMENT.check1) {
 
@@ -12173,20 +12205,20 @@ uint16_t mode_PPA_IMAGEPLAYER() {
     float raw_block_w = srm_config.in.pic_w * bass_map;
     float raw_block_h = srm_config.in.pic_h * bass_map;
 
-    float raw_scale_x = (float)srm_config.out.pic_w / raw_block_w;
-    float raw_scale_y = (float)srm_config.out.pic_h / raw_block_h;
+    float raw_scale_x = (float)dstW / raw_block_w;
+    float raw_scale_y = (float)dstH / raw_block_h;
 
     // Quantize scale factors to match hardware precision
     float quant_scale_x = quantize16(raw_scale_x);
     float quant_scale_y = quantize16(raw_scale_y);
 
     // Clamp scale to avoid overscaling
-    quant_scale_x = fminf(quant_scale_x, (float)srm_config.out.pic_w); // max scale = full input
-    quant_scale_y = fminf(quant_scale_y, (float)srm_config.out.pic_h);
+    quant_scale_x = fminf(quant_scale_x, (float)dstW); // max scale = full input
+    quant_scale_y = fminf(quant_scale_y, (float)dstH);
 
     // Reverse-calculate block size from quantized scale
-    srm_config.in.block_w = (int)((float)srm_config.out.pic_w / quant_scale_x + 0.5f);
-    srm_config.in.block_h = (int)((float)srm_config.out.pic_h / quant_scale_y + 0.5f);
+    srm_config.in.block_w = (int)((float)dstW / quant_scale_x + 0.5f);
+    srm_config.in.block_h = (int)((float)dstH / quant_scale_y + 0.5f);
 
     // Clamp block size to input image dimensions
     srm_config.in.block_w = min(srm_config.in.block_w, srm_config.in.pic_w);
@@ -12329,18 +12361,18 @@ uint16_t mode_PPA_IMAGEPLAYER() {
 
     ppa_blend_oper_config_t blend_config = {};
     blend_config.in_bg.buffer = busPixelData;
-    blend_config.in_bg.pic_w = width;
-    blend_config.in_bg.pic_h = height;
-    blend_config.in_bg.block_w = width;
-    blend_config.in_bg.block_h = height;
+    blend_config.in_bg.pic_w = pic.w;
+    blend_config.in_bg.pic_h = pic.h;
+    blend_config.in_bg.block_w = dstW;
+    blend_config.in_bg.block_h = dstH;
     blend_config.in_bg.block_offset_x = 0;
     blend_config.in_bg.block_offset_y = 0;
     blend_config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
     blend_config.in_fg.buffer = blackbuffer;
     blend_config.in_fg.pic_w = width;
     blend_config.in_fg.pic_h = height;
-    blend_config.in_fg.block_w = width;
-    blend_config.in_fg.block_h = height;
+    blend_config.in_fg.block_w = dstW;
+    blend_config.in_fg.block_h = dstH;
     blend_config.in_fg.block_offset_x = 0;
     blend_config.in_fg.block_offset_y = 0;
     blend_config.bg_rgb_swap = 0;
@@ -12350,8 +12382,8 @@ uint16_t mode_PPA_IMAGEPLAYER() {
     blend_config.in_fg.blend_cm = PPA_BLEND_COLOR_MODE_ARGB8888;
     blend_config.out.buffer = busPixelData;
     blend_config.out.buffer_size = busPixelSize;
-    blend_config.out.pic_w = width;
-    blend_config.out.pic_h = height;
+    blend_config.out.pic_w = pic.w;
+    blend_config.out.pic_h = pic.h;
     blend_config.out.block_offset_x = 0;
     blend_config.out.block_offset_y = 0;
     blend_config.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
@@ -12884,6 +12916,16 @@ uint16_t mode_DJLight_Circles(void) {
     uint16_t lutHeight;
   };
 
+  // The bus holds the LEDs and the matrix can be bigger than the LED count (a
+  // board with 84 LEDs in an 84x4 matrix).  The picture the bus can hold is
+  // then smaller than the matrix, and writing into it as if it were the
+  // matrix would run past the end of the buffer.
+  ppa_bus_picture_t pic = ppaBusPicture(bus, SEGMENT.maxWidth, cols, rows);
+  const uint16_t busStride = (uint16_t)pic.w;        // the bus's row stride
+  const uint16_t drawRows  = min(qh, (uint16_t)pic.h);
+  const uint16_t drawCols  = min(qw, busStride);
+  if (!drawRows || !drawCols) return FRAMETIME;
+
   if (!SEGENV.allocateData(sizeof(DJCircleData))) return FRAMETIME;
   DJCircleData* data = reinterpret_cast<DJCircleData*>(SEGENV.data);
 
@@ -12987,14 +13029,14 @@ uint16_t mode_DJLight_Circles(void) {
     const uint8_t* __restrict__ lut = data->radiusLUT;
 
     // Fill top-left quadrant using LUT - optimized
-    for (uint16_t y = 0; y < qh; y++) {
+    for (uint16_t y = 0; y < drawRows; y++) {
       const uint8_t* __restrict__ lutRow = &lut[y * qw];
-      uint8_t* __restrict__ pixRow = &busPixelData[y * cols * 3];
+      uint8_t* __restrict__ pixRow = &busPixelData[y * busStride * 3];
 
       uint16_t x = 0;
 
       // Process 4 pixels per iteration
-      for (; x + 3 < qw; x += 4) {
+      for (; x + 3 < drawCols; x += 4) {
         const uint8_t r0 = lutRow[x];
         const uint8_t r1 = lutRow[x + 1];
         const uint8_t r2 = lutRow[x + 2];
@@ -13042,7 +13084,7 @@ uint16_t mode_DJLight_Circles(void) {
       }
 
       // Handle remainder
-      for (; x < qw; x++) {
+      for (; x < drawCols; x++) {
         const uint8_t r = lutRow[x];
         if (r < numCircles) {
           const uint32_t c = colorBuf[(ringHeadMinus1 - r) & 0xFF];
@@ -13066,8 +13108,8 @@ uint16_t mode_DJLight_Circles(void) {
     srm_config.in.buffer = busPixelData;
     srm_config.out.buffer = busPixelData;
     srm_config.out.buffer_size = busPixelSize;
-    srm_config.out.pic_w = cols;
-    srm_config.out.pic_h = rows;
+    srm_config.out.pic_w = pic.w;
+    srm_config.out.pic_h = pic.h;
     srm_config.scale_x = 1;
     srm_config.scale_y = 1;
     srm_config.rgb_swap = 0;
@@ -13076,21 +13118,21 @@ uint16_t mode_DJLight_Circles(void) {
     srm_config.mode = PPA_TRANS_MODE_BLOCKING;
 
     // Mirror top-left to top-right
-    srm_config.in.pic_w = cols;
-    srm_config.in.pic_h = rows;
-    srm_config.in.block_w = qw;
-    srm_config.in.block_h = qh;
-    srm_config.out.block_offset_x = cols - qw;
+    srm_config.in.pic_w = pic.w;
+    srm_config.in.pic_h = pic.h;
+    srm_config.in.block_w = drawCols;
+    srm_config.in.block_h = drawRows;
+    srm_config.out.block_offset_x = pic.w - drawCols;
     srm_config.out.block_offset_y = 0;
     srm_config.mirror_x = true;
     srm_config.mirror_y = false;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
 
     // Mirror entire top to bottom
-    srm_config.in.block_w = cols;
-    srm_config.in.block_h = qh;
+    srm_config.in.block_w = pic.w;
+    srm_config.in.block_h = drawRows;
     srm_config.out.block_offset_x = 0;
-    srm_config.out.block_offset_y = rows - qh;
+    srm_config.out.block_offset_y = pic.h - drawRows;
     srm_config.mirror_x = false;
     srm_config.mirror_y = true;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
@@ -13242,21 +13284,28 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
   }
 
   // --- Scale from 32x32 to segment size using PPA SRM ---
+  // The bus holds the LEDs and the matrix can be bigger than the LED count,
+  // so the picture the PPA may write into is the one the bus really has.
+  ppa_bus_picture_t pic = ppaBusPicture(bus, SEGMENT.maxWidth, width, height);
+  const uint32_t dstW = pic.dw;   // the segment's area in the bus, clamped
+  const uint32_t dstH = pic.dh;
+  if (!dstW || !dstH) return FRAMETIME;
+
   // Calculate scale factors (fixed point: 1.0 = 1.0, supports up to ~16x)
-  float scaleX = (float)width / AKEMI_W;
-  float scaleY = (float)height / AKEMI_H;
+  float scaleX = (float)dstW / AKEMI_W;
+  float scaleY = (float)dstH / AKEMI_H;
 
   // Clear the output buffer first
   ppa_fill_oper_config_t clearConfig = {};
   clearConfig.out.buffer = busPixelData;
   clearConfig.out.buffer_size = busPixelSize;
-  clearConfig.out.pic_w = width;
-  clearConfig.out.pic_h = height;
+  clearConfig.out.pic_w = pic.w;
+  clearConfig.out.pic_h = pic.h;
   clearConfig.out.fill_cm = PPA_FILL_COLOR_MODE_RGB888;
   clearConfig.out.block_offset_x = 0;
   clearConfig.out.block_offset_y = 0;
-  clearConfig.fill_block_w = width;
-  clearConfig.fill_block_h = height;
+  clearConfig.fill_block_w = dstW;
+  clearConfig.fill_block_h = dstH;
   clearConfig.fill_argb_color.r = 0;
   clearConfig.fill_argb_color.g = 0;
   clearConfig.fill_argb_color.b = 0;
@@ -13277,8 +13326,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
 
   srm_config.out.buffer = busPixelData;
   srm_config.out.buffer_size = busPixelSize;
-  srm_config.out.pic_w = width;
-  srm_config.out.pic_h = height;
+  srm_config.out.pic_w = pic.w;
+  srm_config.out.pic_h = pic.h;
   srm_config.out.block_offset_x = 0;
   srm_config.out.block_offset_y = 0;
   srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
@@ -13349,8 +13398,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
     }
 
     // Scale factors from 32x32 to actual segment
-    float pixelScaleX = (float)width / 32.0f;
-    float pixelScaleY = (float)height / 32.0f;
+    float pixelScaleX = (float)dstW / 32.0f;
+    float pixelScaleY = (float)dstH / 32.0f;
 
     // Hand region: 4 pixels wide, 16 pixels tall in 32x32 space
     // Left hand at x=0, right hand at x=28
@@ -13375,8 +13424,8 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
 
     geqSrm.out.buffer = busPixelData;
     geqSrm.out.buffer_size = busPixelSize;
-    geqSrm.out.pic_w = width;
-    geqSrm.out.pic_h = height;
+    geqSrm.out.pic_w = pic.w;
+    geqSrm.out.pic_h = pic.h;
     geqSrm.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
 
     geqSrm.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
@@ -13395,7 +13444,7 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &geqSrm));
 
     // Right hand at x=28 (scaled), mirrored horizontally
-    geqSrm.out.block_offset_x = width - handWidthScaled;
+    geqSrm.out.block_offset_x = dstW - handWidthScaled;
     geqSrm.mirror_x = true;
     ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &geqSrm));
   }
