@@ -22,11 +22,9 @@ void updateBaudRate(uint32_t rate){
   }
 
   if (Serial) Serial.flush();
-  #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0
-    Serial.begin(rate);
-  #else
-    Serial.begin(rate, SERIAL_8N1, SOC_RX0, SOC_TX0, false, 20000UL, 120U);
-  #endif
+  // WLEDMM: the console changes the UART's rate; the USB CDC has no rate to
+  // change (it is a packet pipe), so it keeps running as it is.
+  Serial.begin(rate);
 }
 
 // RGB LED data return as JSON array. Slow, but easy to use on the other end.
@@ -44,13 +42,13 @@ void sendJSON(){
 }
 
 bool canUseSerial(void) {   // WLEDMM returns true if Serial can be used for debug output (i.e. not configured for other purpose)
-  #if ARDUINO_USB_CDC_ON_BOOT && !defined(WLED_DEBUG_HOST)
-  //  USB CDC blocks if disconnected! so check if Serial is active before printing to it.
+  // WLEDMM: the console writes to the USB-Serial-JTAG *and* to UART0, and
+  // neither write blocks - a board with nothing attached loses the bytes,
+  // not the app.  So the console is usable as soon as it is open.
   if (!Serial) return false;
-  #endif
-  if (pinManager.isPinAllocated(hardwareTX) && (pinManager.getPinOwner(hardwareTX) != PinOwner::DebugOut)) 
+  if (pinManager.isPinAllocated(hardwareTX) && (pinManager.getPinOwner(hardwareTX) != PinOwner::DebugOut))
     return false;  // TX allocated to LEDs or other functions
-  if ((realtimeMode == REALTIME_MODE_GENERIC)) 
+  if ((realtimeMode == REALTIME_MODE_GENERIC))
     return false;  // Serial in use for other serial communication
   return true;
 } // WLEDMM end

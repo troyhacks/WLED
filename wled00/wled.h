@@ -103,6 +103,7 @@
   #endif
 #else // ESP32
   #include <HardwareSerial.h>  // ensure we have the correct "Serial" on new MCUs (depends on ARDUINO_USB_MODE and ARDUINO_USB_CDC_ON_BOOT)
+  #include "wled_console.h"    // WLEDMM: takes the name "Serial" over - one console for USB-Serial-JTAG and UART0
   #if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     #if defined(WLED_USE_ETHERNET_ONLY) && !defined(WLED_USE_ETHERNET)
       #define WLED_USE_ETHERNET

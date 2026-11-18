@@ -7,6 +7,7 @@
  */
 
 #include <Arduino.h> //PI constant
+#include "wled_console.h" // WLEDMM: the console that takes the name "Serial" over
 
  //#define WLED_DEBUG_MATH
 

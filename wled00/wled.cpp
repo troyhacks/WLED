@@ -3,9 +3,6 @@ static const char *TAG = "WLED";
 #include "wled.h"
 #include "wled_ethernet.h"
 #include <Arduino.h>
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0 && defined(SOC_USB_SERIAL_JTAG_SUPPORTED)
-  #include "driver/usb_serial_jtag.h" // to hand the peripheral over to HWCDC - see WLED::setup()
-#endif
 #if !defined(CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT)
   #define CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT 0
 #endif
@@ -1308,29 +1305,23 @@ void WLED::setup() {
   #ifdef WLED_BOOTUPDELAY
   delay(WLED_BOOTUPDELAY); // delay to let voltage stabilize, helps with boot issues on some setups
   #endif
-  #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0
-  // Hand the USB-Serial-JTAG peripheral over from the IDF to the Arduino core.
+  // ── The console ─────────────────────────────────────────────────────────
+  // One firmware, every board.  Which console a board has is a property of
+  // the board, not of the build: the built-in USB (USB-Serial-JTAG) or UART0
+  // on GPIO37/38.  WledConsole holds both and writes to whichever is there,
+  // so the same image serves a board with USB, a board with a plain serial
+  // header, and a board with neither - where nothing waits for a reader that
+  // is not there.
   //
-  // The IDF installs its own USB-Serial-JTAG *driver* for the secondary
-  // console (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG) before the app
-  // runs. The Arduino core's HWCDC then installs a *second* interrupt handler
-  // on the same peripheral when Serial.begin() runs. Two owners of one
-  // peripheral means the two handlers fight over the same FIFOs: the console
-  // turns into a stream of "invalid header: 0x..." and, on the P4, the
-  // interrupt watchdog eventually fires and resets the chip in a loop.
-  //
-  // So the IDF driver goes first and HWCDC gets the only interrupt handler.
+  // The IDF's own USB-Serial-JTAG driver (its secondary console) is handed
+  // over first: the Arduino core's HWCDC installs a *second* interrupt
+  // handler on the same peripheral when Serial.begin() runs. Two owners of
+  // one peripheral means the two handlers fight over the same FIFOs: the
+  // console turns into a stream of "invalid header: 0x..." and, on the P4,
+  // the interrupt watchdog eventually fires and resets the chip in a loop.
   // The price is that the IDF's own log (ESP_LOG) stops reaching the USB
   // port - it still goes to UART0, which is the primary console.
-  #if defined(SOC_USB_SERIAL_JTAG_SUPPORTED)
-  if (usb_serial_jtag_is_driver_installed()) {
-    usb_serial_jtag_driver_uninstall();
-  }
-  #endif
   Serial.begin(115200);
-  #else
-  Serial.begin(115200, SERIAL_8N1, SOC_RX0, SOC_TX0, false, 20000UL, 120U);
-  #endif
 
 #if !defined(WLEDMM_NO_SERIAL_WAIT) || defined(WLED_DEBUG)
   if (!Serial) delay(1000); // WLEDMM make sure that Serial has initalized
@@ -1348,20 +1339,25 @@ void WLED::setup() {
     Serial.setTxTimeoutMs(0);    // potential side-effect: incomplete debug output, with missing characters whenever TX buffer is full.
     #endif
 #if !defined(WLEDMM_NO_SERIAL_WAIT) || defined(WLED_DEBUG)
-  if (!Serial) delay(2500);  // WLEDMM: always allow CDC USB serial to initialise
-  if (Serial) Serial.println("wait 1");  // waiting a bit longer ensures that a  debug messages are shown in serial monitor
-  if (!Serial) delay(2500);
-  if (Serial) Serial.println("wait 2");
-  if (!Serial) delay(2500);
+    // WLEDMM: the USB CDC needs a host to enumerate, and only a host can be
+    // waited for - a board without USB (or with the monitor closed) must not
+    // sit here for seconds.  What was written before the host shows up stays
+    // in the CDC's TX buffer and comes out when it does.
+    if (Serial.usbConnected()) {
+      if (!Serial) delay(2500);  // WLEDMM: always allow CDC USB serial to initialise
+      if (Serial) Serial.println("wait 1");  // waiting a bit longer ensures that a  debug messages are shown in serial monitor
+      if (!Serial) delay(2500);
+      if (Serial) Serial.println("wait 2");
+      if (!Serial) delay(2500);
 
-  if (Serial) Serial.flush(); // WLEDMM
+      if (Serial) Serial.flush(); // WLEDMM
+    }
 #endif
 
   //Serial.setTimeout(350); // WLEDMM: don't change timeout, as it causes crashes later
   // WLEDMM: redirect debug output to HWCDC
   #if ARDUINO_USB_CDC_ON_BOOT && (defined(WLED_DEBUG) || defined(SR_DEBUG))
-  Serial0.setDebugOutput(false);
-  Serial.setDebugOutput(true);
+  Serial.setDebugOutput(true);   // WLEDMM: the kernel output follows the console
   #endif
   // WLEDMM don't touch serial timeout when we use CDC USB or tinyUSB
   #else // "standard" serial-to-USB chip
