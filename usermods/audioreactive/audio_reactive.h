@@ -754,7 +754,15 @@ constexpr uint32_t AR_TASK_PERIOD_TICKS =
 // The web server drops a client when the free heap is under 8 KB or the
 // largest single free block is under 2 KB, so 16 KB of internal heap given
 // back is worth more than the margin it costs.
-constexpr uint32_t AR_TASK_STACK = 16 * 1024;
+//
+// The stack is a build setting, because a small board cannot spare 16 KB:
+// the analysis task measures at about 3.5 KB of stack in use (the free part
+// is published as "analysis_task_stack_free"), so a board with less RAM to
+// spare can have less.
+#ifndef AR_TASK_STACK
+  #define AR_TASK_STACK (16 * 1024)
+#endif
+constexpr uint32_t AR_TASK_STACK_BYTES = AR_TASK_STACK;
 
 // How long a requester waits for the analysis task to acknowledge a park.
 //
@@ -7824,7 +7832,7 @@ class AudioReactive : public Usermod {
           if (audioSource)
             xTaskCreateUniversal(
               #if defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
-              arAnalysisTask, "AudioTask", AR_TASK_STACK, NULL, AR_TASK_PRIORITY, &AR_Task, 1
+              arAnalysisTask, "AudioTask", AR_TASK_STACK_BYTES, NULL, AR_TASK_PRIORITY, &AR_Task, 1
               #else
               arAnalysisTask, "AudioTask", 8192, NULL, AR_TASK_PRIORITY, & AR_Task, -1
               #endif
@@ -8597,7 +8605,7 @@ class AudioReactive : public Usermod {
         // a large slice of what the web server needs, so this is the number
         // that says whether the allocation is too generous.
         m["analysis_task_stack_free"] = AR_Task ? (unsigned)uxTaskGetStackHighWaterMark(AR_Task) : 0;
-        m["analysis_task_stack_size"] = (unsigned)AR_TASK_STACK;
+        m["analysis_task_stack_size"] = (unsigned)AR_TASK_STACK_BYTES;
       }
 #endif
 
