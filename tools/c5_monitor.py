@@ -33,15 +33,15 @@ port = args[1] if len(args) > 1 else "COM10"
 ser = serial.Serial(port, 115200, timeout=0.2)
 
 if do_reset:
-    # The board is in the bootloader and has to be started.  The lines are
-    # pulsed: a change on either of them is a reset on this board.
+    # The board is reset so that the boot can be watched.
+    #
+    # RTS is the reset line and DTR is the boot line, and the two are
+    # opposite: RTS asserted holds the chip in reset, DTR asserted puts
+    # it in the bootloader.  So the reset is RTS up and RTS down again
+    # with DTR left alone - the same thing esptool does after a flash.
     ser.dtr = False
-    ser.rts = False
-    time.sleep(0.2)
-    ser.dtr = True
     ser.rts = True
-    time.sleep(0.1)
-    ser.dtr = False
+    time.sleep(0.2)
     ser.rts = False
     time.sleep(0.5)
 
