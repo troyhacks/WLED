@@ -216,10 +216,24 @@ rst:0x7 (TG0_WDT_HPSYS),boot:0x3f (SPI_FAST_FLASH_BOOT)
 Core0 Saved PC:0x4003abb0
 ```
 
-with the ROM crashing before it can load the application. The USB download
-mode still works, so the flash can still be written - but the flash does not
-come back until the board has been **powered off and on again**. There is no
-reset button on this board, so that means unplugging it.
+with the ROM crashing before it can load the application - and with **no
+application output at all**, not even the boot log. The USB download mode
+still works, so the flash can still be written, and what is written is
+correct: esptool verifies the hash of every byte it puts down.
+
+It does not come back.  What has been tried, with the board in that state:
+
+* the application rewritten (the hash checks out, and the known-good
+  firmware does not boot either),
+* the filesystem wiped and the configuration lost with it,
+* the flash written in DIO and in QIO, at 40 MHz and at 80 MHz,
+* the ROM's own erase (which only works for small regions - 4 KB is fine,
+  4 MB answers "0106"),
+* the stub flasher's erase (which times out).
+
+What is left is the power: **the board has to be unplugged and plugged in
+again**. There is no reset button on it - the power button cuts the
+battery side, and the USB keeps the board alive.
 
 ## The network
 
