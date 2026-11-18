@@ -173,6 +173,12 @@ MidiUsermod* midiUsermodPtr = nullptr;
   #include "../usermods/usermod_v2_klipper_percentage/usermod_v2_klipper_percentage.h"
 #endif
 
+// WLEDMM: the ESP32-C5 remote. The panel, the IO expander, the IMU and the
+// link to the board that has the beat tracker.
+#ifdef USERMOD_C5REMOTE
+#include "../usermods/usermod_v3_c5remote/usermod_v3_c5remote.h"
+#endif
+
 #ifdef USERMOD_BOBLIGHT
 #include "../usermods/boblight/boblight.h"
 #endif
@@ -388,6 +394,11 @@ void registerUsermods()
   usermods.add(new ArtNetMapUsermod(true));
 #endif
 
+// WLEDMM: the ESP32-C5 remote.
+#ifdef USERMOD_C5REMOTE
+  usermods.add(new C5RemoteUsermod());
+#endif
+
 #ifdef USERMOD_KLIPPER_PERCENTAGE
   usermods.add(new klipper_percentage());
 #endif
@@ -464,7 +475,14 @@ void registerUsermods()
 // musicPlaylist / autoChange are read straight from AutoPlaylistUsermod.
 // Falls back to zeroed defaults when AutoPlaylist isn't compiled in or
 // registered.
+//
+// The whole thing belongs to the MIDI usermod: AutoPlaylistState is declared
+// in usermod_v3_midi.h and the only caller is getMidiState(). A build with
+// the auto-playlist but without the MIDI usermod (the ESP32-C5 remote, for
+// one) has neither the type nor the caller, so the function is only there
+// when the MIDI usermod is.
 // ---------------------------------------------------------------------------
+#ifdef USERMOD_MIDI_USB
 AutoPlaylistState queryAutoPlaylist() {
   AutoPlaylistState s;
 #ifdef USERMOD_AUTO_PLAYLIST
@@ -486,3 +504,4 @@ AutoPlaylistState queryAutoPlaylist() {
 #endif
   return s;
 }
+#endif  // USERMOD_MIDI_USB

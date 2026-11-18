@@ -26,7 +26,25 @@
 
 // esp_codec_dev - official espressif codec driver for ES8311, ES8388, ES8374, etc.
 // esp_codec_dev.h provides core types; codec headers provide codec-specific structs.
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+//
+// The component is NOT part of every Arduino core build. It ships with the
+// ESP32-P4's library set (the one this repo's P4 env pins) and it does NOT
+// ship with the ESP32-C5's - so a build that assumes the header is there dies
+// on the C5 before it compiles a single line of WLED. The header is asked for
+// instead of assumed: if the component is there, the codec sources are
+// compiled exactly as before; if it is not, they are left out and the board
+// runs on the sources it does have (a network receiver, for instance).
+#if defined(__has_include)
+  #if __has_include(<esp_codec_dev.h>)
+    #define AR_HAS_ESP_CODEC_DEV 1
+  #endif
+#endif
+
+#ifndef AR_HAS_ESP_CODEC_DEV
+  #define AR_HAS_ESP_CODEC_DEV 0
+#endif
+
+#if AR_HAS_ESP_CODEC_DEV
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
 #include <es8311_codec.h>
@@ -584,7 +602,11 @@ class audioreactive_I2C {
        library's es8311_codec_open / es8311_codec_read / es8311_codec_write
        calls go through our (known-good) device handle instead of whatever
        audio_codec_new_i2c_ctrl() would have set up. On P4 + IDF v5.3 the
-       latter produces a device that NACKs every transaction; ours does not. */
+       latter produces a device that NACKs every transaction; ours does not.
+
+       The shim is built out of the codec library's own types, so it only
+       exists where the codec library does - see AR_HAS_ESP_CODEC_DEV. */
+#if AR_HAS_ESP_CODEC_DEV
     const audio_codec_ctrl_if_t *_ar_make_i2c_ctrl_if(i2c_master_dev_handle_t dev_handle) {
       struct shim {
         audio_codec_ctrl_if_t base;
@@ -638,6 +660,7 @@ class audioreactive_I2C {
       };
       return &s->base;
     }
+#endif  // AR_HAS_ESP_CODEC_DEV
 
   private:
     static constexpr int MAX_DEVICES = 8;
@@ -1847,7 +1870,7 @@ class AC101Source : public I2SSource {
 // These use the official espressif esp_codec_dev driver which handles I2S internally.
 // Each class creates its own esp_codec_dev handle and uses it for audio input.
 //-----------------------------------------------------------------------------------
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+#if AR_HAS_ESP_CODEC_DEV
 
 /* Base class for esp_codec_dev-based codecs
    Manages the esp_codec_dev handle lifecycle.
@@ -2835,7 +2858,7 @@ class ES7210IDFSource : public CodecDevSource {
 #warning "ES7210 IDF source is not available on this target (CONFIG_CODEC_ES7210_SUPPORT is not set)"
 #endif
 
-#endif  // ESP_IDF_VERSION >= 4.4.0
+#endif  // AR_HAS_ESP_CODEC_DEV
 
 // YEAH YEAH WE KNOW BUT NOBODY WILL
 // I2SAdcSource (classic-ESP32 ADC mic) was removed when migrating to the IDF v5 new I2S driver,
