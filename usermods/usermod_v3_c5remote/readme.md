@@ -347,17 +347,22 @@ ZBOSS and all of it, for the C5 (`espressif__esp-zigbee-lib` and
 `espressif__esp-zboss-lib` in the C5's library set, with `CONFIG_ZB_ENABLED`
 already on).
 
-It is a build flag and a partition scheme:
+The C++ side of it - the core's own `Zigbee` library, with 30 endpoint
+classes and 28 examples (an occupancy sensor, a contact switch, a range
+extender, a gateway) - is **not reachable from here**: PlatformIO's
+dependency finder does not pick the framework's `Zigbee` library up, and the
+include fails with "Zigbee.h: No such file or directory" however the
+include is written. (`lib_extra_dirs` over the framework's libraries does
+not help either - it is the same directory the finder already scans.)
 
-```ini
-build_flags             = -DZIGBEE_MODE_ED     ;; or -DZIGBEE_MODE_ZCZR
-board_build.partitions  = zigbee_8MB.csv       ;; the .csv suffix is REQUIRED
-```
+So the Zigbee build is **not in this repository yet**. What it would take:
 
-and the library is the core's own `Zigbee` (in
-`framework-arduinoespressif32/libraries/Zigbee`), with 30 endpoint classes
-and 28 examples - an occupancy sensor, a contact switch, a range extender, a
-gateway.
+* the library vendored into `wled00/src/dependencies/zigbee/` (where the
+  ILI9488's driver lives too - that one *is* found, because the project
+  scans its own files),
+* `tools/WLED_ESP32_32MB_ZIGBEE.csv` - this board's table with the two
+  Zigbee partitions added after the filesystem,
+* `-DZIGBEE_MODE_ED` (an end device) or `-DZIGBEE_MODE_ZCZR` (a router).
 
 **What Home Assistant needs.**  The C5 cannot be a ZHA radio: there is no
 zigpy radio for the C5, and Espressif's own NCP path is not shipped in the
@@ -384,12 +389,6 @@ Arduino core.  So there are two shapes:
   "supported but performance is unstable" (C1) and End Device + Wi-Fi as
   stable.  A board that is also serving WLED's Wi-Fi wants to be an **end
   device**.
-
-**The partitions.**  Zigbee keeps its network storage in `zb_storage` and
-`zb_fct`, so a Zigbee build needs one of the `zigbee*` schemes - there is
-no 32 MB one, so either the 8 MB scheme is used and the rest of the flash
-is wasted, or a scheme with the Zigbee partitions is written for this
-board.  This board's own table (`tools/WLED_ESP32_32MB.csv`) has neither.
 
 **The size.**  Plenty of room: an end device with the Wi-Fi stack is
 36 KB of RAM and 650 KB of flash.
