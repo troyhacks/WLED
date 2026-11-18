@@ -712,8 +712,15 @@ void C5RemoteUsermod::loop() {
 
   // The expander's buttons: read often enough to be quick, and rarely
   // enough not to be a chore.
+  //
+  // The interval is the debounce the core uses anyway (50 ms), and it is
+  // also as slow as it can be: GPIO27 is the I2C SDA line AND a boot
+  // strap on this chip, and the I2C master pulls it low while it talks.
+  // A reset that lands in the middle of a transaction can strap the chip
+  // low, and a chip strapped low cannot read its flash.  The less the
+  // bus is used, the smaller that window is.
   static uint32_t lastExpander = 0;
-  if (now - lastExpander >= 20) {
+  if (now - lastExpander >= 50) {
     lastExpander = now;
     pollExpander();
   }

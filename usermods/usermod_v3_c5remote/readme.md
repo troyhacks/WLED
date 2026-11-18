@@ -146,6 +146,24 @@ LCD's backlight (a PWM output), and its own IO4..IO14 are on the header.
 | 0x06 ADC     | 16 bits, the battery's voltage. |
 | 0x07 RTCINT  | 16 bits, the RTC's interrupt state. |
 
+### GPIO27 is a boot strap
+
+On the ESP32-C5, **GPIO27 is a boot strap**: it has to be HIGH when the
+chip resets, and GPIO27 low is an invalid combination - the chip comes up
+with the wrong flash configuration and cannot read the flash.
+
+On this board GPIO27 is the **I2C SDA line**.  The I2C master pulls it
+low while it talks, so a reset that lands in the middle of a transaction
+can strap the chip low and leave it unable to boot.
+
+That is a property of the board, not of the firmware, and it is worth
+knowing before anything else is blamed.  The remote keeps the I2C traffic
+small - one short read of the expander every 50 ms (which is the debounce
+anyway) and the IMU once a second - so the window is small.
+
+This is the most likely reason a reset can leave a board that will not
+boot again.
+
 ## The display
 
 WLEDMM's display layer is the P4's: a DSI/PPA pipeline that scales the LED
