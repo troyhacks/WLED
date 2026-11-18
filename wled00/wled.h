@@ -716,9 +716,18 @@ WLED_GLOBAL byte countdownMin  _INIT(0) , countdownSec   _INIT(0);
 WLED_GLOBAL byte macroNl   _INIT(0);        // after nightlight delay over
 WLED_GLOBAL byte macroCountdown _INIT(0);
 WLED_GLOBAL byte macroAlexaOn _INIT(0), macroAlexaOff _INIT(0);
-WLED_GLOBAL byte macroButton[WLED_MAX_BUTTONS]        _INIT({0});
-WLED_GLOBAL byte macroLongPress[WLED_MAX_BUTTONS]     _INIT({0});
-WLED_GLOBAL byte macroDoublePress[WLED_MAX_BUTTONS]   _INIT({0});
+// The button macros.
+//
+// A macro is normally a preset number, so a byte was enough - but a macro
+// at or above WLED_BTN_ACTION_BASE (300) is an ACTION, and 300 does not
+// fit in a byte.  The value was truncated on the way in, so an action was
+// read as a preset (304 became 48) and the action never happened.
+//
+// runButtonMacro() has taken a uint16_t all along; these are what it is
+// given, so they are 16 bits wide.
+WLED_GLOBAL uint16_t macroButton[WLED_MAX_BUTTONS]        _INIT({0});
+WLED_GLOBAL uint16_t macroLongPress[WLED_MAX_BUTTONS]     _INIT({0});
+WLED_GLOBAL uint16_t macroDoublePress[WLED_MAX_BUTTONS]   _INIT({0});
 
 // Security CONFIG
 WLED_GLOBAL bool otaLock     _INIT(false);  // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
