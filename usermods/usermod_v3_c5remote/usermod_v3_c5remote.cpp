@@ -258,6 +258,30 @@ bool C5RemoteUsermod::buttonState(uint8_t index, bool &pressed) {
   return true;
 }
 
+// The band the radio is allowed to use.
+//
+// The ESP32-C5 is a dual-band chip and it comes up in the automatic mode:
+// both bands, and the network's name decides which one.  The 5 GHz network
+// is the one that matters here, and a board that has to be told which band
+// to use has that in its configuration.
+void C5RemoteUsermod::applyWifiBand() {
+  wifi_band_mode_t mode = WIFI_BAND_MODE_AUTO;
+  const char *name = "both bands";
+  if (_wifiBand == 1) { mode = WIFI_BAND_MODE_5G_ONLY; name = "5 GHz only"; }
+  else if (_wifiBand == 2) { mode = WIFI_BAND_MODE_2G_ONLY; name = "2.4 GHz only"; }
+  // The radio has to be up before it can be told: the framework's setter
+  // says so and does nothing otherwise.
+  if (!WiFi.STA.started() && !WiFi.AP.started()) return;
+  if (WiFi.setBandMode(mode)) {
+    USER_PRINTF("C5: the radio is on %s\n", name);
+  }
+}
+
+void C5RemoteUsermod::connected() {
+  // The band can only be set once the radio is up, which is here.
+  applyWifiBand();
+}
+
 void C5RemoteUsermod::pollExpander() {
   if (!_ioexpOk) return;
   uint16_t v = 0;
@@ -414,6 +438,7 @@ void C5RemoteUsermod::pollTracker() {
   }
 
   const String url = "http://" + _p4Host + ":" + String(_p4Port) + "/json/ar";
+  const String stateUrl = "http://" + _p4Host + ":" + String(_p4Port) + "/json/state";
   String body;
   int status = 0;
   if (!c5HttpGet(url.c_str(), body, &status)) {
@@ -454,11 +479,17 @@ void C5RemoteUsermod::pollTracker() {
     _modeName    = tempo["mode_name"] | "";
   }
 
-  // The preset and the brightness come from the state, not from here.
-  JsonObject state = doc["state"];
-  if (!state.isNull()) {
-    _preset = state["preset"] | _preset;
-    _p4Brightness = state["bri"] | _p4Brightness;
+  // The state is a small document (a few hundred bytes) and it is where the
+  // brightness lives - which the brightness actions need to know about.
+  {
+    String state;
+    int st = 0;
+    if (c5HttpGet(stateUrl.c_str(), state, &st)) {
+      StaticJsonDocument<2048> sdoc;
+      if (!deserializeJson(sdoc, state)) {
+        _p4Brightness = sdoc["bri"] | _p4Brightness;
+      }
+    }
   }
 }
 
@@ -511,6 +542,10 @@ void C5RemoteUsermod::drawBars(const uint8_t *bands, int x, int y, int w, int h)
 void C5RemoteUsermod::drawSyncPage() {
   char line[64];
 
+  // The sender table is written in the network's task and read here, so it
+  // is read under its lock.
+  bool locked = (arSyncSenderLock != nullptr) &&
+                (xSemaphoreTake(arSyncSenderLock, pdMS_TO_TICKS(5)) == pdTRUE);
   const uint8_t count = arSyncSenderCount;
   const bool live = (count > 0);
 
@@ -545,21 +580,26 @@ void C5RemoteUsermod::drawSyncPage() {
 
   // The meter: the sixteen bands of the last packet, from whichever board
   // sent most recently.
-  const uint8_t *bands = nullptr;
+  uint8_t bands[16] = {0};
+  uint8_t level = 0;
+  bool haveBands = false;
   uint32_t newest = 0;
   for (uint8_t i = 0; i < count; i++) {
-    if (arSyncSenders[i].lastMs >= newest) { newest = arSyncSenders[i].lastMs; bands = arSyncSenders[i].bands; }
+    if (arSyncSenders[i].lastMs >= newest) {
+      newest = arSyncSenders[i].lastMs;
+      memcpy(bands, arSyncSenders[i].bands, sizeof(bands));
+      level = arSyncSenders[i].level;
+      haveBands = true;
+    }
   }
+  if (locked) xSemaphoreGive(arSyncSenderLock);
+
   const int meterTop = C5_PANEL_H - 12 - 96;
   _panel.fillRect(0, meterTop - 2, C5_PANEL_W, 98, C5_PANEL_BG);
-  drawBars(bands, 4, meterTop, C5_PANEL_W - 8, 92);
+  drawBars(haveBands ? bands : nullptr, 4, meterTop, C5_PANEL_W - 8, 92);
 
   // The level of the last packet.
-  if (bands) {
-    uint8_t level = 0;
-    for (uint8_t i = 0; i < count; i++) {
-      if (arSyncSenders[i].lastMs >= newest) level = arSyncSenders[i].level;
-    }
+  if (haveBands) {
     snprintf_P(line, sizeof(line), PSTR("level %d"), level);
     _panel.drawTextRight(C5_PANEL_W - 4, meterTop + 2, line, C5_DIM, C5_PANEL_BG);
   }
@@ -606,6 +646,9 @@ void C5RemoteUsermod::drawBeatPage() {
   _panel.drawText(2, 80, line, C5_DIM, C5_BG);
   _panel.drawText(2, 90, _downbeatSet ? "downbeat: marked" : "downbeat: not marked",
                  _downbeatSet ? C5_GOOD : C5_DIM, C5_BG);
+  // What the board is showing: the preset and the brightness.
+  snprintf_P(line, sizeof(line), PSTR("preset %d   bri %d"), _preset, _p4Brightness);
+  _panel.drawText(2, 104, line, C5_DIM, C5_BG);
 
   // What the buttons do here.
   drawFooter("BOOT: downbeat", "hold: lock");
@@ -735,6 +778,13 @@ void C5RemoteUsermod::readFromJsonState(JsonObject &obj) {
   if (me["expander_buttons_active_high"].is<bool>()) {
     _ioActiveHigh = me["expander_buttons_active_high"];
   }
+  if (me["wifi_band"].is<int>()) {
+    const int b = me["wifi_band"];
+    if (b >= 0 && b <= 2 && (uint8_t)b != _wifiBand) {
+      _wifiBand = (uint8_t)b;
+      applyWifiBand();
+    }
+  }
   if (me["page"].is<int>()) {
     const int p = me["page"];
     if (p >= 0 && p < C5_PAGE_COUNT) { _page = (uint8_t)p; _redraw = true; }
@@ -773,6 +823,7 @@ void C5RemoteUsermod::addToConfig(JsonObject &obj) {
   top[F("host")]   = _p4Host;
   top[F("port")]   = _p4Port;
   top[F("expander_buttons_active_high")] = _ioActiveHigh;
+  top[F("wifi_band")] = _wifiBand;
 }
 
 bool C5RemoteUsermod::readFromConfig(JsonObject &obj) {
@@ -784,6 +835,8 @@ bool C5RemoteUsermod::readFromConfig(JsonObject &obj) {
   const int port = top[F("port")] | _p4Port;
   if (port > 0 && port < 65536) _p4Port = (uint16_t)port;
   getJsonValue(top[F("expander_buttons_active_high")], _ioActiveHigh);
+  const int band = top[F("wifi_band")] | (int)_wifiBand;
+  if (band >= 0 && band <= 2) _wifiBand = (uint8_t)band;
   return ok;
 }
 

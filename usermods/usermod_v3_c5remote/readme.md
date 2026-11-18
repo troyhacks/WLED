@@ -195,4 +195,23 @@ that a board whose config was wiped still finds its way home:
 ```
 
 The ESP32-C5 is a dual-band chip, and the board comes up in the automatic
-band mode: 2.4 GHz and 5 GHz, and the network's name decides which one.
+band mode: 2.4 GHz and 5 GHz, and the network's name decides which one.  A
+board that has to be told which band to use has that in its configuration
+(`wifi_band`: 0 = both, 1 = 5 GHz only, 2 = 2.4 GHz only).
+
+The board can also be given the address of the board with the tracker
+after the fact, over the API:
+
+```
+curl -X POST -d '{"C5Remote":{"host":"192.168.6.249"}}' http://<the C5>/json
+```
+
+## The two boards' builds
+
+The C5 and the P4 share one PlatformIO platform and one toolchain (the
+RISC-V toolchain is a large download, and there is no point in having two).
+They do not share the **framework**: the P4 pins the fork with the P4's
+library set, and the C5 uses the platform's own.  Building one after the
+other therefore replaces the framework, and the next build of the other
+board is a full one.
+

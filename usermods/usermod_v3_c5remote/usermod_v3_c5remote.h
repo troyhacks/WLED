@@ -112,6 +112,7 @@ class C5RemoteUsermod : public Usermod {
     uint8_t      _ioStableCount = 0;
     bool         _ioActiveHigh = false;  // are the expander's buttons active high?
     uint8_t     *_bmp = nullptr;         // the screen's picture, for the HTTP snapshot
+    uint8_t      _wifiBand = 0;          // 0 = both bands, 1 = 5 GHz only, 2 = 2.4 GHz only
 
     // ---- the pages ----
     uint8_t _page = C5_PAGE_SYNC;
@@ -148,6 +149,8 @@ class C5RemoteUsermod : public Usermod {
     void setupButtons();
     void pollExpander();
     void pollTracker();
+    void applyWifiBand();
+    void connected() override;
     bool trackerPost(const char *key, bool value);
     bool trackerPostRaw(const char *body);
     bool trackerPreset(int preset);
