@@ -26,12 +26,22 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
   if (_fbShow == nullptr) {
     _fbShow = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   }
-  if (_fb == nullptr || _fbShow == nullptr) {
+  // The third: what the panel has.  It is what the new picture is
+  // compared against, so that the bands which have not changed are not
+  // sent again.
+  _fbPanel = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (_fbPanel == nullptr) {
+    _fbPanel = (uint16_t *)heap_caps_malloc(pixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  if (_fb == nullptr || _fbShow == nullptr || _fbPanel == nullptr) {
     USER_PRINTLN("C5: no memory for the panel's picture");
     return false;
   }
   memset(_fb, 0, pixels);
   memset(_fbShow, 0, pixels);
+  // The panel starts with nothing on it, so the first frame sends
+  // everything: the picture it has is not the picture it is showing.
+  memset(_fbPanel, 0, pixels);
 
   // Where the pictures ended up.  Two hundred KB each is a lot to ask of
   // the internal heap, and if PSRAM is not there to take it, the web
@@ -143,6 +153,10 @@ void C5Panel::end() {
   if (_fbShow) {
     heap_caps_free(_fbShow);
     _fbShow = nullptr;
+  }
+  if (_fbPanel) {
+    heap_caps_free(_fbPanel);
+    _fbPanel = nullptr;
   }
 }
 
@@ -269,6 +283,13 @@ bool C5Panel::sendRows(int x, int y0, int y1, int x1, const uint16_t *fb) {
 // The rows go in order, and the send picks up where it left off when the
 // budget ran out - so a full screen goes out over a few loops instead of
 // stalling one of them.
+//
+// Only the bands that CHANGED are sent.  The panel keeps what it was last
+// given, so a band that is the same as it was needs no wire time at all -
+// and most of a page is the same from one look to the next: only the
+// numbers and the meter move.  A full screen is 300 KB on the wire and a
+// band is 7.5 KB, so sending three bands instead of forty is the
+// difference between a screen that keeps up and one that does not.
 void C5Panel::flush(unsigned budgetMs) {
   if (_panel == nullptr) return;
 
@@ -285,22 +306,51 @@ void C5Panel::flush(unsigned budgetMs) {
     _sendRow = 0;
     _sendPtr = _fbShow;
     _frameStart = esp_timer_get_time();
+    // Which bands are different from the ones the panel already has.
+    //
+    // The panel's own copy is the picture it was last sent, and that is
+    // what the difference is against.  The first frame has no such
+    // picture - the panel is blank - so everything is sent.
+    if (!_sentAnything) {
+      _dirty = 0xFFFFFFFF;
+    } else {
+      _dirty = 0;
+      for (uint8_t b = 0; b < C5_PANEL_BAND_COUNT; b++) {
+        const size_t rows = min(C5_PANEL_BAND_ROWS, C5_PANEL_H - (int)b * C5_PANEL_BAND_ROWS);
+        const size_t bytes = rows * C5_PANEL_W * sizeof(uint16_t);
+        if (memcmp(&_fbShow[(size_t)b * C5_PANEL_BAND_ROWS * C5_PANEL_W],
+                   &_fbPanel[(size_t)b * C5_PANEL_BAND_ROWS * C5_PANEL_W], bytes) != 0) {
+          _dirty |= (uint32_t)1 << b;
+        }
+      }
+    }
   }
 
   const int64_t start = esp_timer_get_time();
   while (_sendRow < C5_PANEL_H) {
+    const int band = _sendRow / C5_PANEL_BAND_ROWS;
     const int last = min(_sendRow + C5_PANEL_BAND_ROWS - 1, C5_PANEL_H - 1);
-    const int64_t bandStart = esp_timer_get_time();
-    if (!sendRows(0, _sendRow, last, C5_PANEL_W - 1, _sendPtr)) {
-      _sending = false;
-      return;
+
+    // A band the panel already has is not sent again.
+    if (_dirty & ((uint32_t)1 << band)) {
+      const int64_t bandStart = esp_timer_get_time();
+      if (!sendRows(0, _sendRow, last, C5_PANEL_W - 1, _sendPtr)) {
+        _sending = false;
+        return;
+      }
+      // The panel has this band now, so the next frame compares against it.
+      const size_t rows = (size_t)(last - _sendRow + 1);
+      memcpy(&_fbPanel[(size_t)_sendRow * C5_PANEL_W],
+             &_fbShow[(size_t)_sendRow * C5_PANEL_W],
+             rows * C5_PANEL_W * sizeof(uint16_t));
+      _bandMs += (uint32_t)((esp_timer_get_time() - bandStart) / 1000);
+      _bandCount++;
     }
-    _bandMs += (uint32_t)((esp_timer_get_time() - bandStart) / 1000);
-    _bandCount++;
     _sendRow = last + 1;
     if ((esp_timer_get_time() - start) / 1000 >= (int64_t)budgetMs) return;
   }
   _sending = false;
+  _sentAnything = true;
   _frameMs = (uint32_t)((esp_timer_get_time() - _frameStart) / 1000);
   _frameCount++;
 }

@@ -49,11 +49,23 @@
 // what made the screen crawl: six hundred and forty round trips for one
 // screen, each one waiting for the last.
 //
-// The picture goes out in bands because a band is what fits in the
-// transfer buffer, and there are two of them so that the conversion of
-// one band happens while the other is on its way out.
+// How many rows go out at a time.
+//
+// The panel's window is set for every band, and that is not an accident:
+// the panel starts each block of pixels at the start of the window, so a
+// window set once for the whole screen has every band land on the same
+// rows.  The screen came out grey with a picture that never went past
+// the top.
+//
+// A row at a time was tried first and was far too slow: the window has
+// to be set before every block of pixels, and each of those is a round
+// trip that waits for the one before it.  Six hundred and forty of them
+// for one screen, and the screen took a second.  A band at a time is
+// forty.
 #define C5_PANEL_BAND_ROWS 8
-#define C5_PANEL_BANDS 2
+
+// How many bands a full screen is: 320 rows, eight to a band.
+#define C5_PANEL_BAND_COUNT (C5_PANEL_H / C5_PANEL_BAND_ROWS)
 
 
 // The screen comes over HTTP in tiles of this many rows.
@@ -143,6 +155,15 @@ class C5Panel {
     // and a page that changes (the page does) shows as a mixture of both.
     uint16_t *_fb = nullptr;      // what is drawn into, in PSRAM
     uint16_t *_fbShow = nullptr;  // what is sent, in PSRAM
+    // What the PANEL has.
+    //
+    // The panel keeps what it was last given, so this is the picture it
+    // is showing now.  It is compared against the new picture band by
+    // band, and only the bands that differ are sent - a band that is the
+    // same needs no wire time at all.
+    uint16_t *_fbPanel = nullptr; // what the panel has, in PSRAM
+    uint32_t _dirty = 0;         // which bands differ, one bit each
+    bool _sentAnything = false;  // has the panel been given a picture yet?
     bool _frameReady = false;    // there is a picture waiting to be sent
     bool _sending = false;       // and one is on its way
     int  _sendRow = 0;           // how far it has got
