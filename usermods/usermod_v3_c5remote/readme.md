@@ -217,13 +217,52 @@ on the IO expander**, so the expander is what resets it.
 
 ### Seeing the screen without looking at it
 
-`GET /c5screen.bmp` is what the panel is showing, as a picture. It is the
-only way to see the screen from a desk.
+`GET /c5screen.bmp?row=<n>` is what the panel is showing, as a picture: a
+BMP of 40 rows of the screen, and the whole screen is eight of them. A
+quarter of a megabyte in one request is more than this board's Wi-Fi likes
+- the driver gives up in the middle of it - so it comes in tiles.
 
 ```
-curl -o c5.bmp http://<the C5>/c5screen.bmp
-python tools/bmp_to_png.py c5.bmp c5.png
+python tools/c5_screen.py <the C5's address> c5.png
 ```
+
+puts the tiles back together and writes a PNG. That is the only way to see
+the screen from a desk.
+
+### What the panel is sent
+
+The picture is held as the chip holds it - little-endian, so the low byte
+of a pixel is the blue - and the ILI9488's 16 bit mode takes the high
+byte first, so the bytes are swapped on the way out. (In 18 bit mode the
+driver does the conversion itself and gets this right; in 16 bit mode it
+hands the picture over as it is, so the swap is ours to do.)
+
+Two pictures are kept, one to draw into and one to send, and they are
+swapped when a frame is finished: with one picture the panel can be sent
+half of one frame and half of the next, and a page that changes shows as a
+mixture of both.
+
+RGB565 puts three of the green's six bits in the low byte and three in
+the high one, so the green is the awkward colour and has to be put
+together from both bytes.
+
+### Talking to the other board
+
+ESP-IDF's HTTP client has two ways to make a request, and only one of
+them sends a body: `open()` and `fetch_headers()` never do, so the other
+board got an empty one and answered 400. `esp_http_client_perform()` is
+the one that sends it.
+
+The status code is also only known **after** the headers have been
+fetched - asking for it before that always answers zero, which is what
+made the remote think the board was not answering at all.
+
+And the action is not done where it is asked for: the tempo's actions make
+an HTTP request, and when the request came in over the network that
+request was made from the web server's own task, inside the handling of a
+request - and the HTTP client wants the network task, which is that one.
+The board fell over. So the action is remembered and the main loop does
+it, and a button press goes the same way.
 
 ## Building and flashing
 
