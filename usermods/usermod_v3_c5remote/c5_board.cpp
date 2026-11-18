@@ -96,6 +96,62 @@ uint8_t C5IoExpander::readRtcInt() {
 }
 
 // ---------------------------------------------------------------------------
+// The TF card
+// ---------------------------------------------------------------------------
+
+bool C5SdCard::begin() {
+  // The card is on the panel's SPI bus, and the bus is already up: the
+  // panel's bring-up made it.
+  sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+  host.slot = C5_SPI_HOST;
+  sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+  slot.host_id = C5_SPI_HOST;
+  slot.gpio_cs = (gpio_num_t)C5_SD_CS;
+
+  esp_vfs_fat_mount_config_t mount = {};
+  // The card is NOT ours to format.  A card that cannot be mounted is a
+  // card that is reported, not one that is wiped.
+  mount.format_if_mount_failed = false;
+  mount.max_files = 4;
+  mount.allocation_unit_size = 512;
+
+  sdmmc_card_t *card = nullptr;
+  const esp_err_t err = esp_vfs_fat_sdspi_mount(C5_SD_MOUNT, &host, &slot, &mount, &card);
+  if (err != ESP_OK) {
+    _status = (err == ESP_ERR_NOT_FOUND) ? "no card" : "mount failed";
+    USER_PRINTF("C5: the TF card did not mount (0x%x)\n", (int)err);
+    return false;
+  }
+  _mounted = true;
+  _status = "mounted";
+  if (card != nullptr) _sizeBytes = card->csd.capacity;
+  USER_PRINTF("C5: the TF card: mounted, %llu MB\n",
+              (unsigned long long)(_sizeBytes / (1024ULL * 1024ULL)));
+
+  // What is on it.  The root's names, as many as fit.
+  DIR *dir = opendir(C5_SD_MOUNT);
+  if (dir == nullptr) {
+    _status = "mounted, the root is not readable";
+    return true;
+  }
+  size_t used = 0;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    if (entry->d_name[0] == '.') continue;    // "." and ".."
+    _fileCount++;
+    const size_t len = strlen(entry->d_name);
+    if (used + len + 2 >= sizeof(_listing)) break;
+    if (used) { _listing[used++] = ' '; _listing[used] = 0; }
+    memcpy(&_listing[used], entry->d_name, len);
+    used += len;
+    _listing[used] = 0;
+  }
+  closedir(dir);
+  USER_PRINTF("C5: the TF card has %u entries: %s\n", (unsigned)_fileCount, _listing);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // The IMU (QMI8658)
 // ---------------------------------------------------------------------------
 
@@ -113,6 +169,32 @@ bool C5Imu::begin() {
   }
   _present = true;
   USER_PRINTLN("C5: the IMU (QMI8658) is there");
+  return true;
+}
+
+// The IMU's init, in a task of its own.
+//
+// The driver's calibration waits two and a quarter seconds for the chip
+// to finish, and nothing needs the IMU to be up: the screen is what the
+// board is for, and the Wi-Fi's wait is longer.  So the IMU is brought up
+// while the radio is still looking for the network, and the two waits do
+// not add up.
+static void c5ImuTask(void *arg) {
+  C5Imu *imu = (C5Imu *)arg;
+  const uint32_t start = millis();
+  imu->begin();
+  USER_PRINTF("C5: the IMU took %u ms\n", (unsigned)(millis() - start));
+  vTaskDelete(NULL);
+}
+
+bool C5Imu::beginAsync() {
+  // 3 KB is enough for the driver's init, which is mostly register
+  // writes.  The task is short-lived: it ends when the IMU is up.
+  BaseType_t ok = xTaskCreate(c5ImuTask, "c5imu", 3072, this, 1, nullptr);
+  if (ok != pdPASS) {
+    USER_PRINTLN("C5: no room for the IMU's task - doing it here");
+    return begin();
+  }
   return true;
 }
 

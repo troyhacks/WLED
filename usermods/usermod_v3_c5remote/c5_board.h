@@ -29,6 +29,23 @@
 
 #if defined(WLEDMM_C5_DISPLAY)
 
+// The TF card.
+//
+// The card is on the SAME SPI bus as the panel: the same clock, the same
+// data lines, and only the card's chip select is its own.  The bus
+// carries one transaction at a time, so the two must not talk at once -
+// the panel's picture and the card's protocol would interleave, and both
+// would be wrong.
+//
+// So the card is mounted ONCE, at boot, before the panel starts sending
+// anything, and it is not touched again while the panel is running.
+#include "esp_vfs_fat.h"
+#include "driver/sdspi_host.h"
+#include "driver/sdmmc_host.h"
+#include <dirent.h>
+
+#define C5_SD_MOUNT "/sdcard"
+
 // ---------------------------------------------------------------------------
 // The board's wiring
 // ---------------------------------------------------------------------------
@@ -101,6 +118,40 @@ class C5IoExpander {
 #define C5_IOEXP_MODE  (uint16_t)(0x800B)
 
 // ---------------------------------------------------------------------------
+// The TF card
+//
+// It is mounted with ESP-IDF's FAT filesystem over the SPI card driver -
+// the same way the vendor's own demo mounts it - and what is on it is
+// read once, at boot.
+//
+// The card is not formatted under any circumstances: a card that cannot
+// be mounted is a card that is reported, not one that is wiped.
+// ---------------------------------------------------------------------------
+class C5SdCard {
+  public:
+    // Mounts the card and reads what is on it.
+    //
+    // The SPI bus has to be there already (the panel's bring-up makes
+    // it), and the panel must not be sending anything yet - the card and
+    // the panel share the bus.
+    bool begin();
+
+    bool mounted() const { return _mounted; }
+    const char *status() const { return _status; }
+    uint64_t sizeBytes() const { return _sizeBytes; }
+    // The names in the card's root directory, as many as fit.
+    const char *listing() const { return _listing; }
+    uint8_t fileCount() const { return _fileCount; }
+
+  private:
+    bool        _mounted = false;
+    const char *_status = "not tried";
+    uint64_t    _sizeBytes = 0;
+    char        _listing[160] = {0};
+    uint8_t     _fileCount = 0;
+};
+
+// ---------------------------------------------------------------------------
 // The IMU
 //
 // The driver is the one from the board's own Arduino demo (see
@@ -112,13 +163,20 @@ class C5IoExpander {
 class C5Imu {
   public:
     bool begin();
+    // The same, in a task of its own.
+    //
+    // The driver's calibration waits two and a quarter seconds for the
+    // chip to finish, and the board does not need the IMU to be up to be
+    // useful: the screen is.  So the IMU is brought up in parallel with
+    // the Wi-Fi's wait, and the two do not add up.
+    bool beginAsync();
     // Reads the accelerometer and the gyroscope. Returns false when the chip
     // did not answer or had no fresh numbers.
     bool read(float acc[3], float gyr[3]);
     bool present() const { return _present; }
 
   private:
-    bool _present = false;
+    volatile bool _present = false;
 };
 
 #include "qmi8658c.h"
