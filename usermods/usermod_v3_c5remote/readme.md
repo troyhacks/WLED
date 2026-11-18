@@ -349,20 +349,31 @@ already on).
 
 The C++ side of it - the core's own `Zigbee` library, with 30 endpoint
 classes and 28 examples (an occupancy sensor, a contact switch, a range
-extender, a gateway) - is **not reachable from here**: PlatformIO's
-dependency finder does not pick the framework's `Zigbee` library up, and the
-include fails with "Zigbee.h: No such file or directory" however the
-include is written. (`lib_extra_dirs` over the framework's libraries does
-not help either - it is the same directory the finder already scans.)
+extender, a gateway) - is **not reachable from here**.  The include fails
+with "Zigbee.h: No such file or directory" in every arrangement: in the
+header or in the source, with quotes or with brackets, inside the guard or
+outside it.  (`lib_extra_dirs` over the framework's libraries does not
+help either - it is the same directory the finder already scans.)
 
-So the Zigbee build is **not in this repository yet**. What it would take:
+So the Zigbee build is **not in this repository yet**, and there are two
+ways to get there:
 
-* the library vendored into `wled00/src/dependencies/zigbee/` (where the
+* **Vendor the library** into `wled00/src/dependencies/zigbee/` (where the
   ILI9488's driver lives too - that one *is* found, because the project
-  scans its own files),
-* `tools/WLED_ESP32_32MB_ZIGBEE.csv` - this board's table with the two
-  Zigbee partitions added after the filesystem,
-* `-DZIGBEE_MODE_ED` (an end device) or `-DZIGBEE_MODE_ZCZR` (a router).
+  scans its own files).  But the project's source filter is `+<**/*.cpp>`,
+  so a vendored copy would be compiled into **every** environment - the
+  P4's, the S3's - and every one of them would want the Zigbee component.
+  It wants a directory of its own and a source filter that leaves it out
+  everywhere else.
+* **Use ESPHome's Zigbee component**, which already supports the ESP32-C5
+  as an end device or a router and talks to ZHA or Zigbee2MQTT directly.
+  That is twenty minutes of YAML against a day of vendoring - and it is
+  what I would do.
+
+The rest of this section is what the Arduino way would need: the library
+above, `tools/WLED_ESP32_32MB_ZIGBEE.csv` (this board's table with the two
+Zigbee partitions added after the filesystem), and `-DZIGBEE_MODE_ED` (an
+end device) or `-DZIGBEE_MODE_ZCZR` (a router).
 
 **What Home Assistant needs.**  The C5 cannot be a ZHA radio: there is no
 zigpy radio for the C5, and Espressif's own NCP path is not shipped in the

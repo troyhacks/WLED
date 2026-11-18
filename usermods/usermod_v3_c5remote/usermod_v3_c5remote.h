@@ -54,11 +54,16 @@
 // unsynchronised links with its neighbours and wants to hear them all the
 // time - and this board is serving WLED's Wi-Fi the whole while.
 #if defined(USERMOD_ZIGBEE)
-#include "Zigbee.h"
 
 #define C5_ZIGBEE_EP_TEMPO   1   // the tempo, as an analog input
 #define C5_ZIGBEE_EP_MOTION  2   // motion, as an occupancy sensor
 
+#include "Zigbee.h"
+
+
+// The endpoints. The tempo is an analog input (Home Assistant has a
+// number to show), and the motion is an occupancy sensor (which is the one
+// thing the Zigbee clusters model well).
 static ZigbeeAnalog          c5ZigbeeTempo  = ZigbeeAnalog(C5_ZIGBEE_EP_TEMPO);
 static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP_MOTION);
 #endif
