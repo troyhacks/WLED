@@ -1,0 +1,44 @@
+{
+  "build": {
+    "arduino": {
+      "partitions": "default_32MB.csv",
+      "memory_type": "qio_qspi"
+    },
+    "core": "esp32",
+    "extra_flags": [
+      "-DBOARD_HAS_PSRAM",
+      "-DARDUINO_USB_MODE=1",
+      "-DARDUINO_USB_CDC_ON_BOOT=1"
+    ],
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "flash_mode": "qio",
+    "psram_type": "qspi",
+    "mcu": "esp32c5",
+    "variant": "esp32c5"
+  },
+  "connectivity": [
+    "bluetooth",
+    "wifi"
+  ],
+  "debug": {
+    "openocd_target": "esp32c5.cfg"
+  },
+  "frameworks": [
+    "arduino",
+    "espidf"
+  ],
+  "name": "WaveShare ESP32-C5-LCD-2.73 (ESP32-C5-WROOM-1-N32R8, 32MB flash, 8MB PSRAM)",
+  "upload": {
+    "flash_size": "32MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 4194304,
+    "require_upload_port": true,
+    "speed": 460800
+  },
+  "hwids": [
+    ["0x303A", "0x1001"]
+  ],
+  "url": "https://docs.waveshare.com/ESP32-C5-LCD-2.73",
+  "vendor": "WaveShare"
+}
