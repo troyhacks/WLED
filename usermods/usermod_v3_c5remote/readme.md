@@ -104,6 +104,25 @@ and the remote turns the address into a name with WLED's own node list (the
 notifier's node-info packet carries the name and the address), falling back
 to the address itself.
 
+## The presets, and the sync
+
+The remote changes the other board's presets over WLED's own API:
+
+```
+POST http://<the board with the tracker>/json
+{"preset": 3}
+```
+
+and that board does what WLED always does with it: it changes, and it
+**broadcasts** its notifier, so the other boards in the sync group follow
+its look. The remote is a WLED board like any other, so it can be put in
+that sync group as well (Settings -> Sync) and follow along.
+
+What the notifier carries is the look - the brightness, the colour, the
+effect, the palette - and not the preset: that is WLED's sync, and it has
+always been that way.
+
+
 ## The board's hardware
 
 ```
