@@ -87,12 +87,15 @@ static esp_err_t panel_ili9488_init(esp_lcd_panel_t *panel)
     ili9488_panel_t *ili9488 = __containerof(panel, ili9488_panel_t, base);
     esp_lcd_panel_io_handle_t io = ili9488->io;
 
-    const lcd_init_cmd_t init_cmds[] = {
+    // The same table, in the same order, as the vendor's demo for this
+    // board - that one is known to work on it.
+    lcd_init_cmd_t init_cmds[] = {
         {0xC0, {0x10, 0x12}, 2},
         {0xC1, {0x66}, 1},
         {0xC5, {0x00, 0x45, 0x80}, 3},
         {LCD_CMD_MADCTL, {0x48}, 1},
         {LCD_CMD_INVON, {0x00}, 0},
+        {LCD_CMD_COLMOD, {ILI9488_COLOR_MODE_18BIT}, 1},
         {0xB0, {0x80}, 1},
         {0xB1, {0xA0}, 1},
         {0xB4, {0x02}, 1},
@@ -104,23 +107,22 @@ static esp_err_t panel_ili9488_init(esp_lcd_panel_t *panel)
         {0x00, {0x00}, ILI9488_INIT_DONE_FLAG},
     };
 
+    // THE COLOUR MODE follows what the panel was asked for.
+    //
+    // The original driver sent COLMOD=0x66 (18 bit) in its table whatever
+    // bits_per_pixel said, so a 16 bit panel would have been handed 18 bit
+    // data. Here the panel is told what it is going to be fed - but the
+    // command stays where it was, in the middle of the table, because that
+    // is the order the vendor's working demo uses.
     for (int i = 0; init_cmds[i].data_bytes != ILI9488_INIT_DONE_FLAG; i++) {
+        if (init_cmds[i].cmd == LCD_CMD_COLMOD) {
+            init_cmds[i].data[0] = (ili9488->color_mode == ILI9488_COLOR_MODE_16BIT)
+                                 ? ILI9488_COLOR_MODE_16BIT : ILI9488_COLOR_MODE_18BIT;
+        }
         ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, init_cmds[i].cmd,
                             init_cmds[i].data,
                             init_cmds[i].data_bytes & ILI9488_INIT_LENGTH_MASK),
                             TAG, "send init command failed");
-    }
-
-    // THE COLOUR MODE, last, and it follows what the panel was asked for.
-    //
-    // The original driver sent COLMOD=0x66 (18 bit) in its table whatever
-    // bits_per_pixel said, so a 16 bit panel would have been handed 18 bit
-    // data. Here the panel is told what it is going to be fed.
-    {
-        const uint8_t colmod = (ili9488->color_mode == ILI9488_COLOR_MODE_16BIT)
-                             ? ILI9488_COLOR_MODE_16BIT : ILI9488_COLOR_MODE_18BIT;
-        ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, LCD_CMD_COLMOD, &colmod, 1),
-                            TAG, "set colour mode failed");
     }
 
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, LCD_CMD_SLPOUT, NULL, 0), TAG, "sleep out failed");
@@ -169,8 +171,6 @@ static esp_err_t panel_ili9488_draw_bitmap(esp_lcd_panel_t *panel, int x_start, 
     return esp_lcd_panel_io_tx_color(ili9488->io, LCD_CMD_RAMWR, color_data, pixel_count * 2);
 }
 
-#undef SEND_COORDS
-
 static esp_err_t panel_ili9488_invert_color(esp_lcd_panel_t *panel, bool invert_color_data)
 {
     ili9488_panel_t *ili9488 = __containerof(panel, ili9488_panel_t, base);
@@ -211,6 +211,8 @@ static esp_err_t panel_ili9488_set_gap(esp_lcd_panel_t *panel, int x_gap, int y_
     ili9488->y_gap = y_gap;
     return ESP_OK;
 }
+
+#undef SEND_COORDS
 
 static esp_err_t panel_ili9488_disp_on_off(esp_lcd_panel_t *panel, bool on_off)
 {

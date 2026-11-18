@@ -41,6 +41,21 @@
 #define C5_PANEL_W 320
 #define C5_PANEL_H 320
 
+// How many rows go out at a time.
+//
+// The panel's window is set ONCE for the whole frame and the picture is
+// then streamed into it.  The panel's address counter walks the window on
+// its own, so the rows do not each need a window of their own - which is
+// what made the screen crawl: six hundred and forty round trips for one
+// screen, each one waiting for the last.
+//
+// The picture goes out in bands because a band is what fits in the
+// transfer buffer, and there are two of them so that the conversion of
+// one band happens while the other is on its way out.
+#define C5_PANEL_BAND_ROWS 8
+#define C5_PANEL_BANDS 2
+
+
 // The screen comes over HTTP in tiles of this many rows.
 #define C5_TILE_ROWS 40
 
@@ -101,6 +116,19 @@ class C5Panel {
     // stall WLED's main loop for a whole frame.
     void flush(unsigned budgetMs = 12);
 
+    // How long the last frame took to go out, in milliseconds.  The
+    // picture is drawn separately, so this is the transfer on its own.
+    uint32_t lastFrameMs() const { return _frameMs; }
+
+    // How many frames have gone out since the board came up.
+    uint32_t frameCount() const { return _frameCount; }
+
+    // How long the last frame's BANDS took, in milliseconds, and how many
+    // there were.  The frame takes longer than this if the main loop was
+    // busy in between, and that difference is worth knowing about.
+    uint32_t lastBandMs() const { return _bandMs; }
+    uint32_t lastBandCount() const { return _bandCount; }
+
   private:
     void plot(int x, int y, uint16_t color);
     bool sendRows(int x, int y0, int y1, int x1, const uint16_t *fb);
@@ -115,12 +143,16 @@ class C5Panel {
     // and a page that changes (the page does) shows as a mixture of both.
     uint16_t *_fb = nullptr;      // what is drawn into, in PSRAM
     uint16_t *_fbShow = nullptr;  // what is sent, in PSRAM
-    uint16_t *_dma = nullptr;     // the transfer buffer, in internal RAM
     bool _frameReady = false;    // there is a picture waiting to be sent
     bool _sending = false;       // and one is on its way
     int  _sendRow = 0;           // how far it has got
     const uint16_t *_sendPtr = nullptr;  // the picture being sent
     uint32_t _errors = 0;      // how many times the panel refused a row
+    uint32_t _frameMs = 0;      // how long the last frame took to go out
+    int64_t  _frameStart = 0;   // when the frame on its way started
+    uint32_t _frameCount = 0;   // how many frames have gone out
+    uint32_t _bandMs = 0;       // how long the last frame's bands took
+    uint32_t _bandCount = 0;    // and how many there were
 };
 
 #include "c5_panel.cpp"

@@ -89,19 +89,21 @@ static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP
 #define C5_PAGE_SYNC  0
 #define C5_PAGE_BEAT  1
 #define C5_PAGE_BOARD 2
-#define C5_PAGE_COUNT 3
-
-// The pin the expander's buttons are given.
-//
-// They are not on a GPIO of this chip - they are on the expander - but the
-// core skips a button whose pin is negative, so they need one.  This one
-// is never read: the usermod answers for those buttons before the core
-// gets to the pin.
-#define C5_EXPANDER_BTN_PIN 24
+#define C5_PAGE_TEST  3
+#define C5_PAGE_COUNT 4
 
 // The first button index the expander's buttons take.  The three on the
 // chip come first.
+//
+// The expander's buttons are NOT given to the core: the core skips a
+// button whose pin is negative, and a button that IS given a pin has
+// that pin read - and neither works for a button that lives on the
+// expander.  This usermod reads them itself.
 #define C5_EXPANDER_BTN_FIRST 3
+
+// How long a button on the expander has to be held down for its long
+// press to fire.
+#define C5_EXPANDER_LONG_MS 800
 
 class C5RemoteUsermod : public Usermod {
   public:
@@ -109,9 +111,10 @@ class C5RemoteUsermod : public Usermod {
     void setup() override;
     void loop() override;
 
-    // The expander's buttons: answered for here, so the core's own logic
-    // (debounce, long press, double press, macros) does all of it.
-    bool buttonState(uint8_t index, bool &pressed) override;
+    // The expander's buttons: answered for here, so the core leaves them
+    // alone.  The debounce and the long press are done here too, because
+    // the core never gets that far with a button that has no pin.
+    bool handleButton(uint8_t index) override;
 
     // The actions: the tempo's are forwarded to the board that has the
     // tracker, the rest are this board's own.
@@ -138,6 +141,11 @@ class C5RemoteUsermod : public Usermod {
     uint16_t     _ioInputsStable = 0; // and the same, once it has settled
     uint8_t      _ioStableCount = 0;
     bool         _ioActiveHigh = false;  // are the expander's buttons active high?
+    // What each of the expander's buttons does: a short press, and a long
+    // one.  The board's header has buttons on it, and what they do is the
+    // owner's business - so they are empty until they are told.
+    uint16_t     _expanderAction[C5_IOEXP_BTN_COUNT] = {0};
+    uint16_t     _expanderLongAction[C5_IOEXP_BTN_COUNT] = {0};
     uint8_t     *_bmp = nullptr;         // the screen's picture, for the HTTP snapshot
     uint8_t      _wifiBand = 0;          // 0 = both bands, 1 = 5 GHz only, 2 = 2.4 GHz only
 
@@ -145,6 +153,7 @@ class C5RemoteUsermod : public Usermod {
     uint8_t _page = C5_PAGE_SYNC;
     bool    _redraw = true;
     uint32_t _lastDraw = 0;
+    uint32_t _drawMs = 0;      // how long the last drawing took
 
     // ---- the board that has the tracker ----
     String   _p4Host = "192.168.6.249";
@@ -198,6 +207,7 @@ class C5RemoteUsermod : public Usermod {
     void drawSyncPage();
     void drawBeatPage();
     void drawBoardPage();
+    void drawTestPage();
     void drawHeader(const char *title, const char *right);
     void drawFooter(const char *left, const char *right);
     void drawBars(const uint8_t *bands, int x, int y, int w, int h);

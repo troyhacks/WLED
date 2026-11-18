@@ -38,7 +38,7 @@ cmd = [
     "--baud", "115200",
     "--no-stub",
     "--before", "default-reset",
-    "--after", "no-reset",
+    "--after", "hard-reset",
     "write_flash",
     "--flash-mode", "dio",
     "--flash-size", "detect",

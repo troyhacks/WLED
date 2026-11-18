@@ -33,14 +33,11 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
   memset(_fb, 0, pixels);
   memset(_fbShow, 0, pixels);
 
-  // The transfer buffer has to be in internal RAM: the SPI's DMA reads it.
-  // One row is enough - the panel is sent a row at a time.
-  _dma = (uint16_t *)heap_caps_malloc((size_t)C5_PANEL_W * sizeof(uint16_t),
-                                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-  if (_dma == nullptr) {
-    USER_PRINTLN("C5: no memory for the panel's transfer buffer");
-    return false;
-  }
+  // Where the pictures ended up.  Two hundred KB each is a lot to ask of
+  // the internal heap, and if PSRAM is not there to take it, the web
+  // server's own memory is gone.
+  USER_PRINTF("C5: the picture: %u KB, %u KB free of PSRAM\n",
+              (unsigned)(pixels / 1024), (unsigned)ESP.getFreePsram() / 1024);
 
   // The SPI bus. The TF card shares it, so the card's chip select is put
   // high and left there.
@@ -53,12 +50,15 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
   buscfg.miso_io_num = C5_LCD_MISO;
   buscfg.quadwp_io_num = GPIO_NUM_NC;
   buscfg.quadhd_io_num = GPIO_NUM_NC;
-  buscfg.max_transfer_sz = C5_PANEL_W * 64 * 2;
+  // The biggest thing that goes over the bus is a band of rows, in the
+  // panel's own 18 bit format: three bytes a pixel.
+  buscfg.max_transfer_sz = C5_PANEL_W * C5_PANEL_BAND_ROWS * 3;
   esp_err_t ret = spi_bus_initialize(C5_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
   if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
     USER_PRINTF("C5: the panel's SPI bus did not come up (0x%x)\n", (int)ret);
     return false;
   }
+  USER_PRINTF("C5: the panel's SPI bus: 0x%x\n", (int)ret);
 
   esp_lcd_panel_io_spi_config_t io_config = {};
   io_config.dc_gpio_num = C5_LCD_DC;
@@ -74,32 +74,54 @@ bool C5Panel::begin(C5IoExpander &ioexp) {
     return false;
   }
 
-  // 16 bits per pixel: the picture IS RGB565, so the data goes out as it
-  // is, with no conversion in between.
+  // 18 bits per pixel: this is what the vendor's own demo for this board
+  // uses, and it is known to work on it.  The driver converts the picture
+  // from RGB565 to RGB666 on the way out, so the picture is still RGB565
+  // in the frame buffer and the conversion is the driver's business.
+  //
+  // 16 bit was tried first and gave a grey screen: the panel was told
+  // COLMOD=0x55 and then fed RGB565 bytes, and this panel does not show
+  // that.  The vendor's way is the way that works.
   esp_lcd_panel_dev_config_t panel_config = {};
   panel_config.reset_gpio_num = GPIO_NUM_NC;   // the reset is on the IO expander
   panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
-  panel_config.bits_per_pixel = 16;
+  panel_config.bits_per_pixel = 18;
   panel_config.data_endian = LCD_RGB_DATA_ENDIAN_BIG;
 
-  ret = esp_lcd_new_panel_ili9488(_io, &panel_config, 0, &_panel);
+  // The conversion buffer is a band's worth of pixels.  The driver
+  // converts a whole rectangle at a time and will not take one larger
+  // than this, so the picture goes out a band at a time.
+  ret = esp_lcd_new_panel_ili9488(_io, &panel_config, C5_PANEL_W * C5_PANEL_BAND_ROWS, &_panel);
+  USER_PRINTF("C5: the panel handle: 0x%x\n", (int)ret);
   if (ret != ESP_OK) {
     USER_PRINTF("C5: the panel did not come up (0x%x)\n", (int)ret);
     return false;
   }
 
   // THE RESET, through the IO expander: the panel's reset line is IO0
-  // there, not a GPIO of this chip.
+  // there, not a GPIO of this chip.  It is active low: low for 20 ms,
+  // then released, and the panel is given 150 ms to wake up.
   ioexp.setPin(C5_IOEXP_LCD_RST, false);
   delay(20);
   ioexp.setPin(C5_IOEXP_LCD_RST, true);
   delay(150);
 
-  esp_lcd_panel_init(_panel);
-  esp_lcd_panel_invert_color(_panel, true);
-  esp_lcd_panel_swap_xy(_panel, false);
-  esp_lcd_panel_mirror(_panel, false, false);
-  esp_lcd_panel_disp_on_off(_panel, true);
+  // Every one of these is checked and said out loud.  A panel that was
+  // never initialised shows as a flat grey with the backlight on, and
+  // that is exactly what it looks like, so the console has to say
+  // whether each step worked.
+  ret = esp_lcd_panel_reset(_panel);
+  USER_PRINTF("C5: the panel's reset: 0x%x\n", (int)ret);
+  ret = esp_lcd_panel_init(_panel);
+  USER_PRINTF("C5: the panel's init sequence: 0x%x\n", (int)ret);
+  ret = esp_lcd_panel_invert_color(_panel, true);
+  USER_PRINTF("C5: the panel's invert: 0x%x\n", (int)ret);
+  ret = esp_lcd_panel_swap_xy(_panel, false);
+  USER_PRINTF("C5: the panel's swap: 0x%x\n", (int)ret);
+  ret = esp_lcd_panel_mirror(_panel, false, false);
+  USER_PRINTF("C5: the panel's mirror: 0x%x\n", (int)ret);
+  ret = esp_lcd_panel_disp_on_off(_panel, true);
+  USER_PRINTF("C5: the panel's display on: 0x%x\n", (int)ret);
 
   // The backlight. The vendor caps the duty at 97 %.
   ioexp.setPwm(97);
@@ -118,9 +140,9 @@ void C5Panel::end() {
     heap_caps_free(_fb);
     _fb = nullptr;
   }
-  if (_dma) {
-    heap_caps_free(_dma);
-    _dma = nullptr;
+  if (_fbShow) {
+    heap_caps_free(_fbShow);
+    _fbShow = nullptr;
   }
 }
 
@@ -135,7 +157,15 @@ inline void C5Panel::plot(int x, int y, uint16_t color) {
 
 void C5Panel::clear(uint16_t color) {
   if (_fb == nullptr) return;
-  for (size_t i = 0; i < (size_t)C5_PANEL_W * C5_PANEL_H; i++) _fb[i] = color;
+  // The picture is 320 x 320, and it lives in PSRAM.  Clearing it a pixel
+  // at a time is a hundred thousand writes across the memory bus, and it
+  // is slow enough to be seen: the screen takes longer to draw than to
+  // send.  Two pixels at a time is half the writes, and the compiler
+  // turns the loop into a wide store.
+  uint32_t *p = (uint32_t *)_fb;
+  const uint32_t pattern = (uint32_t)color | ((uint32_t)color << 16);
+  const size_t n = (size_t)C5_PANEL_W * C5_PANEL_H / 2;
+  for (size_t i = 0; i < n; i++) p[i] = pattern;
   _frameReady = true;
 }
 
@@ -199,35 +229,33 @@ void C5Panel::drawTextCentre(int xCentre, int y, const char *text, uint16_t fg, 
 // ---------------------------------------------------------------------------
 
 bool C5Panel::sendRows(int x, int y0, int y1, int x1, const uint16_t *fb) {
-  // One row at a time. The panel's address counter does wrap from the end
-  // of a row to the start of the next one, but a row at a time does not
-  // need that to be true, and a row is small enough that the command
-  // overhead does not matter.
-  const int w = x1 - x + 1;
-  for (int row = y0; row <= y1; row++) {
-    memcpy(_dma, &fb[(size_t)row * C5_PANEL_W + x], (size_t)w * sizeof(uint16_t));
-    // The bytes of each pixel go out the other way round.
-    //
-    // The picture is held as the chip holds it - little-endian, so the low
-    // byte (the blue) is first - and the panel takes the high byte first
-    // (the red).  In 18 bit mode the driver does the conversion and gets
-    // this right; in 16 bit mode it hands the picture over as it is, so
-    // the swap is ours to do.
-    {
-      uint8_t *d = (uint8_t *)_dma;
-      for (int i = 0; i < w; i++) {
-        const uint8_t t = d[0]; d[0] = d[1]; d[1] = t;
-        d += 2;
-      }
+  // A band of rows at a time.
+  //
+  // The panel's address counter wraps from the end of a row to the start
+  // of the next one, so a rectangle of several rows can be sent as one
+  // block: the panel walks the window on its own.  The driver converts
+  // the picture to what the panel takes, so the picture that goes in is
+  // the frame buffer itself, in RGB565, and no copy is needed.
+  //
+  // The window is set for EVERY band, and that is not an accident: the
+  // panel starts each block of pixels at the start of the window, so a
+  // window set once for the whole screen has every band land on the same
+  // rows.  The screen came out grey with a picture that never went past
+  // the top.  Setting it per band is what the panel wants.
+  //
+  // A row at a time was tried first and was far too slow: the window has
+  // to be set before every block of pixels, and each of those is a round
+  // trip that waits for the one before it.  Six hundred and forty of them
+  // for one screen, and the screen took a second.  A band at a time is
+  // forty.
+  esp_err_t ret = esp_lcd_panel_draw_bitmap(_panel, x, y0, x1 + 1, y1 + 1,
+                                            &fb[(size_t)y0 * C5_PANEL_W + x]);
+  if (ret != ESP_OK) {
+    if (_errors < 8) {
+      USER_PRINTF("C5: the panel refused a band (%d)\n", (int)ret);
+      _errors++;
     }
-    esp_err_t ret = esp_lcd_panel_draw_bitmap(_panel, x, row, x1 + 1, row + 1, _dma);
-    if (ret != ESP_OK) {
-      if (_errors < 8) {
-        USER_PRINTF("C5: the panel refused a row (%d)\n", (int)ret);
-        _errors++;
-      }
-      return false;
-    }
+    return false;
   }
   return true;
 }
@@ -256,16 +284,23 @@ void C5Panel::flush(unsigned budgetMs) {
     _sending = true;
     _sendRow = 0;
     _sendPtr = _fbShow;
+    _frameStart = esp_timer_get_time();
   }
 
   const int64_t start = esp_timer_get_time();
   while (_sendRow < C5_PANEL_H) {
-    if (!sendRows(0, _sendRow, _sendRow, C5_PANEL_W - 1, _sendPtr)) {
+    const int last = min(_sendRow + C5_PANEL_BAND_ROWS - 1, C5_PANEL_H - 1);
+    const int64_t bandStart = esp_timer_get_time();
+    if (!sendRows(0, _sendRow, last, C5_PANEL_W - 1, _sendPtr)) {
       _sending = false;
       return;
     }
-    _sendRow++;
+    _bandMs += (uint32_t)((esp_timer_get_time() - bandStart) / 1000);
+    _bandCount++;
+    _sendRow = last + 1;
     if ((esp_timer_get_time() - start) / 1000 >= (int64_t)budgetMs) return;
   }
   _sending = false;
+  _frameMs = (uint32_t)((esp_timer_get_time() - _frameStart) / 1000);
+  _frameCount++;
 }

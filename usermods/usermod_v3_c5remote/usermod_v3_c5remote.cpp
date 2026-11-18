@@ -28,16 +28,36 @@ C5RemoteUsermod::C5RemoteUsermod() : Usermod("C5Remote", false) {}
 // ---------------------------------------------------------------------------
 
 // A GET. The body comes back in the string.
-// The task watchdog.
 //
-// The main task is the one that makes the requests, and a request that
-// waits for an answer holds it - and the task watchdog does not care what
-// the task is waiting for.  So the watchdog is fed around the requests.
-static void c5FeedWatchdog() {
-#if defined(CONFIG_ESP_TASK_WDT_TIMEOUT_S) && (CONFIG_ESP_TASK_WDT_TIMEOUT_S > 0)
-  esp_task_wdt_reset();
-#endif
-}
+// There is no watchdog feed here.  The core watches the task that runs
+// the main loop and feeds it there, and the watchdog on this board is
+// set to a hundred seconds - a request that waits a second and a half
+// for its answer cannot come anywhere near it.  Asking for the watchdog
+// to be reset by a task that is not on it is an error, and it filled the
+// log with "task not found".
+
+// The filter that keeps only what this board wants out of the other
+// board's answer.
+//
+// The AudioReactive document is ten KB - it carries the whole spectrum,
+// the banks and the calibration.  All of it is parsed, and all of it is
+// thrown away, three times a minute.  On a board with 327 KB of RAM that
+// is a document that does not fit, and a heap that fragments.
+//
+// So the parse is told what to keep, and the rest is skipped as it is
+// read: the tempo, and the few numbers beside it.  The document that
+// holds the result is then a few hundred bytes, and it is a STATIC one -
+// made once, at startup, and used for every poll.  Nothing is allocated
+// and freed over and over, which is what had the heap shrinking.
+//
+// The filter is itself a document, and it says where in the answer the
+// wanted numbers are.
+static StaticJsonDocument<256> s_c5TempoFilter;
+
+// The document the poll's answer goes into.  It is made once and kept:
+// making it on every poll is what filled the heap with fragments.
+static StaticJsonDocument<1024> s_c5TempoDoc;
+
 
 static bool c5HttpGet(const char *url, String &out, int *statusOut) {
   out = "";
@@ -53,7 +73,6 @@ static bool c5HttpGet(const char *url, String &out, int *statusOut) {
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == nullptr) return false;
 
-  c5FeedWatchdog();
   bool ok = false;
   if (esp_http_client_open(client, 0) >= 0) {
     // The headers have to be fetched BEFORE the status code is asked
@@ -97,9 +116,7 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
   const int len = (int)strlen(body);
   esp_http_client_set_header(client, "Content-Type", "application/json");
   esp_http_client_set_post_field(client, body, len);
-  c5FeedWatchdog();
   esp_http_client_perform(client);
-  c5FeedWatchdog();
   const int status = esp_http_client_get_status_code(client);
   if (statusOut) *statusOut = status;
   ok = (status == 200);
@@ -112,6 +129,18 @@ static bool c5HttpPost(const char *url, const char *body, int *statusOut) {
 // ---------------------------------------------------------------------------
 
 void C5RemoteUsermod::setup() {
+  // What to keep out of the other board's answer.  It says where the
+  // wanted numbers are, so the parse can skip everything else.
+  s_c5TempoFilter["AudioReactive"]["tempo"]["usable"]       = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["bpm"]          = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["beat_in_bar"]   = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["beat_progress"] = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["quality"]       = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["drift_ms"]      = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["hold"]          = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["downbeat_set"]  = true;
+  s_c5TempoFilter["AudioReactive"]["tempo"]["mode_name"]     = true;
+
   // The panel's pins. They are taken so that nothing else in WLED hands
   // them to a bus.
   const managed_pin_type pins[] = {
@@ -273,19 +302,39 @@ void C5RemoteUsermod::setupButtons() {
   macroLongPress[0] = C5_ACT_PRESET_PREV;
   macroLongPress[1] = C5_ACT_PRESET_NEXT;
 
-  // The expander's buttons. They are not on a GPIO of this chip, but the
-  // core skips a button whose pin is negative, so they are given one that
-  // is never read: this usermod answers for them.
+  // The expander's buttons.
+  //
+  // They are not on a GPIO of this chip.  The core skips a button whose
+  // pin is negative, and a button that IS given a pin has that pin read -
+  // so neither of those can be used for a button that lives on the
+  // expander.  Giving them a pin that is never read also had the core
+  // trying to allocate it, once for each of them, and complaining every
+  // time.
+  //
+  // So they are not given to the core at all.  This usermod reads the
+  // expander itself and does the debouncing, the long press and the
+  // macros, which is what the core does for a button on a pin.  The
+  // core's own buttons - the three on the chip - are untouched.
   for (uint8_t b = C5_EXPANDER_BTN_FIRST; b < WLED_MAX_BUTTONS; b++) {
-    btnPin[b] = C5_EXPANDER_BTN_PIN;
-    buttonType[b] = BTN_TYPE_PUSH;
+    btnPin[b] = -1;
+    buttonType[b] = BTN_TYPE_NONE;
     macroButton[b] = 0;
     macroLongPress[b] = 0;
     macroDoublePress[b] = 0;
   }
 }
 
-bool C5RemoteUsermod::buttonState(uint8_t index, bool &pressed) {
+// The expander's buttons.
+//
+// The core asks every usermod whether it owns a button, and this one owns
+// the ones on the expander: they are read from the expander's input
+// register, not from a GPIO of this chip.
+//
+// The core's own logic - the debounce, the long press, the double press
+// and the macros - is not used for them, because the core never gets
+// that far with a button that has no pin.  So the same logic is done
+// here, on the readings this usermod takes.
+bool C5RemoteUsermod::handleButton(uint8_t index) {
   if (!_ioexpOk) return false;
   if (index < C5_EXPANDER_BTN_FIRST) return false;   // those are real pins
   const uint8_t io = C5_IOEXP_BTN_FIRST + (index - C5_EXPANDER_BTN_FIRST);
@@ -295,8 +344,37 @@ bool C5RemoteUsermod::buttonState(uint8_t index, bool &pressed) {
   // expander's input that floats would otherwise read as a button that
   // is being pressed and let go.
   const bool high = (_ioInputsStable & (uint16_t)(1U << io)) != 0;
-  pressed = _ioActiveHigh ? high : !high;
-  return true;
+  const bool pressed = _ioActiveHigh ? high : !high;
+
+  // The state of each of the expander's buttons: when it was last seen
+  // pressed, and whether it has already fired.
+  static uint32_t pressedMs[C5_IOEXP_BTN_COUNT] = {0};
+  static bool     wasPressed[C5_IOEXP_BTN_COUNT] = {false};
+  static bool     fired[C5_IOEXP_BTN_COUNT] = {false};
+  static bool     longFired[C5_IOEXP_BTN_COUNT] = {false};
+  const uint8_t slot = io - C5_IOEXP_BTN_FIRST;
+  const uint32_t now = millis();
+
+  if (pressed && !wasPressed[slot]) {
+    // Just pressed: remember when, and let go of whatever came before.
+    pressedMs[slot] = now;
+    wasPressed[slot] = true;
+    fired[slot] = false;
+    longFired[slot] = false;
+  } else if (!pressed && wasPressed[slot]) {
+    // Just let go.  A short press fires the button; a long one already
+    // fired on its own, and fires nothing now.
+    wasPressed[slot] = false;
+    if (!fired[slot] && !longFired[slot]) {
+      fired[slot] = true;
+      if (_expanderAction[slot] != 0) performAction(_expanderAction[slot]);
+    }
+  } else if (pressed && !longFired[slot] && (now - pressedMs[slot]) >= C5_EXPANDER_LONG_MS) {
+    // Held down: the long press fires once, when the hold is long enough.
+    longFired[slot] = true;
+    if (_expanderLongAction[slot] != 0) performAction(_expanderLongAction[slot]);
+  }
+  return true;   // the core leaves this button alone
 }
 
 // The band the radio is allowed to use.
@@ -519,15 +597,16 @@ void C5RemoteUsermod::pollTracker() {
   _p4Online = true;
   _p4Failures = 0;
 
-  // The document is about 10 KB. It is parsed into the heap, which on this
-  // board is PSRAM for anything this size.
-  DynamicJsonDocument doc(24576);
-  if (deserializeJson(doc, body)) {
+  // The document is about 10 KB, and only the tempo is wanted.  The filter
+  // skips the rest as it is read, and the document that holds what is
+  // kept is a static one - so the poll allocates nothing.
+  s_c5TempoDoc.clear();
+  if (deserializeJson(s_c5TempoDoc, body, DeserializationOption::Filter(s_c5TempoFilter))) {
     _p4Status = "the board's answer did not parse";
     return;
   }
 
-  JsonObject ar = doc["AudioReactive"];
+  JsonObject ar = s_c5TempoDoc["AudioReactive"];
   if (ar.isNull()) {
     _p4Status = "the board has no AudioReactive";
     return;
@@ -850,9 +929,51 @@ void C5RemoteUsermod::drawBoardPage() {
 }
 
 // ---------------------------------------------------------------------------
+// The test page
+// ---------------------------------------------------------------------------
+//
+// Colour bars, a grey ramp and some text.
+//
+// This is here because a panel that is not working shows as a flat grey
+// with the backlight on, and that is indistinguishable from a panel that
+// IS working and is showing grey.  With this page, one look answers the
+// question: if the bars are there, the panel is being driven; if it is
+// still flat grey, the panel never got its picture.
+
+void C5RemoteUsermod::drawTestPage() {
+  _panel.clear(C5_COL_BLACK);
+
+  // The colour bars: red, green, blue, white, black, cyan, magenta, yellow.
+  static const uint16_t bars[] = {
+    C5_COL_RED, C5_COL_GREEN, C5_COL_BLUE, C5_COL_WHITE,
+    C5_COL_BLACK, C5_COL_CYAN, C5_COL_MAGENTA, C5_COL_YELLOW
+  };
+  const int barW = C5_PANEL_W / 8;
+  for (int i = 0; i < 8; i++) {
+    _panel.fillRect(i * barW, 0, barW, 160, bars[i]);
+  }
+
+  // The grey ramp: sixteen steps from black to white.
+  for (int i = 0; i < 16; i++) {
+    const uint8_t g = (uint8_t)(i * 17);
+    _panel.fillRect(i * 20, 160, 20, 40, c5_rgb(g, g, g));
+  }
+
+  // Some text, so the font is on the test too.
+  _panel.drawText(4, 206, "C5 PANEL TEST", C5_COL_WHITE, C5_COL_BLACK);
+  _panel.drawText(4, 220, "if you can read this,", C5_COL_GREY, C5_COL_BLACK);
+  _panel.drawText(4, 232, "the panel works.", C5_COL_GREY, C5_COL_BLACK);
+
+  // And a solid block of the background colour, which is what the other
+  // pages are mostly made of.
+  _panel.fillRect(0, 250, C5_PANEL_W, 70, C5_COL_DARKGREY);
+  _panel.drawText(4, 262, "SYNC  BEAT  BOARD", C5_COL_WHITE, C5_COL_DARKGREY);
+  _panel.drawText(4, 278, "next >", C5_COL_YELLOW, C5_COL_DARKGREY);
+}
+
+// ---------------------------------------------------------------------------
 // The loop
 // ---------------------------------------------------------------------------
-
 void C5RemoteUsermod::loop() {
   if (!_panel.ready()) return;
 
@@ -877,18 +998,19 @@ void C5RemoteUsermod::loop() {
   pollZigbee();
 #endif
 
-  // The IMU goes to the console, once a second, with the memory's numbers
-  // beside it - this board has 327 KB of RAM and everything counts.
+  // The IMU goes to the console, every few seconds, with the memory's
+  // numbers beside it - this board has 327 KB of RAM and everything
+  // counts.  The console is shared with the rest of WLED, and it is not
+  // fast: a line a second fills it up.
   static uint32_t lastImu = 0;
-  if (_imuOk && (now - lastImu >= 1000)) {
+  if (_imuOk && (now - lastImu >= 5000)) {
     lastImu = now;
     float acc[3] = {0, 0, 0}, gyr[3] = {0, 0, 0};
     if (_imu.read(acc, gyr)) {
-      USER_PRINTF("C5: acc %+.2f %+.2f %+.2f m/s2   gyr %+.3f %+.3f %+.3f rad/s   heap %u (largest %u)\n",
+      USER_PRINTF("C5: acc %+.2f %+.2f %+.2f m/s2   gyr %+.3f %+.3f %+.3f rad/s   heap %u\n",
                   (double)acc[0], (double)acc[1], (double)acc[2],
                   (double)gyr[0], (double)gyr[1], (double)gyr[2],
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                  (unsigned)ESP.getFreeHeap());
     }
   }
 
@@ -910,14 +1032,27 @@ void C5RemoteUsermod::loop() {
   if (_redraw || (now - _lastDraw >= 100)) {
     _lastDraw = now;
     _redraw = false;
+    const int64_t drawStart = esp_timer_get_time();
     switch (_page) {
       case C5_PAGE_SYNC:  drawSyncPage(); break;
       case C5_PAGE_BEAT:  drawBeatPage(); break;
+      case C5_PAGE_TEST:  drawTestPage(); break;
       default:            drawBoardPage(); break;
     }
+    _drawMs = (uint32_t)((esp_timer_get_time() - drawStart) / 1000);
   }
 
-  _panel.flush(12);
+  _panel.flush(25);
+
+  // How long the screen takes to get its picture out, now and then.
+  // The panel is the slow part of this board, so it is worth watching.
+  static uint32_t lastPanelReport = 0;
+  if (now - lastPanelReport >= 5000) {
+    lastPanelReport = now;
+    USER_PRINTF("C5: the screen: %u ms to draw, %u ms to send (%u bands), %u frames\n",
+                (unsigned)_drawMs, (unsigned)_panel.lastFrameMs(),
+                (unsigned)_panel.lastBandCount(), (unsigned)_panel.frameCount());
+  }
 }
 
 // ---------------------------------------------------------------------------

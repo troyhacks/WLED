@@ -187,7 +187,7 @@ if __name__ == "__main__":
     c.png(os.path.join(outdir, "c5_screen_beat.png"))
 
     c = Canvas(font)
-    draw_board(c, "YOUR_NETWORK", "192.168.2.47", 412, 36428,
+    draw_board(c, "Sample_Network", "192.168.2.47", 412, 36428,
                (-0.48, 0.24, -8.75), (-0.02, 0.06, -0.01), 1870,
                "192.168.6.249", True, "downbeat set")
     c.png(os.path.join(outdir, "c5_screen_board.png"))

@@ -310,12 +310,15 @@ battery side, and the USB keeps the board alive.
 
 ## The network
 
-The build carries the credentials of the network the board belongs to, so
-that a board whose config was wiped still finds its way home:
+The board needs the credentials of the network it belongs to, so that a
+board whose config was wiped still finds its way home.  They are **not** in
+the build files: a network's name and its password have no business in a
+file that is tracked and shared.  They go in `wled00/my_config.h`, which is
+ignored by git, like every other board's settings:
 
-```
--D CLIENT_SSID=\"YOUR_NETWORK\"
--D CLIENT_PASS=\"YOUR_PASSWORD\"
+```c
+#define CLIENT_SSID "your network"
+#define CLIENT_PASS "your password"
 ```
 
 The ESP32-C5 is a dual-band chip, and the board comes up in the automatic
