@@ -1824,7 +1824,6 @@ void WLED::setup() {
   //pinManager.allocateMultiplePins(pins, sizeof(pins)/sizeof(managed_pin_type), PinOwner::SPI_RAM);
   #elif defined(CONFIG_IDF_TARGET_ESP32P4)
   // ESP32-P4 peripherals are hidden from GPIO map, including PSRAM - so we don't need to further hide them.
-
   // GPIO > 36 are not powered/configured for Arduino-ESP32 by default.
   // fix from https://esp32.com/viewtopic.php?t=45334 thanks to microfoundry
 
@@ -1879,6 +1878,9 @@ void WLED::setup() {
       USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
     }
   }
+  #elif defined(CONFIG_IDF_TARGET_ESP32C5)
+  // The C5's PSRAM is in the package, not on pins: there is nothing to
+  // reserve, and reserving GPIO16/17 only takes two usable pins away.
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };
