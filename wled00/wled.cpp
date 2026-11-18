@@ -72,8 +72,34 @@ static const char *TAG = "WLED";
   #define SD_POWER_PIN GPIO_NUM_45
 
   static sdmmc_card_t* card = NULL;
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // The SD card's P-FET source is the P4's internal LDO4 (VO4).  LDO4 has to
+  // be held before the P-FET is switched, or the card gets no power at all and
+  // the mount fails with "sdmmc_init_ocr ... 0x107".
+  //
+  // Who holds LDO4 depends on the board: on the plain build wled.cpp takes it
+  // (channels 3 and 4 at 3.3 V), while on the HDMI build the DSI PHY takes
+  // channel 3 and channel 4 is left to nobody.  So take it only when it is
+  // free, and give it back only when it was ours.
+  static esp_ldo_channel_handle_t sd_ldo = NULL;
+  static bool sd_ldo_ours = false;
+  #endif
 
   static void sdcard_power_on(void) {
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    if (!sd_ldo) {
+      esp_ldo_channel_config_t ldo_cfg = {
+        .chan_id = 4,
+        .voltage_mv = 3300,
+        .flags = { .adjustable = 1, .owned_by_hw = 0, .bypass = 0 }
+      };
+      if (esp_ldo_acquire_channel(&ldo_cfg, &sd_ldo) == ESP_OK && sd_ldo) {
+        sd_ldo_ours = true;   // the rail was free - we hold it now
+      } else {
+        sd_ldo = NULL;         // somebody else holds it: the rail is up, fine
+      }
+    }
+    #endif
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << SD_POWER_PIN),
         .mode = GPIO_MODE_OUTPUT,
@@ -87,6 +113,13 @@ static const char *TAG = "WLED";
 
   static void sdcard_power_off(void) {
     gpio_set_level(SD_POWER_PIN, 1);  // P-FET: high = off
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    if (sd_ldo_ours && sd_ldo) {
+      esp_ldo_release_channel(sd_ldo);
+      sd_ldo = NULL;
+      sd_ldo_ours = false;
+    }
+    #endif
   }
 
   esp_err_t mount_sdcard(void) {
