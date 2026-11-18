@@ -170,6 +170,19 @@ static uint8_t* arBandBytes = arBandBuf[0];               // the published buffe
 // ---------------------------------------------------------------------
 #define AR_SYNC_SENDER_MAX 8
 
+// How many packet arrivals are kept for each sender.
+//
+// The audio sync goes out at the analysis rate, so the packets SHOULD be
+// evenly spaced - one every ten milliseconds or so.  Whether they are is
+// worth knowing: a sender that bunches them up (or leaves gaps between
+// them) is a sender whose timing is off, and the times are what says so.
+//
+// The times are kept here, at the point where the packet arrived, because
+// that is the only place the arrival is known to the millisecond.  A reader
+// that sampled the packet counter would only see what happened between its
+// samples.
+#define AR_SYNC_CADENCE_LEN 24
+
 struct ArSyncSender {
   uint32_t ip = 0;          // the address the packets come from
   uint32_t packets = 0;     // how many packets have arrived from it
@@ -181,6 +194,10 @@ struct ArSyncSender {
   uint8_t  format = 0;      // 1 = v1, 2 = v2
   uint8_t  level = 0;       // the level of the last packet
   uint8_t  bands[16] = {0}; // the sixteen bands of the last packet
+  // When the last few packets arrived: a ring buffer, oldest first.
+  uint32_t times[AR_SYNC_CADENCE_LEN] = {0};
+  uint8_t  timeIdx = 0;     // where the next one goes
+  uint8_t  timeCount = 0;   // how many there are
 };
 
 static ArSyncSender arSyncSenders[AR_SYNC_SENDER_MAX];
@@ -6628,6 +6645,10 @@ class AudioReactive : public Usermod {
       s->packets++;
       s->bytes += len;
       s->lastMs = now;
+      // When this one arrived, so that the spacing can be shown.
+      s->times[s->timeIdx] = now;
+      s->timeIdx = (uint8_t)((s->timeIdx + 1) % AR_SYNC_CADENCE_LEN);
+      if (s->timeCount < AR_SYNC_CADENCE_LEN) s->timeCount++;
       // The rate: the packets counted over the last second.
       if (now - s->rateMs >= 1000) {
         s->rate = s->rateCount;
@@ -8658,6 +8679,20 @@ class AudioReactive : public Usermod {
             e["last_ms_ago"] = s.lastMs ? (long)(millis() - s.lastMs) : -1L;
             e["format"]    = s.format;
             e["level"]     = s.level;
+            // The gaps between the last packets, in ms, oldest first.
+            //
+            // The same gaps say whether the packets are spread out or
+            // arriving in bunches, which is what a sender that is not
+            // keeping time looks like.
+            JsonArray gaps = e.createNestedArray("gaps");
+            if (s.timeCount > 1) {
+              const uint8_t start = (uint8_t)((s.timeIdx + AR_SYNC_CADENCE_LEN - s.timeCount) % AR_SYNC_CADENCE_LEN);
+              for (uint8_t k = 1; k < s.timeCount; k++) {
+                const uint8_t a = (uint8_t)((start + k - 1) % AR_SYNC_CADENCE_LEN);
+                const uint8_t b = (uint8_t)((start + k) % AR_SYNC_CADENCE_LEN);
+                gaps.add((unsigned long)(s.times[b] - s.times[a]));
+              }
+            }
             JsonArray bands = e.createNestedArray("bands");
             for (uint8_t b = 0; b < 16; b++) bands.add(s.bands[b]);
           }
