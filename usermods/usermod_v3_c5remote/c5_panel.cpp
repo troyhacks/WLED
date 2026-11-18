@@ -167,19 +167,51 @@ void C5Panel::end() {
 inline void C5Panel::plot(int x, int y, uint16_t color) {
   if (x < 0 || y < 0 || x >= C5_PANEL_W || y >= C5_PANEL_H) return;
   _fb[(size_t)y * C5_PANEL_W + x] = color;
+  _touched[y] = true;
+}
+
+// Note that a row of the picture has been drawn into.
+//
+// The rows that were drawn are the only ones that can have changed, so
+// they are the only ones worth comparing with what the panel has.
+void C5Panel::markTouched(int y0, int y1) {
+  const int top = max(0, y0);
+  const int bottom = min(C5_PANEL_H - 1, y1);
+  for (int y = top; y <= bottom; y++) _touched[y] = true;
 }
 
 void C5Panel::clear(uint16_t color) {
+  clearRows(0, C5_PANEL_H - 1, color);
+}
+
+// Clear a band of rows.
+//
+// The picture is 320 x 320, and it lives in PSRAM.  Clearing it a pixel
+// at a time is a hundred thousand writes across the memory bus, and it
+// is slow enough to be seen: the screen takes longer to draw than to
+// send.
+//
+// Four pixels at a time is a quarter of the writes and a full bus
+// width: the PSRAM on this chip is 64 bits wide, and a store that does
+// not fill a bus width costs a read-modify-write of the whole line.
+void C5Panel::clearRows(int y0, int y1, uint16_t color) {
   if (_fb == nullptr) return;
-  // The picture is 320 x 320, and it lives in PSRAM.  Clearing it a pixel
-  // at a time is a hundred thousand writes across the memory bus, and it
-  // is slow enough to be seen: the screen takes longer to draw than to
-  // send.  Two pixels at a time is half the writes, and the compiler
-  // turns the loop into a wide store.
-  uint32_t *p = (uint32_t *)_fb;
-  const uint32_t pattern = (uint32_t)color | ((uint32_t)color << 16);
-  const size_t n = (size_t)C5_PANEL_W * C5_PANEL_H / 2;
-  for (size_t i = 0; i < n; i++) p[i] = pattern;
+  const int64_t start = esp_timer_get_time();
+  const int top = max(0, y0);
+  const int bottom = min(C5_PANEL_H - 1, y1);
+  if (bottom < top) return;
+
+  const uint64_t pattern = (uint64_t)color | ((uint64_t)color << 16) |
+                           ((uint64_t)color << 32) | ((uint64_t)color << 48);
+  for (int y = top; y <= bottom; y++) {
+    // A row is 320 pixels, which is 640 bytes: a whole number of 64 bit
+    // words, so the row can be written in full-width stores.
+    uint64_t *p = (uint64_t *)&_fb[(size_t)y * C5_PANEL_W];
+    const size_t n = C5_PANEL_W / 4;
+    for (size_t i = 0; i < n; i++) p[i] = pattern;
+  }
+  _clearMs = (uint32_t)((esp_timer_get_time() - start) / 1000);
+  markTouched(top, bottom);
   _frameReady = true;
 }
 
@@ -189,8 +221,17 @@ void C5Panel::fillRect(int x, int y, int w, int h, uint16_t color) {
   int x1 = min(C5_PANEL_W, x + w), y1 = min(C5_PANEL_H, y + h);
   for (int yy = y0; yy < y1; yy++) {
     uint16_t *row = &_fb[(size_t)yy * C5_PANEL_W];
-    for (int xx = x0; xx < x1; xx++) row[xx] = color;
+    int xx = x0;
+    // Two pixels at a time, where the row allows it: a store that does
+    // not fill the bus width costs a read-modify-write of the whole line.
+    if ((xx & 1) == 0) {
+      const uint32_t pair = (uint32_t)color | ((uint32_t)color << 16);
+      uint32_t *w32 = (uint32_t *)&row[xx];
+      while (xx + 1 < x1) { *w32++ = pair; xx += 2; }
+    }
+    for (; xx < x1; xx++) row[xx] = color;
   }
+  markTouched(y0, y1 - 1);
   _frameReady = true;
 }
 
@@ -214,19 +255,27 @@ int C5Panel::textWidth(const char *text) {
 
 void C5Panel::drawText(int x, int y, const char *text, uint16_t fg, uint16_t bg) {
   if (_fb == nullptr || text == nullptr) return;
+  const int top = max(0, y);
+  const int bottom = min(C5_PANEL_H - 1, y + C5_FONT_H - 1);
   int gx = x;
   for (const char *p = text; *p; p++, gx += C5_FONT_ADVANCE) {
     unsigned char ch = (unsigned char)*p;
     if (ch < 32 || ch > 126) ch = '?';
     const uint8_t *glyph = &console_font_6x8[(ch - 32) * C5_FONT_H];
-    for (int row = 0; row < C5_FONT_H; row++) {
-      uint8_t bits = pgm_read_byte(&glyph[row]);
+    // The glyph's pixels go into the picture a row at a time, and a row is
+    // six pixels: three pairs, each written as one 32 bit store.
+    for (int row = top; row <= bottom; row++) {
+      uint8_t bits = pgm_read_byte(&glyph[row - y]);
+      uint16_t *out = &_fb[(size_t)row * C5_PANEL_W];
       for (int col = 0; col < C5_FONT_W; col++) {
+        const int px = gx + col;
+        if (px < 0 || px >= C5_PANEL_W) continue;
         // The leftmost pixel of the glyph is the top bit of the row.
-        plot(gx + col, y + row, ((bits >> (7 - col)) & 1) ? fg : bg);
+        out[px] = ((bits >> (7 - col)) & 1) ? fg : bg;
       }
     }
   }
+  markTouched(top, bottom);
   _frameReady = true;
 }
 
@@ -306,47 +355,57 @@ void C5Panel::flush(unsigned budgetMs) {
     _sendRow = 0;
     _sendPtr = _fbShow;
     _frameStart = esp_timer_get_time();
-    // Which bands are different from the ones the panel already has.
+    // Which ROWS are different from the ones the panel already has.
     //
     // The panel's own copy is the picture it was last sent, and that is
-    // what the difference is against.  The first frame has no such
-    // picture - the panel is blank - so everything is sent.
+    // what the difference is against.  Only the rows the drawing touched
+    // can have changed, so only those are compared - and a row that is
+    // the same needs no wire time at all.
+    //
+    // The first frame has no such picture - the panel is blank - so
+    // everything is sent.
     if (!_sentAnything) {
-      _dirty = 0xFFFFFFFF;
+      for (int y = 0; y < C5_PANEL_H; y++) _dirty[y] = true;
     } else {
-      _dirty = 0;
-      for (uint8_t b = 0; b < C5_PANEL_BAND_COUNT; b++) {
-        const size_t rows = min(C5_PANEL_BAND_ROWS, C5_PANEL_H - (int)b * C5_PANEL_BAND_ROWS);
-        const size_t bytes = rows * C5_PANEL_W * sizeof(uint16_t);
-        if (memcmp(&_fbShow[(size_t)b * C5_PANEL_BAND_ROWS * C5_PANEL_W],
-                   &_fbPanel[(size_t)b * C5_PANEL_BAND_ROWS * C5_PANEL_W], bytes) != 0) {
-          _dirty |= (uint32_t)1 << b;
-        }
+      for (int y = 0; y < C5_PANEL_H; y++) {
+        if (!_touched[y]) { _dirty[y] = false; continue; }
+        const size_t bytes = (size_t)C5_PANEL_W * sizeof(uint16_t);
+        _dirty[y] = memcmp(&_fbShow[(size_t)y * C5_PANEL_W],
+                           &_fbPanel[(size_t)y * C5_PANEL_W], bytes) != 0;
       }
     }
+    for (int y = 0; y < C5_PANEL_H; y++) _touched[y] = false;
   }
 
   const int64_t start = esp_timer_get_time();
   while (_sendRow < C5_PANEL_H) {
-    const int band = _sendRow / C5_PANEL_BAND_ROWS;
-    const int last = min(_sendRow + C5_PANEL_BAND_ROWS - 1, C5_PANEL_H - 1);
+    // Find the run of rows that need sending.
+    int first = _sendRow;
+    while (first < C5_PANEL_H && !_dirty[first]) first++;
+    if (first >= C5_PANEL_H) break;
 
-    // A band the panel already has is not sent again.
-    if (_dirty & ((uint32_t)1 << band)) {
-      const int64_t bandStart = esp_timer_get_time();
-      if (!sendRows(0, _sendRow, last, C5_PANEL_W - 1, _sendPtr)) {
-        _sending = false;
-        return;
-      }
-      // The panel has this band now, so the next frame compares against it.
-      const size_t rows = (size_t)(last - _sendRow + 1);
-      memcpy(&_fbPanel[(size_t)_sendRow * C5_PANEL_W],
-             &_fbShow[(size_t)_sendRow * C5_PANEL_W],
-             rows * C5_PANEL_W * sizeof(uint16_t));
-      _bandMs += (uint32_t)((esp_timer_get_time() - bandStart) / 1000);
-      _bandCount++;
+    // How many rows in this run.  The driver's conversion buffer holds one
+    // band's worth of pixels, so a run longer than that goes in pieces.
+    int last = first;
+    while (last + 1 < C5_PANEL_H && _dirty[last + 1]) last++;
+    const int bandLast = min(last, first + C5_PANEL_BAND_ROWS - 1);
+
+    const int64_t bandStart = esp_timer_get_time();
+    if (!sendRows(0, first, bandLast, C5_PANEL_W - 1, _sendPtr)) {
+      _sending = false;
+      return;
     }
-    _sendRow = last + 1;
+    // The panel has these rows now, so the next frame compares against them.
+    const size_t rows = (size_t)(bandLast - first + 1);
+    memcpy(&_fbPanel[(size_t)first * C5_PANEL_W],
+           &_fbShow[(size_t)first * C5_PANEL_W],
+           rows * C5_PANEL_W * sizeof(uint16_t));
+    _bandMs += (uint32_t)((esp_timer_get_time() - bandStart) / 1000);
+    _bandCount++;
+
+    // The rows that were sent are done with.
+    for (int y = first; y <= bandLast; y++) _dirty[y] = false;
+    _sendRow = bandLast + 1;
     if ((esp_timer_get_time() - start) / 1000 >= (int64_t)budgetMs) return;
   }
   _sending = false;

@@ -748,12 +748,32 @@ void C5RemoteUsermod::drawBars(const uint8_t *bands, int x, int y, int w, int h)
   }
 }
 
+// Wipe the area the page uses.
+//
+// The whole screen is 200 KB of writes into PSRAM and it is the most
+// expensive thing the board does - it takes longer than sending the
+// picture.  The pages do not use all of it, so only the rows they use are
+// wiped.
+//
+// The exception is a page CHANGE: the new page may draw where the old
+// one did not, so then the whole screen is wiped.
+void C5RemoteUsermod::clearPageArea() {
+  if (_drawnPage != _page) {
+    _drawnPage = _page;
+    _panel.clear(C5_BG);
+    return;
+  }
+  // The rows the pages draw their text in.  The meter and the footer are
+  // painted over completely by the pages that use them.
+  _panel.clearRows(0, 130, C5_BG);
+}
+
 void C5RemoteUsermod::drawSyncPage() {
   char line[64];
 
   // The page is wiped first: what was on it is not necessarily on it
   // now (a sender that went quiet leaves its line behind otherwise).
-  _panel.clear(C5_BG);
+  clearPageArea();
 
   // The sender table is written in the network's task and read here, so it
   // is read under its lock.
@@ -826,7 +846,7 @@ void C5RemoteUsermod::drawBeatPage() {
 
   // The page is wiped first: what was on it is not necessarily on it
   // now (a sender that went quiet leaves its line behind otherwise).
-  _panel.clear(C5_BG);
+  clearPageArea();
 
   if (!_p4Online) {
     drawHeader("BEAT", "no board");
@@ -876,7 +896,7 @@ void C5RemoteUsermod::drawBoardPage() {
 
   // The page is wiped first: what was on it is not necessarily on it
   // now (a sender that went quiet leaves its line behind otherwise).
-  _panel.clear(C5_BG);
+  clearPageArea();
 
   drawHeader("BOARD", _p4Online ? "linked" : "alone");
 
@@ -941,6 +961,7 @@ void C5RemoteUsermod::drawBoardPage() {
 // still flat grey, the panel never got its picture.
 
 void C5RemoteUsermod::drawTestPage() {
+  // The test page uses the whole screen, so it wipes all of it.
   _panel.clear(C5_COL_BLACK);
 
   // The colour bars: red, green, blue, white, black, cyan, magenta, yellow.
@@ -1029,7 +1050,7 @@ void C5RemoteUsermod::loop() {
 
   // The screen. Ten times a second is plenty, and the live parts (the
   // meter, the beat) are worth a quicker look than that.
-  if (_redraw || (now - _lastDraw >= 100)) {
+  if (_redraw || (now - _lastDraw >= 50)) {
     _lastDraw = now;
     _redraw = false;
     const int64_t drawStart = esp_timer_get_time();
@@ -1049,8 +1070,9 @@ void C5RemoteUsermod::loop() {
   static uint32_t lastPanelReport = 0;
   if (now - lastPanelReport >= 5000) {
     lastPanelReport = now;
-    USER_PRINTF("C5: the screen: %u ms to draw, %u ms to send (%u bands), %u frames\n",
-                (unsigned)_drawMs, (unsigned)_panel.lastFrameMs(),
+    USER_PRINTF("C5: the screen: %u ms to draw (%u clear), %u ms to send (%u bands), %u frames\n",
+                (unsigned)_drawMs, (unsigned)_panel.lastClearMs(),
+                (unsigned)_panel.lastFrameMs(),
                 (unsigned)_panel.lastBandCount(), (unsigned)_panel.frameCount());
   }
 }

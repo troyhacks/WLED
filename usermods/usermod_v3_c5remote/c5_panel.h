@@ -113,6 +113,13 @@ class C5Panel {
 
     // ---- drawing (into the frame buffer) ----
     void clear(uint16_t color);
+    // Clear a band of rows only.
+    //
+    // The pages do not use the whole screen - the middle of the SYNC page
+    // is empty - and a full clear is 200 KB of writes into PSRAM, which
+    // is the most expensive thing the board does.  Clearing only the rows
+    // that are used is a third of the work.
+    void clearRows(int y0, int y1, uint16_t color);
     void fillRect(int x, int y, int w, int h, uint16_t color);
     void drawRect(int x, int y, int w, int h, uint16_t color);
     void drawHLine(int x, int y, int w, uint16_t color);
@@ -140,10 +147,12 @@ class C5Panel {
     // busy in between, and that difference is worth knowing about.
     uint32_t lastBandMs() const { return _bandMs; }
     uint32_t lastBandCount() const { return _bandCount; }
+    uint32_t lastClearMs() const { return _clearMs; }
 
   private:
     void plot(int x, int y, uint16_t color);
     bool sendRows(int x, int y0, int y1, int x1, const uint16_t *fb);
+    void markTouched(int y0, int y1);
 
     esp_lcd_panel_handle_t _panel = nullptr;
     esp_lcd_panel_io_handle_t _io = nullptr;
@@ -158,11 +167,16 @@ class C5Panel {
     // What the PANEL has.
     //
     // The panel keeps what it was last given, so this is the picture it
-    // is showing now.  It is compared against the new picture band by
-    // band, and only the bands that differ are sent - a band that is the
-    // same needs no wire time at all.
+    // is showing now.  The new picture is compared with it ROW by row,
+    // and only the rows that differ go over the wire.
+    //
+    // A row is the finest grain that is worth it: the panel's window can
+    // be set to any run of rows, and a row is 320 pixels.  The meter
+    // moves by a pixel or two at a time, so sending whole bands for it
+    // would send most of the screen for nothing.
     uint16_t *_fbPanel = nullptr; // what the panel has, in PSRAM
-    uint32_t _dirty = 0;         // which bands differ, one bit each
+    bool _touched[C5_PANEL_H] = {false};  // rows the drawing touched
+    bool _dirty[C5_PANEL_H] = {false};    // rows that differ from the panel
     bool _sentAnything = false;  // has the panel been given a picture yet?
     bool _frameReady = false;    // there is a picture waiting to be sent
     bool _sending = false;       // and one is on its way
@@ -174,6 +188,7 @@ class C5Panel {
     uint32_t _frameCount = 0;   // how many frames have gone out
     uint32_t _bandMs = 0;       // how long the last frame's bands took
     uint32_t _bandCount = 0;    // and how many there were
+    uint32_t _clearMs = 0;      // how long the last clear took
 };
 
 #include "c5_panel.cpp"

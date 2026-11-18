@@ -151,6 +151,7 @@ class C5RemoteUsermod : public Usermod {
 
     // ---- the pages ----
     uint8_t _page = C5_PAGE_SYNC;
+    uint8_t _drawnPage = 0xFF;   // the page the screen last showed
     bool    _redraw = true;
     uint32_t _lastDraw = 0;
     uint32_t _drawMs = 0;      // how long the last drawing took
@@ -208,6 +209,7 @@ class C5RemoteUsermod : public Usermod {
     void drawBeatPage();
     void drawBoardPage();
     void drawTestPage();
+    void clearPageArea();
     void drawHeader(const char *title, const char *right);
     void drawFooter(const char *left, const char *right);
     void drawBars(const uint8_t *bands, int x, int y, int w, int h);
