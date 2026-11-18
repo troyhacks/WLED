@@ -27,7 +27,41 @@ so it listens for the audio sync packets and shows them.
 | `BEAT`   | the tempo of the board that has the tracker: the rate, the beat, the quality, the drift, and whether the clock is locked |
 | `BOARD`  | this board: the network, the uptime, the memory, the IMU and the expander's battery reading |
 
-## The buttons
+## The memory on this board
+
+The ESP32-C5 has 327 KB of RAM and everything counts, so two stacks are
+set in the build:
+
+* the **web task** (`CONFIG_ASYNC_TCP_STACK_SIZE`, 12 KB) - and note that
+  this is the macro the stack actually comes from.
+  `CONFIG_ASYNC_TCP_TASK_STACK_SIZE`, which every environment in this repo
+  sets, is used by nothing: AsyncTCP takes its stack from
+  `CONFIG_ASYNC_TCP_STACK_SIZE`, which defaults to 16 KB, and the
+  AudioReactive usermod's sanity check looks at the other one.  So on this
+  board the web task asked for 16 KB of *contiguous* internal RAM that the
+  heap did not have, and the web server never started ("begin(): failed to
+  start task").  Both are set now, and the check in the AudioReactive
+  usermod is satisfied by the same number.
+* the **analysis task** (`AR_TASK_STACK`, 8 KB) - it measures about 3.5 KB
+  in use, and the free part of it is published as
+  "analysis_task_stack_free" so the number can be looked at.
+
+The board has no LEDs, so it has no output bus either
+(`DEFAULT_LED_TYPE=TYPE_NONE`): an Art-Net sender on a board with nothing
+to send is just noise on the network and in the console.
+
+And the **JSON document** is 40 KB (`JSON_BUFFER_SIZE`) rather than the 54 KB
+the boards with more RAM use.  It is a static array in DRAM, and every byte
+of it comes out of the heap that the tasks have to be carved out of: with
+54 KB the heap had 15 KB in one piece, the web task took 12 KB of it, and
+the two UDP tasks - the audio sync's listener and the notifier's - had
+nothing left ("listen(): failed to start task").  Without a listener there
+is no audio sync, and without the web server there is no way to see the
+screen.
+
+The heap's *largest block* is the number that matters here, not the heap's
+free total: a task's stack has to be one piece.  The console prints it
+once a second, beside the IMU's numbers.
 
 Three on the chip, and up to eleven on the IO expander:
 
