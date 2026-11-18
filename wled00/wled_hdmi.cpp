@@ -695,12 +695,52 @@ static int hdmi_edid_best_mode() {
 // hdmi_setup() — boot-time init. Use 'm' in serial console to switch modes at runtime.
 // Call once from WLED::setup().
 // ============================================================
+
+// ============================================================
+// Is there an LT8912B bridge on the bus at all?
+//
+// The bridge is optional hardware: some boards have it soldered on, some get
+// it through the MIPI-DSI connector, and some have neither.  The firmware
+// does not know which, so it asks the bus before it builds anything on top
+// of it - a board without a bridge has to boot and run exactly like one with
+// it, just without the picture.
+//
+// The bridge answers at 0x48 (main register space); 0x49/0x4A are the other
+// register spaces of the same chip and 0x50 is its DDC/EDID proxy.
+// ============================================================
+bool hdmi_bridge_present() {
+  // The answer is asked once and kept: the bus handle lives on, and the
+  // decision (who owns LDO channel 3, whether a display stack is built at
+  // all) must not change halfway through the boot.
+  static int answered = -1;   // -1 = not asked yet
+  if (answered < 0) {
+    answered = 0;
+    // WLEDMM: the LT8912B bridge talks I2C at 0x48/0x49/0x4A (register spaces)
+    // and 0x50 (DDC EDID proxy) - on the same SDA/SCL pins as the audio codec.
+    // There can only be ONE bus on those pins: a second controller would take
+    // the pins away from the first one and both would stop working. So the
+    // bridge joins the board's shared bus.
+    if (!hdmi_i2c_bus) {
+      hdmi_i2c_bus = globalI2cBusEnsure((int8_t)HW_PIN_SDA, (int8_t)HW_PIN_SCL);
+    }
+    if (hdmi_i2c_bus) {
+      answered = (i2c_master_probe(hdmi_i2c_bus, LT8912B_IO_I2C_MAIN_ADDRESS, 50) == ESP_OK) ? 1 : 0;
+    }
+  }
+  return answered == 1;
+}
+
 void hdmi_setup() {
+  // The bridge is optional: ask the bus before we take the DSI PHY rail or
+  // build the display stack.  Without a bridge there is nothing to drive the
+  // MIPI lanes, and the board has to carry on as a plain LED board.
+  if (!hdmi_bridge_present()) return;
+
   // Power the MIPI DSI PHY first — chan_id=3 at 2.5V per ESP32-P4 datasheet.
   // Acquired once on boot and left on for the app lifetime (the IDF blocks
   // re-acquiring an adjustable channel that's already held, so mode switches
   // can't take/release this).  wled.cpp's chan_id=3 acquire (3.3V for GPIO>36)
-  // is skipped on HDMI builds via #ifndef WLEDMM_DISPLAY_MODE.
+  // is skipped when a bridge is present.
   static bool ldo_acquired = false;
   if (!ldo_acquired) {
     esp_ldo_channel_config_t ldo_cfg = { .chan_id = 3, .voltage_mv = 2500 };
@@ -710,20 +750,6 @@ void hdmi_setup() {
       USER_PRINTLN("HDMI: MIPI DSI PHY powered (LDO chan 3 @ 2.5V)");
     } else {
       USER_PRINTLN("HDMI: failed to acquire MIPI DSI PHY LDO (chan 3) — continuing without explicit power");
-    }
-  }
-
-  // WLEDMM: the LT8912B bridge talks I2C at 0x48/0x49/0x4A (register spaces)
-  // and 0x50 (DDC EDID proxy) - on the same SDA/SCL pins as the audio codec.
-  // There can only be ONE bus on those pins: a second controller would take
-  // the pins away from the first one and both would stop working. So the
-  // bridge joins the board's shared bus.
-  if (!hdmi_i2c_bus) {
-    USER_PRINTLN("HDMI: joining the board's I2C bus for LT8912B bridge");
-    hdmi_i2c_bus = globalI2cBusEnsure((int8_t)HW_PIN_SDA, (int8_t)HW_PIN_SCL);
-    if (!hdmi_i2c_bus) {
-      USER_PRINTLN("HDMI: no I2C bus available - HDMI disabled");
-      return;
     }
   }
 
@@ -758,6 +784,12 @@ void hdmi_print_mode_menu() {
 void hdmi_switch_mode(int mode) {
   if (mode < 0 || mode >= (int)HDMI_MODE_COUNT) {
     Serial.printf("HDMI: invalid mode %d\n", mode);
+    return;
+  }
+  // Without a bridge there is nothing to switch - building the stack would
+  // take the ESP_ERROR_CHECK on the panel init down with it.
+  if (!hdmi_bridge_present()) {
+    Serial.println("HDMI: no LT8912B bridge on the I2C bus - nothing to switch.");
     return;
   }
   Serial.printf("HDMI: switching to %d: %s\n", mode, hdmi_mode_names[mode]);

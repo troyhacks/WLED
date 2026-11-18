@@ -1795,6 +1795,18 @@ void WLED::setup() {
   // GPIO > 36 are not powered/configured for Arduino-ESP32 by default.
   // fix from https://esp32.com/viewtopic.php?t=45334 thanks to microfoundry
 
+  // WLEDMM: the HDMI bridge is optional hardware - some boards have one, some
+  // get one through the MIPI-DSI connector, some have neither.  Ask the bus
+  // once, here, because it decides who owns LDO channel 3: the bridge's
+  // display stack needs it at 2.5V for the MIPI DSI PHY, while a board
+  // without a bridge wants the 3.3V rail for the high GPIOs.
+  #if defined(WLEDMM_DISPLAY_MODE)
+  const bool hdmiChip = hdmi_bridge_present();
+  if (!hdmiChip) USER_PRINTLN("HDMI: no LT8912B bridge on the I2C bus - HDMI disabled");
+  #else
+  const bool hdmiChip = false;
+  #endif
+
   esp_ldo_channel_config_t config2 = {
     .chan_id = 3,  // discovered by trial and error
     .voltage_mv = 3300,
@@ -1817,23 +1829,23 @@ void WLED::setup() {
   };
 
   // Try to acquire both channels
-  #ifndef WLEDMM_DISPLAY_MODE
-  // WLEDMM: skip chan_id=3 acquire when HDMI is enabled — hdmi_setup() takes
-  // ownership of chan_id=3 at 2.5V for the MIPI DSI PHY, and the IDF blocks
-  // re-acquiring an adjustable channel that's already held.
-  if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 2 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 2");
-  }
+  // WLEDMM: skip the chan_id=3 acquire when a bridge is there — hdmi_setup()
+  // takes ownership of chan_id=3 at 2.5V for the MIPI DSI PHY, and the IDF
+  // blocks re-acquiring an adjustable channel that's already held.
+  if (!hdmiChip) {
+    if (esp_ldo_acquire_channel(&config2, &ldo2) == ESP_OK) {
+      DEBUG_PRINTLN("LDO index 2 acquired");
+    } else {
+      USER_PRINTLN("Failed to acquire LDO index 2");
+    }
 
 
-  if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
-    DEBUG_PRINTLN("LDO index 3 acquired");
-  } else {
-    USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
+    if (esp_ldo_acquire_channel(&config3, &ldo3) == ESP_OK) {
+      DEBUG_PRINTLN("LDO index 3 acquired");
+    } else {
+      USER_PRINTLN("Failed to acquire LDO index 3 - higher GPOIOs may be unavailable.");
+    }
   }
-  #endif // WLEDMM_DISPLAY_MODE
   #else
   // GPIO16/GPIO17 reserved for SPI RAM
   managed_pin_type pins[] = { {16, true}, {17, true} };

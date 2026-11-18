@@ -34,6 +34,7 @@ extern hdmi_edid_info_t hdmi_edid_info;
 void hdmi_setup();               // boot: init bridge and display
 void hdmi_print_mode_menu();     // print numbered mode list to Serial
 void hdmi_switch_mode(int mode); // runtime mode switch
+bool hdmi_bridge_present();      // is an LT8912B bridge on the I2C bus at all?
 #if defined(CONFIG_SOC_PPA_SUPPORTED)
 void hdmi_blit();                // loop: PPA scale-blit LED bus buffer → HDMI framebuffer
 #endif

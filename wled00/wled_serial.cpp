@@ -141,7 +141,9 @@ void handleSerial() {
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
   // HDMI mode switch: type 'm' to open interactive menu, then enter a number + Enter.
-  if (Serial.available() >= 1 && Serial.peek() == 'm') {
+  // Only a board with a bridge has modes to switch - without one the 'm' is
+  // left alone so it stays an ordinary command.
+  if (hdmi_bridge_present() && Serial.available() >= 1 && Serial.peek() == 'm') {
     Serial.read();  // consume 'm'
     // drain any trailing newline that arrived alongside the 'm'
     while (Serial.available() && (Serial.peek() == '\r' || Serial.peek() == '\n')) Serial.read();
