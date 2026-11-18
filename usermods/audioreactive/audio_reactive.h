@@ -151,6 +151,42 @@ static uint8_t arBandBuf[2][NUM_GEQ_CHANNELS] = {{0}};  // double buffer: arBand
 static uint8_t  arBandIdx = 0;                          // which buffer is published
 static uint8_t* arBandBytes = arBandBuf[0];               // the published buffer
 
+// ---------------------------------------------------------------------
+// WHO IS SENDING THE AUDIO SYNC PACKETS
+//
+// The sync packet carries no identity: 44 bytes, all of them audio. There
+// is no name in it, no MAC, no number. The only thing that says who sent
+// a packet is the address it came from.
+//
+// A receiver that only ever listened to one board never needed to know
+// that. A receiver that listens to a room - the ESP32-C5 remote, which is
+// exactly that - does, so the senders are kept apart here.
+//
+// The table is written in the packet callback (which runs in the network's
+// task) and read by the loop, so it is under a lock.
+//
+// It is at file scope so that the C5 remote - another usermod, in this same
+// translation unit - can read it without going through JSON.
+// ---------------------------------------------------------------------
+#define AR_SYNC_SENDER_MAX 8
+
+struct ArSyncSender {
+  uint32_t ip = 0;          // the address the packets come from
+  uint32_t packets = 0;     // how many packets have arrived from it
+  uint32_t bytes = 0;       // and how many bytes
+  uint32_t lastMs = 0;      // when the last one arrived
+  uint32_t rate = 0;        // packets a second, over the last second
+  uint32_t rateCount = 0;   // the packets counted in the current second
+  uint32_t rateMs = 0;      // when that second started
+  uint8_t  format = 0;      // 1 = v1, 2 = v2
+  uint8_t  level = 0;       // the level of the last packet
+  uint8_t  bands[16] = {0}; // the sixteen bands of the last packet
+};
+
+static ArSyncSender arSyncSenders[AR_SYNC_SENDER_MAX];
+static uint8_t       arSyncSenderCount = 0;
+static SemaphoreHandle_t arSyncSenderLock = nullptr;
+
 // The RTA set: 31 third-octave bands, published for the effects that draw an
 // analyser (the GEQ PPA effect's RTA mode) and for the serial plot.
 //
@@ -6155,6 +6191,14 @@ class AudioReactive : public Usermod {
     unsigned long last_UDPTime = 0;    // time of last valid UDP sound sync datapacket
     int receivedFormat = 0;            // last received UDP sound sync format - 0=none, 1=v1 (0.13.x), 2=v2 (0.14.x)
 
+    // ---------------------------------------------------------------------
+    // WHO IS SENDING
+    //
+    // The table itself is at file scope (see above): it is written in the
+    // packet callback and read by the loop, and by the ESP32-C5 remote,
+    // which is another usermod in this same translation unit.
+    // ---------------------------------------------------------------------
+
     // The transmit counters.
     //
     // The send is the one part of the sound sync that fails silently: the
@@ -6523,6 +6567,10 @@ class AudioReactive : public Usermod {
             this->incomingPacketSize = packet.length();
             this->hasNewData = true;
             this->last_UDPTime = millis();
+            // WHO sent it. The packet says nothing, so it is the address it
+            // came from - and that is worth keeping, because a receiver in
+            // a room hears more than one board.
+            arSyncSenderNote(packet.remoteIP(), packet.data(), packet.length(), this->last_UDPTime);
             });
 
           if (apActive && !(WLED_CONNECTED)) {
@@ -6534,6 +6582,68 @@ class AudioReactive : public Usermod {
           DEBUGSR_PRINTLN(F("AR connected(): UDP: FAILED to connect."));
         }
       }
+    }
+
+    // ---------------------------------------------------------------------
+    // Note a packet, and who it came from.
+    //
+    // The update happens in the network's task and the reading happens in
+    // WLED's loop, so the lock is not optional.
+    // ---------------------------------------------------------------------
+    void arSyncSenderNote(IPAddress ip, const uint8_t *data, size_t len, uint32_t now) {
+      if (arSyncSenderLock == nullptr) return;
+      if (xSemaphoreTake(arSyncSenderLock, pdMS_TO_TICKS(5)) != pdTRUE) return;
+
+      const uint32_t addr = (uint32_t)ip;
+      ArSyncSender *s = nullptr;
+      for (uint8_t i = 0; i < arSyncSenderCount; i++) {
+        if (arSyncSenders[i].ip == addr) { s = &arSyncSenders[i]; break; }
+      }
+      if (s == nullptr) {
+        if (arSyncSenderCount < AR_SYNC_SENDER_MAX) {
+          s = &arSyncSenders[arSyncSenderCount++];
+        } else {
+          // The table is full: the sender that has been quiet the longest
+          // gives up its place.
+          uint32_t oldest = 0xFFFFFFFF;
+          uint8_t idx = 0;
+          for (uint8_t i = 0; i < arSyncSenderCount; i++) {
+            if (arSyncSenders[i].lastMs < oldest) { oldest = arSyncSenders[i].lastMs; idx = i; }
+          }
+          s = &arSyncSenders[idx];
+        }
+        memset(s, 0, sizeof(*s));
+        s->ip = addr;
+        s->rateMs = now;
+      }
+
+      s->packets++;
+      s->bytes += len;
+      s->lastMs = now;
+      // The rate: the packets counted over the last second.
+      if (now - s->rateMs >= 1000) {
+        s->rate = s->rateCount;
+        s->rateCount = 0;
+        s->rateMs = now;
+      }
+      s->rateCount++;
+
+      // The format, and the payload of the last packet.
+      if (data != nullptr && len >= 6) {
+        if (memcmp(data, UDP_SYNC_HEADER, 6) == 0) {
+          s->format = 2;
+          if (len >= sizeof(audioSyncPacket)) {
+            audioSyncPacket p;
+            memcpy(&p, data, sizeof(p));
+            s->level = (uint8_t)constrain((int)p.sampleSmth, 0, 255);
+            memcpy(s->bands, p.bandBytes, 16);
+          }
+        } else if (memcmp(data, UDP_SYNC_HEADER_v1, 6) == 0) {
+          s->format = 1;
+        }
+      }
+
+      xSemaphoreGive(arSyncSenderLock);
     }
 
     // Which adapter the sound sync leaves by.
@@ -6911,6 +7021,11 @@ class AudioReactive : public Usermod {
     {
       disableSoundProcessing = true; // just to be sure
       if (!initDone) {
+        // The lock for the sender table. It is made here, once, and it is
+        // never given back: the table outlives any one configuration.
+        if (arSyncSenderLock == nullptr) {
+          arSyncSenderLock = xSemaphoreCreateMutex();
+        }
         // usermod exchangeable data
         // we will assign all usermod exportable data here as pointers to original variables or arrays and allocate memory for pointers
         um_data = new um_data_t;
@@ -8515,6 +8630,31 @@ class AudioReactive : public Usermod {
         // and not "live".
         u["live"]      = udpSyncConnected && (last_UDPTime != 0) &&
                           ((millis() - last_UDPTime) <= AUDIOSYNC_IDLE_MS);
+
+        // WHO IS SENDING.
+        //
+        // One entry per board that has sent a packet, with the address the
+        // packets come from - the packet itself carries no identity - and
+        // what that board's last packet said.
+        if (arSyncSenderLock != nullptr &&
+            xSemaphoreTake(arSyncSenderLock, pdMS_TO_TICKS(5)) == pdTRUE) {
+          JsonArray senders = u.createNestedArray("senders");
+          for (uint8_t i = 0; i < arSyncSenderCount; i++) {
+            const ArSyncSender &s = arSyncSenders[i];
+            JsonObject e = senders.createNestedObject();
+            IPAddress ip(s.ip);
+            e["ip"]        = ip.toString();
+            e["packets"]   = (unsigned long)s.packets;
+            e["bytes"]     = (unsigned long)s.bytes;
+            e["rate"]      = (unsigned long)s.rate;          // packets a second
+            e["last_ms_ago"] = s.lastMs ? (long)(millis() - s.lastMs) : -1L;
+            e["format"]    = s.format;
+            e["level"]     = s.level;
+            JsonArray bands = e.createNestedArray("bands");
+            for (uint8_t b = 0; b < 16; b++) bands.add(s.bands[b]);
+          }
+          xSemaphoreGive(arSyncSenderLock);
+        }
       }
     }
 
@@ -8988,6 +9128,67 @@ class AudioReactive : public Usermod {
      * readFromJsonState() can be used to receive data clients send to the /json/state part of the JSON API (state object).
      * Values in the state object may be modified by connected clients
      */
+    // ---------------------------------------------------------------------
+    // THE BUTTON ACTIONS THIS USORMOD OWNS.
+    //
+    // A button macro at or above WLED_BTN_ACTION_BASE is an action and not
+    // a preset number, and the usermods are asked which of them they own.
+    // These are the tempo's: mark the downbeat, lock the clock, let it go
+    // again, throw the grid away and find it again.
+    //
+    // The tempo actions are only claimed when there IS a tempo here. The
+    // tracker runs on the local audio, so a board that is only listening to
+    // the network has no grid of its own to lock - and that board (the
+    // ESP32-C5 remote) sends the action to the board that does have one.
+    // ---------------------------------------------------------------------
+    bool handleButtonAction(uint8_t action) override {
+      if (!initDone || !enabled) return false;
+      if (audioSource == nullptr || !audioSource->isInitialized()) return false;
+
+      switch (action) {
+        case WLED_ACT_TEMPO_DOWNBEAT:
+          arTempoRequestDownbeat(true);
+          USER_PRINTLN("AR: downbeat set - the beat sounding now is beat 1");
+          return true;
+        case WLED_ACT_TEMPO_CLEAR_DOWNBEAT:
+          arTempoRequestDownbeat(false);
+          USER_PRINTLN("AR: downbeat cleared - the numbering is the convention again");
+          return true;
+        case WLED_ACT_TEMPO_LOCK:
+          arTempoRequestHold(true);
+          USER_PRINTLN("AR: tempo locked - the grid stays, the estimate runs");
+          return true;
+        case WLED_ACT_TEMPO_UNLOCK:
+          arTempoRequestHold(false);
+          USER_PRINTLN("AR: tempo unlocked - the grid may move again");
+          return true;
+        case WLED_ACT_TEMPO_TOGGLE_LOCK:
+          arTempoRequestHold(!arTempoUserHold());
+          USER_PRINTF("AR: tempo %s\n", arTempoUserHold() ? "locked" : "unlocked");
+          return true;
+        case WLED_ACT_TEMPO_RELOCK:
+          arTempoRequestRelock();
+          USER_PRINTLN("AR: tempo re-locking - the grid is dropped and the next search starts over");
+          return true;
+        case WLED_ACT_TEMPO_SYNC:
+          arTempoRequestSync();
+          USER_PRINTLN("AR: tempo grid sync requested - the rate is not touched");
+          return true;
+        case WLED_ACT_TEMPO_MODE_DJ:
+        case WLED_ACT_TEMPO_MODE_PLAYLIST: {
+          const bool want = (action == WLED_ACT_TEMPO_MODE_PLAYLIST);
+          const ArLiveSettings s = arSettingsEdit([want](ArLiveSettings& st) {
+            st.tempoPlaylist = want;
+          });
+          doSerializeConfig = true;   // a mode that forgets itself is not a setting
+          USER_PRINTF("AR: tempo mode now %s\n", s.tempoPlaylist ? "PLAYLIST" : "DJ SET");
+          return true;
+        }
+        default:
+          return false;
+      }
+    }
+
     void readFromJsonState(JsonObject& root)
     {
       if (!initDone) return;  // prevent crash on boot applyPreset()
@@ -9139,6 +9340,17 @@ class AudioReactive : public Usermod {
           if (usermod[F("syncTempo")].as<bool>()) {
             arTempoRequestSync();
             USER_PRINTLN("AR: tempo grid sync requested - the rate is not touched");
+          }
+        }
+        // THE RE-LOCK, from a remote or a button.
+        //
+        // "Throw the grid away and find it again." It is what the serial
+        // console's 'q' does, and it is here so that a remote (the
+        // ESP32-C5) can ask for it over the network like everything else.
+        if (usermod[F("relockTempo")].is<bool>()) {
+          if (usermod[F("relockTempo")].as<bool>()) {
+            arTempoRequestRelock();
+            USER_PRINTLN("AR: tempo re-locking - the grid is dropped and the next search starts over");
           }
         }
         // THE MODE, from the info pane's button.
