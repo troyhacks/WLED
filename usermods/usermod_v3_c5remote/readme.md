@@ -266,3 +266,58 @@ library set, and the C5 uses the platform's own.  Building one after the
 other therefore replaces the framework, and the next build of the other
 board is a full one.
 
+## Zigbee
+
+The ESP32-C5 has an 802.15.4 radio, and the Arduino core **already ships
+the whole Zigbee stack for it** - the headers and the compiled libraries,
+ZBOSS and all of it, for the C5 (`espressif__esp-zigbee-lib` and
+`espressif__esp-zboss-lib` in the C5's library set, with `CONFIG_ZB_ENABLED`
+already on).
+
+It is a build flag and a partition scheme:
+
+```ini
+build_flags             = -DZIGBEE_MODE_ED     ;; or -DZIGBEE_MODE_ZCZR
+board_build.partitions  = zigbee_8MB.csv       ;; the .csv suffix is REQUIRED
+```
+
+and the library is the core's own `Zigbee` (in
+`framework-arduinoespressif32/libraries/Zigbee`), with 30 endpoint classes
+and 28 examples - an occupancy sensor, a contact switch, a range extender, a
+gateway.
+
+**What Home Assistant needs.**  The C5 cannot be a ZHA radio: there is no
+zigpy radio for the C5, and Espressif's own NCP path is not shipped in the
+Arduino core.  So there are two shapes:
+
+* **The C5 joins a network that already has a coordinator.**  The C5 is an
+  end device or a router; Home Assistant needs nothing new beyond the
+  coordinator you already have (ZHA with a stick, or Zigbee2MQTT).  This is
+  the small, certain experiment.
+* **The C5 is the coordinator.**  That means a ZBOSS NCP firmware (not the
+  Arduino library - the core has no NCP app) and Zigbee2MQTT's `zboss`
+  adapter, which calls itself experimental; the ZHA route is a HACS
+  integration that is broken on recent Home Assistant.  Do not start here.
+
+**The radio.**  Three things matter on this board:
+
+* The TX power comes up at **maximum** (+20 dBm), which with the WROOM-1's
+  2 dBi PCB antenna is over the European 20 dBm EIRP limit.  There is no
+  Kconfig for it; it takes a runtime `esp_ieee802154_set_txpower()`.  A
+  real deployment runs at 5-10 dBm.
+* There is **no external antenna**: the WROOM-1 has its PCB antenna, and
+  the 2.4 GHz path is shared by the Wi-Fi, the BLE and the 802.15.4.
+* **Coexistence is the real risk.**  Espressif rates Router + Wi-Fi as
+  "supported but performance is unstable" (C1) and End Device + Wi-Fi as
+  stable.  A board that is also serving WLED's Wi-Fi wants to be an **end
+  device**.
+
+**The partitions.**  Zigbee keeps its network storage in `zb_storage` and
+`zb_fct`, so a Zigbee build needs one of the `zigbee*` schemes - there is
+no 32 MB one, so either the 8 MB scheme is used and the rest of the flash
+is wasted, or a scheme with the Zigbee partitions is written for this
+board.  This board's own table (`tools/WLED_ESP32_32MB.csv`) has neither.
+
+**The size.**  Plenty of room: an end device with the Wi-Fi stack is
+36 KB of RAM and 650 KB of flash.
+
