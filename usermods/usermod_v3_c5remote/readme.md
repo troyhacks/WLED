@@ -23,9 +23,11 @@ so it listens for the audio sync packets and shows them.
 
 | Page     | What it shows                                                             |
 |----------|---------------------------------------------------------------------------|
-| `SYNC`   | the boards that are sending audio sync packets, how many packets each has sent, how fast, and how long ago - and the sixteen bands of the last packet as a meter |
+| `SYNC`   | the boards that are sending audio sync packets, how many packets each has sent, how fast, and how long ago - the sixteen bands of the last packet as a meter - and **the cadence of the packets**: how far apart they are, and whether they are spread out or arriving in bunches |
 | `BEAT`   | the tempo of the board that has the tracker: the rate, the beat, the quality, the drift, and whether the clock is locked |
 | `BOARD`  | this board: the network, the uptime, the memory, the IMU and the expander's battery reading |
+| `BUTTONS`| **the button debug**: every button the board has, what it is doing now, and a log of what has been pressed |
+| `TEST`   | the colour bars: whether the panel is being driven at all |
 
 ## The memory on this board
 
@@ -72,18 +74,59 @@ Three on the chip, and up to eleven on the IO expander:
 
 | Button                | Pin                | What it does                                    |
 |-----------------------|--------------------|-------------------------------------------------|
-| previous              | GPIO2              | the previous page; held: the previous preset on the other board |
-| next                  | GPIO3              | the next page; held: the next preset on the other board |
-| boot                  | GPIO28             | **mark the downbeat** on the other board; held: lock or unlock its clock |
-| IO4 .. IO14          | the IO expander    | ordinary WLED buttons - the debounce, the long press, the double press and the macros are all the core's |
+| KEY_L (previous)      | GPIO2              | the previous page; held: the previous preset on the other board |
+| KEY_R (next)          | GPIO3              | the next page; held: the next preset on the other board |
+| BOOT                  | GPIO28             | **mark the downbeat** on the other board; held: lock or unlock its clock |
+| IO4 .. IO14          | the IO expander    | ordinary WLED buttons - but the usermod's, not the core's (see below) |
 
-The expander's buttons are answered for by the usermod, so the core's own
-button logic does all of it. The core asks the usermods first:
+Those are the board's own names, from its schematic: **KEY_L** is GPIO2,
+**KEY_R** is GPIO3 and **BOOT** is GPIO28, each pulled up with 10K and
+pulling its pin down when it is pressed.
+
+The board has a fourth button, **PWR**, and it is not on a GPIO of this
+chip at all: it goes to the chip that latches the board's power on, so
+there is nothing to read and nothing to show for it.
+
+The three on the chip are the core's: it reads the pins and it does the
+debounce, the long press and the macros. The core asks the usermods first,
+though, so a usermod can take a button over:
 
 ```cpp
 // wled00/fcn_declare.h
-virtual bool buttonState(uint8_t index, bool &pressed) { return false; }
+virtual bool handleButton(uint8_t b) { return false; }
 ```
+
+### The button debug
+
+The `BUTTONS` page watches the buttons instead of acting on them: the
+core's buttons are **captured** while the page is up, so that pressing
+"next" does not leave the page before the press can be seen.  `BOOT` leaves
+the page and puts it back where it was.
+
+The page shows the board's own three buttons and the expander's eleven, a
+box each: green while the button is down, yellow once it has been held
+long enough for its long press.  Below them is a log of the last eight
+events - down, up, or held - with how long the button was down for and
+when it happened.
+
+The same log is in the JSON, for reading from a desk:
+
+```
+/json/ar  ->  C5Remote.buttons
+  { "down": 0, "presses": 3, "key_l": false, "key_r": false, "boot": false,
+    "log": ["KEY_R up 214 ms", "KEY_R down -", "BOOT up 96 ms"] }
+```
+
+Two things about the expander's eleven are worth knowing: they are the
+header's IO pins, so they are not buttons until something is wired to
+them; and the expander's inputs are read every 50 ms and have to be
+**stable three times** before they are believed, so a press on one of them
+is seen about 150 ms after it happens.
+
+The expander's buttons are **not** the core's, and cannot be: the core
+skips a button whose pin is negative before it asks the usermods about
+one, so the expander's buttons are read by the usermod itself, and their
+debounce, their long press and their macros are done there.
 
 ## The tempo actions
 
@@ -108,6 +151,13 @@ The AudioReactive usermod acts on them **when it owns a tempo tracker** -
 that is, when it has a local audio source. A board that only listens to the
 network has no grid of its own to lock, so it sends the action to the board
 that does: that is what the C5 remote does.
+
+**The macros are sixteen bits wide.** They used to be bytes, which is
+enough for a preset number and not enough for an action: 300 does not fit
+in a byte, so the value was truncated on the way in (304 became 48) and the
+action was read as a preset.  The action never happened, and the button
+looked like it did something else.  `runButtonMacro()` has taken a
+`uint16_t` all along; the arrays that feed it are now the same width.
 
 The same actions are available over the network, without a button:
 
@@ -143,6 +193,37 @@ and the remote turns the address into a name with WLED's own node list (the
 notifier's node-info packet carries the name and the address), falling back
 to the address itself.
 
+## The cadence of the packets
+
+The audio sync goes out at the **analysis rate**, so the packets should be
+evenly spaced - one every ten milliseconds or so.  Whether they are is
+worth knowing: a sender that bunches them up, or leaves gaps between
+them, is a sender whose timing is off, and that shows up as a jittery
+display long before it shows up as anything else.
+
+So the arrival times are kept, **where the packet arrives** - the packet
+callback, in the network's task.  That is the only place the arrival is
+known to the millisecond: a reader that sampled the packet counter would
+only see what happened between its samples, and at ten milliseconds a
+packet that is sampled every thirty is two packets and a gap.
+
+The times are kept per sender (the last 24 of them) and the gaps between
+them are published:
+
+```
+/json/ar  ->  AudioReactive.udp_sync.senders[].gaps
+  [ 10, 11, 9, 10, 12, 9, ... ]      the milliseconds between the packets
+```
+
+and the `SYNC` page draws them: a strip of the last quarter of a second
+with a tick for each packet.  Evenly spaced packets are an even comb of
+ticks; bunches are ticks that crowd together.  The line above it says
+what the gaps are - the average, the smallest and the largest - and
+whether they are `even` or `BUNCHED`.
+
+On the P4's own board, sending 94 packets a second, the gaps come out at
+9 to 15 ms with an average of about 10.6, and the comb is even.
+
 ## The presets, and the sync
 
 The remote changes the other board's presets over WLED's own API:
@@ -168,10 +249,24 @@ always been that way.
   GPIO6   LCD SCLK        GPIO27  I2C SDA
   GPIO7   LCD MOSI        GPIO26  I2C SCL
   GPIO5   LCD MISO        GPIO28  BOOT button (a button once it has booted)
-  GPIO4   LCD DC          GPIO2   previous button
-  GPIO8   LCD CS          GPIO3   next button
+  GPIO4   LCD DC          GPIO2   KEY_L (previous)
+  GPIO8   LCD CS          GPIO3   KEY_R (next)
   GPIO9   TF card CS      GPIO13/14  USB (D-/D+)
 ```
+
+**The schematic is the authority for all of this.** It is in the vendor's
+own repository, and it is a PDF with the text in it:
+
+```
+https://github.com/waveshareteam/ESP32-C5-LCD-2.73
+  schematic/ESP32-C5-LCD-2.73.pdf
+```
+
+It is where the button names come from - KEY_L on GPIO2, KEY_R on GPIO3,
+BOOT on GPIO28, each with a 10K pull-up and a switch to ground - and where
+PWR is found to be on the power latch's KEY input rather than on a GPIO of
+the ESP32-C5.  The demo code in the same repository is where the vendor's
+own pin assignments come from, but it does not use the buttons at all.
 
 The CH32V003 IO expander (0x24) holds the LCD's reset line (IO0) and the
 LCD's backlight (a PWM output), and its own IO4..IO14 are on the header.

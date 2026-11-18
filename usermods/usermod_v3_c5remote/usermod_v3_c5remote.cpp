@@ -324,57 +324,118 @@ void C5RemoteUsermod::setupButtons() {
   }
 }
 
-// The expander's buttons.
+// The buttons.
 //
-// The core asks every usermod whether it owns a button, and this one owns
-// the ones on the expander: they are read from the expander's input
-// register, not from a GPIO of this chip.
+// The core asks every usermod whether it owns a button.
 //
-// The core's own logic - the debounce, the long press, the double press
-// and the macros - is not used for them, because the core never gets
-// that far with a button that has no pin.  So the same logic is done
-// here, on the readings this usermod takes.
+// The three on the chip are the core's: it reads the pins, it debounces
+// them and it does the macros.  But on the button debug page they are the
+// ones being watched, and a "next" that left the page would take the
+// press with it - so the core leaves them alone there.
+//
+// The eleven on the expander are never even asked about: the core skips a
+// button whose pin is negative BEFORE it asks the usermods, and a pin is
+// what the expander's buttons do not have.  They are read in
+// pollButtons() instead, and their debounce, their long press and their
+// macros are done there.
 bool C5RemoteUsermod::handleButton(uint8_t index) {
-  if (!_ioexpOk) return false;
-  if (index < C5_EXPANDER_BTN_FIRST) return false;   // those are real pins
-  const uint8_t io = C5_IOEXP_BTN_FIRST + (index - C5_EXPANDER_BTN_FIRST);
-  if (io > C5_IOEXP_BTN_LAST) return false;
+  if (index >= C5_BTN_CHIP_COUNT) return false;   // the expander's are ours
+  // One of the three on the chip.
+  return (_page == C5_PAGE_BUTTONS);
+}
 
-  // The reading that is believed is the one that has not moved: an
-  // expander's input that floats would otherwise read as a button that
-  // is being pressed and let go.
-  const bool high = (_ioInputsStable & (uint16_t)(1U << io)) != 0;
-  const bool pressed = _ioActiveHigh ? high : !high;
-
-  // The state of each of the expander's buttons: when it was last seen
-  // pressed, and whether it has already fired.
-  static uint32_t pressedMs[C5_IOEXP_BTN_COUNT] = {0};
-  static bool     wasPressed[C5_IOEXP_BTN_COUNT] = {false};
-  static bool     fired[C5_IOEXP_BTN_COUNT] = {false};
-  static bool     longFired[C5_IOEXP_BTN_COUNT] = {false};
-  const uint8_t slot = io - C5_IOEXP_BTN_FIRST;
+// The buttons, read.
+//
+// The three on the chip are read here as well as by the core: the core
+// does the actions, and this is what says what was pressed.
+//
+// The eleven on the IO expander are read here alone.  They are IO4..IO14
+// on the header, so they are not buttons until something is wired to
+// them - but they are watched all the same, because a button that is not
+// seen is a button that cannot be debugged.
+void C5RemoteUsermod::pollButtons() {
   const uint32_t now = millis();
 
-  if (pressed && !wasPressed[slot]) {
-    // Just pressed: remember when, and let go of whatever came before.
-    pressedMs[slot] = now;
-    wasPressed[slot] = true;
-    fired[slot] = false;
-    longFired[slot] = false;
-  } else if (!pressed && wasPressed[slot]) {
-    // Just let go.  A short press fires the button; a long one already
-    // fired on its own, and fires nothing now.
-    wasPressed[slot] = false;
-    if (!fired[slot] && !longFired[slot]) {
-      fired[slot] = true;
-      if (_expanderAction[slot] != 0) performAction(_expanderAction[slot]);
-    }
-  } else if (pressed && !longFired[slot] && (now - pressedMs[slot]) >= C5_EXPANDER_LONG_MS) {
-    // Held down: the long press fires once, when the hold is long enough.
-    longFired[slot] = true;
-    if (_expanderLongAction[slot] != 0) performAction(_expanderLongAction[slot]);
+  // The three on the chip: KEY_L is GPIO2, KEY_R is GPIO3 and BOOT is
+  // GPIO28 - the board's schematic says so.  All three are pulled up with
+  // 10K and pull the pin down when they are pressed.
+  static const uint8_t chipPins[C5_BTN_CHIP_COUNT] = {
+    C5_BTN_PREV, C5_BTN_NEXT, C5_BTN_BOOT
+  };
+  for (uint8_t i = 0; i < C5_BTN_CHIP_COUNT; i++) {
+    noteButton(i, digitalRead(chipPins[i]) == LOW, now);
   }
-  return true;   // the core leaves this button alone
+
+  // The expander's - but only once its answer has been believed.  Until
+  // then its input register reads as zero, and zero is every button
+  // pressed (they are pulled up, and a press pulls them down).
+  if (!_ioexpOk || !_ioPrimed) return;
+  for (uint8_t io = C5_IOEXP_BTN_FIRST; io <= C5_IOEXP_BTN_LAST; io++) {
+    const bool high = (_ioInputsStable & (uint16_t)(1U << io)) != 0;
+    const bool pressed = _ioActiveHigh ? high : !high;
+    noteButton((uint8_t)(C5_BTN_CHIP_COUNT + io - C5_IOEXP_BTN_FIRST), pressed, now);
+  }
+}
+
+// One button, and what it is doing.
+//
+// The expander's buttons do their actions here: a short press fires when
+// the button comes up, and a long press fires when it has been held down
+// for long enough.  The three on the chip are the core's, and the core
+// does those.
+void C5RemoteUsermod::noteButton(uint8_t id, bool pressed, uint32_t now) {
+  const bool was = _btnDown[id];
+  if (pressed && !was) {
+    // Just pressed.
+    _btnDown[id] = true;
+    _btnDownSince[id] = now;
+    _btnHeldFired[id] = false;
+    _btnPresses++;
+    logButton(id, 0, 0, now);
+  } else if (!pressed && was) {
+    // Just let go.  A short press fires the action now; a long one
+    // already fired on its own, and fires nothing now.
+    _btnDown[id] = false;
+    const uint32_t held = now - _btnDownSince[id];
+    logButton(id, 1, held, now);
+    if (id >= C5_BTN_CHIP_COUNT) {
+      const uint8_t slot = (uint8_t)(id - C5_BTN_CHIP_COUNT);
+      if (!_btnHeldFired[id] && _expanderAction[slot] != 0) {
+        handleButtonAction(_expanderAction[slot]);
+      }
+    }
+    // The debug page is left with BOOT, and on the way UP: the core never
+    // saw the press (it was captured while the page was up), so it must
+    // not see the release either - or leaving the page would mark the
+    // downbeat on the other board.
+    if (_page == C5_PAGE_BUTTONS && id == 2) {
+      _page = _pageBeforeDebug;
+      _redraw = true;
+    }
+  } else if (pressed && !_btnHeldFired[id] &&
+             (now - _btnDownSince[id]) >= C5_EXPANDER_LONG_MS) {
+    // Held down: the long press fires once, when the hold is long enough.
+    _btnHeldFired[id] = true;
+    const uint32_t held = now - _btnDownSince[id];
+    logButton(id, 2, held, now);
+    if (id >= C5_BTN_CHIP_COUNT) {
+      const uint8_t slot = (uint8_t)(id - C5_BTN_CHIP_COUNT);
+      if (_expanderLongAction[slot] != 0) {
+        handleButtonAction(_expanderLongAction[slot]);
+      }
+    }
+  }
+}
+
+// One event, into the log.
+void C5RemoteUsermod::logButton(uint8_t id, uint8_t kind, uint32_t heldMs, uint32_t now) {
+  C5BtnEvent &e = _btnLog[_btnLogHead];
+  e.id = id;
+  e.kind = kind;
+  e.heldMs = heldMs;
+  e.ms = now;
+  _btnLogHead = (uint8_t)((_btnLogHead + 1) % C5_BTN_LOG_LEN);
+  if (_btnLogCount < C5_BTN_LOG_LEN) _btnLogCount++;
 }
 
 // The band the radio is allowed to use.
@@ -407,10 +468,36 @@ void C5RemoteUsermod::pollExpander() {
   if (!_ioexp.readInput(v)) return;
   if (v == _ioInputs) {
     if (_ioStableCount < 3) _ioStableCount++;
-    if (_ioStableCount >= 3) _ioInputsStable = v;
+    if (_ioStableCount >= 3) {
+      // The first answer is the one that says what the buttons are doing.
+      if (!_ioPrimed) {
+        _ioPrimed = true;
+        primeExpanderButtons(v);
+      }
+      _ioInputsStable = v;
+    }
   } else {
     _ioInputs = v;
     _ioStableCount = 0;
+  }
+}
+
+// The expander's first answer.
+//
+// Until the expander has answered, its input register reads as zero - and
+// zero means every button is pressed, because they are pulled up and a
+// press pulls them down.  So the first answer sets the buttons' states
+// without saying anything about them: a board that has just come up has
+// not had eleven button presses.
+void C5RemoteUsermod::primeExpanderButtons(uint16_t inputs) {
+  const uint32_t now = millis();
+  for (uint8_t io = C5_IOEXP_BTN_FIRST; io <= C5_IOEXP_BTN_LAST; io++) {
+    const bool high = (inputs & (uint16_t)(1U << io)) != 0;
+    const bool pressed = _ioActiveHigh ? high : !high;
+    const uint8_t id = (uint8_t)(C5_BTN_CHIP_COUNT + io - C5_IOEXP_BTN_FIRST);
+    _btnDown[id] = pressed;
+    _btnDownSince[id] = now;
+    _btnHeldFired[id] = false;
   }
 }
 
@@ -422,6 +509,17 @@ void C5RemoteUsermod::noteAction(const char *what) {
   _lastAction = what;
   _lastActionMs = millis();
   USER_PRINTF("C5: %s\n", what);
+  _redraw = true;
+}
+
+// The page, and where the debug page came from.
+//
+// The debug page is left with BOOT, and BOOT puts it back where it was:
+// the page before it is remembered when it is entered.
+void C5RemoteUsermod::setPage(uint8_t p) {
+  if (p >= C5_PAGE_COUNT || p == _page) return;
+  if (p == C5_PAGE_BUTTONS) _pageBeforeDebug = _page;
+  _page = p;
   _redraw = true;
 }
 
@@ -445,12 +543,10 @@ bool C5RemoteUsermod::performAction(uint16_t action) {
   switch (action) {
     // ---- this board's own ----
     case C5_ACT_PAGE_PREV:
-      _page = (_page + C5_PAGE_COUNT - 1) % C5_PAGE_COUNT;
-      _redraw = true;
+      setPage((uint8_t)((_page + C5_PAGE_COUNT - 1) % C5_PAGE_COUNT));
       return true;
     case C5_ACT_PAGE_NEXT:
-      _page = (_page + 1) % C5_PAGE_COUNT;
-      _redraw = true;
+      setPage((uint8_t)((_page + 1) % C5_PAGE_COUNT));
       return true;
 
     // ---- the board with the tracker ----
@@ -757,7 +853,7 @@ void C5RemoteUsermod::drawBars(const uint8_t *bands, int x, int y, int w, int h)
 //
 // The exception is a page CHANGE: the new page may draw where the old
 // one did not, so then the whole screen is wiped.
-void C5RemoteUsermod::clearPageArea() {
+void C5RemoteUsermod::clearPageArea(int y1) {
   if (_drawnPage != _page) {
     _drawnPage = _page;
     _panel.clear(C5_BG);
@@ -765,7 +861,7 @@ void C5RemoteUsermod::clearPageArea() {
   }
   // The rows the pages draw their text in.  The meter and the footer are
   // painted over completely by the pages that use them.
-  _panel.clearRows(0, 130, C5_BG);
+  _panel.clearRows(0, y1, C5_BG);
 }
 
 void C5RemoteUsermod::drawSyncPage() {
@@ -817,15 +913,76 @@ void C5RemoteUsermod::drawSyncPage() {
   uint8_t level = 0;
   bool haveBands = false;
   uint32_t newest = 0;
+  // When that board's packets arrived, for the cadence.
+  uint32_t times[AR_SYNC_CADENCE_LEN] = {0};
+  uint8_t  timeCount = 0;
+  uint32_t lastMs = 0;
   for (uint8_t i = 0; i < count; i++) {
     if (arSyncSenders[i].lastMs >= newest) {
       newest = arSyncSenders[i].lastMs;
       memcpy(bands, arSyncSenders[i].bands, sizeof(bands));
       level = arSyncSenders[i].level;
       haveBands = true;
+      // The arrival times, oldest first.
+      const ArSyncSender &s = arSyncSenders[i];
+      timeCount = s.timeCount;
+      lastMs = s.lastMs;
+      const uint8_t start = (uint8_t)((s.timeIdx + AR_SYNC_CADENCE_LEN - timeCount) % AR_SYNC_CADENCE_LEN);
+      for (uint8_t k = 0; k < timeCount; k++) {
+        times[k] = s.times[(start + k) % AR_SYNC_CADENCE_LEN];
+      }
     }
   }
   if (locked) xSemaphoreGive(arSyncSenderLock);
+
+  // The cadence: how the packets are spaced out.
+  //
+  // The audio sync goes out at the analysis rate, so the packets should be
+  // evenly spaced - one every ten milliseconds or so.  A sender that
+  // bunches them up (or leaves gaps between them) is a sender whose
+  // timing is off, and the arrivals are drawn as ticks on a strip of
+  // time: evenly spaced packets are an even comb of ticks, and bunches are
+  // ticks that crowd together.
+  const int cadTop = 112;
+  _panel.fillRect(0, cadTop, C5_PANEL_W, 60, C5_PANEL_BG);
+
+  uint32_t gapSum = 0, gapMin = 0xFFFFFFFF, gapMax = 0;
+  uint8_t gapCount = 0;
+  for (uint8_t k = 1; k < timeCount; k++) {
+    const uint32_t g = times[k] - times[k - 1];
+    gapSum += g;
+    if (g < gapMin) gapMin = g;
+    if (g > gapMax) gapMax = g;
+    gapCount++;
+  }
+  if (gapCount > 0) {
+    const uint32_t mean = gapSum / gapCount;
+    // Bunched: two packets within a few milliseconds of each other, or a
+    // gap a long way bigger than the rest.
+    const bool bunched = (gapMin < 4) || (gapMax > mean * 3);
+    snprintf_P(line, sizeof(line), PSTR("packets %lu ms apart  (%lu..%lu)  %s"),
+               (unsigned long)mean, (unsigned long)gapMin, (unsigned long)gapMax,
+               bunched ? "BUNCHED" : "even");
+    _panel.drawText(2, cadTop + 2, line, bunched ? C5_WARN : C5_TEXT, C5_PANEL_BG);
+  } else {
+    _panel.drawText(2, cadTop + 2, "no packets yet", C5_DIM, C5_PANEL_BG);
+  }
+
+  // The strip: the last quarter of a second, with a tick for each packet.
+  const int stripTop = cadTop + 14;
+  const int stripH = 30;
+  const uint32_t window = 250;   // ms
+  if (timeCount > 0) {
+    const uint32_t startMs = (lastMs > window) ? (lastMs - window) : 0;
+    _panel.drawHLine(4, stripTop + stripH, C5_PANEL_W - 8, C5_DIM);
+    for (uint8_t k = 0; k < timeCount; k++) {
+      if (times[k] < startMs) continue;   // older than the window
+      const int x = 4 + (int)(((times[k] - startMs) * (C5_PANEL_W - 8)) / window);
+      _panel.fillRect(x, stripTop, 2, stripH, C5_ACCENT);
+    }
+  }
+  _panel.drawText(2, stripTop + stripH + 4, "each tick is a packet, the last 250 ms",
+                   C5_DIM, C5_PANEL_BG);
 
   const int meterTop = C5_PANEL_H - 12 - 96;
   _panel.fillRect(0, meterTop - 2, C5_PANEL_W, 98, C5_PANEL_BG);
@@ -993,6 +1150,103 @@ void C5RemoteUsermod::drawTestPage() {
 }
 
 // ---------------------------------------------------------------------------
+// The button debug page
+// ---------------------------------------------------------------------------
+//
+// Every button the board has, and what it is doing.
+//
+// The three on the chip are the board's own - KEY_L, KEY_R and BOOT - and
+// the eleven on the IO expander are the header's IO pins.  The board's
+// fourth button, PWR, is the power latch: it goes to the chip that
+// latches the board's power on, and not to a GPIO of this one, so there is
+// nothing to read.
+//
+// The page watches the buttons instead of acting on them: the core's
+// buttons are captured while this page is up, so that pressing "next" does
+// not leave the page before the press can be seen.  BOOT leaves the page.
+
+static void c5BtnName(uint8_t id, char *buf, size_t len) {
+  if (id == 0)      snprintf(buf, len, "KEY_L");
+  else if (id == 1) snprintf(buf, len, "KEY_R");
+  else if (id == 2) snprintf(buf, len, "BOOT");
+  else              snprintf(buf, len, "IO%u", (unsigned)(C5_IOEXP_BTN_FIRST + id - C5_BTN_CHIP_COUNT));
+}
+
+void C5RemoteUsermod::drawButtonPage() {
+  char line[64];
+  char name[8];
+
+  // The page uses most of the screen, so it wipes most of it.
+  clearPageArea(270);
+
+  // How many are down at this moment.
+  uint8_t down = 0;
+  for (uint8_t i = 0; i < C5_BTN_TOTAL; i++) if (_btnDown[i]) down++;
+
+  drawHeader("BUTTONS", down ? "PRESSED" : "idle");
+
+  // The three on the board.
+  _panel.drawText(2, 18, "ON THE BOARD", C5_DIM, C5_BG);
+  static const char *chipNames[C5_BTN_CHIP_COUNT] = {"KEY_L", "KEY_R", "BOOT"};
+  static const char *chipPins[C5_BTN_CHIP_COUNT]  = {"GPIO2", "GPIO3", "GPIO28"};
+  for (uint8_t i = 0; i < C5_BTN_CHIP_COUNT; i++) {
+    const int x = 10 + i * 102;
+    const bool down_ = _btnDown[i];
+    const uint16_t bg = down_ ? (_btnHeldFired[i] ? C5_WARN : C5_GOOD) : C5_PANEL_BG;
+    const uint16_t fg = down_ ? C5_BG : C5_TEXT;
+    const uint16_t sub = down_ ? C5_BG : C5_DIM;
+    _panel.fillRect(x, 30, 94, 30, bg);
+    _panel.drawRect(x, 30, 94, 30, down_ ? bg : C5_DIM);
+    _panel.drawTextCentre(x + 47, 34, chipNames[i], fg, bg);
+    _panel.drawTextCentre(x + 47, 45, chipPins[i], sub, bg);
+  }
+  // The board's fourth button.  It is not on a GPIO of this chip, so there
+  // is nothing here to read.
+  _panel.drawText(2, 63, "PWR is the power latch - not on a GPIO", C5_DIM, C5_BG);
+
+  // The expander's: IO4..IO14, on the header.
+  _panel.drawText(2, 76, "ON THE EXPANDER (the header)", C5_DIM, C5_BG);
+  for (uint8_t i = 0; i < C5_IOEXP_BTN_COUNT; i++) {
+    const uint8_t id = (uint8_t)(C5_BTN_CHIP_COUNT + i);
+    const int col = i % 4;
+    const int row = i / 4;
+    const int x = 8 + col * 77;
+    const int y = 88 + row * 26;
+    const bool down_ = _btnDown[id];
+    const uint16_t bg = down_ ? (_btnHeldFired[id] ? C5_WARN : C5_GOOD) : C5_PANEL_BG;
+    const uint16_t fg = down_ ? C5_BG : C5_TEXT;
+    _panel.fillRect(x, y, 71, 24, bg);
+    _panel.drawRect(x, y, 71, 24, down_ ? bg : C5_DIM);
+    snprintf_P(name, sizeof(name), PSTR("IO%u"), (unsigned)(C5_IOEXP_BTN_FIRST + i));
+    _panel.drawTextCentre(x + 35, y + 8, name, fg, bg);
+  }
+  // The expander's input register in one line: which pins are high.
+  snprintf_P(line, sizeof(line), PSTR("the expander's inputs: 0x%04X"), (unsigned)_ioInputsStable);
+  _panel.drawText(2, 168, line, C5_DIM, C5_BG);
+
+  // The log: the last few things that happened.
+  _panel.drawText(2, 178, "THE LOG", C5_DIM, C5_BG);
+  for (uint8_t i = 0; i < C5_BTN_LOG_LEN && i < _btnLogCount; i++) {
+    const uint8_t idx = (uint8_t)((_btnLogHead + C5_BTN_LOG_LEN - 1 - i) % C5_BTN_LOG_LEN);
+    const C5BtnEvent &e = _btnLog[idx];
+    c5BtnName(e.id, name, sizeof(name));
+    const char *kind = (e.kind == 0) ? "down" : (e.kind == 1) ? "up" : "held";
+    char dur[8];
+    if (e.kind == 0) snprintf(dur, sizeof(dur), "-");
+    else             snprintf(dur, sizeof(dur), "%lu ms", (unsigned long)e.heldMs);
+    snprintf_P(line, sizeof(line), PSTR("%-6s %-5s %-6s %u:%02u.%u"),
+               name, kind, dur,
+               (unsigned)(e.ms / 60000), (unsigned)((e.ms / 1000) % 60),
+               (unsigned)((e.ms / 100) % 10));
+    _panel.drawText(2, 190 + i * 10, line, i == 0 ? C5_ACCENT : C5_DIM, C5_BG);
+  }
+
+  // The footer.
+  snprintf_P(line, sizeof(line), PSTR("%lu presses"), (unsigned long)_btnPresses);
+  drawFooter("BOOT leaves the page", line);
+}
+
+// ---------------------------------------------------------------------------
 // The loop
 // ---------------------------------------------------------------------------
 void C5RemoteUsermod::loop() {
@@ -1013,6 +1267,15 @@ void C5RemoteUsermod::loop() {
   if (now - lastExpander >= 50) {
     lastExpander = now;
     pollExpander();
+  }
+
+  // The buttons.  Often enough to be quick, and no more often than the
+  // expander is read - the expander's own inputs cannot change faster
+  // than that, so reading them faster would only cost time.
+  static uint32_t lastButtons = 0;
+  if (now - lastButtons >= 10) {
+    lastButtons = now;
+    pollButtons();
   }
 
 #if defined(USERMOD_ZIGBEE)
@@ -1058,6 +1321,7 @@ void C5RemoteUsermod::loop() {
       case C5_PAGE_SYNC:  drawSyncPage(); break;
       case C5_PAGE_BEAT:  drawBeatPage(); break;
       case C5_PAGE_TEST:  drawTestPage(); break;
+      case C5_PAGE_BUTTONS: drawButtonPage(); break;
       default:            drawBoardPage(); break;
     }
     _drawMs = (uint32_t)((esp_timer_get_time() - drawStart) / 1000);
@@ -1116,7 +1380,7 @@ void C5RemoteUsermod::readFromJsonState(JsonObject &obj) {
   }
   if (me["page"].is<int>()) {
     const int p = me["page"];
-    if (p >= 0 && p < C5_PAGE_COUNT) { _page = (uint8_t)p; _redraw = true; }
+    if (p >= 0 && p < C5_PAGE_COUNT) setPage((uint8_t)p);
   }
 
   // An ACTION, by name.
@@ -1165,6 +1429,29 @@ void C5RemoteUsermod::addToJsonAr(JsonObject &obj) {
   me["expander"]  = _ioexpOk;
   me["imu"]       = _imuOk;
   me["expander_inputs"] = (unsigned)_ioInputsStable;
+  // The buttons: what is pressed at this moment, and what has happened.
+  //
+  // The screen shows the same thing, but this is the version that can be
+  // read from a desk.
+  JsonObject bt = me.createNestedObject("buttons");
+  uint8_t down = 0;
+  for (uint8_t i = 0; i < C5_BTN_TOTAL; i++) if (_btnDown[i]) down++;
+  bt["down"]    = down;
+  bt["presses"] = (unsigned long)_btnPresses;
+  bt["key_l"]   = _btnDown[0];
+  bt["key_r"]   = _btnDown[1];
+  bt["boot"]    = _btnDown[2];
+  JsonArray bl = bt.createNestedArray("log");
+  char name[8];
+  char entry[40];
+  for (uint8_t i = 0; i < C5_BTN_LOG_LEN && i < _btnLogCount; i++) {
+    const uint8_t idx = (uint8_t)((_btnLogHead + C5_BTN_LOG_LEN - 1 - i) % C5_BTN_LOG_LEN);
+    const C5BtnEvent &e = _btnLog[idx];
+    c5BtnName(e.id, name, sizeof(name));
+    const char *kind = (e.kind == 0) ? "down" : (e.kind == 1) ? "up" : "held";
+    snprintf_P(entry, sizeof(entry), PSTR("%s %s %lu ms"), name, kind, (unsigned long)e.heldMs);
+    bl.add(entry);
+  }
 }
 
 void C5RemoteUsermod::addToConfig(JsonObject &obj) {

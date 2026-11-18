@@ -89,8 +89,9 @@ static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP
 #define C5_PAGE_SYNC  0
 #define C5_PAGE_BEAT  1
 #define C5_PAGE_BOARD 2
-#define C5_PAGE_TEST  3
-#define C5_PAGE_COUNT 4
+#define C5_PAGE_BUTTONS 3
+#define C5_PAGE_TEST  4
+#define C5_PAGE_COUNT 5
 
 // The first button index the expander's buttons take.  The three on the
 // chip come first.
@@ -104,6 +105,24 @@ static ZigbeeOccupancySensor c5ZigbeeMotion = ZigbeeOccupancySensor(C5_ZIGBEE_EP
 // How long a button on the expander has to be held down for its long
 // press to fire.
 #define C5_EXPANDER_LONG_MS 800
+
+// The buttons, for the debug.
+//
+// The three on the chip are the board's own: KEY_L is GPIO2, KEY_R is
+// GPIO3 and BOOT is GPIO28 - the board's schematic says so, and all three
+// are pulled up with 10K and pull the pin down when they are pressed.
+//
+// The board's fourth button, PWR, is NOT on a GPIO of this chip: it goes
+// to the chip that latches the board's power on, so there is nothing to
+// read and nothing to show.
+//
+// The eleven on the IO expander (IO4..IO14) are on the header, so they are
+// not buttons until something is wired to them.
+#define C5_BTN_CHIP_COUNT 3
+#define C5_BTN_TOTAL (C5_BTN_CHIP_COUNT + C5_IOEXP_BTN_COUNT)
+
+// How many of the last events the log keeps.
+#define C5_BTN_LOG_LEN 8
 
 class C5RemoteUsermod : public Usermod {
   public:
@@ -140,6 +159,7 @@ class C5RemoteUsermod : public Usermod {
     uint16_t     _ioInputs = 0;      // the expander's input register
     uint16_t     _ioInputsStable = 0; // and the same, once it has settled
     uint8_t      _ioStableCount = 0;
+    bool         _ioPrimed = false;  // has the expander's answer been believed yet?
     bool         _ioActiveHigh = false;  // are the expander's buttons active high?
     // What each of the expander's buttons does: a short press, and a long
     // one.  The board's header has buttons on it, and what they do is the
@@ -184,6 +204,30 @@ class C5RemoteUsermod : public Usermod {
     uint16_t _pendingAction = 0;     // an action asked for elsewhere
     bool    _pendingActionSet = false;
 
+    // ---- the button debug ----
+    //
+    // Every button is watched, not just the ones that do something: the
+    // point of the debug is to see what the board sees.
+    //
+    // The three on the chip are read here as well as by the core - the
+    // core does the actions, and this is what says what was pressed.  The
+    // eleven on the expander are read here ALONE: the core skips a button
+    // whose pin is negative, so it never gets as far as asking about one.
+    struct C5BtnEvent {
+      uint8_t  id = 0;      // 0..2 the chip's, 3.. the expander's
+      uint8_t  kind = 0;    // 0 = down, 1 = up, 2 = held
+      uint32_t heldMs = 0;  // how long it was held
+      uint32_t ms = 0;      // when it happened
+    };
+    bool       _btnDown[C5_BTN_TOTAL] = {false};
+    uint32_t   _btnDownSince[C5_BTN_TOTAL] = {0};
+    bool       _btnHeldFired[C5_BTN_TOTAL] = {false};
+    C5BtnEvent _btnLog[C5_BTN_LOG_LEN];
+    uint8_t    _btnLogHead = 0;    // where the next one goes
+    uint8_t    _btnLogCount = 0;  // how many there are
+    uint32_t   _btnPresses = 0;    // and how many presses there have been
+    uint8_t    _pageBeforeDebug = C5_PAGE_SYNC;
+
     // ---- the Zigbee radio ----
 #if defined(USERMOD_ZIGBEE)
     bool    _zigbeeStarted = false;
@@ -209,11 +253,18 @@ class C5RemoteUsermod : public Usermod {
     void drawBeatPage();
     void drawBoardPage();
     void drawTestPage();
-    void clearPageArea();
+    void drawButtonPage();
+    void clearPageArea(int y1 = 130);
     void drawHeader(const char *title, const char *right);
     void drawFooter(const char *left, const char *right);
     void drawBars(const uint8_t *bands, int x, int y, int w, int h);
     void noteAction(const char *what);
+    void setPage(uint8_t p);
+    // ---- the buttons ----
+    void pollButtons();
+    void noteButton(uint8_t id, bool pressed, uint32_t now);
+    void logButton(uint8_t id, uint8_t kind, uint32_t heldMs, uint32_t now);
+    void primeExpanderButtons(uint16_t inputs);
 };
 
 #include "usermod_v3_c5remote.cpp"
