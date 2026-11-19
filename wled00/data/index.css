@@ -993,6 +993,32 @@ input[type=range]::-moz-range-thumb {
 	background-color: var(--c-tbh);
 }
 
+/* The song's phrase: a checkbox, because it is a choice and not an
+   action.  It only appears when the beat comes from a deck, because only a
+   deck knows the song's structure. */
+#tempowrap .tchk {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	font-size: 10px;
+	letter-spacing: 0.5px;
+	color: var(--c-c);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+#tempowrap .tchk input {
+	margin: 0;
+	width: 12px;
+	height: 12px;
+	cursor: pointer;
+	accent-color: var(--c-f);
+}
+
+#tempowrap .tchk.on {
+	color: var(--c-f);
+}
+
 /* The panel CENTRED in the title bar.
  *
  * Above 1250px there is room for the panel to sit in the MIDDLE of the

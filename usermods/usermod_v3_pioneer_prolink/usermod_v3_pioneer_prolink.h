@@ -23,6 +23,9 @@
 #include <vector>
 #include "fcn_declare.h"
 #include "esp_heap_caps.h"
+// The song's phrase is published to the CORE, so the board's clock and the
+// effects can use it without knowing that a deck is where it came from.
+#include "ar_publish.h"
 
 // --- Protocol Constants ---
 static constexpr uint16_t PORT_ANNOUNCE = 50000;
@@ -249,6 +252,34 @@ private:
   // Phrase Storage
   std::vector<PhraseEntry> phrases;
   uint32_t lastAnalyzedTrackId = 0;
+  // The mood the phrases were read with: the Pioneer's kinds are relative
+  // to it, so the same kind is a chorus in one mood and a verse in another.
+  uint16_t phraseMood = 0;
+  // The published phrase's generation - bumped when the phrase changes, so
+  // a reader can see that it has.
+  uint32_t phraseGeneration = 0;
+  // ---- the deck's beat count, and how old it is ----------------------------
+  //
+  // The deck's "beats elapsed" rides the STATUS packet, and the count in it
+  // is the beat the deck was on when it SENT it - so by the time the board
+  // reads it, it is a beat or two old.  How old is what the phrase needs:
+  // the phrase's start beat is a beat number in the same numbering, and
+  // the difference between the two is how far into the phrase the music
+  // is.
+  //
+  // The beat in the bar says the same thing MODULO FOUR, and it cannot say
+  // more than that: a count that is four beats old looks exactly like a
+  // fresh one, because four beats is a whole bar.  So the count can be
+  // right and the phrase still be a bar out - which is what the downbeat
+  // mark was doing.
+  //
+  // The BEAT packets arrive on every beat, so counting them says the age
+  // EXACTLY: the beats the board has seen since the count arrived are the
+  // beats since the count was sent.  The phase says the age modulo four,
+  // and the two together say the age exactly.
+  volatile uint32_t beatsAnnounced = 0;   // the beats the board has seen
+  volatile uint32_t countBeatsAt = 0;     // beatsAnnounced when the count arrived
+  volatile uint32_t countValue = 0;       // the deck's count from that packet
 
   // State Machine
   FetchState fetchState = IDLE;
@@ -758,6 +789,12 @@ private:
       linkState.beatsElapsed = ((uint32_t)data[0xA0] << 24) | ((uint32_t)data[0xA1] << 16) |
         ((uint32_t)data[0xA2] << 8) | data[0xA3];
       prolink_beats_elapsed_public = linkState.beatsElapsed;
+      // The count's AGE, in beats, is measured from here - see the member's
+      // comment.  It is the number of beats the board has seen since this
+      // packet arrived, which is how many beats have passed since the deck
+      // wrote the count down.
+      countValue = linkState.beatsElapsed;
+      countBeatsAt = beatsAnnounced;
     }
 
     // Track duration (0x14C-0x14F)
@@ -831,6 +868,9 @@ private:
     if (linkState.beatNumber != lastPacketBeatNo &&
         linkState.beatNumber >= 1 && linkState.beatNumber <= 4) {
       lastPacketBeatNo = linkState.beatNumber;
+      // A beat was announced.  Counting them is how the deck's count's age
+      // is measured exactly - see the member's comment.
+      beatsAnnounced++;
       prolinkClockPacked = (millis() & PROLINK_CLOCK_ANC_MASK) |
                            ((uint32_t)(linkState.beatNumber - 1u) << PROLINK_CLOCK_POS_SHIFT);
     }
@@ -936,6 +976,35 @@ private:
     }
   }
 
+  // The phrase's TYPE, on the board's own vocabulary.
+  //
+  // The Pioneer's kinds are relative to the mood: kind 5 is a chorus in a
+  // high-mood track and a verse in a mid-mood one.  The board's types are
+  // not relative to anything, so the mood decides what a kind means.
+  uint8_t mapPhraseKind(uint16_t kind, uint16_t mood) {
+    if (mood == 1) {
+      switch (kind) {
+      case 1: return AR_PHRASE_INTRO;
+      case 2: return AR_PHRASE_UP;
+      case 3: return AR_PHRASE_DOWN;
+      case 5: return AR_PHRASE_CHORUS;
+      case 6: return AR_PHRASE_OUTRO;
+      default: return AR_PHRASE_UNKNOWN;
+      }
+    }
+    if (mood == 2 || mood == 3) {
+      switch (kind) {
+      case 1: return AR_PHRASE_INTRO;
+      case 2: case 3: case 4: case 5: case 6: case 7: return AR_PHRASE_VERSE;
+      case 8: return AR_PHRASE_BRIDGE;
+      case 9: return AR_PHRASE_CHORUS;
+      case 10: return AR_PHRASE_OUTRO;
+      default: return AR_PHRASE_UNKNOWN;
+      }
+    }
+    return AR_PHRASE_UNKNOWN;
+  }
+
   String getPhraseName(uint16_t kind, uint16_t mood, uint8_t k1, uint8_t k2, uint8_t k3) {
     if (mood == 1 || mood == 0) {
       switch (kind) {
@@ -998,6 +1067,7 @@ private:
     }
 
     uint16_t mood = (head[14] << 8) | head[15];
+    phraseMood = mood;
     switch (mood) {
     case 1: prolink_mood_public = "High"; break;
     case 2: prolink_mood_public = "Mid"; break;
@@ -1678,7 +1748,31 @@ private:
 
     // Fix volatile issue: cast to non-volatile for comparison
     uint32_t beatsElapsed = linkState.beatsElapsed;
-    uint32_t currentBeat = beatsElapsed > 0 ? beatsElapsed : 1;
+
+    // The deck's CURRENT beat, exactly.  The count alone is a beat or two
+    // old - it is the deck's beat at the moment it sent the packet - and
+    // the beat in the bar cannot say by how much, because four beats is a
+    // whole bar and a count that is four beats old looks exactly like a
+    // fresh one.  The beats the board has seen since the count arrived
+    // say it exactly; the phase settles the last beat.
+    //
+    // It is used for the PHRASE LOOKUP as well, so the phrase boundary is
+    // found on the beat it is on and not a beat or two late.
+    uint32_t currentBeat = beatsElapsed;
+    {
+      uint32_t count = countValue;
+      uint32_t age = beatsAnnounced - countBeatsAt;
+      uint32_t countBeat = ((count > 0u ? count - 1u : 0u) & 3u) + 1u;
+      uint32_t nowBeat  = (prolink_beat_public >= 1 && prolink_beat_public <= 4)
+                        ? prolink_beat_public : countBeat;
+      const uint32_t phase = (nowBeat + 4u - countBeat) & 3u;
+      if ((age & 3u) != phase) {
+        if (((age + 1u) & 3u) == phase)             age += 1u;
+        else if (age > 0u && ((age - 1u) & 3u) == phase) age -= 1u;
+      }
+      currentBeat = count + age;
+    }
+    if (currentBeat == 0u) currentBeat = 1u;
 
     if (prolink_total_beats > 0) {
       prolink_track_progress = min((float)currentBeat / (float)prolink_total_beats, 1.0f);
@@ -1766,6 +1860,10 @@ private:
         previousEffectPresetId = newPreset;
       }
     }
+    // A new phrase is a new generation, so a reader can see that the
+    // published phrase has changed - and the board's clock rebases its
+    // counters on it.
+    if (activeIdx != previousPhraseIdx) phraseGeneration++;
     previousPhraseIdx = activeIdx;
 
     if (activeIdx != -1) {
@@ -1786,11 +1884,39 @@ private:
       if (phrases[activeIdx].count > 0) {
         prolink_phrase_progress_public = totalProgress / (float)phrases[activeIdx].count;
       }
+
+      // ---- publish it to the core --------------------------------------
+      //
+      // The board's clock uses the phrase: the phrase's START is the
+      // downbeat, so the bar the music is in starts there, and the
+      // counters run from it.
+      //
+      // The beat it publishes is the deck's CURRENT beat, and it is
+      // EXACT - it is worked out at the top of this function, where the
+      // phrase lookup uses it too.
+      {
+        ArSongPhrase ph;
+        ph.index       = activeIdx;
+        ph.startBeat   = phrases[activeIdx].startBeat;
+        ph.beatCount   = phrases[activeIdx].count;
+        ph.kind        = mapPhraseKind(phrases[activeIdx].kind, phraseMood);
+        ph.fill        = phrases[activeIdx].isFill ? 1 : 0;
+        ph.generation  = phraseGeneration;
+        strlcpy(ph.name, phrases[activeIdx].label.c_str(), sizeof(ph.name));
+
+        // The deck's CURRENT beat, exactly - it is worked out at the top of
+        // this function, where the phrase lookup uses it too.
+        ph.currentBeat = currentBeat;
+
+        arPublishSongPhrase(ph);
+      }
     } else {
       prolink_phrase_index_public = -1;
       prolink_phrase_name_public = "Gap/End";
       prolink_phrase_beats_public = 0;
       prolink_phrase_progress_public = 0.0f;
+      // There is no phrase, so there is none to publish.
+      arResetSongPhrase();
     }
   }
 

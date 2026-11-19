@@ -544,6 +544,12 @@ struct BeatClock {
   // song, and it rides the status stream, which is not the beat rate, so
   // its bar boundary can be a beat away from the phase's.
   uint32_t barCount;
+  // The SONG'S PHRASE: the structure the music is in, when the source
+  // knows it.  The FILL is a flag on top of the phrase's type, not a type
+  // of its own.
+  uint8_t  phraseOn;      // 1 when there is a phrase
+  uint8_t  phraseFill;    // 1 when the phrase is a FILL
+  uint8_t  phraseKind;    // the phrase's TYPE
 };
 
 static BeatClock beatClock(bool ignoreProLink = false) {
@@ -564,6 +570,9 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.downbeatKnown = b.downbeatKnown;
   c.fromProLink   = b.fromProLink;
   c.beatCount     = b.beatCount;
+  c.phraseOn      = b.phraseOn;
+  c.phraseFill    = b.phraseFill;
+  c.phraseKind    = b.phraseKind;
   return c;
 }
 
@@ -1837,7 +1846,12 @@ uint16_t mode_beat_sweep(void) {
   const bool loopMode = SEGMENT.check2;
   // A pass is one BEAT or one BAR.  The light crosses the strip in a pass
   // and turns round at the end of it, so a bounce is two passes.
-  const bool perBeat = SEGMENT.check3;
+  //
+  // A FILL is one beat a pass, whatever the checkbox says: a fill is four
+  // beats of something happening, and the sweep that runs on the bar would
+  // cross the strip once in all of it.  The checkbox is the user's own
+  // choice, and it comes back when the fill is over.
+  const bool perBeat = SEGMENT.check3 || (clk.live && clk.phraseFill);
 
   float pos;
   int dir;

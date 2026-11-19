@@ -175,6 +175,7 @@ struct ArTempoFrame {
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
+  uint8_t  songPhrase;      // 1 when the downbeat comes from the SONG's phrase
   // The ProLink OVERRIDE: the user marked a downbeat while the deck was
   // playing, so the deck's numbering is rotated to the beat they marked.
   // It is an OFFSET from the deck's packets - the deck's tempo and phase
@@ -231,6 +232,24 @@ struct ArBeatSource {
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   uint8_t  deckOverride;    // 1 when the user's mark overrides the DECK's numbering
+  // The MARK: the beat that is beat one.
+  //
+  // It is the user's own mark, or the song's phrase - both of them say
+  // where the bar starts, and the phrase wins when the user has asked for
+  // it.  The phrase's start is in the PAST, so the mark carries how far
+  // back it is.
+  uint8_t  markOn;          // 1 when a mark is in force
+  uint8_t  markBeat;        // the deck's beat (0..3) that is beat one
+  uint32_t markBack;        // the whole beats from now back to the marked beat
+  uint32_t markAt;          // the source's count at the marked beat
+  uint32_t markGen;         // bumped when the mark changes
+  // The PHRASE: the song's structure, when there is one.
+  uint8_t  phraseOn;        // 1 when there is a phrase
+  uint8_t  phraseFill;      // 1 when the phrase is a FILL
+  uint8_t  phraseKind;      // the phrase's TYPE - an ArPhraseKind
+  int32_t  phraseIndex;     // the phrase's number in the track
+  uint32_t phraseIn;        // the beats into the phrase
+  uint8_t  songPhrase;      // 1 when the downbeat comes from the SONG's phrase
   // The BAR NUMBER - on the same grid as the phase below.
   //
   // It is the bar the music is in, counted on the grid the phase runs on.
@@ -305,5 +324,62 @@ void arCopyTempoLocked(ArTempoFrame* dest);
 
 // Forget the published tempo frame.
 void arResetTempo();
+
+// ---------------------------------------------------------------------------
+// The SONG PHRASE.
+//
+// Where the music is, structurally: the intro, the verse, the chorus, the
+// fill.  A source that knows - a DJ deck, a lighting desk - publishes the
+// phrase the music is in, and the board's clock uses it.
+//
+// It is in the CORE on purpose.  The source that provides it may change - a
+// deck today, something else tomorrow - and everything that reads the phrase
+// reads it from here, so nothing downstream has to know where it came from.
+// ---------------------------------------------------------------------------
+
+// The phrase's TYPE.
+//
+// The source maps its own vocabulary onto these: the Pioneer's kinds are
+// relative to the mood, so its "kind 5" is a chorus in a high-mood track and
+// a verse in a low-mood one.
+enum ArPhraseKind : uint8_t {
+  AR_PHRASE_NONE     = 0,
+  AR_PHRASE_UNKNOWN  = 1,
+  AR_PHRASE_INTRO    = 2,
+  AR_PHRASE_VERSE    = 3,
+  AR_PHRASE_CHORUS   = 4,
+  AR_PHRASE_BRIDGE   = 5,
+  AR_PHRASE_UP       = 6,
+  AR_PHRASE_DOWN     = 7,
+  AR_PHRASE_OUTRO    = 8
+};
+
+struct ArSongPhrase {
+  int32_t  index;        // the phrase's number in the track; -1 = there is none
+  uint32_t startBeat;    // the beat it starts on, in the SOURCE's beat numbering (1-based)
+  uint32_t beatCount;    // how many beats it lasts
+  uint32_t currentBeat;  // the source's CURRENT beat - the same numbering
+  uint8_t  kind;         // the phrase's TYPE - an ArPhraseKind
+  uint8_t  fill;         // 1 when it is a FILL - a flag on top of the kind
+  char     name[24];     // the label, for a reader that wants to show it
+  uint32_t generation;   // bumped on every change, so a reader can see it
+};
+
+// Publish the phrase the music is in.
+//
+// The source calls it when the phrase changes.  The board's clock reads it
+// and uses the phrase's START as the downbeat, so the bar the music is in
+// starts there.
+void arPublishSongPhrase(const ArSongPhrase& p);
+
+// Copy the published phrase into dest.  Returns whether there is one.
+bool arCopySongPhrase(ArSongPhrase* dest);
+
+// May the published phrase be used?  The same answer arCopySongPhrase
+// gives, without the copy.
+bool arSongPhraseUsable(void);
+
+// Forget the published phrase.
+void arResetSongPhrase(void);
 
 #endif // WLED_AR_PUBLISH_H

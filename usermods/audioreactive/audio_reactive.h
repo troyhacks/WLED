@@ -938,6 +938,7 @@ struct ArLiveSettings {
   uint8_t tempoQuant;            // the candidate lattice: 0 = a quarter BPM, 1 = a half BPM, 2 = half BPM, whole preferred
   bool    tempoPlaylist;         // DJ SET (false) or PLAYLIST (true)
   bool    tempoHold;             // the clock is frozen by the user's lock?
+  bool    tempoSongPhrase;       // the downbeat comes from the SONG's phrase?
 };
 
 // The settings as they are on boot.
@@ -2632,6 +2633,10 @@ static ArLiveSettings arSettingsBoot() {
   // The lock is OFF on boot: a frozen clock that nobody set is a clock
   // nobody can explain.
   s.tempoHold      = false;
+  // The song's phrase is ON on boot: it is the better answer whenever the
+  // source knows the song's structure, and the source not knowing is not
+  // an error - the board simply falls back to the user's own mark.
+  s.tempoSongPhrase = true;
   return s;
 }
 
@@ -5638,6 +5643,7 @@ void arAnalysisTask(void * parameter)
       tf.beatInMeasure32 = arTempoBeatInMeasure32();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;
+      tf.songPhrase    = arFrameSettings.tempoSongPhrase ? 1 : 0;
       tf.deckOverride  = arTempoDeckOverride() ? 1 : 0;
       tf.deckDownbeat  = arTempoDeckDownbeat();
       tf.deckElapsedAtMark = arTempoDeckElapsedAtMark();
@@ -8117,12 +8123,20 @@ class AudioReactive : public Usermod {
         // tell a mark the person made from a downbeat the tracker measured
         // (which is at chance level, and is not acted on).
         t["downbeat_set"]  = tf.downbeatSet != 0;
-        // The ProLink OVERRIDE: the user marked a downbeat by ear while a
-        // deck was playing, so the deck's numbering is rotated to the beat
-        // they marked.  It is an offset from the deck's packets, and
-        // nothing else - the deck's tempo and phase are still its own.
-        t["deck_override"] = tf.deckOverride != 0;
-        t["deck_downbeat"] = (int)tf.deckDownbeat;
+        // The SONG'S PHRASE: whether the downbeat comes from it, and what
+        // the phrase is when there is one.
+        t["song_phrase"]   = tf.songPhrase != 0;
+        {
+          ArSongPhrase ph;
+          if (arCopySongPhrase(&ph) && ph.index >= 0) {
+            t["phrase"]        = (int)ph.index;
+            t["phrase_name"]   = ph.name;
+            t["phrase_kind"]   = (int)ph.kind;
+            t["phrase_fill"]   = ph.fill != 0;
+            t["phrase_start"]  = (int)ph.startBeat;
+            t["phrase_beats"]  = (int)ph.beatCount;
+          }
+        }
         // The beats counted since the lock - the number the scrolling text's
         // #BPOS macro shows, and the number the bars are counted from.
         t["beat_count"]    = (int)tf.beatCount;
@@ -8183,6 +8197,17 @@ class AudioReactive : public Usermod {
           t["source_bpm"]   = (double)bs.bpm;
           t["source_beat"]  = (int)bs.beatInBar;
           t["source_32"]    = (int)bs.beatInMeasure32;
+          // The ProLink OVERRIDE, read from the BEAT SOURCE: a downbeat was
+          // marked while a deck was playing - by the user, or by the song's
+          // phrase - so the deck's numbering is rotated to the beat that was
+          // marked.  It is an offset from the deck's packets, and nothing
+          // else - the deck's tempo and phase are still its own.
+          //
+          // It is read here, and not from the tracker's frame, because the
+          // phrase's mark is applied in the publish layer: the two marks
+          // have to be ONE answer.
+          t["deck_override"] = bs.deckOverride != 0;
+          t["deck_downbeat"] = (int)bs.markBeat;
           // The BAR the light is on, and the PHRASE step inside the
           // sixteen beats.  The bar is counted from the user's mark when
           // the ProLink override is on, so the mark is visible here: the
@@ -9350,6 +9375,24 @@ class AudioReactive : public Usermod {
             USER_PRINTLN("AR: downbeat cleared - the numbering is the convention again");
           }
         }
+        // THE SONG'S PHRASE, from the tempo panel's checkbox.
+        //
+        // "Take the downbeat from the song's phrase" - the deck knows the
+        // song's structure (the chorus, the fill) and the board does not,
+        // so with this on, the phrase's START is the downbeat and the
+        // counters run from it.
+        //
+        // It is a live SETTING, and it is saved: it is a choice about how
+        // the board follows the music, not a test instrument.
+        if (usermod[F("songPhrase")].is<bool>()) {
+          const bool want = usermod[F("songPhrase")].as<bool>();
+          arSettingsEdit([want](ArLiveSettings& st) {
+            st.tempoSongPhrase = want;
+          });
+          doSerializeConfig = true;
+          USER_PRINTF("AR: the downbeat now comes from the song's phrase: %s\n",
+                      want ? "yes" : "no");
+        }
         // THE LOCK, from the info pane's button.
         //
         // "Lock BPM and grid to current values - keep estimating, but
@@ -9697,6 +9740,11 @@ class AudioReactive : public Usermod {
       //          sooner, so the new one is found sooner, and the downbeat
       //          goes when the grid re-anchors.
       tempo[F("mode")]   = st.tempoPlaylist ? 1 : 0;
+      // "song_phrase"  the downbeat comes from the SONG's phrase - the
+      //               chorus, the fill - when the source knows it.  It is
+      //               ON by default: the source not knowing is not an
+      //               error, the board falls back to the user's own mark.
+      tempo[F("song_phrase")] = st.tempoSongPhrase ? 1 : 0;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -10038,12 +10086,20 @@ class AudioReactive : public Usermod {
         const bool haveMode = arGetRangedNumber(top["tempo"][F("mode")],
                                                  modeRead, 0, 1);
 
+        // The song's phrase: the same shape as the mode.  A missing key
+        // leaves it alone - a config written before it existed is still a
+        // good config.
+        uint8_t phraseRead = before.tempoSongPhrase ? 1 : 0;
+        const bool havePhrase = arGetRangedNumber(top["tempo"][F("song_phrase")],
+                                                   phraseRead, 0, 1);
+
         arSettingsEdit([haveTempo, tempoOnRead, tolRead, haveQuant, quantRead,
-                        haveMode, modeRead](ArLiveSettings& st) {
+                        haveMode, modeRead, havePhrase, phraseRead](ArLiveSettings& st) {
           if (haveTempo) st.tempoEnabled = (tempoOnRead != 0);
           st.tempoTolMs = tolRead;
           if (haveQuant) st.tempoQuant = quantRead;
           if (haveMode) st.tempoPlaylist = (modeRead != 0);
+          if (havePhrase) st.tempoSongPhrase = (phraseRead != 0);
         });
       }
 

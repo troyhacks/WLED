@@ -2468,11 +2468,24 @@ function tempoUpdate(t)
 	// The downbeat's MARK is there even with a deck connected: the deck
 	// numbers the beats, and the user can override it by ear.
 	tempoShow('tempoDown', true);
+	// The SONG'S PHRASE is only there with a deck: only a deck knows the
+	// song's structure, so only a deck can give the board a phrase.
+	tempoShow('tempoPhrase', proLink);
 	// The CORRECT button is the exception: there is nothing to correct
 	// until the grid has been LOCKED to the music, so it appears with the
 	// lock and disappears with it.
 	tempoShow('tempoCorr', !proLink && locked);
 	gId('tempoLock').classList.toggle('on', locked);
+	// The phrase's checkbox: the board's own state, and the FILL lights up
+	// while the music is in one.
+	var sp = gId('tempoPhrase');
+	if (sp) {
+		var box = sp.querySelector('input');
+		if (box && box.checked !== !!t.sp) box.checked = !!t.sp;
+		sp.classList.toggle('on', !!t.sp);
+		sp.classList.toggle('fill', !!t.fill);
+		sp.title = t.fill ? "The song's phrase - in a FILL" : "Take the downbeat from the song's phrase";
+	}
 	// The downbeat's MARK is a state only with a deck.  With the
 	// estimator the button is one-shot: it always marks the beat that is
 	// sounding, and it never lights up, because there is nothing to turn
@@ -2559,10 +2572,31 @@ function tempoLock()
 function tempoDown()
 {
 	if (tempo.plink && tempo.dbo) {
-		tempoCmd({AudioReactive: {clearDownbeat:true}});
+		// The downbeat is overridden.  If it is the SONG's PHRASE that is
+		// overriding it, then that is what the button turns off - the
+		// phrase is the source's own, so the user cannot mark over it.
+		if (tempo.sp) {
+			tempoCmd({AudioReactive: {songPhrase: false}});
+		} else {
+			tempoCmd({AudioReactive: {clearDownbeat:true}});
+		}
 	} else {
 		tempoCmd({AudioReactive: {setDownbeat:true}});
 	}
+}
+
+// The SONG'S PHRASE.
+//
+// With a deck connected, the deck knows the song's structure - the
+// chorus, the fill - and the board does not.  With this on, the phrase's
+// START is the downbeat: the bar the music is in starts there, and the
+// counters run from it.
+//
+// It is a SETTING and not an action, so it is posted like one and the
+// board's answer comes back in the tempo frame.
+function tempoSongPhrase(on)
+{
+	tempoCmd({AudioReactive: {songPhrase: on}});
 }
 
 // Move the grid onto the music. The RATE is not touched, so a locked

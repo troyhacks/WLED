@@ -260,7 +260,8 @@ static float    arHandoffBpm    = 0.0f;   // the tempo of that source
 // three beats at a time.  The grid's phase runs free between the beat
 // packets and is exact, so the counters are counted on THAT.
 static float    arHandoffDeckAtMark = 0.0f;   // the grid's position at the marked beat
-static uint8_t  arHandoffDeckWas    = 0;      // the override, as it was last time
+static uint32_t arHandoffMarkGen    = 0;      // the mark's identity, as it was last time
+static uint8_t  arHandoffMarkOn     = 0;      // 1 when a mark was in force last time
 
 // How fast the correction is let go, in BEATS.  Four beats is a bar: the
 // light slows for a bar and is back on the grid by the next one.
@@ -388,21 +389,30 @@ static void arApplyHandoff(ArBeatSource* b) {
   // override and not only a rotation of the beat number - the effect's
   // cycle, its sweep direction and its sixteen-beat phrase all start again
   // on the beat the user marked.
-  if (b->deckOverride) {
-    // The rebase, taken the moment the override turns on.  The phase is
-    // the position inside the bar, so the grid's position at the START of
-    // the marked beat is the phase taken off the accumulator.
-    if (!arHandoffDeckWas) {
-      arHandoffDeckAtMark = arHandoffAcc - phase;
+  //
+  // The rebase is the grid's position at the START of the marked beat: the
+  // phase is the position inside the current beat, and the marked beat is
+  // markBack whole beats back.  The user's own mark is the beat sounding
+  // now, so markBack is zero for it - and the song's phrase is a mark in
+  // the PAST, so markBack is how far back it is.
+  if (b->markOn) {
+    // The rebase is taken when the mark CHANGES - the user marks a beat,
+    // or the song moves to another phrase - and held until then.  A mark
+    // that comes back after being off is a new mark too, even if it is
+    // the same beat: the counters have moved on since.
+    if (b->markGen != arHandoffMarkGen || !arHandoffMarkOn) {
+      arHandoffMarkGen = b->markGen;
+      arHandoffDeckAtMark = arHandoffAcc - (float)b->markBack - phase;
     }
+    arHandoffMarkOn = 1;
     const float rel = arHandoffAcc - arHandoffDeckAtMark;
     const float relBar = floorf(rel / 4.0f);
     b->barCount = (relBar > 0.0f) ? (uint32_t)relBar : 0u;
   } else {
+    arHandoffMarkOn = 0;
     const float accBar = floorf(arHandoffAcc / 4.0f);
     b->barCount = (accBar > 0.0f) ? (uint32_t)accBar : 0u;
   }
-  arHandoffDeckWas = b->deckOverride ? 1 : 0;
 
   arHandoffAccAt = now;
   arHandoffBpm   = b->bpm;
@@ -440,27 +450,72 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     b.live          = 1;
     b.downbeatKnown = 1;      // a CDJ knows its own downbeat
     b.fromProLink   = 1;
+    b.songPhrase    = haveTf ? (tf.songPhrase ? 1 : 0) : 0;
 
-    // THE USER'S OVERRIDE OF THE DECK'S NUMBERING.
+    // THE MARK: the beat that is beat one.
+    //
+    // Two things can say where the bar starts, and they say the SAME
+    // thing: the user, marking a beat by ear, and the SONG's phrase - the
+    // chorus, the fill - which the deck knows and the board does not.
     //
     // The deck's beat one, two, three and four are still used - the deck
     // is still the clock, and its tempo and its phase are its own - but
-    // the beat the user marked by ear is the downbeat, so the deck's
-    // numbering is ROTATED to it.  That is the whole of the override: an
-    // offset from the deck's packets, and nothing else.
+    // the marked beat is the downbeat, so the deck's numbering is
+    // ROTATED to it.  That is the whole of the mark: an offset from the
+    // deck's packets, and nothing else.
     //
     // The counters that describe a BAR - the bar number and the
     // sixteen-beat phrase - are counted from the mark as well, in
-    // arApplyHandoff(): the bar the user marked is bar zero, so the
-    // effect's cycle and its phrase restart on it.  Without that the
-    // override was only a rotation of the beat number, and everything
-    // that counted on the bar carried on counting from wherever it had
-    // got to.
-    const bool override = haveTf && tf.deckOverride != 0;
+    // arApplyHandoff(): the marked bar is bar zero, so the effect's cycle
+    // and its phrase restart on it.  Without that the mark was only a
+    // rotation of the beat number, and everything that counted on the bar
+    // carried on counting from wherever it had got to.
+    //
+    // THE PHRASE WINS when the user has asked for it: it knows the song,
+    // and the user asked for the song.
+    {
+      const bool wantPhrase = haveTf && tf.songPhrase != 0;
+      ArSongPhrase ph;
+      const bool havePhrase = wantPhrase && arCopySongPhrase(&ph) && ph.index >= 0;
+
+      if (havePhrase) {
+        // The phrase's START is the downbeat.
+        //
+        // The rotation needs no counting: the phrase's start beat says
+        // where in the bar it falls - the beat in the bar is (start - 1)
+        // mod 4 - and the deck's beat in the bar is exact.
+        b.markOn   = 1;
+        b.markBeat = (uint8_t)((ph.startBeat - 1u) & 3u);
+        // How far back the marked beat is: the beats since the phrase
+        // started.  The phrase's beats and the deck's count are the same
+        // numbering, so the difference is exact - even when the count
+        // itself is a second old.
+        b.markBack = (ph.currentBeat > ph.startBeat)
+                   ? (ph.currentBeat - ph.startBeat) : 0u;
+        // The mark's identity: the phrase's own generation, so a new
+        // phrase is a new mark and the counters are rebased on it.
+        b.markGen  = ph.generation | 0x80000000u;
+        b.markAt   = ph.startBeat;
+        b.phraseOn   = 1;
+        b.phraseFill = ph.fill;
+        b.phraseKind = ph.kind;
+        b.phraseIndex = ph.index;
+        b.phraseIn   = b.markBack;
+      } else if (haveTf && tf.deckOverride != 0) {
+        // The user's own mark.  It is the beat sounding NOW, so nothing is
+        // behind it.
+        b.markOn   = 1;
+        b.markBeat = tf.deckDownbeat;
+        b.markBack = 0;
+        b.markGen  = tf.deckElapsedAtMark;
+        b.markAt   = tf.deckElapsedAtMark;
+      }
+    }
+    const bool override = b.markOn != 0;
     b.deckOverride = override ? 1 : 0;
     if (override) {
       b.beatInBar = (uint8_t)((((uint32_t)prolink_beat_public - 1u + 4u
-                                - (uint32_t)tf.deckDownbeat) & 3u) + 1u);
+                                - (uint32_t)b.markBeat) & 3u) + 1u);
     }
 
     // The BEAT COUNT: the deck's beat in the song.  With the override on
@@ -478,8 +533,8 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // rebased on the mark keeps that convention, so the marked beat is
     // count 1.
     uint32_t deckBeats = prolink_beats_elapsed_public;
-    if (override && prolink_beats_elapsed_public >= tf.deckElapsedAtMark) {
-      deckBeats = prolink_beats_elapsed_public - tf.deckElapsedAtMark + 1u;
+    if (override && prolink_beats_elapsed_public >= b.markAt) {
+      deckBeats = prolink_beats_elapsed_public - b.markAt + 1u;
     }
     b.beatCount = deckBeats;
 
@@ -539,8 +594,7 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   return b;
 }
 
-void arResetTempo() {
-  ArPublishGuard guard;
+void arResetTempo() {  ArPublishGuard guard;
   // The handoff correction goes too: after a reset there is no grid to
   // be out of step with.
   arHandoffCorr  = 0.0f;
@@ -552,7 +606,8 @@ void arResetTempo() {
   // The mark's rebase goes too: after a reset there is no grid for the
   // bar number to be counted on, and no mark to count from.
   arHandoffDeckAtMark = 0.0f;
-  arHandoffDeckWas    = 0;
+  arHandoffMarkGen    = 0;
+  arHandoffMarkOn     = 0;
   arTempoFrame.bpm = 0.0f;
   arTempoFrame.beatProgress = 0.0f;
   arTempoFrame.score = 0.0f;
@@ -572,4 +627,49 @@ void arResetTempo() {
   arTempoFrame.refSlips = 0;
   arTempoFrame.refOffset = 0;
   arTempoValid = false;
+}
+
+// ---------------------------------------------------------------------------
+// The published song phrase.
+//
+// One struct, copied under the lock like the others: a reader cannot see
+// half of it.  It is NOT a measurement - it is something a source KNOWS - so
+// there is no "live" flag for it: it is there or it is not.
+// ---------------------------------------------------------------------------
+static ArSongPhrase arPhrase = {};
+static bool arPhraseValid = false;
+
+void arPublishSongPhrase(const ArSongPhrase& p) {
+  ArPublishGuard guard;
+  arPhrase = p;
+  arPhraseValid = true;
+}
+
+bool arCopySongPhrase(ArSongPhrase* dest) {
+  ArPublishGuard guard;
+  if (!arPhraseValid) {
+    dest->index = -1;
+    dest->startBeat = 0;
+    dest->beatCount = 0;
+    dest->currentBeat = 0;
+    dest->kind = AR_PHRASE_NONE;
+    dest->fill = 0;
+    dest->name[0] = '\0';
+    dest->generation = 0;
+    return false;
+  }
+  *dest = arPhrase;
+  return true;
+}
+
+bool arSongPhraseUsable(void) {
+  ArPublishGuard guard;
+  return arPhraseValid;
+}
+
+void arResetSongPhrase(void) {
+  ArPublishGuard guard;
+  arPhrase = ArSongPhrase();
+  arPhrase.index = -1;
+  arPhraseValid = false;
 }
