@@ -8994,16 +8994,20 @@ uint16_t mode_2Dscrollingtext(void) {
       float    srcGridBpm  = 0.0f;
       bool     srcHaveDrift = false;
 
-      #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-      if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
-        srcBpm  = prolink_bpm_public;
-        srcBeat = prolink_beat_public;
-        srcPos  = prolink_beats_elapsed_public;
-        srcBars = prolink_bars_elapsed_public;
-        srcLive = true;
-        srcDeck = true;
+      // A DECK, whichever one it is: a Pioneer over Pro DJ Link, or a Denon
+      // over StageLinq.  The core asks for the deck that is driving, so
+      // this does not have to know which protocol it came from.
+      {
+        ArDeckBeat deck;
+        if (arGetDeckBeat(&deck)) {
+          srcBpm  = deck.bpm;
+          srcBeat = deck.beatInBar;
+          srcPos  = deck.beatsElapsed;
+          srcBars = deck.barsElapsed;
+          srcLive = true;
+          srcDeck = true;
+        }
       }
-      #endif
 
       #if defined(USERMOD_AUDIOREACTIVE)
       // The estimator, when the deck has not answered.

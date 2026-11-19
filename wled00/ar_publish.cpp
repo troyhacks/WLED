@@ -418,7 +418,198 @@ static void arApplyHandoff(ArBeatSource* b) {
   arHandoffBpm   = b->bpm;
 }
 
-// The beat source: ProLink first, the estimator second.
+// ---------------------------------------------------------------------------
+// The deck that is driving.
+//
+// Each deck usermod publishes its numbers in its own file-scope globals, and
+// this asks them.  Only ONE deck drives at a time: the first one that is
+// really there - connected, with a rate and a beat - wins, and the other is
+// ignored until this one goes away.
+//
+// The two decks are different protocols on different networks: a Pioneer
+// CDJ over Pro DJ Link, and a Denon DJ unit over StageLinq.  The core does
+// not know about either of them beyond the five numbers they publish.
+// ---------------------------------------------------------------------------
+bool arGetDeckBeat(ArDeckBeat* d) {
+  if (!d) return false;
+  memset(d, 0, sizeof(*d));
+
+  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
+  {
+    // ProLink globals - file-scope volatile in usermods_list.cpp. The
+    // beatInMeasure sentinel 0 ("no packet yet") falls through, so there is
+    // no beat before the first CDJ hello.
+    extern volatile float   prolink_bpm_public;            // beats per minute (0 = unknown)
+    extern volatile uint8_t prolink_beat_public;           // beat-in-measure 1..4, in the SHIFTED grid
+    extern volatile float   prolink_beat_progress_public;  // 0..1 within the current beat
+    extern volatile bool    prolink_connected_public;      // true while following a master CDJ
+    extern volatile uint32_t prolink_beats_elapsed_public;   // the deck's beat in the song
+    extern volatile uint8_t prolink_bars_elapsed_public;    // the deck's own count of bars
+
+    if (prolink_connected_public && prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
+      d->bpm          = prolink_bpm_public;
+      d->beatInBar    = prolink_beat_public;
+      d->beatProgress = prolink_beat_progress_public;
+      d->beatsElapsed = prolink_beats_elapsed_public;
+      d->barsElapsed  = prolink_bars_elapsed_public;
+      d->connected    = 1;
+      d->sourceId     = AR_DECK_PROLINK;
+      return true;
+    }
+  }
+  #endif
+
+  #if defined(USERMOD_DENON_STAGELINQ)
+  {
+    // The StageLinq globals - the same five numbers, from a Denon DJ unit.
+    extern volatile float    stagelinq_bpm_public;           // beats per minute (0 = unknown)
+    extern volatile uint8_t  stagelinq_beat_public;          // beat-in-bar 1..4, on the deck's own grid
+    extern volatile float    stagelinq_beat_progress_public; // 0..1 within the current beat
+    extern volatile bool     stagelinq_connected_public;     // true while a deck is driving
+    extern volatile uint32_t stagelinq_beats_elapsed_public;  // the deck's beat in the song
+
+    if (stagelinq_connected_public && stagelinq_bpm_public > 0.0f && stagelinq_beat_public != 0u) {
+      d->bpm          = stagelinq_bpm_public;
+      d->beatInBar    = stagelinq_beat_public;
+      d->beatProgress = stagelinq_beat_progress_public;
+      d->beatsElapsed = stagelinq_beats_elapsed_public;
+      // StageLinq has no bar counter of its own - but its beat counter is
+      // exact, so the bars are simply the beats over four.
+      d->barsElapsed  = stagelinq_beats_elapsed_public / 4u;
+      d->connected    = 1;
+      d->sourceId     = AR_DECK_STAGELINQ;
+      return true;
+    }
+  }
+  #endif
+
+  return false;
+}
+
+// Apply a deck's beat to the answer.
+//
+// This is the deck's half of the arbitration, and it does not care WHICH
+// deck it is: a Pioneer over Pro DJ Link and a Denon over StageLinq both
+// say the same five things, and the board treats them the same way - the
+// deck's numbering is the real one, and the user's mark rotates it.
+static void arApplyDeckBeat(ArBeatSource* b, const ArDeckBeat& deck,
+                             bool haveTf, const ArTempoFrame& tf) {
+  b->bpm           = deck.bpm;
+  b->beatInBar     = deck.beatInBar;
+  b->beatProgress  = deck.beatProgress;
+  b->live          = 1;
+  b->downbeatKnown = 1;      // a deck knows its own downbeat
+  b->fromProLink   = 1;
+  b->sourceId      = deck.sourceId;
+  b->songPhrase    = haveTf ? (tf.songPhrase ? 1 : 0) : 0;
+
+  // THE MARK: the beat that is beat one.
+  //
+  // Two things can say where the bar starts, and they say the SAME
+  // thing: the user, marking a beat by ear, and the SONG's phrase - the
+  // chorus, the fill - which the deck knows and the board does not.
+  //
+  // The deck's beat one, two, three and four are still used - the deck
+  // is still the clock, and its tempo and its phase are its own - but
+  // the marked beat is the downbeat, so the deck's numbering is
+  // ROTATED to it.  That is the whole of the mark: an offset from the
+  // deck's packets, and nothing else.
+  //
+  // The counters that describe a BAR - the bar number and the
+  // sixteen-beat phrase - are counted from the mark as well, in
+  // arApplyHandoff(): the marked bar is bar zero, so the effect's cycle
+  // and its phrase restart on it.  Without that the mark was only a
+  // rotation of the beat number, and everything that counted on the bar
+  // carried on counting from wherever it had got to.
+  //
+  // THE PHRASE WINS when the user has asked for it: it knows the song,
+  // and the user asked for the song.
+  {
+    const bool wantPhrase = haveTf && tf.songPhrase != 0;
+    ArSongPhrase ph;
+    const bool havePhrase = wantPhrase && arCopySongPhrase(&ph) && ph.index >= 0;
+
+    if (havePhrase) {
+      // The phrase's START is the downbeat.
+      //
+      // The rotation needs no counting: the phrase's start beat says
+      // where in the bar it falls - the beat in the bar is (start - 1)
+      // mod 4 - and the deck's beat in the bar is exact.
+      b->markOn   = 1;
+      b->markBeat = (uint8_t)((ph.startBeat - 1u) & 3u);
+      // How far back the marked beat is: the beats since the phrase
+      // started.  The phrase's beats and the deck's count are the same
+      // numbering, so the difference is exact - even when the count
+      // itself is a second old.
+      b->markBack = (ph.currentBeat > ph.startBeat)
+                  ? (ph.currentBeat - ph.startBeat) : 0u;
+      // The mark's identity: the phrase's own generation, so a new
+      // phrase is a new mark and the counters are rebased on it.
+      b->markGen  = ph.generation | 0x80000000u;
+      b->markAt   = ph.startBeat;
+      b->phraseOn   = 1;
+      b->phraseFill = ph.fill;
+      b->phraseKind = ph.kind;
+      b->phraseIndex = ph.index;
+      b->phraseIn   = b->markBack;
+    } else if (haveTf && tf.deckOverride != 0 && tf.deckSourceId == deck.sourceId) {
+      // The user's own mark.  It is the beat sounding NOW, so nothing is
+      // behind it.
+      //
+      // It belongs to the deck it was taken ON: a mark made while the
+      // Denon was playing must not rotate the Pioneer's numbering, and the
+      // other way round.
+      b->markOn   = 1;
+      b->markBeat = tf.deckDownbeat;
+      b->markBack = 0;
+      b->markGen  = tf.deckElapsedAtMark;
+      b->markAt   = tf.deckElapsedAtMark;
+    }
+  }
+  const bool override = b->markOn != 0;
+  b->deckOverride = override ? 1 : 0;
+  if (override) {
+    b->beatInBar = (uint8_t)((((uint32_t)deck.beatInBar - 1u + 4u
+                              - (uint32_t)b->markBeat) & 3u) + 1u);
+  }
+
+  // The BEAT COUNT: the deck's beat in the song.  With the override on
+  // it is counted from the MARK, so it restarts when the user marks
+  // the downbeat - the same thing the master's counter does, and the
+  // reason an effect that counts on this realigns with the mark.
+  //
+  // The count itself rides the deck's own stream, which a real deck sends
+  // about once a second: it jumps two or three beats at a time.  So it
+  // is not what anything counts on - the grid's own phase is - and it
+  // is here as the deck's own answer, for a reader that wants it.
+  //
+  // The deck's count is ONE-BASED: the count is 1 on the deck's first
+  // beat, and (count - 1) mod 4 is the beat in the bar.  The count
+  // rebased on the mark keeps that convention, so the marked beat is
+  // count 1.
+  uint32_t deckBeats = deck.beatsElapsed;
+  if (override && deck.beatsElapsed >= b->markAt) {
+    deckBeats = deck.beatsElapsed - b->markAt + 1u;
+  }
+  b->beatCount = deckBeats;
+
+  arApplyHandoff(b);
+
+  // The THIRTY-TWO: the position in the eight-bar measure, on the SAME
+  // grid as the bar number and the sixteen-beat phrase.
+  //
+  // It is counted on the grid's phase instead of on the deck's count,
+  // which is exact: the bar number and the beat in the bar are both
+  // there already.
+  //
+  // And because the bar number is counted from the user's mark when
+  // the override is on, the thirty-two starts on the beat they marked
+  // - the same anchor as the bar and the phrase.
+  b->beatInMeasure32 = (uint8_t)((((b->barCount * 4u) +
+                                  (uint32_t)(b->beatInBar - 1u)) % 32u) + 1u);
+}
+
+// The beat source: a deck first, the estimator second.
 //
 // The two rules are the ones the beat-strobe effect has always used, moved
 // here so that there is only ONE of them. The effect and the web GUI both
@@ -432,132 +623,18 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   ArTempoFrame tf;
   const bool haveTf = arCopyTempo(&tf);
 
-  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-  // ProLink globals - file-scope volatile in usermods_list.cpp. The
-  // beatInMeasure sentinel 0 ("no packet yet") falls through, so there is
-  // no beat before the first CDJ hello.
-  extern volatile float   prolink_bpm_public;            // beats per minute (0 = unknown)
-  extern volatile uint8_t prolink_beat_public;           // beat-in-measure 1..4, in the SHIFTED grid
-  extern volatile float   prolink_beat_progress_public;  // 0..1 within the current beat
-  extern volatile bool    prolink_connected_public;      // true while following a master CDJ
-  extern volatile uint32_t prolink_beats_elapsed_public;   // the deck's beat in the song
-
-  if (!ignoreProLink && prolink_connected_public &&
-      prolink_bpm_public > 0.0f && prolink_beat_public != 0u) {
-    b.bpm           = prolink_bpm_public;
-    b.beatInBar     = prolink_beat_public;
-    b.beatProgress  = prolink_beat_progress_public;
-    b.live          = 1;
-    b.downbeatKnown = 1;      // a CDJ knows its own downbeat
-    b.fromProLink   = 1;
-    b.songPhrase    = haveTf ? (tf.songPhrase ? 1 : 0) : 0;
-
-    // THE MARK: the beat that is beat one.
-    //
-    // Two things can say where the bar starts, and they say the SAME
-    // thing: the user, marking a beat by ear, and the SONG's phrase - the
-    // chorus, the fill - which the deck knows and the board does not.
-    //
-    // The deck's beat one, two, three and four are still used - the deck
-    // is still the clock, and its tempo and its phase are its own - but
-    // the marked beat is the downbeat, so the deck's numbering is
-    // ROTATED to it.  That is the whole of the mark: an offset from the
-    // deck's packets, and nothing else.
-    //
-    // The counters that describe a BAR - the bar number and the
-    // sixteen-beat phrase - are counted from the mark as well, in
-    // arApplyHandoff(): the marked bar is bar zero, so the effect's cycle
-    // and its phrase restart on it.  Without that the mark was only a
-    // rotation of the beat number, and everything that counted on the bar
-    // carried on counting from wherever it had got to.
-    //
-    // THE PHRASE WINS when the user has asked for it: it knows the song,
-    // and the user asked for the song.
-    {
-      const bool wantPhrase = haveTf && tf.songPhrase != 0;
-      ArSongPhrase ph;
-      const bool havePhrase = wantPhrase && arCopySongPhrase(&ph) && ph.index >= 0;
-
-      if (havePhrase) {
-        // The phrase's START is the downbeat.
-        //
-        // The rotation needs no counting: the phrase's start beat says
-        // where in the bar it falls - the beat in the bar is (start - 1)
-        // mod 4 - and the deck's beat in the bar is exact.
-        b.markOn   = 1;
-        b.markBeat = (uint8_t)((ph.startBeat - 1u) & 3u);
-        // How far back the marked beat is: the beats since the phrase
-        // started.  The phrase's beats and the deck's count are the same
-        // numbering, so the difference is exact - even when the count
-        // itself is a second old.
-        b.markBack = (ph.currentBeat > ph.startBeat)
-                   ? (ph.currentBeat - ph.startBeat) : 0u;
-        // The mark's identity: the phrase's own generation, so a new
-        // phrase is a new mark and the counters are rebased on it.
-        b.markGen  = ph.generation | 0x80000000u;
-        b.markAt   = ph.startBeat;
-        b.phraseOn   = 1;
-        b.phraseFill = ph.fill;
-        b.phraseKind = ph.kind;
-        b.phraseIndex = ph.index;
-        b.phraseIn   = b.markBack;
-      } else if (haveTf && tf.deckOverride != 0) {
-        // The user's own mark.  It is the beat sounding NOW, so nothing is
-        // behind it.
-        b.markOn   = 1;
-        b.markBeat = tf.deckDownbeat;
-        b.markBack = 0;
-        b.markGen  = tf.deckElapsedAtMark;
-        b.markAt   = tf.deckElapsedAtMark;
-      }
+  // A DECK, if there is one.
+  //
+  // ignoreProLink is the DEBUG switch: it ignores the deck and answers from
+  // the estimator instead, so the two tempo models can be heard on the same
+  // wall.  It is the effect's "Ignore Pro Link" option, passed through.
+  if (!ignoreProLink) {
+    ArDeckBeat deck;
+    if (arGetDeckBeat(&deck)) {
+      arApplyDeckBeat(&b, deck, haveTf, tf);
+      return b;
     }
-    const bool override = b.markOn != 0;
-    b.deckOverride = override ? 1 : 0;
-    if (override) {
-      b.beatInBar = (uint8_t)((((uint32_t)prolink_beat_public - 1u + 4u
-                                - (uint32_t)b.markBeat) & 3u) + 1u);
-    }
-
-    // The BEAT COUNT: the deck's beat in the song.  With the override on
-    // it is counted from the MARK, so it restarts when the user marks
-    // the downbeat - the same thing the master's counter does, and the
-    // reason an effect that counts on this realigns with the mark.
-    //
-    // The count itself rides the STATUS stream, which a real deck sends
-    // about once a second: it jumps two or three beats at a time.  So it
-    // is not what anything counts on - the grid's own phase is - and it
-    // is here as the deck's own answer, for a reader that wants it.
-    //
-    // The deck's count is ONE-BASED: the count is 1 on the deck's first
-    // beat, and (count - 1) mod 4 is the beat in the bar.  The count
-    // rebased on the mark keeps that convention, so the marked beat is
-    // count 1.
-    uint32_t deckBeats = prolink_beats_elapsed_public;
-    if (override && prolink_beats_elapsed_public >= b.markAt) {
-      deckBeats = prolink_beats_elapsed_public - b.markAt + 1u;
-    }
-    b.beatCount = deckBeats;
-
-    arApplyHandoff(&b);
-
-    // The THIRTY-TWO: the position in the eight-bar measure, on the SAME
-    // grid as the bar number and the sixteen-beat phrase.
-    //
-    // It was the deck's own count of beats into the song, and that count
-    // rides the status stream - a real deck sends it about once a second,
-    // so it names the beat the deck was on a second ago and jumps two or
-    // three beats at a time.  It is counted on the grid's phase instead,
-    // which is exact: the bar number and the beat in the bar are both
-    // there already.
-    //
-    // And because the bar number is counted from the user's mark when
-    // the override is on, the thirty-two starts on the beat they marked
-    // - the same anchor as the bar and the phrase.
-    b.beatInMeasure32 = (uint8_t)((((b.barCount * 4u) +
-                                    (uint32_t)(b.beatInBar - 1u)) % 32u) + 1u);
-    return b;
   }
-  #endif
 
   // The estimator.
   //

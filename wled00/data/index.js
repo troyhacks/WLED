@@ -2385,7 +2385,7 @@ function arToggle(btn, txtOn, txtOff, isOn, cmdOn, cmdOff)
 // fast it is (the BPM), and where the beat comes from (the badge). The
 // three buttons are the controls: lock the grid, mark the downbeat, and
 // move the grid back onto the music.
-var tempo = {bpm:0, beat:0, prog:0, live:0, lock:0, db:0, dbset:0, dbo:0, plink:0, drift:0};
+var tempo = {bpm:0, beat:0, prog:0, live:0, lock:0, db:0, dbset:0, dbo:0, plink:0, drift:0, sid:0};
 var tempoAt = 0;      // when the last frame arrived, on the page's clock
 var tempoBox = -1;    // the box that is filling right now
 
@@ -2411,6 +2411,11 @@ function tempoUpdate(t)
 	tempoAt = performance.now();
 	var live = !!t.live;
 	var proLink = !!t.plink;
+	// WHICH deck: a Pioneer over Pro DJ Link, or a Denon over StageLinq.
+	// The two are told apart because only one of them knows the song's
+	// phrase - StageLinq has no phrase structure at all.
+	var sid = t.sid | 0;
+	var stageLinq = (sid === 2);
 	var boxes = document.getElementsByClassName('tbox');
 	var cur = live ? Math.min(3, Math.max(0, (t.beat|0) - 1)) : -1;
 	tempoBox = cur;
@@ -2454,7 +2459,7 @@ function tempoUpdate(t)
 	}
 
 	// Where the beat comes from.
-	gId('tempoMode').textContent = proLink ? "PRO LINK" : "INTERNAL";
+	gId('tempoMode').textContent = stageLinq ? "STAGE LINQ" : (proLink ? "PRO LINK" : "INTERNAL");
 
 	// The CONTROLS. In ProLink the deck IS the clock: there is nothing to
 	// lock, nothing to mark and nothing to correct, so the buttons go.
@@ -2468,9 +2473,12 @@ function tempoUpdate(t)
 	// The downbeat's MARK is there even with a deck connected: the deck
 	// numbers the beats, and the user can override it by ear.
 	tempoShow('tempoDown', true);
-	// The SONG'S PHRASE is only there with a deck: only a deck knows the
-	// song's structure, so only a deck can give the board a phrase.
-	tempoShow('tempoPhrase', proLink);
+	// The SONG'S PHRASE is only there with a PIONEER deck: only that deck
+	// knows the song's structure - it reads the phrase table off the CDJ's
+	// USB.  A Denon over StageLinq has no phrase at all - there is no
+	// Phrase state path and the Engine beatgrid holds only beat markers -
+	// so the checkbox is hidden rather than offered and ignored.
+	tempoShow('tempoPhrase', proLink && !stageLinq);
 	// The CORRECT button is the exception: there is nothing to correct
 	// until the grid has been LOCKED to the music, so it appears with the
 	// lock and disappears with it.

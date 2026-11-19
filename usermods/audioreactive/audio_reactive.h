@@ -5647,6 +5647,7 @@ void arAnalysisTask(void * parameter)
       tf.deckOverride  = arTempoDeckOverride() ? 1 : 0;
       tf.deckDownbeat  = arTempoDeckDownbeat();
       tf.deckElapsedAtMark = arTempoDeckElapsedAtMark();
+      tf.deckSourceId = arTempoDeckSourceId();
       tf.downbeatT    = arTempoDownbeatT();
       tf.beatCount    = arTempoBeatCount();
       tf.refBpm       = arTempoRefBpm();
@@ -8193,7 +8194,16 @@ class AudioReactive : public Usermod {
         // and NEITHER when neither is live - a rate is never invented.
         {
           const ArBeatSource bs = arGetBeatSource(false);
-          t["source"]       = bs.fromProLink ? "PRO LINK" : (bs.live ? "INTERNAL" : "--");
+          // WHICH source: a deck says which deck it is, and the estimator
+          // says nothing.
+          const char* srcName = "--";
+          if (bs.fromProLink) {
+            srcName = (bs.sourceId == AR_DECK_STAGELINQ) ? "STAGE LINQ" : "PRO LINK";
+          } else if (bs.live) {
+            srcName = "INTERNAL";
+          }
+          t["source"]       = srcName;
+          t["source_id"]    = (int)bs.sourceId;
           t["source_bpm"]   = (double)bs.bpm;
           t["source_beat"]  = (int)bs.beatInBar;
           t["source_32"]    = (int)bs.beatInMeasure32;

@@ -165,16 +165,14 @@
 #include <atomic>
 #include <math.h>
 
-// The ProLink usermod's published grid - the deck's own beat, which is the
-// reference this tracker can be measured against.  The definitions live in the
-// usermod's header; these are the externs for them.
-#if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-extern volatile float   prolink_bpm_public;              // beats per minute (0 = unknown)
-extern volatile uint8_t prolink_beat_public;            // beat in the bar, 1..4 (1 = downbeat); 0 = no packet yet
-extern volatile float   prolink_beat_progress_public;    // 0..1 through the deck's current beat
-extern volatile bool    prolink_connected_public;        // true while following a master CDJ
-extern volatile uint32_t prolink_beats_elapsed_public;   // the deck's beat in the song
-#endif
+// The DECK's published grid - the deck's own beat, which is the reference
+// this tracker can be measured against.
+//
+// The deck is whichever one is compiled in and talking: a Pioneer over Pro
+// DJ Link, or a Denon over StageLinq.  They are different protocols, but
+// they publish the same five numbers, so the core asks for them through
+// one door - arGetDeckBeat() - and this tracker does not have to know or
+// care which deck it is measuring itself against.
 
 // ---------------------------------------------------------------------------
 // The constants.
@@ -1150,6 +1148,7 @@ struct ArTempoState {
   bool     deckOverride;                  // the user has overridden the deck
   uint8_t  deckDownbeat;                  // the DECK's beat they marked, 0..3
   uint32_t deckElapsedAtMark;             // the deck's beat count at that moment
+  uint8_t  deckSourceId;                  // WHICH deck the mark was taken on
 
   // ---- the gate ----
   uint16_t gateShutFrames;                // how long the gate has been shut
@@ -2861,34 +2860,39 @@ static void arTempoScoreDownbeat(void) {
 static uint8_t arTempoBeatInBar(void);
 
 static void arTempoProLinkReference(void) {
-  #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
-  if (!prolink_connected_public || prolink_bpm_public <= 0.0f) {
-    arTempo.refBpm = 0.0f;
-    return;
-  }
-  arTempo.refBpm = prolink_bpm_public;
-  const float beatMs = 60000.0f / prolink_bpm_public;
+  {
+    // WHICHEVER deck is driving.  A Pioneer over Pro DJ Link and a Denon
+    // over StageLinq are different protocols, but they publish the same five
+    // numbers, and this measurement - our grid against the deck's - is the
+    // same measurement either way.
+    ArDeckBeat deck;
+    if (!arGetDeckBeat(&deck) || deck.bpm <= 0.0f) {
+      arTempo.refBpm = 0.0f;
+      return;
+    }
+    arTempo.refBpm = deck.bpm;
+    const float beatMs = 60000.0f / deck.bpm;
 
-  // The residual is only meaningful while the deck's GRID is running.  When
-  // it is not - no deck, or the beat packets stopped - the usermod publishes
-  // a phase of zero, and a residual of zero would read as "in sync", which
-  // is a lie: there is nothing to be in sync WITH.  So the readout is
-  // marked invalid instead, and the tuning number is not published.
-  if (prolink_beat_public < 1 || prolink_beat_public > 4) {
-    arTempo.refHaveErr = false;
-    return;
-  }
+    // The residual is only meaningful while the deck's GRID is running.  When
+    // it is not - no deck, or the beat packets stopped - the usermod publishes
+    // a phase of zero, and a residual of zero would read as "in sync", which
+    // is a lie: there is nothing to be in sync WITH.  So the readout is
+    // marked invalid instead, and the tuning number is not published.
+    if (deck.beatInBar < 1 || deck.beatInBar > 4) {
+      arTempo.refHaveErr = false;
+      return;
+    }
 
-  float err = prolink_beat_progress_public * beatMs;
-  if (err > beatMs * 0.5f) err -= beatMs;
-  if (!arTempo.locked) return;
-  if (!arTempo.refHaveErr) {
-    arTempo.refErrMs   = err;
-    arTempo.refHaveErr = true;
-  } else {
-    arTempo.refErrMs += 0.1f * (err - arTempo.refErrMs);
-  }
-  const uint8_t deckBeat = prolink_beat_public;
+    float err = deck.beatProgress * beatMs;
+    if (err > beatMs * 0.5f) err -= beatMs;
+    if (!arTempo.locked) return;
+    if (!arTempo.refHaveErr) {
+      arTempo.refErrMs   = err;
+      arTempo.refHaveErr = true;
+    } else {
+      arTempo.refErrMs += 0.1f * (err - arTempo.refErrMs);
+    }
+    const uint8_t deckBeat = deck.beatInBar;
   const uint8_t ourBeat  = arTempoBeatInBar();
   // The bar's position is compared only when the two positions can mean the
   // same thing - and that is a ONE-SIDED window, because of what the deck's
@@ -2951,10 +2955,8 @@ static void arTempoProLinkReference(void) {
     arTempo.refBeat     = deckBeat;
     arTempo.refOurBeat  = ourBeat;
     if (arTempo.refCount < 65535) arTempo.refCount++;
+    }
   }
-  #else
-  (void)0;
-  #endif
 }
 
 // ---------------------------------------------------------------------------
@@ -3095,12 +3097,19 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         // thirty-two can be counted from the mark and not from the deck's
         // own idea of where the track started.
         arTempo.deckOverride = false;
-        if (prolink_connected_public && prolink_beat_public >= 1 && prolink_beat_public <= 4) {
-          arTempo.deckOverride      = true;
-          arTempo.deckDownbeat      = (uint8_t)(prolink_beat_public - 1u);
-          arTempo.deckElapsedAtMark = prolink_beats_elapsed_public;
-          USER_PRINTF("tempo: downbeat set - the deck's beat %u is beat 1 now\n",
-                      (unsigned)prolink_beat_public);
+        {
+          // WHICHEVER deck is driving - a Pioneer over Pro DJ Link, or a
+          // Denon over StageLinq.  The mark captures the deck's beat and the
+          // deck's count, and the deck's numbering is rotated onto it.
+          ArDeckBeat deck;
+          if (arGetDeckBeat(&deck) && deck.beatInBar >= 1 && deck.beatInBar <= 4) {
+            arTempo.deckOverride      = true;
+            arTempo.deckDownbeat      = (uint8_t)(deck.beatInBar - 1u);
+            arTempo.deckElapsedAtMark = deck.beatsElapsed;
+            arTempo.deckSourceId      = deck.sourceId;
+            USER_PRINTF("tempo: downbeat set - the deck's beat %u is beat 1 now\n",
+                        (unsigned)deck.beatInBar);
+          }
         }
         USER_PRINTF("tempo: downbeat set - the beat sounding now (was %u) is beat 1\n",
                     (unsigned)(arTempo.beatIndex % 4u) + 1u);
@@ -3526,6 +3535,7 @@ static float arTempoRefBpm(void)      { return arTempo.refBpm; }
 static bool arTempoDeckOverride(void) { return arTempo.deckOverride; }
 static uint8_t arTempoDeckDownbeat(void) { return arTempo.deckDownbeat; }
 static uint32_t arTempoDeckElapsedAtMark(void) { return arTempo.deckElapsedAtMark; }
+static uint8_t arTempoDeckSourceId(void) { return arTempo.deckSourceId; }
 static float arTempoRefErrMs(void)    { return arTempo.refErrMs; }
 static uint8_t arTempoRefBeat(void)   { return arTempo.refBeat; }
 static uint8_t arTempoRefOurBeat(void){ return arTempo.refOurBeat; }

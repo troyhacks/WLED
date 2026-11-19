@@ -169,6 +169,14 @@
 MidiUsermod* midiUsermodPtr = nullptr;
 #endif
 
+// WLEDMM v3: the Denon DJ StageLinq usermod.  A Denon unit (a PRIME GO, a
+// PRIME 4) speaks StageLinq, and this follows its clock the way the ProLink
+// usermod follows a Pioneer's.  The two do not share any symbols, so they
+// can both be built.
+#ifdef USERMOD_DENON_STAGELINQ
+#include "../usermods/usermod_v3_denon_stagelinq/usermod_v3_denon_stagelinq.h"
+#endif
+
 #ifdef USERMOD_KLIPPER_PERCENTAGE
   #include "../usermods/usermod_v2_klipper_percentage/usermod_v2_klipper_percentage.h"
 #endif
@@ -383,6 +391,11 @@ void registerUsermods()
 // WLEDMM v3: register the v3 Pioneer. Same mutually-exclusive caveat.
 #ifdef USERMOD_PIONEER_PROLINK_V3
   usermods.add(new ProLinkUsermodV3());
+#endif
+
+// WLEDMM v3: the Denon DJ StageLinq usermod.
+#ifdef USERMOD_DENON_STAGELINQ
+  usermods.add(new DenonStageLinqUsermod());
 #endif
 
 #ifdef USERMOD_MIDI_USB

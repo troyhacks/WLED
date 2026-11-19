@@ -78,13 +78,14 @@ static void wsSendTempo(void) {
   int n = snprintf(buf, sizeof(buf),
     "{\"tempo\":{\"bpm\":%.1f,\"beat\":%u,\"prog\":%.3f,\"live\":%u,\"lock\":%u,"
     "\"db\":%u,\"dbset\":%u,\"dbo\":%u,\"plink\":%u,\"drift\":%.2f,\"sp\":%u,"
-    "\"fill\":%u,\"ph\":%u,\"bar\":%u,\"pi\":%d,\"pin\":%u}}",
+    "\"fill\":%u,\"ph\":%u,\"bar\":%u,\"pi\":%d,\"pin\":%u,\"sid\":%u}}",
     (double)b.bpm, (unsigned)b.beatInBar, (double)b.beatProgress,
     (unsigned)b.live, (unsigned)b.locked, (unsigned)b.downbeatKnown,
     (unsigned)b.downbeatSet, (unsigned)b.deckOverride,
     (unsigned)b.fromProLink, (double)b.driftPct,
     (unsigned)b.songPhrase, (unsigned)b.phraseFill, (unsigned)b.phraseKind,
-    (unsigned)b.barCount, (int)b.phraseIndex, (unsigned)b.phraseIn);
+    (unsigned)b.barCount, (int)b.phraseIndex, (unsigned)b.phraseIn,
+    (unsigned)b.sourceId);
   if (n < 1 || n >= (int)sizeof(buf)) return;
 
   for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {

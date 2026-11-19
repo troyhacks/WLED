@@ -184,6 +184,9 @@ struct ArTempoFrame {
   uint8_t  deckOverride;    // 1 when the override is on
   uint8_t  deckDownbeat;    // the DECK's beat that was marked, 0..3
   uint32_t deckElapsedAtMark; // the deck's beat count when it was marked
+  uint8_t  deckSourceId;    // WHICH deck the mark was taken against - a mark
+                            // belongs to the deck it was taken on, and must
+                            // not rotate a DIFFERENT deck's numbering
   float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
   uint32_t beatCount;       // beats counted since the lock (the monotonic counter)
   // The ProLink reference: the deck's grid, measured against ours.  All zero
@@ -201,6 +204,49 @@ struct ArTempoFrame {
 
 // Publish one whole tempo frame.
 void arPublishTempo(const ArTempoFrame& t);
+
+// ---------------------------------------------------------------------------
+// THE DECK SOURCES.
+//
+// A DJ deck that speaks for itself: a Pioneer CDJ over Pro DJ Link, or a
+// Denon DJ unit over StageLinq.  Both are master clocks - they know their
+// own tempo and their own phase exactly, which is something a measurement
+// of the sound can never be.
+//
+// They are DIFFERENT protocols on different networks, and they can be
+// compiled in together, so the core does not know about either of them
+// directly: each usermod publishes its numbers here, and the arbitration
+// below asks for whichever deck is talking.
+// ---------------------------------------------------------------------------
+
+// Which deck is driving.
+enum ArDeckSourceId : uint8_t {
+  AR_DECK_NONE     = 0,
+  AR_DECK_PROLINK  = 1,   // a Pioneer deck, over Pro DJ Link
+  AR_DECK_STAGELINQ = 2   // a Denon DJ unit, over StageLinq
+};
+
+// What a deck says about where the beat is.
+//
+// The same five numbers for every deck: the rate, the beat in the bar, the
+// progress through it, the count of beats into the song, and whether the
+// deck is there at all.
+struct ArDeckBeat {
+  float    bpm;           // beats per minute (0 = unknown)
+  uint8_t  beatInBar;     // 1..4, in the DECK's own grid; 0 = unknown
+  float    beatProgress;  // 0..1 through the current beat
+  uint32_t beatsElapsed;  // the deck's beat in the song
+  uint32_t barsElapsed;   // the deck's own count of bars into the song
+  uint8_t  connected;     // 1 when the deck is there
+  uint8_t  sourceId;      // an ArDeckSourceId
+};
+
+// The deck that is driving, if there is one.
+//
+// The core asks for this, and the usermods that publish it answer.  Only
+// ONE deck drives at a time: the first one that is connected and has a
+// beat wins, and the other is ignored until this one goes away.
+bool arGetDeckBeat(ArDeckBeat* d);
 
 // The BEAT SOURCE: the board's one answer to "what is the beat?"
 //
@@ -228,6 +274,7 @@ struct ArBeatSource {
   uint8_t  live;            // 1 when there is a beat to show
   uint8_t  downbeatKnown;   // the downbeat is KNOWN - the deck's, or the user's
   uint8_t  fromProLink;     // 1 when the DECK is the source, 0 for the estimator
+  uint8_t  sourceId;        // WHICH deck - an ArDeckSourceId (0 = the estimator)
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
