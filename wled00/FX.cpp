@@ -8998,8 +8998,8 @@ uint16_t mode_2Dscrollingtext(void) {
       // over StageLinq.  The core asks for the deck that is driving, so
       // this does not have to know which protocol it came from.
       {
-        ArDeckBeat deck;
-        if (arGetDeckBeat(&deck)) {
+        ArSourceBeat deck;
+        if (arGetSourceBeat(&deck)) {
           srcBpm  = deck.bpm;
           srcBeat = deck.beatInBar;
           srcPos  = deck.beatsElapsed;

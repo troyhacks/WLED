@@ -206,39 +206,43 @@ struct ArTempoFrame {
 void arPublishTempo(const ArTempoFrame& t);
 
 // ---------------------------------------------------------------------------
-// THE DECK SOURCES.
+// THE EXTERNAL SOURCES.
 //
-// A DJ deck that speaks for itself: a Pioneer CDJ over Pro DJ Link, or a
-// Denon DJ unit over StageLinq.  Both are master clocks - they know their
-// own tempo and their own phase exactly, which is something a measurement
-// of the sound can never be.
+// Something that speaks for itself: a Pioneer CDJ over Pro DJ Link, a Denon
+// DJ unit over StageLinq, or Ableton Live over Link.  All of them are master
+// clocks - they know their own tempo and their own phase exactly, which is
+// something a measurement of the sound can never be.
 //
 // They are DIFFERENT protocols on different networks, and they can be
-// compiled in together, so the core does not know about either of them
+// compiled in together, so the core does not know about any of them
 // directly: each usermod publishes its numbers here, and the arbitration
-// below asks for whichever deck is talking.
+// below asks for whichever is talking.
+//
+// The order of preference is the order of authoring: the Pioneer first,
+// then the Denon, then Ableton.  Only one of them drives at a time.
 // ---------------------------------------------------------------------------
 
-// Which deck is driving.
-enum ArDeckSourceId : uint8_t {
-  AR_DECK_NONE     = 0,
-  AR_DECK_PROLINK  = 1,   // a Pioneer deck, over Pro DJ Link
-  AR_DECK_STAGELINQ = 2   // a Denon DJ unit, over StageLinq
+// Which source is driving.
+enum ArSourceId : uint8_t {
+  AR_SRC_NONE      = 0,
+  AR_SRC_PROLINK   = 1,   // a Pioneer deck, over Pro DJ Link
+  AR_SRC_STAGELINQ = 2,   // a Denon DJ unit, over StageLinq
+  AR_SRC_ABLETON   = 3    // Ableton Live, over Link
 };
 
-// What a deck says about where the beat is.
+// What a source says about where the beat is.
 //
-// The same five numbers for every deck: the rate, the beat in the bar, the
+// The same numbers for every source: the rate, the beat in the bar, the
 // progress through it, the count of beats into the song, and whether the
-// deck is there at all.
-struct ArDeckBeat {
+// source is there at all.
+struct ArSourceBeat {
   float    bpm;           // beats per minute (0 = unknown)
-  uint8_t  beatInBar;     // 1..4, in the DECK's own grid; 0 = unknown
+  uint8_t  beatInBar;     // 1..4, in the SOURCE's own grid; 0 = unknown
   float    beatProgress;  // 0..1 through the current beat
-  uint32_t beatsElapsed;  // the deck's beat in the song
-  uint32_t barsElapsed;   // the deck's own count of bars into the song
-  uint8_t  connected;     // 1 when the deck is there
-  uint8_t  sourceId;      // an ArDeckSourceId
+  uint32_t beatsElapsed;  // the source's beat in the song
+  uint32_t barsElapsed;   // the source's own count of bars into the song
+  uint8_t  connected;     // 1 when the source is there
+  uint8_t  sourceId;      // an ArSourceId
 };
 
 // The deck that is driving, if there is one.
@@ -246,7 +250,7 @@ struct ArDeckBeat {
 // The core asks for this, and the usermods that publish it answer.  Only
 // ONE deck drives at a time: the first one that is connected and has a
 // beat wins, and the other is ignored until this one goes away.
-bool arGetDeckBeat(ArDeckBeat* d);
+bool arGetSourceBeat(ArSourceBeat* d);
 
 // The BEAT SOURCE: the board's one answer to "what is the beat?"
 //
@@ -274,7 +278,7 @@ struct ArBeatSource {
   uint8_t  live;            // 1 when there is a beat to show
   uint8_t  downbeatKnown;   // the downbeat is KNOWN - the deck's, or the user's
   uint8_t  fromProLink;     // 1 when the DECK is the source, 0 for the estimator
-  uint8_t  sourceId;        // WHICH deck - an ArDeckSourceId (0 = the estimator)
+  uint8_t  sourceId;        // WHICH deck - an ArSourceId (0 = the estimator)
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  locked;          // 1 when the estimator's clock is frozen
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand

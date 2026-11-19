@@ -177,6 +177,13 @@ MidiUsermod* midiUsermodPtr = nullptr;
 #include "../usermods/usermod_v3_denon_stagelinq/usermod_v3_denon_stagelinq.h"
 #endif
 
+// WLEDMM v3: Ableton Live's Link - the THIRD source, and the last in the
+// order of preference.  A DAW publishing its tempo and its beat phase over
+// the LAN; it shares no symbols with the decks either.
+#ifdef USERMOD_ABLETON_LINK
+#include "../usermods/usermod_v3_ableton_link/usermod_v3_ableton_link.h"
+#endif
+
 #ifdef USERMOD_KLIPPER_PERCENTAGE
   #include "../usermods/usermod_v2_klipper_percentage/usermod_v2_klipper_percentage.h"
 #endif
@@ -396,6 +403,11 @@ void registerUsermods()
 // WLEDMM v3: the Denon DJ StageLinq usermod.
 #ifdef USERMOD_DENON_STAGELINQ
   usermods.add(new DenonStageLinqUsermod());
+#endif
+
+// WLEDMM v3: Ableton Live's Link - the third source.
+#ifdef USERMOD_ABLETON_LINK
+  usermods.add(new AbletonLinkUsermod());
 #endif
 
 #ifdef USERMOD_MIDI_USB

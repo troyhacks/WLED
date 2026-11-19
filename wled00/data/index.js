@@ -2411,11 +2411,15 @@ function tempoUpdate(t)
 	tempoAt = performance.now();
 	var live = !!t.live;
 	var proLink = !!t.plink;
-	// WHICH deck: a Pioneer over Pro DJ Link, or a Denon over StageLinq.
-	// The two are told apart because only one of them knows the song's
-	// phrase - StageLinq has no phrase structure at all.
+	// WHICH source: a Pioneer over Pro DJ Link, a Denon over StageLinq, or
+	// Ableton Live over Link.  They are told apart because only one of them
+	// knows the song's phrase - StageLinq and Link have no phrase
+	// structure at all.
 	var sid = t.sid | 0;
-	var stageLinq = (sid === 2);
+	var srcName = "INTERNAL";
+	if (sid === 1) srcName = "PRO LINK";
+	else if (sid === 2) srcName = "STAGE LINQ";
+	else if (sid === 3) srcName = "ABLETON LINK";
 	var boxes = document.getElementsByClassName('tbox');
 	var cur = live ? Math.min(3, Math.max(0, (t.beat|0) - 1)) : -1;
 	tempoBox = cur;
@@ -2459,7 +2463,7 @@ function tempoUpdate(t)
 	}
 
 	// Where the beat comes from.
-	gId('tempoMode').textContent = stageLinq ? "STAGE LINQ" : (proLink ? "PRO LINK" : "INTERNAL");
+	gId('tempoMode').textContent = srcName;
 
 	// The CONTROLS. In ProLink the deck IS the clock: there is nothing to
 	// lock, nothing to mark and nothing to correct, so the buttons go.
@@ -2477,8 +2481,10 @@ function tempoUpdate(t)
 	// knows the song's structure - it reads the phrase table off the CDJ's
 	// USB.  A Denon over StageLinq has no phrase at all - there is no
 	// Phrase state path and the Engine beatgrid holds only beat markers -
-	// so the checkbox is hidden rather than offered and ignored.
-	tempoShow('tempoPhrase', proLink && !stageLinq);
+	// and Ableton's Link carries a tempo and a phase, never a structure.
+	// So for those two the checkbox is hidden rather than offered and
+	// ignored.
+	tempoShow('tempoPhrase', proLink && sid === 1);
 	// The CORRECT button is the exception: there is nothing to correct
 	// until the grid has been LOCKED to the music, so it appears with the
 	// lock and disappears with it.

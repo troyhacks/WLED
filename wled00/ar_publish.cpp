@@ -426,11 +426,13 @@ static void arApplyHandoff(ArBeatSource* b) {
 // really there - connected, with a rate and a beat - wins, and the other is
 // ignored until this one goes away.
 //
-// The two decks are different protocols on different networks: a Pioneer
-// CDJ over Pro DJ Link, and a Denon DJ unit over StageLinq.  The core does
-// not know about either of them beyond the five numbers they publish.
+// The three sources are different protocols on different networks: a
+// Pioneer CDJ over Pro DJ Link, a Denon DJ unit over StageLinq, and
+// Ableton Live over Link.  The core does not know about any of them beyond
+// the numbers they publish, and it asks for them in the order they were
+// written: the Pioneer first, then the Denon, then Ableton.
 // ---------------------------------------------------------------------------
-bool arGetDeckBeat(ArDeckBeat* d) {
+bool arGetSourceBeat(ArSourceBeat* d) {
   if (!d) return false;
   memset(d, 0, sizeof(*d));
 
@@ -453,7 +455,7 @@ bool arGetDeckBeat(ArDeckBeat* d) {
       d->beatsElapsed = prolink_beats_elapsed_public;
       d->barsElapsed  = prolink_bars_elapsed_public;
       d->connected    = 1;
-      d->sourceId     = AR_DECK_PROLINK;
+      d->sourceId     = AR_SRC_PROLINK;
       return true;
     }
   }
@@ -477,7 +479,34 @@ bool arGetDeckBeat(ArDeckBeat* d) {
       // exact, so the bars are simply the beats over four.
       d->barsElapsed  = stagelinq_beats_elapsed_public / 4u;
       d->connected    = 1;
-      d->sourceId     = AR_DECK_STAGELINQ;
+      d->sourceId     = AR_SRC_STAGELINQ;
+      return true;
+    }
+  }
+  #endif
+
+  #if defined(USERMOD_ABLETON_LINK)
+  {
+    // Ableton Live's Link - the same numbers again, from a DAW rather than
+    // a deck.  It is LAST in the order of preference: the decks are better
+    // sources for a rig, because they publish the music's own grid, and
+    // Live is the one that is there when nothing else is.
+    extern volatile float    abletonlink_bpm_public;           // beats per minute (0 = unknown)
+    extern volatile uint8_t  abletonlink_beat_public;          // beat-in-bar 1..4, on the session's grid
+    extern volatile float    abletonlink_beat_progress_public; // 0..1 within the current beat
+    extern volatile bool     abletonlink_connected_public;     // true while a session is live
+    extern volatile uint32_t abletonlink_beats_elapsed_public;  // the phase, in beats
+
+    if (abletonlink_connected_public && abletonlink_bpm_public > 0.0f && abletonlink_beat_public != 0u) {
+      d->bpm          = abletonlink_bpm_public;
+      d->beatInBar    = abletonlink_beat_public;
+      d->beatProgress = abletonlink_beat_progress_public;
+      d->beatsElapsed = abletonlink_beats_elapsed_public;
+      // Link has no bar counter of its own - but its beat count is exact,
+      // so the bars are simply the beats over four.
+      d->barsElapsed  = abletonlink_beats_elapsed_public / 4u;
+      d->connected    = 1;
+      d->sourceId     = AR_SRC_ABLETON;
       return true;
     }
   }
@@ -492,15 +521,15 @@ bool arGetDeckBeat(ArDeckBeat* d) {
 // deck it is: a Pioneer over Pro DJ Link and a Denon over StageLinq both
 // say the same five things, and the board treats them the same way - the
 // deck's numbering is the real one, and the user's mark rotates it.
-static void arApplyDeckBeat(ArBeatSource* b, const ArDeckBeat& deck,
+static void arApplySourceBeat(ArBeatSource* b, const ArSourceBeat& src,
                              bool haveTf, const ArTempoFrame& tf) {
-  b->bpm           = deck.bpm;
-  b->beatInBar     = deck.beatInBar;
-  b->beatProgress  = deck.beatProgress;
+  b->bpm           = src.bpm;
+  b->beatInBar     = src.beatInBar;
+  b->beatProgress  = src.beatProgress;
   b->live          = 1;
   b->downbeatKnown = 1;      // a deck knows its own downbeat
   b->fromProLink   = 1;
-  b->sourceId      = deck.sourceId;
+  b->sourceId      = src.sourceId;
   b->songPhrase    = haveTf ? (tf.songPhrase ? 1 : 0) : 0;
 
   // THE MARK: the beat that is beat one.
@@ -552,7 +581,7 @@ static void arApplyDeckBeat(ArBeatSource* b, const ArDeckBeat& deck,
       b->phraseKind = ph.kind;
       b->phraseIndex = ph.index;
       b->phraseIn   = b->markBack;
-    } else if (haveTf && tf.deckOverride != 0 && tf.deckSourceId == deck.sourceId) {
+    } else if (haveTf && tf.deckOverride != 0 && tf.deckSourceId == src.sourceId) {
       // The user's own mark.  It is the beat sounding NOW, so nothing is
       // behind it.
       //
@@ -569,7 +598,7 @@ static void arApplyDeckBeat(ArBeatSource* b, const ArDeckBeat& deck,
   const bool override = b->markOn != 0;
   b->deckOverride = override ? 1 : 0;
   if (override) {
-    b->beatInBar = (uint8_t)((((uint32_t)deck.beatInBar - 1u + 4u
+    b->beatInBar = (uint8_t)((((uint32_t)src.beatInBar - 1u + 4u
                               - (uint32_t)b->markBeat) & 3u) + 1u);
   }
 
@@ -587,9 +616,9 @@ static void arApplyDeckBeat(ArBeatSource* b, const ArDeckBeat& deck,
   // beat, and (count - 1) mod 4 is the beat in the bar.  The count
   // rebased on the mark keeps that convention, so the marked beat is
   // count 1.
-  uint32_t deckBeats = deck.beatsElapsed;
-  if (override && deck.beatsElapsed >= b->markAt) {
-    deckBeats = deck.beatsElapsed - b->markAt + 1u;
+  uint32_t deckBeats = src.beatsElapsed;
+  if (override && src.beatsElapsed >= b->markAt) {
+    deckBeats = src.beatsElapsed - b->markAt + 1u;
   }
   b->beatCount = deckBeats;
 
@@ -629,9 +658,9 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   // the estimator instead, so the two tempo models can be heard on the same
   // wall.  It is the effect's "Ignore Pro Link" option, passed through.
   if (!ignoreProLink) {
-    ArDeckBeat deck;
-    if (arGetDeckBeat(&deck)) {
-      arApplyDeckBeat(&b, deck, haveTf, tf);
+    ArSourceBeat deck;
+    if (arGetSourceBeat(&deck)) {
+      arApplySourceBeat(&b, deck, haveTf, tf);
       return b;
     }
   }

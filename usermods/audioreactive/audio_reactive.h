@@ -8194,11 +8194,13 @@ class AudioReactive : public Usermod {
         // and NEITHER when neither is live - a rate is never invented.
         {
           const ArBeatSource bs = arGetBeatSource(false);
-          // WHICH source: a deck says which deck it is, and the estimator
+          // WHICH source: a source says which one it is, and the estimator
           // says nothing.
           const char* srcName = "--";
           if (bs.fromProLink) {
-            srcName = (bs.sourceId == AR_DECK_STAGELINQ) ? "STAGE LINQ" : "PRO LINK";
+            srcName = (bs.sourceId == AR_SRC_STAGELINQ) ? "STAGE LINQ"
+                   : (bs.sourceId == AR_SRC_ABLETON)   ? "ABLETON LINK"
+                                                      : "PRO LINK";
           } else if (bs.live) {
             srcName = "INTERNAL";
           }

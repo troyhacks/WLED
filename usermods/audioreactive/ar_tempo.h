@@ -171,7 +171,7 @@
 // The deck is whichever one is compiled in and talking: a Pioneer over Pro
 // DJ Link, or a Denon over StageLinq.  They are different protocols, but
 // they publish the same five numbers, so the core asks for them through
-// one door - arGetDeckBeat() - and this tracker does not have to know or
+// one door - arGetSourceBeat() - and this tracker does not have to know or
 // care which deck it is measuring itself against.
 
 // ---------------------------------------------------------------------------
@@ -2865,8 +2865,8 @@ static void arTempoProLinkReference(void) {
     // over StageLinq are different protocols, but they publish the same five
     // numbers, and this measurement - our grid against the deck's - is the
     // same measurement either way.
-    ArDeckBeat deck;
-    if (!arGetDeckBeat(&deck) || deck.bpm <= 0.0f) {
+    ArSourceBeat deck;
+    if (!arGetSourceBeat(&deck) || deck.bpm <= 0.0f) {
       arTempo.refBpm = 0.0f;
       return;
     }
@@ -3101,8 +3101,8 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
           // WHICHEVER deck is driving - a Pioneer over Pro DJ Link, or a
           // Denon over StageLinq.  The mark captures the deck's beat and the
           // deck's count, and the deck's numbering is rotated onto it.
-          ArDeckBeat deck;
-          if (arGetDeckBeat(&deck) && deck.beatInBar >= 1 && deck.beatInBar <= 4) {
+          ArSourceBeat deck;
+          if (arGetSourceBeat(&deck) && deck.beatInBar >= 1 && deck.beatInBar <= 4) {
             arTempo.deckOverride      = true;
             arTempo.deckDownbeat      = (uint8_t)(deck.beatInBar - 1u);
             arTempo.deckElapsedAtMark = deck.beatsElapsed;
