@@ -323,8 +323,14 @@ static void arApplyHandoff(ArBeatSource* b) {
     if (src == 2 && fabsf(step) >= 0.5f) {
       // The deck moved its grid on purpose: re-anchor on it, with no
       // correction to let go.
+      //
+      // The unwrapped phase moves WITH the step rather than being reset to
+      // the phase: the phase is the position inside the bar, and throwing
+      // the accumulator away would take the bar number - and with it the
+      // sweep's direction - back to zero.  On a deck loop the grid really
+      // does move back, and the bar number has to move with it.
       arHandoffCorr = 0.0f;
-      arHandoffAcc = phase;
+      arHandoffAcc  = expected + step;
     } else {
       arHandoffCorr -= step;
       arHandoffAt = now;
