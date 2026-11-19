@@ -74,10 +74,31 @@ clock does not.
 ## The one thing left
 
 Whether the phase is Live's *transport* position, or the transport position
-plus the track's start offset. If it is the transport position, the board
-follows Live exactly, downbeat included. If there is an offset, that offset
-is what the board's own estimator - or the downbeat mark - has to supply,
-the same as for every other source.
+plus the track's start offset.
+
+**It is the transport position**, and the evidence is in the readings taken
+during this work:
+
+- The transport was read as **690 bars** while the phase was at **2760
+  beats** - 690 bars exactly. The phase and Live's display were the same
+  number.
+- It was then read as **716 bars**, and the phase advanced by exactly the
+  same 26 bars over that stretch - even though the unit's microsecond clock
+  ran on for far longer, because the transport only moves while it plays
+  and the phase only moves while it plays.
+- When the transport was stopped and restarted, Live showed **1.1.1** -
+  the track's start, i.e. the transport *parked* - while the phase carried
+  on. That is the transport being parked, not the phase being wrong; the
+  moment it plays again the display is the phase again.
+
+So the phase is Live's own beat grid, in beats, and it comes out of the
+announce traffic. **A follower needs no peer handshake, no offset and no
+help from the board's estimator: the downbeat falls out of it, because
+Link's beat one is the music's beat one.**
+
+(The one caveat: between a stop and the next play, Live's transport is
+parked at the track's start while the phase keeps its place. A follower
+would be briefly ahead of the audio for that moment.)
 
 ## The tools
 
