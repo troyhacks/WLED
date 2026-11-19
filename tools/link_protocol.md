@@ -71,6 +71,18 @@ The proof that the earlier reading was wrong is the phase's RATE: it advances
 at exactly the beat rate, which is what a phase does and what a free-running
 clock does not.
 
+## Validated on the board
+
+The usermod is built and running (`usermods/usermod_v3_ableton_link/`).
+The board's decode was checked against the reference decoder on the host,
+and the two agreed to within the 0.3 s between the two readings - which is
+the phase moving at two beats a second.
+
+The strongest check available: **the tempo of the Live project was changed
+and the board followed it exactly.** Nothing is hardcoded - the tempo and
+the phase both come out of the packets - so a tempo change is simply the
+next packet carrying a different number.
+
 ## The one thing left
 
 Whether the phase is Live's *transport* position, or the transport position
