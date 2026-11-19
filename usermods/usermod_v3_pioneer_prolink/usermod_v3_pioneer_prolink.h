@@ -1743,6 +1743,20 @@ private:
       prolink_phrase_beats_public = 0;
       prolink_phrase_progress_public = 0.0f;
       prolink_track_progress = 0.0f;
+      // There is no phrase, so there is none to publish - and the OLD
+      // track's must go with it.
+      //
+      // The phrases are cleared when the deck loads a new track, and the
+      // new ones come back from the database a moment later - often after
+      // the new track has already started.  Until they do, the board would
+      // be running on the OLD track's phrase: its start beat, its rotation
+      // of the deck's numbering, its bar numbering - measured against the
+      // NEW track's beat count.  The downbeat would be a beat or two out
+      // and the bar number would be the old song's.
+      //
+      // So the phrase goes, and the board falls back on the deck's own
+      // numbering until the new phrase arrives.
+      arResetSongPhrase();
       return;
     }
 
@@ -1956,6 +1970,10 @@ private:
         previousPhraseIdx = -1;
         previousEffectPresetId = -1;
         prolink_total_beats = 0;
+        // The old track's phrase goes with its phrases - the board must not
+        // keep counting the new track's beats against the old song's bar
+        // numbers while the new phrase is fetched.
+        arResetSongPhrase();
 
         clearMetadata();
         clearWaveform();
