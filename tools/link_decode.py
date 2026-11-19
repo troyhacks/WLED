@@ -1,31 +1,41 @@
 """
-link_decode.py - read Ableton Link's clock off the wire.
+link_decode.py - read Ableton Link's tempo and phase off the wire.
 
-WHAT WAS FOUND, by watching a PRIME GO... no: by watching Ableton Live 12
-Lite on the same wire, with the tempo known (120 BPM):
+WHAT WAS FOUND, by watching Ableton Live 12 Lite on the same wire with the
+tempo known (120 BPM):
 
     UDP multicast 224.76.78.75
-      port 20808   the ASDP announce channel, ~20 packets a second
-      port 20909   the ablsd start/stop channel, one a second
+      :20808   the ASDP announce channel, ~18 packets a second
+      :20909   the ablsd start/stop channel, one a second
 
-An ASDP packet is:
+(The widely-cited 224.0.0.87:20800 is the Link SDK's own default and is
+NOT what Live 12 uses here.  Find the real group with
+`netsh interface ipv4 show joins`.)
 
-    "_asdp_v"            7 bytes of magic
-    01 01 05 00 00       version, message type, and a count
-    <12 bytes>           the session id
-    <records>            each one: a uint32 length, the value, then the name
+An ASDP packet:
 
-The record that matters is "sess" (24 bytes), and inside it:
+    "_asdp_v" + a version byte of 0x01     8 bytes
+    uint8   message type                    1 = alive, 2 = response
+    uint8   ttl
+    uint16  group id                        the session group
+    12 bytes                                the node id
+    then the payload, as entries of:
+        uint32  length
+        <value>
+        uint32  key   - the key is FOUR ASCII CHARACTERS, big endian
 
-    +0   uint32   0
-    +4   uint32   MICROSECONDS PER BEAT   ->  60 000 000 / this = the tempo
-    +8   uint32   0
-    +12  uint32   a counter that marches every packet
-    +16  uint32   0
-    +20  uint32   a counter that marches every packet
+Live carries four entries.  The one that matters is "sess", and it is the
+SDK's Timeline - (Tempo, Beats, timeOrigin), 24 bytes, each an int64 in
+big endian:
 
-At 120 BPM the tempo field reads 500 000, which is exactly one beat at
-120 BPM - and it is the field that moves when Live's tempo moves.
+    +0   int64   MICROSECONDS PER BEAT      the tempo is 60000000 / this
+    +8   int64   MILLIONTHS OF A BEAT       the phase, and it advances at
+                                              the beat rate - 2 000 000
+                                              millionths a second at 120 BPM
+    +16  int64   a microsecond time origin
+
+So the phase comes straight out of the announce traffic: no peer handshake
+is needed to follow Link's clock.
 
     python tools/link_decode.py --seconds 10
 """
@@ -40,34 +50,33 @@ GROUP = "224.76.78.75"
 PORT = 20808
 
 
-def parse_asdp(data):
-    """Pull the records out of an ASDP packet."""
-    if len(data) < 12 or data[:7] != b"_asdp_v":
-        return None
-    out = {"magic": data[:7].decode(), "version": data[7], "type": data[8],
-           "count": data[9] if len(data) > 9 else 0,
-           "session": data[12:24].hex(), "records": {}}
+def entries(data):
+    """The payload entries: a length, a value, then a four-character key."""
+    out = {}
     o = 24
     while o + 4 <= len(data):
-        n = struct.unpack_from(">I", data, o)[0]
+        size = struct.unpack_from(">I", data, o)[0]
         o += 4
-        if n > len(data) - o:
+        if size > len(data) - o:
             break
-        val = data[o:o + n]
-        o += n
-        # the name follows the value
-        name = ""
-        while o < len(data) and 32 <= data[o] < 127:
-            name += chr(data[o])
-            o += 1
-        out["records"][name or ("@%d" % o)] = val
+        val = data[o:o + size]
+        o += size
+        key = ""
+        if o + 4 <= len(data):
+            key = "".join(chr(b) if 32 <= b < 127 else "." for b in data[o:o + 4])
+            o += 4
+        out[key] = val
     return out
 
 
-def tempo_bpm(us_per_beat):
-    if not us_per_beat:
-        return 0.0
-    return 60000000.0 / float(us_per_beat)
+def read_timeline(data):
+    """(tempo in us per beat, phase in beats, the raw fields)."""
+    e = entries(data)
+    sess = e.get("sess")
+    if not sess or len(sess) < 24:
+        return None
+    tempo_us, origin, time_origin = struct.unpack_from(">qqq", sess, 0)
+    return tempo_us, origin / 1e6, time_origin, sess
 
 
 def main():
@@ -88,72 +97,34 @@ def main():
     s.bind(("", PORT))
     s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
                  struct.pack("4s4s", socket.inet_aton(GROUP), socket.inet_aton(iface)))
-    s.settimeout(0.3)
-    print("Ableton Link: %s:%d on %s\n" % (GROUP, PORT, iface))
+    s.settimeout(0.05)
 
-    packets = []
+    t0 = time.time()
+    print("Ableton Link: %s:%d on %s\n" % (GROUP, PORT, iface))
+    print("%9s %10s %14s %9s %8s %8s  %s" %
+          ("t", "tempo", "phase(beats)", "bar", "beat", "32nd", "track"))
+    last = None
     end = time.monotonic() + args.seconds
     while time.monotonic() < end:
         try:
             d, _a = s.recvfrom(4096)
         except socket.timeout:
             continue
-        packets.append((time.monotonic(), d))
-
-    if not packets:
-        print("nothing arrived - is Link on?")
-        return 1
-
-    p = packets[0][1]
-    info = parse_asdp(p)
-    if not info:
-        print("not an ASDP packet")
-        return 1
-
-    print("%d packets.  The first one:" % len(packets))
-    print("  magic    %r" % info["magic"])
-    print("  version  %d   type %d   flags %d" % (info["version"], info["type"], info["count"]))
-    print("  session  %s" % info["session"])
-    for name, val in info["records"].items():
-        print("  record %-6s %2d bytes  %s" % (name, len(val), val.hex()))
-        if name == "sess" and len(val) >= 24:
-            us = struct.unpack_from(">I", val, 4)[0]
-            print("           -> microseconds per beat = %d   ->  TEMPO = %.4f BPM"
-                  % (us, tempo_bpm(us)))
-            print("           -> counters at +12 and +20 march every packet")
-    print()
-
-    # the tempo over the capture
-    bpm = {}
-    for _t, d in packets:
-        i = parse_asdp(d)
-        if i and "sess" in i["records"] and len(i["records"]["sess"]) >= 24:
-            us = struct.unpack_from(">I", i["records"]["sess"], 4)[0]
-            bpm[round(tempo_bpm(us), 4)] = bpm.get(round(tempo_bpm(us), 4), 0) + 1
-    if bpm:
-        print("the tempo over %d packets: %s"
-              % (len(packets), ", ".join("%.4f BPM (x%d)" % (k, v) for k, v in bpm.items())))
-
-    # the rate of the marching counter, in beats per second
-    c12 = []
-    for t, d in packets:
-        i = parse_asdp(d)
-        if i and "sess" in i["records"] and len(i["records"]["sess"]) >= 24:
-            c12.append((t, struct.unpack_from(">I", i["records"]["sess"], 12)[0]))
-    if len(c12) > 3:
-        dt = c12[-1][0] - c12[0][0]
-        du = (c12[-1][1] - c12[0][1]) & 0xFFFFFFFF
-        us = None
-        i = parse_asdp(packets[0][1])
-        if i and "sess" in i["records"]:
-            us = struct.unpack_from(">I", i["records"]["sess"], 4)[0]
-        if dt > 0:
-            rate = du / dt
-            print("counter +12 advances %.0f per second" % rate)
-            if us:
-                print("           = %.4f beats per second (the tempo is %.4f)"
-                      % (rate / us, 60000000.0 / us))
-                print("           = %.4f of 2^32 per second" % (rate / 2 ** 32))
+        if len(d) < 48 or d[:7] != b"_asdp_v" or d[7] != 0x01:
+            continue
+        t = read_timeline(d)
+        if not t:
+            continue
+        tempo_us, phase, time_origin, _sess = t
+        bar = int(phase) % 4
+        beat = bar + 1
+        if (tempo_us, phase) != last:
+            last = (tempo_us, phase)
+            print("%9.2f %10d %14.6f %9d %8d %8d" %
+                  (time.time() - t0, tempo_us, phase, bar, beat,
+                   (int(phase * 4) % 32)), flush=True)
+    print("\n  the phase advances at the beat rate, so the bar and the beat in")
+    print("  the bar fall out of it directly.")
     return 0
 
 

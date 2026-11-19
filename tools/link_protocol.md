@@ -15,62 +15,75 @@ The widely-cited `224.0.0.87:20800` is the Link SDK's own default and is
 
 ## An ASDP packet
 
-    "_asdp_v"          7 bytes of magic
-    01 01 05 00 00     version, message type, flags
-    <12 bytes>         the session id
-    <records>          each: uint32 length, the value, then the name
+    "_asdp_v"  + a version byte of 0x01     8 bytes
+    uint8   message type                     1 = alive, 2 = response
+    uint8   ttl
+    uint16  group id                         the session group
+    12 bytes                                 the node id
+    then the payload, as entries of:
+        uint32  length
+        <value>
+        uint32  key     - FOUR ASCII CHARACTERS, big endian
 
-The records are `sess` (24 bytes), `stst` (8 bytes) and `mep` (6 bytes).
+**The version byte is the integer 1, not the character '1'.** Getting that
+wrong means the magic never matches and an announce carries a magic the unit
+does not recognise. The keys are ASCII codes: `sess`, `stst`, `mep4`.
 
-### The "sess" record
+## The tempo and the phase - both straight out of the traffic
 
-    +0   uint32   0
-    +4   uint32   MICROSECONDS PER BEAT   ->  the tempo is 60000000 / this
-    +8   uint32   0
-    +12  uint32   a counter that marches at 2e6 per second
-    +16  uint32   0
-    +20  uint32   a clock that marches at 1e6 per second (microseconds)
+The `sess` entry's 24 bytes are the SDK's `Timeline`, which is
+`(Tempo, Beats, timeOrigin)`. From the SDK's own definitions:
 
-The tempo field read 500000 - **120.0000 BPM** - steady across every
-packet.
+| | on the wire |
+|---|---|
+| `Tempo` | `microsPerBeat`, an **int64, big endian** |
+| `Beats` | **millionths of a beat**, an int64, big endian |
+| `timeOrigin` | microseconds, an int64, big endian |
 
-## The phase, and the one thing that is missing
+So:
 
-The clock at +20 gives a phase that marches at exactly one turn per beat:
+    +0   int64   MICROSECONDS PER BEAT   ->  the tempo is 60000000 / this
+    +8   int64   MILLIONTHS OF A BEAT    ->  the phase
+    +16  int64   a microsecond time origin
 
-    phase = ((clock + K) mod microseconds_per_beat) / microseconds_per_beat
+Measured: `microsPerBeat` = 500000, so **120.0000 BPM**, steady across every
+packet. And the phase field advances at **1.998964 beats/s** against the
+tempo's 2.000000 - 0.05 % over twenty seconds, which is just the jitter
+of the packets arriving in bursts.
 
-for any anchor K. The RATE is therefore solved. The **anchor is not**:
-K is what puts the wrap on the music's downbeat.
+**So the tempo AND the beat phase both come out of the passive announce
+traffic. A follower needs no peer handshake at all.**
 
-**The anchor is not in the passive traffic, and this was proved rather than
-assumed.** Live's transport was stopped and restarted during a capture -
-it went back to 1.1.1 - and the clock and the phase marched straight
-through it: 207.6 s of clock over 211.7 s of wall, with no reset. A
-phase tied to the transport would have jumped; this one is a free-running
-session phase, so its relation to the music's downbeat changes every time
-the transport restarts.
+(The SDK models the phase as `beatOrigin + microsToBeats(time - timeOrigin)`;
+Live sends the phase directly and running, which is the same thing with the
+origin folded in.)
 
-**=> A follower needs Live's state, and Link only shares that with real
-peers.** Announcing ourselves with a valid `sess` record gets us ignored
-(`tools/link_peer.py`); the announce's `mep` record carries Live's peer
-address and a gateway port that is not listening. The peer handshake is
-the remaining piece, and Ableton's LinkKit is the reference.
+### What this corrects
 
-## What this means for the board
+An earlier note here said the phase's anchor was not in the passive traffic
+and that a peer handshake would be needed. **That was wrong, and the reason
+was a misread of the field boundaries.** The two counters that looked like
+separate fields are one int64 - the phase - and the tempo field was read
+from the wrong offset. There is no missing anchor: `sess`+8 *is* the phase,
+in millionths of a beat.
 
-A Link follower would take the **tempo** and the **phase**, and would
-still need the board's own downbeat mark - the same escape hatch as every
-other source - because the phase's relation to the music's downbeat is not
-something Link publishes to a passive listener.
+The proof that the earlier reading was wrong is the phase's RATE: it advances
+at exactly the beat rate, which is what a phase does and what a free-running
+clock does not.
 
-The board-side pieces are already understood: join the multicast group on
-:20808, parse the ASDP records, take the tempo from `sess`+4, and derive
-the phase from `sess`+20. The peer handshake is the part that is not.
+## The one thing left
+
+Whether the phase is Live's *transport* position, or the transport position
+plus the track's start offset. If it is the transport position, the board
+follows Live exactly, downbeat included. If there is an offset, that offset
+is what the board's own estimator - or the downbeat mark - has to supply,
+the same as for every other source.
 
 ## The tools
 
     tools/link_probe.py    find Link on the network and dump the traffic
-    tools/link_decode.py   parse it and decode the tempo
-    tools/link_peer.py     the peer announce experiment (the next step)
-    tools/link_origin.py   watch the transport being restarted, for the anchor
+    tools/link_decode.py   parse it and decode the tempo and the phase
+    tools/link_watch2.py   watch every session-state field across a restart
+    tools/link_peer.py     a peer announce experiment (kept: it is where the
+                           "do we need a handshake at all" question was
+                           answered - we do not)
