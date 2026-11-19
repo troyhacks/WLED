@@ -526,10 +526,15 @@ struct BeatClock {
   uint8_t  fromProLink;    // 1 when the deck is driving
   // The BEAT COUNTER: the master's, for the source that is driving.
   //
-  // It is the number to count on.  It RESTARTS when the user marks the
-  // downbeat - that is the master tempo's own rule - so an effect that
-  // counts on it realigns with the mark instead of carrying on from
-  // wherever it had got to.
+  // It RESTARTS when the user marks the downbeat - that is the master
+  // tempo's own rule - so it realigns with the mark instead of carrying
+  // on from wherever it had got to.
+  //
+  // It is NOT what the effects count on.  With a deck driving it is the
+  // deck's own count, and that rides the status stream, which is not the
+  // beat rate - so it jumps two or three beats at a time.  The BAR NUMBER
+  // below is the counter the effects use: it is on the grid's own phase,
+  // so it is exact.
   uint32_t beatCount;
   // The BAR NUMBER - on the grid the phase runs on.
   //
@@ -600,11 +605,18 @@ static float downbeatAccent(const BeatClock& c, uint32_t decayMs = 300) {
 //
 // The estimator's own sixteen-beat measure is the best answer when it is
 // driving, because that measure is the one the user can move.  With a
-// deck driving the position comes from the MASTER TEMPO's beat counter
-// instead: sixteen beats is the phrase, and the counter is the master's -
-// so the phrase is where the master tempo says it is, and it restarts
-// with the mark rather than carrying on from wherever the effect had
-// got to.
+// deck driving the position comes from the GRID the light is on instead:
+// the bar it is in, and the beat in that bar.
+//
+// The deck's own beat counter is NOT what answers this.  That count is the
+// deck's position in the song and it rides the status stream, which a real
+// deck sends about once a second - so it jumps two or three beats at a
+// time, and a sixteen-step phrase built on it skips about half its steps.
+// The grid's phase runs free between the beat packets and is exact.
+//
+// And because the bar number is counted from the user's mark when the
+// override is on, the phrase starts again on the beat the user marked - the
+// same bar the light is in, so the two never disagree.
 static float beatPhrasePhase(const BeatClock& c) {
   if (c.live == 0) return 0.0f;
   ArTempoFrame tf;
@@ -612,12 +624,11 @@ static float beatPhrasePhase(const BeatClock& c) {
       tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
     return ((float)(tf.beatInMeasure - 1u) + c.beatPhase) * 0.0625f;
   }
-  // With a deck driving, the position comes from the MASTER TEMPO's beat
-  // counter: sixteen beats is the phrase, and the counter is the
-  // master's - so the phrase is where the master tempo says it is, and
-  // it restarts with the mark rather than carrying on from wherever the
-  // effect had got to.
-  return ((float)(c.beatCount & 15u) + c.beatPhase) * 0.0625f;
+  // With a deck driving: sixteen beats is four bars, and the bar number
+  // is the grid's own - so the phrase is smooth, and the user's mark
+  // moves it.
+  const uint32_t bar = c.barCount;
+  return ((float)((bar % 4u) * 4u + (uint32_t)(c.beat - 1u)) + c.beatPhase) * 0.0625f;
 }
 
 // The grid's own quality and error: how well the music explains the
@@ -1738,19 +1749,19 @@ uint16_t mode_beat_sweep(void) {
   };
 
   // ---- the movement -----------------------------------------------------
-  // The BAR is the MASTER TEMPO's bar, not one of this effect's own.
+  // The BAR is the GRID's bar, not one of this effect's own.
   //
   // The effect used to count its own bars, and that gave it a life of its
   // own: marking the downbeat restarts the master tempo's beat counter,
   // and the effect carried on counting from wherever it had got to.  So
-  // its bars were not the music's bars, and the walk through the
+  // its bars were not the music's bars, and the cycle through the
   // thirty-two was anchored to nothing the user could see - it just
   // lined up with the first beat of the bar and went on its own way.
   //
-  // Now the bar comes from the master tempo, so the effect is where the
-  // music is: mark the downbeat and the counter restarts, and the effect
-  // restarts with it - the walk through the thirty-two begins again from
-  // the first, and it is aligned to the measure.
+  // Now the bar comes from the grid, so the effect is where the music
+  // is: mark the downbeat and the count restarts, and the effect
+  // restarts with it - the cycle starts again on the marked beat, and it
+  // is aligned to the measure.
   //
   // The bar comes from the PUBLISH layer's grid - the same grid the
   // light's own position runs on - and NOT from the master's beat counter.
@@ -1763,9 +1774,15 @@ uint16_t mode_beat_sweep(void) {
   const uint32_t bar = clk.barCount;
 
   // ---- the cycle --------------------------------------------------------
-  // With the cycle on, the sub-effect steps on every few BARS - sixteen
-  // beats at four - so all thirty-two can be watched in order.  It starts
-  // at zero and counts up to thirty-one and round again.
+  // With the cycle on, the sub-effect changes on every few BARS - sixteen
+  // beats at four - so all thirty-two can be watched over a few minutes.
+  //
+  // WHICH one it changes to is a SHUFFLE, not a walk through them in
+  // order.  It used to count: one, two, three, and round again - and that
+  // is a list, not a cycle.  A lot of these sub-effects are near
+  // neighbours of each other, so the wall kept showing the same sort of
+  // thing over and over.  Now the next one is uniform over the other
+  // thirty-one and never the same one twice running.
   //
   // The FIRST SLIDER is the cycle: zero for off, and then the number of
   // BARS each sub-effect is shown for.  It is one control because it is
@@ -1782,22 +1799,23 @@ uint16_t mode_beat_sweep(void) {
   if (cycle) {
     const uint8_t lastSub = (uint8_t)((SEGENV.aux1 >> 8) & 31u);
     if (clk.live) {
-      // The SLOT comes from the master tempo's bar number, so the change
-      // lands on the master's bars - and the mark moves it with them.
+      // The SLOT comes from the grid's bar number, so the change lands on
+      // the bar boundaries - and the mark moves it with them.
       //
       // WHICH sub-effect is a different matter: it is a RANDOM one, and
-      // never the same one twice running.  Counting one to thirty-one
-      // walks past the whole set in a fixed order, and a lot of these
-      // effects are near neighbours of each other - a shuffle is livelier
-      // than a list, and it is the same set every time.
+      // never the same one twice running.  The offset is one to
+      // thirty-one, so the walk always MOVES: the next sub-effect is
+      // never the one on the wall now.
       //
-      // The offset is one to thirty-one, so the walk always MOVES: the
-      // next sub-effect is never the one on the wall now.
-      const uint32_t slot = bar / cycleBars;
-      if (slot != (uint32_t)SEGENV.aux0) {
+      // The slot is kept in SIXTEEN BITS, the width it is stored in.  A
+      // bar number past 65535 - about a day and a half at 124 BPM with a
+      // one-bar cycle - would be truncated on the way in and then never
+      // match the comparison, so the cycle would shuffle on every frame.
+      const uint16_t slot = (uint16_t)(bar / cycleBars);
+      if (slot != SEGENV.aux0) {
         const uint8_t offset = (uint8_t)(1u + (random8() % 31u));
         sub = (uint8_t)((lastSub + offset) & 31u);
-        SEGENV.aux0 = (uint16_t)slot;
+        SEGENV.aux0 = slot;
       } else {
         sub = lastSub;
       }
@@ -1849,16 +1867,11 @@ uint16_t mode_beat_sweep(void) {
   }
 
   // The sixteen-step phrase's position, 0..1.
-  float phrasePhase = 0.0f;
-  {
-    ArTempoFrame tf;
-    if (!clk.fromProLink && arCopyTempo(&tf) && tf.valid != 0 &&
-        tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
-      phrasePhase = ((float)(tf.beatInMeasure - 1u) + clk.beatPhase) * 0.0625f;
-    } else {
-      phrasePhase = ((float)((bar % 4u) * 4u + (uint32_t)(clk.beat - 1u)) + clk.beatPhase) * 0.0625f;
-    }
-  }
+  //
+  // It comes from the SHARED helper, so the Phrase and the Phrase Mover
+  // are always on the same sixteen beats - and so this effect's phrase is
+  // the one the user can move with the downbeat button.
+  const float phrasePhase = beatPhrasePhase(clk);
 
   // ---- what the sub-effect says -----------------------------------------
   // layer        what the strip shows

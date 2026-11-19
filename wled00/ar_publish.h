@@ -177,8 +177,9 @@ struct ArTempoFrame {
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
   // The ProLink OVERRIDE: the user marked a downbeat while the deck was
   // playing, so the deck's numbering is rotated to the beat they marked.
-  // It is an OFFSET from the deck's packets - the deck's tempo, phase and
-  // thirty-two are still the deck's own.
+  // It is an OFFSET from the deck's packets - the deck's tempo and phase
+  // are still the deck's own - and the bar number and the sixteen-beat
+  // phrase are counted FROM THE MARK (see ArBeatSource::barCount).
   uint8_t  deckOverride;    // 1 when the override is on
   uint8_t  deckDownbeat;    // the DECK's beat that was marked, 0..3
   uint32_t deckElapsedAtMark; // the deck's beat count when it was marked
@@ -238,13 +239,22 @@ struct ArBeatSource {
   // which is not the beat rate - so its bar boundary can be a beat away
   // from the phase's.  A light that turns round when the COUNT says the
   // bar turned round reverses in the middle of the bar.
+  //
+  // WITH THE USER'S PROLINK MARK ON it is counted FROM THE MARK: the bar
+  // the user marked is bar zero, and the count runs from there.  So the
+  // mark restarts the effect's cycle, its sweep direction and its
+  // sixteen-beat phrase, and not only the beat number.
   uint32_t barCount;
   // The beat COUNTER - the master's, for the source that is driving.
   //
-  // It is what the effects count on: the bars are this divided by four,
-  // and the master tempo's counter RESTARTS when the user marks the
-  // downbeat, so an effect that counts on this realigns with the mark
-  // instead of carrying on from wherever it had got to.
+  // It RESTARTS when the user marks the downbeat, so it realigns with the
+  // mark instead of carrying on from wherever it had got to.
+  //
+  // It is NOT what the effects count on.  With a deck driving it is the
+  // deck's own count, and that rides the status stream, which is not the
+  // beat rate - so it jumps two or three beats at a time.  The BAR NUMBER
+  // above is the counter the effects use: it is on the grid's own phase,
+  // so it is exact.
   uint32_t beatCount;
   float    driftMs;         // the grid's phase error against the music, ms
   float    driftPct;        // that error as a percentage of the beat

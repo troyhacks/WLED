@@ -3070,9 +3070,9 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
   // WITH A DECK, THE MARK IS AN OVERRIDE OF THE DECK'S NUMBERING.  The
   // deck's beat one, two, three and four are still used - the deck is
   // still the clock - but the one the user marked is the downbeat, so the
-  // deck's numbering is rotated to it.  That is an OFFSET, and it is the
-  // only thing the mark changes: the deck's tempo, its phase and its
-  // thirty-two are the deck's own.
+  // deck's numbering is rotated to it.  That is an OFFSET from the deck's
+  // packets: the deck's tempo and its phase are the deck's own, and the
+  // thirty-two and the bar number are counted from the mark.
   {
     const uint8_t dbr = arTempoDownbeatRequest.exchange(0, std::memory_order_relaxed);
     if (dbr == 1) {

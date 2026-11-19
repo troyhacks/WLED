@@ -8183,6 +8183,13 @@ class AudioReactive : public Usermod {
           t["source_bpm"]   = (double)bs.bpm;
           t["source_beat"]  = (int)bs.beatInBar;
           t["source_32"]    = (int)bs.beatInMeasure32;
+          // The BAR the light is on, and the PHRASE step inside the
+          // sixteen beats.  The bar is counted from the user's mark when
+          // the ProLink override is on, so the mark is visible here: the
+          // bar it was taken on is bar zero.
+          t["source_bar"]   = (int)bs.barCount;
+          t["source_phrase"] = (int)(((bs.barCount % 4u) * 4u +
+                                      (uint32_t)(bs.beatInBar > 0u ? bs.beatInBar - 1u : 0u)) & 15u);
         }
         t["ref_bpm"]      = (double)tf.refBpm;
         t["ref_valid"]    = (int)tf.refValid;

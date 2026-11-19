@@ -242,6 +242,26 @@ static float    arHandoffAcc    = 0.0f;   // the source's phase, unwrapped, in b
 static uint32_t arHandoffAccAt  = 0;      // when that was, ms
 static float    arHandoffBpm    = 0.0f;   // the tempo of that source
 
+// The ProLink MARK's REBASE.
+//
+// The bar number is the grid's own count, and it counts from wherever the
+// grid started - which is not where the user says the bar starts.  So the
+// mark REBASES it: the bar the user marked is bar zero, and the count runs
+// from there.
+//
+// The rebase is the grid's position at the START of the beat the user
+// marked.  That beat is beat one of the bar - the rotation in
+// arGetBeatSource() makes it so - so this is the bar's start, and the
+// count is exact on the downbeat.
+//
+// The deck's OWN count cannot be used here.  It is the deck's position in
+// the song, and it rides the status stream, which is not the beat rate:
+// on a real deck it arrives about once a second, so it jumps two or
+// three beats at a time.  The grid's phase runs free between the beat
+// packets and is exact, so the counters are counted on THAT.
+static float    arHandoffDeckAtMark = 0.0f;   // the grid's position at the marked beat
+static uint8_t  arHandoffDeckWas    = 0;      // the override, as it was last time
+
 // How fast the correction is let go, in BEATS.  Four beats is a bar: the
 // light slows for a bar and is back on the grid by the next one.
 #define AR_HANDOFF_TAU_BEATS 4.0f
@@ -362,8 +382,27 @@ static void arApplyHandoff(ArBeatSource* b) {
   //
   // The unwrapped phase is the exact position in beats, and it is what the
   // light follows, so the bar it gives is the bar the light is in.
-  const float accBar = floorf(arHandoffAcc / 4.0f);
-  b->barCount = (accBar > 0.0f) ? (uint32_t)accBar : 0u;
+  //
+  // WITH THE USER'S MARK ON, the number is counted from the mark: the bar
+  // the user marked is bar zero.  That is what makes the mark a real
+  // override and not only a rotation of the beat number - the effect's
+  // cycle, its sweep direction and its sixteen-beat phrase all start again
+  // on the beat the user marked.
+  if (b->deckOverride) {
+    // The rebase, taken the moment the override turns on.  The phase is
+    // the position inside the bar, so the grid's position at the START of
+    // the marked beat is the phase taken off the accumulator.
+    if (!arHandoffDeckWas) {
+      arHandoffDeckAtMark = arHandoffAcc - phase;
+    }
+    const float rel = arHandoffAcc - arHandoffDeckAtMark;
+    const float relBar = floorf(rel / 4.0f);
+    b->barCount = (relBar > 0.0f) ? (uint32_t)relBar : 0u;
+  } else {
+    const float accBar = floorf(arHandoffAcc / 4.0f);
+    b->barCount = (accBar > 0.0f) ? (uint32_t)accBar : 0u;
+  }
+  arHandoffDeckWas = b->deckOverride ? 1 : 0;
 
   arHandoffAccAt = now;
   arHandoffBpm   = b->bpm;
@@ -409,6 +448,14 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // the beat the user marked by ear is the downbeat, so the deck's
     // numbering is ROTATED to it.  That is the whole of the override: an
     // offset from the deck's packets, and nothing else.
+    //
+    // The counters that describe a BAR - the bar number and the
+    // sixteen-beat phrase - are counted from the mark as well, in
+    // arApplyHandoff(): the bar the user marked is bar zero, so the
+    // effect's cycle and its phrase restart on it.  Without that the
+    // override was only a rotation of the beat number, and everything
+    // that counted on the bar carried on counting from wherever it had
+    // got to.
     const bool override = haveTf && tf.deckOverride != 0;
     b.deckOverride = override ? 1 : 0;
     if (override) {
@@ -420,24 +467,39 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // it is counted from the MARK, so it restarts when the user marks
     // the downbeat - the same thing the master's counter does, and the
     // reason an effect that counts on this realigns with the mark.
+    //
+    // The count itself rides the STATUS stream, which a real deck sends
+    // about once a second: it jumps two or three beats at a time.  So it
+    // is not what anything counts on - the grid's own phase is - and it
+    // is here as the deck's own answer, for a reader that wants it.
+    //
+    // The deck's count is ONE-BASED: the count is 1 on the deck's first
+    // beat, and (count - 1) mod 4 is the beat in the bar.  The count
+    // rebased on the mark keeps that convention, so the marked beat is
+    // count 1.
     uint32_t deckBeats = prolink_beats_elapsed_public;
-    if (override && tf.deckElapsedAtMark > 0u &&
-        prolink_beats_elapsed_public > tf.deckElapsedAtMark) {
-      deckBeats = prolink_beats_elapsed_public - tf.deckElapsedAtMark;
+    if (override && prolink_beats_elapsed_public >= tf.deckElapsedAtMark) {
+      deckBeats = prolink_beats_elapsed_public - tf.deckElapsedAtMark + 1u;
     }
     b.beatCount = deckBeats;
 
-    // The THIRTY-TWO: the deck's beat in the song, which we ASSUME is set
-    // to a measure start.  But the USER's mark of the downbeat overrides
-    // it: he has said by ear where the bar starts, and that beats the
-    // deck's numbering.  With the override on, the thirty-two is counted
-    // from the mark - the deck's beat count at the moment he marked it.
-    if (haveTf && tf.downbeatSet != 0 && !override) {
-      b.beatInMeasure32 = tf.beatInMeasure32;
-    } else if (deckBeats > 0u) {
-      b.beatInMeasure32 = (uint8_t)(((deckBeats - 1u) % 32u) + 1u);
-    }
     arApplyHandoff(&b);
+
+    // The THIRTY-TWO: the position in the eight-bar measure, on the SAME
+    // grid as the bar number and the sixteen-beat phrase.
+    //
+    // It was the deck's own count of beats into the song, and that count
+    // rides the status stream - a real deck sends it about once a second,
+    // so it names the beat the deck was on a second ago and jumps two or
+    // three beats at a time.  It is counted on the grid's phase instead,
+    // which is exact: the bar number and the beat in the bar are both
+    // there already.
+    //
+    // And because the bar number is counted from the user's mark when
+    // the override is on, the thirty-two starts on the beat they marked
+    // - the same anchor as the bar and the phrase.
+    b.beatInMeasure32 = (uint8_t)((((b.barCount * 4u) +
+                                    (uint32_t)(b.beatInBar - 1u)) % 32u) + 1u);
     return b;
   }
   #endif
@@ -487,6 +549,10 @@ void arResetTempo() {
   arHandoffAcc   = 0.0f;
   arHandoffAccAt = 0;
   arHandoffBpm   = 0.0f;
+  // The mark's rebase goes too: after a reset there is no grid for the
+  // bar number to be counted on, and no mark to count from.
+  arHandoffDeckAtMark = 0.0f;
+  arHandoffDeckWas    = 0;
   arTempoFrame.bpm = 0.0f;
   arTempoFrame.beatProgress = 0.0f;
   arTempoFrame.score = 0.0f;
