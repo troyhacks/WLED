@@ -382,6 +382,7 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FX_MODE_TRACKER                239
 #define FX_MODE_PHRASE_MOVER           240
 #define FX_MODE_BEAT_SWEEP              241
+#define FX_MODE_LOOP_SWEEP              242
 
 #define MODE_COUNT                     242
 

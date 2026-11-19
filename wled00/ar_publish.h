@@ -239,6 +239,17 @@ struct ArBeatSource {
   // from the phase's.  A light that turns round when the COUNT says the
   // bar turned round reverses in the middle of the bar.
   uint32_t barCount;
+  // THE DECK'S LOOP: its length in beats, the position inside it, and how
+  // many times the DJ has halved it.
+  //
+  // The beat number repeats on the loop's boundary, so the number of beats
+  // between two appearances of the same number is the loop's length, and
+  // the count from there is the position inside it.  The beat grid cannot
+  // know any of this: it knows where the BAR is, not where the DJ's loop
+  // is.
+  uint8_t  loopBeats;    // the loop's length in beats; 0 when there is none
+  uint8_t  loopPos;      // the beats from the loop's start
+  uint8_t  loopHalvings; // how many times the loop has been halved
   // The beat COUNTER - the master's, for the source that is driving.
   //
   // It is what the effects count on: the bars are this divided by four,
