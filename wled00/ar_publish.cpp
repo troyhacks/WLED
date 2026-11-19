@@ -262,6 +262,7 @@ static void arApplyHandoff(ArBeatSource* b) {
     arHandoffSrc = 0;
     arHandoffCorr = 0.0f;
     b->phaseBeats = 0.0f;
+    b->barCount = 0;
     return;
   }
 
@@ -341,6 +342,22 @@ static void arApplyHandoff(ArBeatSource* b) {
   while (p >= 4.0f) p -= 4.0f;
   while (p <  0.0f) p += 4.0f;
   b->phaseBeats = p;
+
+  // The bar number, on the SAME grid as the phase: the unwrapped phase
+  // divided by the beats in a bar.
+  //
+  // The master's COUNT cannot answer this.  With a deck driving, that
+  // count is the deck's position in the song, and it rides the status
+  // stream - which is not the beat rate - so its bar boundary can be a
+  // beat away from the phase's.  A light that turns round when the COUNT
+  // says the bar turned round reverses in the middle of the bar, and a
+  // sub-effect that changes when the COUNT says the bar turned round
+  // changes in the middle of the bar too.
+  //
+  // The unwrapped phase is the exact position in beats, and it is what the
+  // light follows, so the bar it gives is the bar the light is in.
+  const float accBar = floorf(arHandoffAcc / 4.0f);
+  b->barCount = (accBar > 0.0f) ? (uint32_t)accBar : 0u;
 
   arHandoffAccAt = now;
   arHandoffBpm   = b->bpm;

@@ -531,6 +531,14 @@ struct BeatClock {
   // counts on it realigns with the mark instead of carrying on from
   // wherever it had got to.
   uint32_t beatCount;
+  // The BAR NUMBER - on the grid the phase runs on.
+  //
+  // It is the bar the music is in: the phase is the position within the
+  // bar, and this says which bar that is.  The counter above cannot answer
+  // it - with a deck driving, that count is the deck's position in the
+  // song, and it rides the status stream, which is not the beat rate, so
+  // its bar boundary can be a beat away from the phase's.
+  uint32_t barCount;
 };
 
 static BeatClock beatClock(bool ignoreProLink = false) {
@@ -546,6 +554,7 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   // deck arrives or leaves.  The beat NUMBER above is still the
   // source's - the deck's real downbeat is information, not a glitch.
   c.barPhase      = b.phaseBeats * 0.25f;
+  c.barCount      = b.barCount;
   c.live          = 1;
   c.downbeatKnown = b.downbeatKnown;
   c.fromProLink   = b.fromProLink;
@@ -1738,16 +1747,20 @@ uint16_t mode_beat_sweep(void) {
   // thirty-two was anchored to nothing the user could see - it just
   // lined up with the first beat of the bar and went on its own way.
   //
-  // Now the bar comes from the master tempo's beat counter, so the
-  // effect is where the music is: mark the downbeat and the counter
-  // restarts, and the effect restarts with it - the walk through the
-  // thirty-two begins again from the first, and it is aligned to the
-  // measure.
+  // Now the bar comes from the master tempo, so the effect is where the
+  // music is: mark the downbeat and the counter restarts, and the effect
+  // restarts with it - the walk through the thirty-two begins again from
+  // the first, and it is aligned to the measure.
   //
-  // The bar is the master's, so it advances when the master's counter
-  // does - four beats to the bar - and the sweep turns round on the bar
-  // line.
-  const uint32_t bar = clk.beatCount / 4u;
+  // The bar comes from the PUBLISH layer's grid - the same grid the
+  // light's own position runs on - and NOT from the master's beat counter.
+  // With a deck driving, that counter is the deck's position in the song,
+  // and it rides the status stream, which is not the beat rate: its bar
+  // boundary can be a beat away from the phase's.  A sweep that turned
+  // round when the COUNTER said the bar turned round reversed in the
+  // middle of the bar, and a sub-effect that changed then changed in the
+  // middle of the bar too.
+  const uint32_t bar = clk.barCount;
 
   // ---- the cycle --------------------------------------------------------
   // With the cycle on, the sub-effect steps on every few BARS - sixteen
