@@ -300,11 +300,35 @@ static void arApplyHandoff(ArBeatSource* b) {
     arHandoffSrc = src;
     arHandoffAcc = phase;      // the new grid's phase starts here
   } else if (fabsf(step) > AR_HANDOFF_JUMP_BEATS) {
-    // The same grid, but it STEPPED: a deck that re-anchored, a tracker
-    // that skipped a beat.  The step is taken back the same way.
-    arHandoffCorr -= step;
-    arHandoffAt = now;
-    arHandoffAcc = expected + step;
+    // The same grid, but it STEPPED.
+    //
+    // A step of a WHOLE BEAT or more from the DECK is the deck's own
+    // numbering moving - the song changed, and the bar with it - and
+    // that is INFORMATION, not a glitch.  The deck's position in the
+    // song is transmitted in beats, so a new song restarts it, and the
+    // beat in the bar jumps with it.
+    //
+    // Taking that step back would be wrong: the light would run slowly
+    // for a bar, appear to reverse, and then drift to the place it was
+    // going to anyway.  A grid that loops must take the light with it -
+    // the light goes to the new bar and STAYS there.
+    //
+    // The deck's PHASE stepping (a packet that arrived late, an anchor
+    // that moved) is a different thing: that is a glitch, and it is
+    // taken back the way it always was.  A dropped beat packet does not
+    // step the phase at all - the anchor holds and the phase keeps
+    // running - so a whole-beat step from the deck is its numbering
+    // moving and nothing else.
+    if (src == 2 && fabsf(step) >= 0.5f) {
+      // The deck moved its grid on purpose: re-anchor on it, with no
+      // correction to let go.
+      arHandoffCorr = 0.0f;
+      arHandoffAcc = phase;
+    } else {
+      arHandoffCorr -= step;
+      arHandoffAt = now;
+      arHandoffAcc = expected + step;
+    }
   } else {
     // The phase is going where it should.  The correction is let go, so
     // the phase glides onto the grid instead of sitting beside it.
