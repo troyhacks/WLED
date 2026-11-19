@@ -539,16 +539,6 @@ struct BeatClock {
   // song, and it rides the status stream, which is not the beat rate, so
   // its bar boundary can be a beat away from the phase's.
   uint32_t barCount;
-  // The DECK'S LOOP: its length in beats, the position inside it, and how
-  // many times the DJ has halved it.
-  //
-  // The beat grid cannot know any of this - it knows where the BAR is, not
-  // where the DJ's loop is - and the loop is what a DJ works with.
-  uint8_t  loopBeats;    // the loop's length in beats
-  uint8_t  loopPos;      // the beats from the loop's start
-  uint8_t  loopHalvings; // how many times the loop has been halved
-  // The SONG'S POSITION, in beats - where the platter is in the track.
-  float    songPos;
 };
 
 static BeatClock beatClock(bool ignoreProLink = false) {
@@ -569,10 +559,6 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.downbeatKnown = b.downbeatKnown;
   c.fromProLink   = b.fromProLink;
   c.beatCount     = b.beatCount;
-  c.loopBeats     = b.loopBeats;
-  c.loopPos       = b.loopPos;
-  c.loopHalvings  = b.loopHalvings;
-  c.songPos       = b.songPos;
   return c;
 }
 
@@ -1696,7 +1682,7 @@ static const char _data_FX_MODE_PHRASE_MOVER[] PROGMEM = "Phrase Mover ☾🐺@T
  *   Checkbox[2] Peak        = a mark at the dominant band
  *   Checkbox[3] Downbeat    = the third colour on the downbeat
  */
-uint16_t mode_beat_sweep_core(bool platter) {
+uint16_t mode_beat_sweep(void) {
   const BeatClock clk = beatClock();
   const uint16_t n = beatRowLength();
   if (n < 2) return mode_static();
@@ -1844,30 +1830,14 @@ uint16_t mode_beat_sweep_core(bool platter) {
       if (clk.beat & 1) { pos = clk.beatPhase;         dir = 1;  }
       else              { pos = 1.0f - clk.beatPhase; dir = -1; }
     } else {
-      // WHERE THE LIGHT IS.
-      //
-      // The Beat Sweep's light is at the BAR's phase - where we are in
-      // the bar.  The Loop Sweep's light is at the PLATTER'S position -
-      // where we are in the song, taken modulo the loop's length, so the
-      // light crosses the strip once per loop and the loop's width is the
-      // sweep's width.
-      //
-      // The song's position is the deck's count plus the beats that have
-      // passed since the count arrived, so it follows the platter instead
-      // of stepping every time the status stream speaks.
-      const float lp = (platter && clk.loopBeats > 0)
-                     ? (fmodf(clk.songPos, (float)clk.loopBeats) / (float)clk.loopBeats)
-                     : clk.barPhase;
-      const float bp = lp;                           // 0..1 through the bar, or the loop
+      const float bp = clk.barPhase;                 // 0..1 through this bar
       if (loopMode) { pos = bp;         dir = 1;  }  // always one way, wrapping
       else if (bar & 1u) { pos = 1.0f - bp; dir = -1; }  // this bar: right to left
       else          { pos = bp;         dir = 1;  }  // this bar: left to right
     }
     if (loopMode) {
       // The loop always goes the same way and wraps.
-      pos = perBeat ? clk.beatPhase : (platter && clk.loopBeats > 0)
-                     ? (fmodf(clk.songPos, (float)clk.loopBeats) / (float)clk.loopBeats)
-                     : clk.barPhase;
+      pos = perBeat ? clk.beatPhase : clk.barPhase;
       dir = 1;
     }
   } else {
@@ -2190,23 +2160,7 @@ uint16_t mode_beat_sweep_core(bool platter) {
 
   return FRAMETIME;
 }
-
-// The Beat Sweep's light is at the BAR's phase - where we are in the bar.
-//
-// The Loop Sweep's light is at the LOOP's position - where we are in the
-// DJ's loop.  A DJ works with the loop: it is the thing that gets halved
-// for a build-up and released at the drop, and the beat grid knows
-// nothing about it.  The two are the same effect otherwise: the same
-// thirty-two sub-effects, the same spectrum ribbon, the same light.
-//
-// With no deck there is no loop, so the light waits at the start of the
-// strip - the loop's length is not known, and a made-up one would be a
-// lie.
-uint16_t mode_beat_sweep(void) { return mode_beat_sweep_core(false); }
-uint16_t mode_loop_sweep(void) { return mode_beat_sweep_core(true); }
-
 static const char _data_FX_MODE_BEAT_SWEEP[] PROGMEM = "Beat Sweep ☾🐺@Cycle,Sensitivity,Width,Hue,Effect,Trail,Loop,Beat;Light,BG,Downbeat;;1v;sx=128,ix=128,c1=96,c2=0,c3=12,o1=1,o2=0,o3=0,pal=11";
-static const char _data_FX_MODE_LOOP_SWEEP[] PROGMEM = "Loop Sweep ☾🐺@Cycle,Sensitivity,Width,Hue,Effect,Trail,Loop,Beat;Light,BG,Downbeat;;1v;sx=128,ix=128,c1=96,c2=0,c3=12,o1=1,o2=0,o3=0,pal=11";
 
 
 /*
@@ -17152,7 +17106,6 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_TRACKER, &mode_tracker, _data_FX_MODE_TRACKER); // beats: the motion shows the grid's quality
   addEffect(FX_MODE_PHRASE_MOVER, &mode_phrase_mover, _data_FX_MODE_PHRASE_MOVER); // beats: the light's position is the phrase's
   addEffect(FX_MODE_BEAT_SWEEP, &mode_beat_sweep, _data_FX_MODE_BEAT_SWEEP); // beats + audio: a sweep across the bar, over the spectrum
-  addEffect(FX_MODE_LOOP_SWEEP, &mode_loop_sweep, _data_FX_MODE_LOOP_SWEEP); // the same, but the light follows the DJ's LOOP, not the bar
   addEffect(FX_MODE_DJLIGHT_CIRCLES, &mode_DJLight_Circles, _data_FX_MODE_DJLIGHT_CIRCLES); // audio
   addEffect(FX_MODE_AKEMIPPA, &mode_AkemiPPA, _data_FX_MODE_AKEMIPPA); // audio
   addEffect(FX_MODE_RTA_METER, &mode_RTAMeter, _data_FX_MODE_RTA_METER); // audio: the analyser view

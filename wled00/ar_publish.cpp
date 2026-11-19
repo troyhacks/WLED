@@ -402,45 +402,6 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     b.downbeatKnown = 1;      // a CDJ knows its own downbeat
     b.fromProLink   = 1;
 
-    // THE DECK'S LOOP: its length, the position inside it, and the
-    // build-up.
-    //
-    // TWO answers, and they see different things.
-    //
-    // The BEAT NUMBER sees a loop TIGHTER than a bar: a two-beat loop is
-    // 3,4,3,4 and a one-beat loop is 3,3,3, and the number of beats
-    // between two appearances of the same number is the loop's length.  It
-    // cannot see a wide loop, because a four-beat loop and an eight-beat
-    // one both cycle 1,2,3,4.
-    //
-    // The POSITION sees a WIDE loop: the count is the deck's position in
-    // the song, and it jumps BACKWARDS by the loop's length when the loop
-    // comes round.  It cannot see a tight loop, because the count's
-    // updates are further apart than the loop - MEASURED, the deck sends
-    // status about every 2.3 s.
-    //
-    // So: a tight answer from the beat number wins, and otherwise the
-    // position's.
-    {
-      extern volatile uint8_t prolink_loop_beats_public;
-      extern volatile uint8_t prolink_loop_pos_public;
-      extern volatile uint8_t prolink_loop_halvings_public;
-      extern volatile uint8_t prolink_loop_jump_public;
-      extern volatile float   prolink_song_pos_public;
-      const uint8_t tight = prolink_loop_beats_public;
-      // The position's answer carries a CONSTANT: the count is the deck's
-      // grid and the beats that passed are counted on the audible one, and
-      // the audible grid is the phase offset - 40 ms - EARLIER than the
-      // deck's.  So the count is one beat behind the count of the beats
-      // that passed, and the jump is one MORE than the loop's length.
-      // MEASURED on the board with no loop at all: the jump reads 1.
-      const uint8_t wide = (prolink_loop_jump_public > 1) ? (uint8_t)(prolink_loop_jump_public - 1) : 0;
-      b.loopBeats    = (tight > 0 && tight < 4) ? tight : (wide > 0 ? wide : 4);
-      b.loopPos      = (tight > 0 && tight < 4) ? prolink_loop_pos_public : 0;
-      b.loopHalvings = prolink_loop_halvings_public;
-      b.songPos      = prolink_song_pos_public;
-    }
-
     // THE USER'S OVERRIDE OF THE DECK'S NUMBERING.
     //
     // The deck's beat one, two, three and four are still used - the deck

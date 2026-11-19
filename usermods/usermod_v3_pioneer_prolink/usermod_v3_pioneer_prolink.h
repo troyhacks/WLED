@@ -148,21 +148,6 @@ volatile uint32_t prolink_beats_elapsed_public = 0;
 volatile uint8_t  prolink_bars_elapsed_public = 0;
 volatile uint8_t  prolink_bars_remaining_public = 0;
 
-// THE LOOP, and the build-up.
-//
-// The beat number repeats on the loop's boundary, so the number of beats
-// between two appearances of the same number is the loop's length: a bar
-// is four, a two-beat loop is two, a one-beat loop is one.
-//
-// A DJ halving the loop - the build-up, where a beat is cut in half again
-// and again before it is released - is that length halving, and the count
-// of how many times it has been halved says how far into the build we
-// are.  The position in the song says where we are; this says how big the
-// loop is, and neither can be had from the other.
-volatile uint8_t  prolink_loop_beats_public = 0;      // the loop's length in beats
-volatile uint8_t  prolink_loop_beats_last_public = 0; // the length before this one
-volatile uint8_t  prolink_loop_halvings_public = 0;   // how many times it has been halved
-
 // Phrase / Structure
 volatile int      prolink_phrase_index_public = -1;
 String            prolink_phrase_name_public = "";
@@ -395,36 +380,10 @@ private:
   // beat - so the 30-bit wrap never bites, and the elapsed time is recovered
   // with a masked subtraction.
   volatile uint32_t prolinkClockPacked = 0;
-  // The beat's OWN duration - the tempo it was announced with.
-  //
-  // The phase inside a beat runs at that beat's rate, so it has to be
-  // measured against the duration that beat was announced with and not
-  // against the deck's current tempo.  When the speed changes - the
-  // platter moved - the current tempo changes with it, and the phase
-  // JUMPS: the same elapsed time suddenly means a different fraction of
-  // a beat.  With the beat's own duration the phase keeps moving at the
-  // old rate until the next beat, and the new rate takes over there.
-  //
-  // The tempo changes the grid's RATE; it must not move the grid's
-  // VALUE.
-  volatile float anchorBeatMs = 0.0f;
   // The change detection for the anchor.  Written by the packet callback and
   // cleared by the main loop when the deck goes away, so it is touched from
   // two tasks: it is volatile, and a single byte's write is atomic here.
   volatile uint8_t  lastPacketBeatNo = 0;
-  // The last five beat numbers, newest first, and when they came.  The
-  // loop's length is the distance back to the last time the current
-  // number was seen - and a repeat that is less than half a beat away is
-  // the same beat arriving twice, not a loop.
-  //
-  // FIVE, because a bar is four beats and the bar's own repeat is a
-  // repeat: the number comes round again after four beats, and that has
-  // to be findable or the ordinary case reads as "no loop at all".
-  uint8_t  beatNumberSeen[5] = { 0, 0, 0, 0, 0 };
-  uint32_t beatNumberAt[5]   = { 0, 0, 0, 0, 0 };
-  // The last reading of the loop's length, before it was confirmed.  A
-  // reading has to come twice to be believed.
-  uint8_t  lastLoopFinding = 0;
 
   // Config strings
   static const char _name[];
@@ -874,70 +833,6 @@ private:
       lastPacketBeatNo = linkState.beatNumber;
       prolinkClockPacked = (millis() & PROLINK_CLOCK_ANC_MASK) |
                            ((uint32_t)(linkState.beatNumber - 1u) << PROLINK_CLOCK_POS_SHIFT);
-      // The duration of the beat this packet announced.  The phase inside
-      // this beat is measured against it, so that a change of tempo - the
-      // platter moving - changes the rate the phase runs at from the next
-      // beat on, and never the phase's own value.
-      if (linkState.bpm > 0.0f) anchorBeatMs = 60000.0f / linkState.bpm;
-
-      // THE LOOP'S LENGTH, in beats.
-      //
-      // The beat number repeats on the loop's boundary: a bar is
-      // 1,2,3,4,1,2,3,4 - the same number every four beats.  A loop
-      // SHORTENS that: a two-beat loop is 3,4,3,4 and a one-beat loop is
-      // 3,3,3.  So the number of beats between two appearances of the
-      // same number IS the loop's length.
-      //
-      // And a DJ halving the loop - the build-up, where a beat is cut in
-      // half again and again before it is released - is that length
-      // halving.  It is the one thing about a loop that cannot be seen
-      // any other way: the position in the song says where we are, and
-      // the number says how big the loop is.
-      //
-      // The four most recent beat numbers are kept, newest first, and the
-      // loop's length is the distance back to the last time this number
-      // was seen.
-      //
-      // A DUPLICATE is not a loop.  The deck sends some of its beat
-      // packets to the board alone and some to the network, so the same
-      // beat number can arrive twice in a moment - and a duplicate is
-      // not a one-beat loop.  The two are told apart by TIME: a repeat
-      // that is less than half a beat away is the same beat twice.
-      for (int i = 4; i > 0; i--) {
-        beatNumberSeen[i] = beatNumberSeen[i - 1];
-        beatNumberAt[i]  = beatNumberAt[i - 1];
-      }
-      beatNumberSeen[0] = linkState.beatNumber;
-      beatNumberAt[0]  = millis();
-      uint8_t loopBeats = 0;
-      const uint32_t nowMs = millis();
-      for (uint8_t k = 1; k <= 4; k++) {
-        if (beatNumberSeen[k] != linkState.beatNumber) continue;
-        const uint32_t gap = nowMs - beatNumberAt[k];
-        if (gap < (uint32_t)(anchorBeatMs * 0.5f)) continue;   // a duplicate
-        loopBeats = k;
-        break;
-      }
-      // A loop longer than a bar cannot be told from the bar itself by the
-      // beat number alone, so a length above four is not a length at all.
-      if (loopBeats > 4) loopBeats = 0;
-      if (loopBeats > 0) {
-        // The reading has to be CONFIRMED: a packet lost between the two
-        // appearances of a number makes the repeat look a beat further
-        // away than it is, and that would read as a loop one beat shorter
-        // than the real one.  Two findings in a row are not a coincidence.
-        if (loopBeats == lastLoopFinding) {
-          prolink_loop_beats_public = loopBeats;
-          // The loop got SHORTER: the DJ is halving it, which is the
-          // build-up.  The count of how many times it has been halved is
-          // what says how far into the build we are.
-          if (loopBeats < prolink_loop_beats_last_public) {
-            prolink_loop_halvings_public++;
-          }
-          prolink_loop_beats_last_public = loopBeats;
-        }
-        lastLoopFinding = loopBeats;
-      }
     }
 
     linkState.pitchPercent = (speedRatio - 1.0f) * 100.0f;
@@ -1927,15 +1822,6 @@ private:
         prolinkClockPacked = 0;
         lastPacketBeatNo   = 0;
 
-        // The loop's length and the build-up count go with the deck: a
-        // deck that comes back is a new song, and its loop is a new loop.
-        anchorBeatMs = 0.0f;
-        for (int i = 0; i < 5; i++) { beatNumberSeen[i] = 0; beatNumberAt[i] = 0; }
-        prolink_loop_beats_public = 0;
-        prolink_loop_beats_last_public = 0;
-        prolink_loop_halvings_public = 0;
-        lastLoopFinding = 0;
-
         phrases.clear();
         lastAnalyzedTrackId = 0;
         prolink_phrase_name_public = "";
@@ -2241,23 +2127,13 @@ public:
       // start of the beat on every packet and leave the bar position stuck
       // on the deck's raw announced value for the whole beat.
       float shiftedMs = (float)elapsedSinceAnchor + (float)off;
-      // The duration of the beat the anchor announced - see anchorBeatMs.
-      //
-      // The phase inside a beat is measured against the beat's OWN rate, so
-      // that a change of tempo (the platter moving) changes the rate the
-      // phase runs at from the next beat on, and never moves the phase's
-      // own value.  Measured on the board: with the deck's current tempo
-      // used here, a change of speed jumped the light - the sweep ran
-      // backwards for a bar and then drifted back to where it was going
-      // anyway.
-      const float beatOwnMs = (anchorPacked && anchorBeatMs > 0.0f) ? anchorBeatMs : beatMs;
       int32_t wholeBeats;
       float progress;
       if (shiftedMs < 0.0f) {
         wholeBeats = -1;
-        progress = (shiftedMs + beatOwnMs) / beatOwnMs;
+        progress = (shiftedMs + beatMs) / beatMs;
       } else {
-        const float beatIndex = shiftedMs / beatOwnMs;
+        const float beatIndex = shiftedMs / beatMs;
         wholeBeats = (int32_t)beatIndex;
         progress = beatIndex - (float)wholeBeats;
       }
@@ -2271,7 +2147,7 @@ public:
       // ~40 ms before the counter turns over, and adding the two together
       // would saw the progress down by a beat every beat.
       {
-        const float rawIndex = (float)elapsedSinceAnchor / beatOwnMs;
+        const float rawIndex = (float)elapsedSinceAnchor / beatMs;
         deckRawPhase = rawIndex - floorf(rawIndex);
       }
 

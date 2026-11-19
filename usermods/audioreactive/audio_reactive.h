@@ -8184,20 +8184,6 @@ class AudioReactive : public Usermod {
           t["source_beat"]  = (int)bs.beatInBar;
           t["source_32"]    = (int)bs.beatInMeasure32;
         }
-        // THE DECK'S LOOP, and the build-up.
-        //
-        // The beat number repeats on the loop's boundary, so the number of
-        // beats between two appearances of the same number is the loop's
-        // length - four for a bar, two for a two-beat loop, one for a
-        // one-beat loop.  A DJ halving the loop is that length halving,
-        // and the count of the halvings says how far into the build we
-        // are.  Zero when there is no deck: the estimator has no loop.
-        {
-          extern volatile uint8_t prolink_loop_beats_public;
-          extern volatile uint8_t prolink_loop_halvings_public;
-          t["loop_beats"]   = (int)prolink_loop_beats_public;
-          t["loop_halvings"] = (int)prolink_loop_halvings_public;
-        }
         t["ref_bpm"]      = (double)tf.refBpm;
         t["ref_valid"]    = (int)tf.refValid;
         t["ref_err_ms"]   = (double)tf.refErrMs;
