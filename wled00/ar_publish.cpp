@@ -426,11 +426,19 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
       extern volatile uint8_t prolink_loop_pos_public;
       extern volatile uint8_t prolink_loop_halvings_public;
       extern volatile uint8_t prolink_loop_jump_public;
+      extern volatile float   prolink_song_pos_public;
       const uint8_t tight = prolink_loop_beats_public;
-      b.loopBeats    = (tight > 0 && tight < 4) ? tight
-                      : (prolink_loop_jump_public > 0 ? prolink_loop_jump_public : 4);
+      // The position's answer carries a CONSTANT: the count is the deck's
+      // grid and the beats that passed are counted on the audible one, and
+      // the audible grid is the phase offset - 40 ms - EARLIER than the
+      // deck's.  So the count is one beat behind the count of the beats
+      // that passed, and the jump is one MORE than the loop's length.
+      // MEASURED on the board with no loop at all: the jump reads 1.
+      const uint8_t wide = (prolink_loop_jump_public > 1) ? (uint8_t)(prolink_loop_jump_public - 1) : 0;
+      b.loopBeats    = (tight > 0 && tight < 4) ? tight : (wide > 0 ? wide : 4);
       b.loopPos      = (tight > 0 && tight < 4) ? prolink_loop_pos_public : 0;
       b.loopHalvings = prolink_loop_halvings_public;
+      b.songPos      = prolink_song_pos_public;
     }
 
     // THE USER'S OVERRIDE OF THE DECK'S NUMBERING.

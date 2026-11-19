@@ -547,6 +547,8 @@ struct BeatClock {
   uint8_t  loopBeats;    // the loop's length in beats
   uint8_t  loopPos;      // the beats from the loop's start
   uint8_t  loopHalvings; // how many times the loop has been halved
+  // The SONG'S POSITION, in beats - where the platter is in the track.
+  float    songPos;
 };
 
 static BeatClock beatClock(bool ignoreProLink = false) {
@@ -570,6 +572,7 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.loopBeats     = b.loopBeats;
   c.loopPos       = b.loopPos;
   c.loopHalvings  = b.loopHalvings;
+  c.songPos       = b.songPos;
   return c;
 }
 
@@ -1844,14 +1847,16 @@ uint16_t mode_beat_sweep_core(bool platter) {
       // WHERE THE LIGHT IS.
       //
       // The Beat Sweep's light is at the BAR's phase - where we are in
-      // the bar.  The Loop Sweep's light is at the LOOP's position - where
-      // we are in the DJ's loop, which is what a DJ works with and what
-      // the beat grid cannot know.
+      // the bar.  The Loop Sweep's light is at the PLATTER'S position -
+      // where we are in the song, taken modulo the loop's length, so the
+      // light crosses the strip once per loop and the loop's width is the
+      // sweep's width.
       //
-      // The loop's position is the beats from the loop's start, plus the
-      // way through the beat we are in, over the loop's length.
+      // The song's position is the deck's count plus the beats that have
+      // passed since the count arrived, so it follows the platter instead
+      // of stepping every time the status stream speaks.
       const float lp = (platter && clk.loopBeats > 0)
-                     ? ((float)clk.loopPos + clk.beatPhase) / (float)clk.loopBeats
+                     ? (fmodf(clk.songPos, (float)clk.loopBeats) / (float)clk.loopBeats)
                      : clk.barPhase;
       const float bp = lp;                           // 0..1 through the bar, or the loop
       if (loopMode) { pos = bp;         dir = 1;  }  // always one way, wrapping
@@ -1861,7 +1866,7 @@ uint16_t mode_beat_sweep_core(bool platter) {
     if (loopMode) {
       // The loop always goes the same way and wraps.
       pos = perBeat ? clk.beatPhase : (platter && clk.loopBeats > 0)
-                     ? ((float)clk.loopPos + clk.beatPhase) / (float)clk.loopBeats
+                     ? (fmodf(clk.songPos, (float)clk.loopBeats) / (float)clk.loopBeats)
                      : clk.barPhase;
       dir = 1;
     }

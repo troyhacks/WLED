@@ -250,6 +250,13 @@ struct ArBeatSource {
   uint8_t  loopBeats;    // the loop's length in beats; 0 when there is none
   uint8_t  loopPos;      // the beats from the loop's start
   uint8_t  loopHalvings; // how many times the loop has been halved
+  // THE SONG'S POSITION, in beats, exact.
+  //
+  // The deck's count arrives on the status stream, which is not the beat
+  // rate, so the count alone moves in steps.  The beats that have passed
+  // since it arrived are counted from the beat packets, so this follows
+  // the platter.
+  float    songPos;
   // The beat COUNTER - the master's, for the source that is driving.
   //
   // It is what the effects count on: the bars are this divided by four,
