@@ -25,6 +25,11 @@
 #define HIDCTL_MAX_REPORT         64
 #define HIDCTL_MAX_NAME           24
 #define HIDCTL_MAX_ACTION         20
+#define HIDCTL_MAX_LIGHTS         40
+#define HIDCTL_MAX_SEGMENTS        8
+#define HIDCTL_MAX_OUTPUT        128
+#define HIDCTL_MAX_IFACES          4
+#define HIDCTL_MAX_IFACE_EPS       4
 
 // One continuous control (a knob, a fader, a wheel): a little-endian
 // unsigned integer of `bits` bits at `offset` in the report.
@@ -45,6 +50,43 @@ struct HidctlButton {
   uint8_t  modifier;                       // true for modifier keys (SHIFT)
 };
 
+// One light in the output report (an LED or a 7-segment stroke).
+struct HidctlLight {
+  char     name[HIDCTL_MAX_NAME];
+  uint16_t offset;      // byte offset in the output report's DATA (no ID byte)
+  uint8_t  rgb;         // 1 = three bytes (blue, red, green); 0 = one brightness
+  uint8_t  dual;        // 1 = a second light follows immediately (dual-sided)
+};
+
+// The output (host to device) report: LEDs and the display.
+struct HidctlOutput {
+  bool     present;
+  uint8_t  report_id;
+  uint16_t length;       // bytes in the data, not counting the report ID
+  // Seven-segment display: `digit_count` digits, `segments_per_digit` strokes
+  // each, `display_offset` where the first digit starts.
+  bool     has_display;
+  uint16_t display_offset;
+  uint8_t  digit_count;
+  uint8_t  segments_per_digit;
+  // The segment order, as names. The usermod maps a digit to strokes by name.
+  char     segment_names[HIDCTL_MAX_SEGMENTS][12];
+  uint8_t  light_count;
+  HidctlLight lights[HIDCTL_MAX_LIGHTS];
+};
+
+// What the device's configuration descriptor says about one interface.
+struct HidctlIfaceInfo {
+  uint8_t num;        // interface number
+  uint8_t cls;        // bInterfaceClass (3 = HID)
+  uint8_t sub;        // bInterfaceSubClass
+  uint8_t proto;      // bInterfaceProtocol
+  uint8_t ep_count;
+  uint8_t ep_addr[HIDCTL_MAX_IFACE_EPS];
+  uint16_t ep_mps[HIDCTL_MAX_IFACE_EPS];
+  uint8_t ep_attr[HIDCTL_MAX_IFACE_EPS];   // bmAttributes (2 = bulk, 3 = interrupt)
+};
+
 // One controller.
 struct HidctlProfile {
   char     name[HIDCTL_MAX_NAME];
@@ -59,4 +101,5 @@ struct HidctlProfile {
   uint8_t  button_count;
   HidctlControl controls[HIDCTL_MAX_CONTROLS];
   HidctlButton buttons[HIDCTL_MAX_BUTTONS];
+  HidctlOutput output;
 };

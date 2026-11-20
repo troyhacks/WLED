@@ -37,22 +37,22 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "name": "fader4", "offset": 20, "bits": 12, "action": "seg3bri" }
   ],
   "button_map": [
-    { "index": 0,  "name": "pad1",  "action": "preset1",  "mod_action": "savepreset1" },
-    { "index": 1,  "name": "pad2",  "action": "preset2",  "mod_action": "savepreset2" },
-    { "index": 2,  "name": "pad3",  "action": "preset3",  "mod_action": "savepreset3" },
-    { "index": 3,  "name": "pad4",  "action": "preset4",  "mod_action": "savepreset4" },
-    { "index": 4,  "name": "pad5",  "action": "preset5",  "mod_action": "savepreset5" },
-    { "index": 5,  "name": "pad6",  "action": "preset6",  "mod_action": "savepreset6" },
-    { "index": 6,  "name": "pad7",  "action": "preset7",  "mod_action": "savepreset7" },
-    { "index": 7,  "name": "pad8",  "action": "preset8",  "mod_action": "savepreset8" },
-    { "index": 8,  "name": "pad9",  "action": "preset9",  "mod_action": "savepreset9" },
-    { "index": 9,  "name": "pad10", "action": "preset10", "mod_action": "savepreset10" },
-    { "index": 10, "name": "pad11", "action": "preset11", "mod_action": "savepreset11" },
-    { "index": 11, "name": "pad12", "action": "preset12", "mod_action": "savepreset12" },
-    { "index": 12, "name": "pad13", "action": "preset13", "mod_action": "savepreset13" },
-    { "index": 13, "name": "pad14", "action": "preset14", "mod_action": "savepreset14" },
-    { "index": 14, "name": "pad15", "action": "preset15", "mod_action": "savepreset15" },
-    { "index": 15, "name": "pad16", "action": "preset16", "mod_action": "savepreset16" },
+    { "index": 0,  "name": "pad1",  "action": "preset1",  "mod_action": "preset17" },
+    { "index": 1,  "name": "pad2",  "action": "preset2",  "mod_action": "preset18" },
+    { "index": 2,  "name": "pad3",  "action": "preset3",  "mod_action": "preset19" },
+    { "index": 3,  "name": "pad4",  "action": "preset4",  "mod_action": "preset20" },
+    { "index": 4,  "name": "pad5",  "action": "preset5",  "mod_action": "preset21" },
+    { "index": 5,  "name": "pad6",  "action": "preset6",  "mod_action": "preset22" },
+    { "index": 6,  "name": "pad7",  "action": "preset7",  "mod_action": "preset23" },
+    { "index": 7,  "name": "pad8",  "action": "preset8",  "mod_action": "preset24" },
+    { "index": 8,  "name": "pad9",  "action": "preset9",  "mod_action": "preset25" },
+    { "index": 9,  "name": "pad10", "action": "preset10", "mod_action": "preset26" },
+    { "index": 10, "name": "pad11", "action": "preset11", "mod_action": "preset27" },
+    { "index": 11, "name": "pad12", "action": "preset12", "mod_action": "preset28" },
+    { "index": 12, "name": "pad13", "action": "preset13", "mod_action": "preset29" },
+    { "index": 13, "name": "pad14", "action": "preset14", "mod_action": "preset30" },
+    { "index": 14, "name": "pad15", "action": "preset15", "mod_action": "preset31" },
+    { "index": 15, "name": "pad16", "action": "preset16", "mod_action": "preset32" },
     { "index": 16, "name": "shift", "modifier": true },
     { "index": 17, "name": "reverse", "action": "prevpal" },
     { "index": 18, "name": "type",    "action": "nextpreset" },
@@ -66,6 +66,48 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "index": 28, "name": "sync",    "action": "nextfx" },
     { "index": 29, "name": "quant",   "action": "prevfx" },
     { "index": 30, "name": "capture", "action": "nextpal" }
-  ]
+  ],
+  "output": {
+    "report_id": 128,
+    "length": 80,
+    "display": {
+      "offset": 0,
+      "digits": 2,
+      "segments": ["dot", "middle", "lower-right", "upper-right",
+                   "top", "upper-left", "lower-left", "bottom"]
+    },
+    "lights": [
+      { "name": "browse",  "offset": 16, "rgb": false },
+      { "name": "size",    "offset": 17, "rgb": false },
+      { "name": "type",    "offset": 18, "rgb": false },
+      { "name": "reverse", "offset": 19, "rgb": false },
+      { "name": "shift",   "offset": 20, "rgb": false },
+      { "name": "capture", "offset": 21, "rgb": false },
+      { "name": "quant",   "offset": 22, "rgb": false },
+      { "name": "sync",    "offset": 23, "rgb": false },
+
+      { "name": "pad1",  "offset": 24, "rgb": true },
+      { "name": "pad2",  "offset": 27, "rgb": true },
+      { "name": "pad3",  "offset": 30, "rgb": true },
+      { "name": "pad4",  "offset": 33, "rgb": true },
+      { "name": "pad5",  "offset": 36, "rgb": true },
+      { "name": "pad6",  "offset": 39, "rgb": true },
+      { "name": "pad7",  "offset": 42, "rgb": true },
+      { "name": "pad8",  "offset": 45, "rgb": true },
+      { "name": "pad9",  "offset": 48, "rgb": true },
+      { "name": "pad10", "offset": 51, "rgb": true },
+      { "name": "pad11", "offset": 54, "rgb": true },
+      { "name": "pad12", "offset": 57, "rgb": true },
+      { "name": "pad13", "offset": 60, "rgb": true },
+      { "name": "pad14", "offset": 63, "rgb": true },
+      { "name": "pad15", "offset": 66, "rgb": true },
+      { "name": "pad16", "offset": 69, "rgb": true },
+
+      { "name": "stop4", "offset": 72, "rgb": false, "dual": true },
+      { "name": "stop3", "offset": 74, "rgb": false, "dual": true },
+      { "name": "stop2", "offset": 76, "rgb": false, "dual": true },
+      { "name": "stop1", "offset": 78, "rgb": false, "dual": true }
+    ]
+  }
 }
 )JSON";

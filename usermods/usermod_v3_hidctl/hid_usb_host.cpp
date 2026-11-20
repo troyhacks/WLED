@@ -45,11 +45,37 @@ static uint16_t                hid_in_mps = 0;
 
 static usb_transfer_t* hid_in_xfer = nullptr;
 
+// The output path: one SET_REPORT control transfer at a time.
+static usb_transfer_t* hid_ctrl_xfer = nullptr;
+// A separate transfer for the one-off GET_DESCRIPTOR of the report
+// descriptor (its own callback, and a bigger buffer).
+static usb_transfer_t* hid_desc_xfer = nullptr;
+static uint16_t hid_desc_desc_wvalue = 0;
+static volatile bool hid_ctrl_in_flight = false;
+static volatile bool hid_ctrl_pending = false;
+// The last report's outcome, published over /json/ar (the console is not
+// always available).
+static volatile int8_t  hid_last_report_status = -1;
+static volatile uint32_t hid_reports_ok = 0;
+// What the device's configuration descriptor says about its interfaces.
+static HidctlIfaceInfo hid_ifaces[HIDCTL_MAX_IFACES] = {};
+static uint8_t hid_iface_count = 0;
+
+const HidctlIfaceInfo* hid_usb_interfaces(uint8_t* count) {
+  if (count) *count = hid_iface_count;
+  return hid_ifaces;
+}
+
+int8_t hid_usb_last_report_status(void) { return hid_last_report_status; }
+uint32_t hid_usb_reports_ok(void) { return hid_reports_ok; }
+
 static volatile bool hid_in_resubmit_needed = false;
 static volatile bool hid_in_error_recovery_needed = false;
 
 static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
 static void hid_in_transfer_cb(usb_transfer_t* xfer);
+static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
+static void hid_desc_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
 
@@ -80,6 +106,27 @@ void hid_usb_init(void) {
   }
   hid_in_xfer->callback = hid_in_transfer_cb;
   hid_in_xfer->context = nullptr;
+
+  // The control transfer for the output report (LEDs, display). The buffer
+  // holds the 8-byte setup packet plus the report.
+  err = usb_host_transfer_alloc(8 + HIDCTL_MAX_OUTPUT + 1, 0, &hid_ctrl_xfer);
+  if (err != ESP_OK) {
+    HIDCTL_LOG("init: usb_host_transfer_alloc(control) failed: %s", esp_err_to_name(err));
+    hid_ctrl_xfer = nullptr;
+    return;
+  }
+  hid_ctrl_xfer->callback = hid_ctrl_transfer_cb;
+  hid_ctrl_xfer->context = nullptr;
+
+  // The report descriptor transfer (setup packet + up to 512 bytes).
+  err = usb_host_transfer_alloc(8 + 512, 0, &hid_desc_xfer);
+  if (err != ESP_OK) {
+    HIDCTL_LOG("init: usb_host_transfer_alloc(descriptor) failed: %s", esp_err_to_name(err));
+    hid_desc_xfer = nullptr;
+  } else {
+    hid_desc_xfer->callback = hid_desc_transfer_cb;
+    hid_desc_xfer->context = nullptr;
+  }
 
   HIDCTL_LOG("init: USB Host client ready");
 }
@@ -260,6 +307,43 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   HIDCTL_LOG("configure: CLAIMED iface=%d IN=0x%02X MPS=%u",
              claimed_iface, in_ep, (unsigned)hid_in_mps);
 
+  // Log every interface of the configuration, so it is clear what else the
+  // device offers (the F1 has a second interface for the LEDs).
+  hid_iface_count = 0;
+  for (uint8_t ifn = 0; ifn < 8; ifn++) {
+    int ioff = 0;
+    const usb_intf_desc_t* ifd =
+        usb_parse_interface_descriptor(cfg_desc, ifn, 0, &ioff);
+    if (!ifd) break;
+    HidctlIfaceInfo* info = &hid_ifaces[hid_iface_count];
+    info->num = ifn;
+    info->cls = ifd->bInterfaceClass;
+    info->sub = ifd->bInterfaceSubClass;
+    info->proto = ifd->bInterfaceProtocol;
+    info->ep_count = 0;
+    for (uint8_t e = 0; e < ifd->bNumEndpoints; e++) {
+      int eoff = ioff;
+      const usb_ep_desc_t* ep = usb_parse_endpoint_descriptor_by_index(
+          ifd, e, cfg_desc->wTotalLength, &eoff);
+      if (!ep) continue;
+      if (info->ep_count < HIDCTL_MAX_IFACE_EPS) {
+        info->ep_addr[info->ep_count] = ep->bEndpointAddress;
+        info->ep_mps[info->ep_count] = ep->wMaxPacketSize;
+        info->ep_attr[info->ep_count] = ep->bmAttributes;
+        info->ep_count++;
+      }
+    }
+    USER_PRINTF("[HIDCTL]   iface %u: class=0x%02X subclass=0x%02X proto=0x%02X eps=%u\n",
+                ifn, ifd->bInterfaceClass, ifd->bInterfaceSubClass,
+                ifd->bInterfaceProtocol, ifd->bNumEndpoints);
+    for (uint8_t e = 0; e < info->ep_count; e++) {
+      USER_PRINTF("[HIDCTL]     ep 0x%02X attr=0x%02X mps=%u\n",
+                  info->ep_addr[e], info->ep_attr[e], (unsigned)info->ep_mps[e]);
+    }
+    hid_iface_count++;
+    if (hid_iface_count >= HIDCTL_MAX_IFACES) break;
+  }
+
   usb_transfer_t* x = hid_in_xfer;
   if (x) {
     x->device_handle = dev;
@@ -293,4 +377,137 @@ static void hid_close_device(void) {
 
 bool hid_usb_connected(void) {
   return hid_dev_hdl != nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// The output report: LEDs and the display
+// ---------------------------------------------------------------------------
+// A HID SET_REPORT control transfer. The transfer buffer starts with the
+// setup packet, then the report's DATA.
+//
+// bmRequestType 0x21 = host-to-device, class, interface
+// bRequest      0x09 = SET_REPORT
+// wValue        (0x02 << 8) | report_id  -> Output report, that ID
+//
+// IMPORTANT: the report ID does NOT go into the data. It goes in wValue,
+// and the data stage carries only the report's bytes. Sending the ID in the
+// data as well makes the device see a report one byte too long, and it
+// answers with a STALL.
+// ---------------------------------------------------------------------------
+bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
+                         const uint8_t* data, uint16_t len) {
+  if (!hid_dev_hdl || !hid_ctrl_xfer || !data || len == 0) return false;
+  if (len > HIDCTL_MAX_OUTPUT) return false;
+
+  // One control transfer at a time.
+  if (hid_ctrl_in_flight) {
+    hid_ctrl_pending = true;
+    return false;
+  }
+
+  usb_setup_packet_t setup = {};
+  setup.bmRequestType = 0x21;   // Host-to-device | Class | Interface
+  setup.bRequest      = 0x09;   // SET_REPORT
+  setup.wValue        = (uint16_t)(((report_type & 0x03) << 8) | report_id);
+  setup.wIndex        = hid_iface;
+  setup.wLength       = len;
+
+  memcpy(hid_ctrl_xfer->data_buffer, &setup, sizeof(setup));
+  memcpy(hid_ctrl_xfer->data_buffer + sizeof(setup), data, len);
+  hid_ctrl_xfer->num_bytes = sizeof(setup) + len;
+  hid_ctrl_xfer->device_handle = hid_dev_hdl;
+
+  hid_ctrl_in_flight = true;
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_ctrl_xfer);
+  if (err != ESP_OK) {
+    hid_ctrl_in_flight = false;
+    HIDCTL_LOG("SET_REPORT submit failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool hid_usb_send_output_report(uint8_t report_id, const uint8_t* data, uint16_t len) {
+  return hid_usb_send_report(0x02, report_id, data, len);
+}
+
+static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
+  if (xfer) {
+    hid_last_report_status = (int8_t)xfer->status;
+    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+      HIDCTL_LOG("SET_REPORT transfer status=%d", (int)xfer->status);
+    } else {
+      hid_reports_ok++;
+    }
+  }
+  hid_ctrl_in_flight = false;
+  // If another paint asked while this one was in flight, the newer state
+  // goes out on the next paint.
+  hid_ctrl_pending = false;
+}
+
+// ---------------------------------------------------------------------------
+// Descriptors
+// ---------------------------------------------------------------------------
+// The device itself knows what reports it has: the HID report descriptor
+// says which report IDs and sizes the interface accepts. Fetching it is a
+// standard GET_DESCRIPTOR (type 0x22) control transfer to the interface.
+//
+// `bmRequestType` is 0x80 for a device-type descriptor (the device
+// descriptor) and 0x81 for an interface-type one (the HID report
+// descriptor). `wValue` selects the descriptor: 0x0100 = device,
+// 0x0200 = configuration, 0x2200 = HID report descriptor.
+bool hid_usb_get_descriptor(uint8_t bmRequestType, uint16_t wValue,
+                            uint16_t wLength, uint8_t wIndex) {
+  if (!hid_dev_hdl || !hid_desc_xfer) return false;
+  if (hid_ctrl_in_flight) return false;
+
+  usb_setup_packet_t setup = {};
+  setup.bmRequestType = bmRequestType;   // Device-to-host, Standard, Device or Interface
+  setup.bRequest      = 0x06;   // GET_DESCRIPTOR
+  setup.wValue        = wValue;
+  setup.wIndex        = wIndex;
+  setup.wLength       = wLength;
+
+  memcpy(hid_desc_xfer->data_buffer, &setup, sizeof(setup));
+  // The transfer has to be big enough for the setup packet AND the data
+  // stage the device is going to send back.
+  hid_desc_xfer->num_bytes = sizeof(setup) + wLength;
+  hid_desc_xfer->device_handle = hid_dev_hdl;
+  hid_desc_desc_wvalue = wValue;
+
+  hid_ctrl_in_flight = true;
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_desc_xfer);
+  if (err != ESP_OK) {
+    hid_ctrl_in_flight = false;
+    HIDCTL_LOG("GET_DESCRIPTOR(%04X) submit failed: %s", wValue, esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
+  hid_ctrl_in_flight = false;
+  if (!xfer) return;
+  if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+    HIDCTL_LOG("GET_DESCRIPTOR(%04X) status=%d", hid_desc_desc_wvalue, (int)xfer->status);
+    return;
+  }
+  // The data follows the 8-byte setup packet.
+  int n = xfer->actual_num_bytes - (int)sizeof(usb_setup_packet_t);
+  if (n <= 0) {
+    HIDCTL_LOG("GET_DESCRIPTOR(%04X): no data", hid_desc_desc_wvalue);
+    return;
+  }
+  const uint8_t* d = xfer->data_buffer + sizeof(usb_setup_packet_t);
+  HIDCTL_LOG("descriptor %04X: %d bytes", hid_desc_desc_wvalue, n);
+  for (int i = 0; i < n; i += 16) {
+    char line[96];
+    int len = 0;
+    len += snprintf(line + len, sizeof(line) - len, "  %04X: ", (unsigned)i);
+    for (int j = i; j < i + 16 && j < n; j++) {
+      len += snprintf(line + len, sizeof(line) - len, "%02X ", d[j]);
+    }
+    USER_PRINTF("%s\n", line);
+  }
 }

@@ -51,6 +51,7 @@
 #include "wled.h"
 #include "hidctl_types.h"
 #include "hidctl_default_profile.h"
+#include "hid_usb_host.h"
 
 class HidctlUsermod : public Usermod {
  private:
@@ -81,6 +82,13 @@ class HidctlUsermod : public Usermod {
 
   // Console log throttle for the continuous controls.
   uint32_t lastCtlLog = 0;
+
+  // The last output-report attempts and their status, published over
+  // /json/ar so they can be read without the console.
+  static constexpr uint8_t HIDCTL_MAX_PROBE_RESULTS = 12;
+  struct ProbeResult { uint8_t type; uint8_t id; uint16_t len; int8_t status; };
+  ProbeResult probe_results[HIDCTL_MAX_PROBE_RESULTS] = {};
+  uint8_t probe_result_count = 0;
 
   // -------------------------------------------------------------------------
   // profile handling
@@ -162,6 +170,50 @@ class HidctlUsermod : public Usermod {
       copyAction(btn.mod_action, mod);
       btn.modifier = b["modifier"] | false;
       p.button_count++;
+    }
+
+    // The output report: LEDs and the display.
+    JsonObject out = j["output"];
+    if (!out.isNull()) {
+      p.output.present = true;
+      p.output.report_id = (uint8_t)(out["report_id"] | 0x80);
+      p.output.length = (uint16_t)(out["length"] | 0);
+      if (p.output.length == 0 || p.output.length > HIDCTL_MAX_OUTPUT) return false;
+
+      JsonObject disp = out["display"];
+      if (!disp.isNull()) {
+        p.output.has_display = true;
+        p.output.display_offset = (uint16_t)(disp["offset"] | 0);
+        p.output.digit_count = (uint8_t)(disp["digits"] | 0);
+        JsonArray segs = disp["segments"];
+        uint8_t n = 0;
+        for (JsonVariant v : segs) {
+          if (n >= HIDCTL_MAX_SEGMENTS) break;
+          const char* s = v;
+          strlcpy(p.output.segment_names[n], s ? s : "", HIDCTL_MAX_SEGMENTS + 4);
+          n++;
+        }
+        p.output.segments_per_digit = n;
+        if (p.output.segments_per_digit == 0) p.output.has_display = false;
+        if (p.output.display_offset + p.output.digit_count * p.output.segments_per_digit
+            > p.output.length) return false;
+      }
+
+      JsonArray lights = out["lights"];
+      uint8_t lc = 0;
+      for (JsonObject l : lights) {
+        if (lc >= HIDCTL_MAX_LIGHTS) break;
+        HidctlLight& li = p.output.lights[lc];
+        const char* nm = l["name"];
+        copyStr(li.name, nm);
+        li.offset = (uint16_t)(l["offset"] | 0);
+        li.rgb = l["rgb"] | false;
+        li.dual = l["dual"] | false;
+        uint16_t need = li.offset + (li.rgb ? 3 : 1) + (li.dual ? 1 : 0);
+        if (need > p.output.length) return false;
+        lc++;
+      }
+      p.output.light_count = lc;
     }
     return true;
   }
@@ -276,6 +328,9 @@ class HidctlUsermod : public Usermod {
 
   // The USB host client found a device. Bind the first profile that wants it.
   void onDeviceConnected(uint16_t vid, uint16_t pid) {
+    // Re-read the profiles: one may have been edited while the controller
+    // was unplugged, and this is the moment it comes back.
+    loadProfiles();
     uint8_t idx = matchDevice(vid, pid);
     if (idx == 0xFF) {
       USER_PRINTF("[HIDCTL] device 0x%04X:0x%04X — no profile wants it\n", vid, pid);
@@ -288,6 +343,18 @@ class HidctlUsermod : public Usermod {
     }
     buttons = 0;
     USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
+    // Prime the control pipe with a harmless request. The first control
+    // transfer after a claim does not always complete; a device descriptor
+    // read does, and after it the pipe behaves.
+    for (uint8_t tries = 0; tries < 5; tries++) {
+      if (hid_usb_get_descriptor(0x80, 0x0100, 18, 0)) break;   // device
+      delay(300);
+    }
+    delay(800);
+    // Light everything for a moment, in each candidate format, so the LED
+    // protocol can be confirmed against the hardware.
+    probeFormats();
+    paint();
   }
 
   void onDeviceDisconnected() {
@@ -511,6 +578,200 @@ class HidctlUsermod : public Usermod {
   }
 
   // -------------------------------------------------------------------------
+  // The output report: LEDs and the display
+  // -------------------------------------------------------------------------
+  // The canonical seven-segment stroke order. The profile lists its own
+  // order; a digit is a bitmask over this one.
+  static const char* segmentName(uint8_t i) {
+    static const char* names[HIDCTL_MAX_SEGMENTS] = {
+      "dot", "middle", "lower-right", "upper-right",
+      "top", "upper-left", "lower-left", "bottom"
+    };
+    return (i < HIDCTL_MAX_SEGMENTS) ? names[i] : "";
+  }
+
+  static uint8_t digitMask(uint8_t digit) {
+    // bit0 dot, bit1 middle, bit2 lower-right, bit3 upper-right,
+    // bit4 top, bit5 upper-left, bit6 lower-left, bit7 bottom
+    static const uint8_t masks[10] = {
+      0xFC, 0x0C, 0xDA, 0x9E, 0x2E, 0xB6, 0xF6, 0x1C, 0xFE, 0xBE
+    };
+    return (digit < 10) ? masks[digit] : 0;
+  }
+
+  static int segmentIndexByName(const char* name) {
+    for (int i = 0; i < HIDCTL_MAX_SEGMENTS; i++) {
+      if (!strcmp(name, segmentName(i))) return i;
+    }
+    return -1;
+  }
+
+  // Is a button with this name currently held?
+  bool buttonHeld(const HidctlProfile& p, const char* name) {
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      if (!strcmp(p.buttons[i].name, name)) {
+        return (buttons & (1UL << p.buttons[i].index)) != 0;
+      }
+    }
+    return false;
+  }
+
+  // Which segment is selected (the first one that is).
+  uint8_t selectedSegment() {
+    for (uint8_t i = 0; i < strip.getSegmentsNum(); i++) {
+      if (strip.getSegment(i).selected) return i;
+    }
+    return 0;
+  }
+
+  // Try every plausible shape of the output report, lighting everything,
+  // and log which one the device accepts. Used to pin down a controller's
+  // LED protocol when the sources disagree (report type, data length).
+  void probeFormats() {
+    if (!profiles || active_profile >= profile_count) return;
+    HidctlProfile& p = profiles[active_profile];
+    if (!p.output.present) return;
+
+    uint8_t buf[HIDCTL_MAX_OUTPUT];
+    memset(buf, 0, sizeof(buf));
+    uint8_t* data = buf;   // the report's data; the ID goes in wValue
+
+    // Everything on: the display, the buttons, the pads.
+    for (uint8_t i = 0; i < 16 && i < p.output.length; i++) data[i] = 0x7F;
+    for (uint8_t i = 16; i < 24 && i < p.output.length; i++) data[i] = 0x7F;
+    for (uint8_t i = 72; i < 80 && i < p.output.length; i++) data[i] = 0x7F;
+    for (uint8_t pad = 0; pad < 16; pad++) {
+      uint16_t base = 24 + pad * 3;
+      if (base + 2 < p.output.length) {
+        data[base + 0] = 0x00;   // blue
+        data[base + 1] = 0x7F;   // red
+        data[base + 2] = 0x00;   // green
+      }
+    }
+
+    // Try several shapes and see which one the device accepts. A HID
+    // device that does not know the report answers with a STALL, so the
+    // shape that completes without a stall is the right one.
+    struct Candidate { uint8_t type; uint8_t id; uint16_t len; const char* name; };
+    static const Candidate candidates[] = {
+      {0x03, 0xF0, 8,   "Feature 0xF0, 8 bytes"},
+      {0x03, 0xF0, 7,   "Feature 0xF0, 7 bytes"},
+      {0x03, 0xF0, 9,   "Feature 0xF0, 9 bytes"},
+      {0x03, 0xF1, 48,  "Feature 0xF1, 48 bytes"},
+      {0x03, 0xF1, 47,  "Feature 0xF1, 47 bytes"},
+      {0x03, 0xF1, 49,  "Feature 0xF1, 49 bytes"},
+      {0x03, 0xD0, 63,  "Feature 0xD0, 63 bytes"},
+      {0x03, 0x01, 21,  "Feature 0x01, 21 bytes"},
+      {0x03, 0x80, 80,  "Feature 0x80, 80 bytes"},
+    };
+    for (const Candidate& c : candidates) {
+      memset(buf, 0, sizeof(buf));
+      bool ok = hid_usb_send_report(c.type, c.id, buf, c.len);
+      delay(700);
+      int8_t st = hid_usb_last_report_status();
+      USER_PRINTF("[HIDCTL] probe: %s -> %s, status=%d\n", c.name,
+                  ok ? "sent" : "FAILED", (int)st);
+      probe_results[probe_result_count].type = c.type;
+      probe_results[probe_result_count].id = c.id;
+      probe_results[probe_result_count].len = c.len;
+      probe_results[probe_result_count].status = st;
+      if (probe_result_count < HIDCTL_MAX_PROBE_RESULTS) probe_result_count++;
+    }
+
+    // The colour demo: light the top-left pad red, then green, then blue,
+    // then all the pads, then the eight buttons. It shows which byte is
+    // which colour.
+    for (uint8_t step = 0; step < 5; step++) {
+      memset(buf, 0, sizeof(buf));
+      if (step < 3) {
+        uint16_t off = (step == 0) ? 1 : ((step == 1) ? 2 : 0);   // R, G, B
+        buf[off] = 0x7F;
+        hid_usb_send_report(0x03, 0xF1, buf, 48);
+      } else if (step == 3) {
+        for (uint8_t i = 0; i < 48; i++) buf[i] = 0x40;
+        hid_usb_send_report(0x03, 0xF1, buf, 48);
+      } else {
+        for (uint8_t i = 0; i < 8; i++) buf[i] = 0x7F;
+        hid_usb_send_report(0x03, 0xF0, buf, 8);
+      }
+      delay(2500);
+    }
+  }
+
+  // Paint the LEDs and the display, then send the output report.
+  void paint() {
+    if (!profiles || active_profile >= profile_count) return;
+    HidctlProfile& p = profiles[active_profile];
+    if (!p.output.present) return;
+
+    uint8_t buf[HIDCTL_MAX_OUTPUT + 1];
+    memset(buf, 0, sizeof(buf));
+    buf[0] = p.output.report_id;
+    uint8_t* data = buf + 1;
+
+    // --- the display: the current preset number ---
+    if (p.output.has_display) {
+      uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
+      uint16_t divisor = 1;
+      for (uint8_t k = 1; k < p.output.digit_count; k++) divisor *= 10;
+      for (uint8_t d = 0; d < p.output.digit_count; d++) {
+        // The right-hand digit comes first in the report.
+        uint8_t digit = (uint8_t)((val / divisor) % 10);
+        divisor = (divisor > 1) ? divisor / 10 : 1;
+        uint8_t mask = digitMask(digit);
+        uint16_t base = p.output.display_offset +
+                        (uint16_t)(p.output.digit_count - 1 - d) * p.output.segments_per_digit;
+        for (uint8_t s = 0; s < p.output.segments_per_digit; s++) {
+          int canon = segmentIndexByName(p.output.segment_names[s]);
+          bool on = (canon >= 0) && ((mask >> canon) & 1);
+          data[base + s] = on ? 0x7F : 0x00;
+        }
+      }
+    }
+
+    // --- the lights ---
+    for (uint8_t i = 0; i < p.output.light_count; i++) {
+      const HidctlLight& li = p.output.lights[i];
+      uint8_t r = 0, g = 0, b = 0;
+      const char* nm = li.name;
+
+      if (!strncmp(nm, "pad", 3)) {
+        // A pad shows the state of its preset: the active one is green, a
+        // saved one is blue, the rest are dark.
+        int slot = atoi(nm + 3);
+        if (slot >= 1 && slot <= 64) {
+          if (slot == currentPreset) {
+            g = 0x7F;
+          } else if (getCachedPresetExists(slot)) {
+            b = 0x7F;
+          }
+        }
+      } else if (!strncmp(nm, "stop", 4)) {
+        // The four lower buttons show the selected segment.
+        int n = atoi(nm + 4);
+        if (n >= 1 && (uint8_t)(n - 1) == selectedSegment()) {
+          r = g = b = 0x7F;
+        }
+      } else if (buttonHeld(p, nm)) {
+        // Any other button lights while it is held.
+        r = g = b = 0x7F;
+      }
+
+      if (li.rgb) {
+        // The colour bytes are in blue, red, green order.
+        data[li.offset] = b;
+        data[li.offset + 1] = r;
+        data[li.offset + 2] = g;
+      } else {
+        data[li.offset] = (r || g || b) ? 0x7F : 0x00;
+        if (li.dual) data[li.offset + 1] = data[li.offset];
+      }
+    }
+
+    hid_usb_send_output_report(p.output.report_id, buf, p.output.length);
+  }
+
+  // -------------------------------------------------------------------------
   // incoming report
   // -------------------------------------------------------------------------
  public:
@@ -589,6 +850,8 @@ class HidctlUsermod : public Usermod {
         USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, act);
         runAction(act, 255);
       }
+      // The LEDs may have changed (a button lights while it is held).
+      paint();
     }
   }
 
@@ -620,6 +883,11 @@ class HidctlUsermod : public Usermod {
   }
 
   void loop() override {}
+
+  // The preset changed: the pads and the display have to follow.
+  void onStateChange(uint8_t mode) override {
+    paint();
+  }
 
   void onEvent(const wled::Event& ev) override {
     if (ev.type == wled::EventType::UsbDeviceChanged) {
@@ -667,6 +935,36 @@ class HidctlUsermod : public Usermod {
     top["device"] = profileName();
     top["profiles_loaded"] = profile_count;
     top["buttons"] = buttons;
+    top["report_status"] = hid_usb_last_report_status();
+    top["reports_ok"] = hid_usb_reports_ok();
+    JsonArray pr = top.createNestedArray("probe");
+    for (uint8_t i = 0; i < probe_result_count; i++) {
+      JsonObject o = pr.createNestedObject();
+      o["type"] = probe_results[i].type;
+      o["id"] = probe_results[i].id;
+      o["len"] = probe_results[i].len;
+      o["status"] = probe_results[i].status;
+    }
+    // What the device says it has: every interface and its endpoints.
+    uint8_t ifcount = 0;
+    const HidctlIfaceInfo* ifs = hid_usb_interfaces(&ifcount);
+    JsonArray ia = top.createNestedArray("interfaces");
+    for (uint8_t i = 0; i < ifcount; i++) {
+      JsonObject o = ia.createNestedObject();
+      o["num"] = ifs[i].num;
+      o["class"] = ifs[i].cls;
+      o["subclass"] = ifs[i].sub;
+      o["protocol"] = ifs[i].proto;
+      o["endpoints"] = ifs[i].ep_count;
+      char eps[24];
+      int len = 0;
+      eps[0] = '\0';
+      for (uint8_t e = 0; e < ifs[i].ep_count && len < 20; e++) {
+        len += snprintf(eps + len, sizeof(eps) - len, "%s0x%02X",
+                        e ? "," : "", ifs[i].ep_addr[e]);
+      }
+      o["ep_addr"] = eps;
+    }
     if (active_profile < profile_count) {
       HidctlProfile& p = profiles[active_profile];
       JsonObject vals = top.createNestedObject("values");

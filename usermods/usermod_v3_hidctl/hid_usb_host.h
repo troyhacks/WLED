@@ -29,4 +29,30 @@ void hid_usb_poll(void);
 // True while a HID device is claimed.
 bool hid_usb_connected(void);
 
+// Send an output report (LEDs, display). `data` is the report's data
+// ONLY - the report ID goes in the control transfer's wValue, not in the
+// data. Returns false when the device is not there or a transfer is already
+// in flight.
+bool hid_usb_send_output_report(uint8_t report_id, const uint8_t* data, uint16_t len);
+
+// Send a report with an explicit type: 2 = Output, 3 = Feature. Used to
+// work out which shape a controller actually wants.
+bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
+                         const uint8_t* data, uint16_t len);
+
+// The outcome of the last output report: 0 = completed, 4 = stalled, -1 =
+// none sent yet. And how many reports have gone through.
+int8_t  hid_usb_last_report_status(void);
+uint32_t hid_usb_reports_ok(void);
+
+// What the device's configuration descriptor says about its interfaces.
+const HidctlIfaceInfo* hid_usb_interfaces(uint8_t* count);
+
+// Ask the device for a descriptor. bmRequestType is 0x80 for a device-type
+// descriptor (device, configuration) and 0x81 for an interface-type one (the
+// HID report descriptor). wValue selects it: 0x0100 device, 0x0200
+// configuration, 0x2200 HID report descriptor. The bytes are logged.
+bool hid_usb_get_descriptor(uint8_t bmRequestType, uint16_t wValue,
+                            uint16_t wLength, uint8_t wIndex);
+
 #endif  // USERMOD_HIDCTL_USB
