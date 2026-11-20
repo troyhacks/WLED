@@ -756,10 +756,14 @@ class HidctlUsermod : public Usermod {
         report[73 + i * 2 + s] = triangle((uint8_t)((t / 40) + i * 12 + s * 6));
       }
     }
-    // The pads: a rainbow that turns.
+    // The pads: a rainbow that turns, and breathes.
+    uint8_t level = triangle((uint8_t)(t / 100));
     for (uint8_t k = 0; k < 16; k++) {
       uint8_t r, g, b;
       hue2rgb((uint8_t)(k * 16 + t / 10), r, g, b);
+      r = (uint8_t)((uint16_t)r * level / 0x7F);
+      g = (uint8_t)((uint16_t)g * level / 0x7F);
+      b = (uint8_t)((uint16_t)b * level / 0x7F);
       uint16_t base = 25 + k * 3;
       report[base + 0] = b;
       report[base + 1] = r;
