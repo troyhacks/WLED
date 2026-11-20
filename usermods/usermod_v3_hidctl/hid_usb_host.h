@@ -35,10 +35,27 @@ bool hid_usb_connected(void);
 // in flight.
 bool hid_usb_send_output_report(uint8_t report_id, const uint8_t* data, uint16_t len);
 
+// Send data on the interface's OUT endpoint (some controllers take their
+// LED data there rather than over the control pipe).
+bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len);
+int8_t  hid_usb_last_out_status(void);
+
+// The bytes a device-to-host control transfer brought back (the LED state
+// readback). Returns the buffer and its length.
+const uint8_t* hid_usb_readback(uint8_t* len);
+
 // Send a report with an explicit type: 2 = Output, 3 = Feature. Used to
 // work out which shape a controller actually wants.
 bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
                          const uint8_t* data, uint16_t len);
+
+// A control transfer with the setup packet spelled out.
+bool hid_usb_send_setup(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                        const uint8_t* data, uint16_t len);
+
+// The same, with an explicit interface index (wIndex).
+bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                           uint8_t wIndex, const uint8_t* data, uint16_t len);
 
 // The outcome of the last output report: 0 = completed, 4 = stalled, -1 =
 // none sent yet. And how many reports have gone through.

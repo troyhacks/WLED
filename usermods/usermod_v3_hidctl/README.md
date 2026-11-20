@@ -40,10 +40,25 @@ in the P4 env (`esp32p4_8MB_troyhacks` in `platformio_override.ini`).
     { "name": "fader4", "offset": 20, "bits": 12, "action": "seg3bri" }
   ],
   "button_map": [
-    { "index": 0, "name": "pad1", "action": "preset1", "mod_action": "savepreset1" },
+    { "index": 0, "name": "pad1", "action": "preset1", "mod_action": "preset17" },
     { "index": 16, "name": "shift", "modifier": true },
     { "index": 28, "name": "sync", "action": "nextfx" }
-  ]
+  ],
+  "output": {
+    "report_id": 128,
+    "length": 81,
+    "display": {
+      "digits": [ { "offset": 9 }, { "offset": 1 } ],
+      "dot_offset": 8,
+      "segments_per_digit": 7,
+      "segments": ["middle", "lower-right", "upper-right", "top",
+                   "upper-left", "lower-left", "bottom"]
+    },
+    "lights": [
+      { "name": "browse", "offset": 17, "bytes": 1 },
+      { "name": "pad1",   "offset": 25, "bytes": 3 }
+    ]
+  }
 }
 ```
 
@@ -62,6 +77,13 @@ in the P4 env (`esp32p4_8MB_troyhacks` in `platformio_override.ini`).
 | `button_map[].action` | what a plain press does |
 | `button_map[].mod_action` | what a press does while a modifier is held |
 | `button_map[].modifier` | `true` for modifier keys (SHIFT) |
+| `output.report_id` | the report ID of the LED report |
+| `output.length` | its length, including the ID byte |
+| `output.display.digits[].offset` | where each digit's strokes start |
+| `output.display.dot_offset` | the byte of the dot between the digits |
+| `output.display.segments` | the stroke names, in the order they appear |
+| `output.lights[].offset` | where the light's bytes start |
+| `output.lights[].bytes` | 1 = one brightness, 2 = two, 3 = blue, red, green |
 
 ## Action vocabulary
 
@@ -70,6 +92,9 @@ in the P4 env (`esp32p4_8MB_troyhacks` in `platformio_override.ini`).
 | parameters | `bri`, `effectSpeed`, `effectIntensity`, `effectPalette`, `effectCustom1`, `effectCustom2`, `seg0bri`..`seg7bri` |
 | verbs | `power`, `blackout`, `full`, `nextfx`, `prevfx`, `nextpal`, `prevpal`, `nextpreset`, `prevpreset`, `toggleFreeze`, `seg0`..`seg7` |
 | presets | `preset1`..`preset64`, `savepreset1`..`savepreset64` |
+
+On the F1 the 16 pads are presets 1..16 and SHIFT + a pad is presets
+17..32.
 
 A parameter action is driven by a continuous control: the control's value is
 scaled to 0..255 and applied. A verb runs once per press.
@@ -127,9 +152,39 @@ file, no rebuild.
 
 ### LED feedback
 
-Not implemented yet. The F1's pads and buttons are RGB LEDs driven by HID
-SET_REPORT (an output report) whose payload format is NI's and not public.
-The mechanism (a HID SET_REPORT control transfer) is the obvious next step.
+The F1's pads, buttons and two-digit display are driven by an 81-byte
+report (ID 0x80) that goes out on the interface's **interrupt OUT endpoint**
+(0x01) — *not* over the control pipe. The device stalls every HID class
+request: SET_REPORT with bRequest 0x09 is recognised (it stalls on the
+report rather than refusing the request code), but no report ID and length
+in the descriptor is accepted, and the other request codes get
+"invalid function" outright. The OUT endpoint is the only way in.
+
+The report (the ID byte first, then the data):
+
+| Byte(s) | What |
+|----------|------|
+| 0 | report ID, 0x80 |
+| 1–7 | the right-hand digit, seven strokes |
+| 8 | the dot between the digits |
+| 9–15 | the left-hand digit, seven strokes |
+| 16 | not identified |
+| 17–24 | Browse, Size, Type, Reverse, Shift, Capture, Quant, Sync (brightness) |
+| 25–72 | the 16 pads, three bytes each: **blue, red, green** |
+| 73–80 | the four lower buttons, two bytes each (left, right), in the order 4, 3, 2, 1 |
+
+Every byte is a brightness from 00 to 7F. The transport buttons and the
+lower four have fixed colours on the hardware (Browse is blue, Shift is
+white, the rest orange), so their byte only turns them on and off.
+
+This was confirmed against the hardware: the pad colour order came out as
+blue, red, green, and Sync stayed dark because its byte is the eighth of
+the transport row.
+
+Sources: the [Mixxx wiki](https://github.com/mixxxdj/mixxx/wiki/Native-Instruments-Traktor-Kontrol-F1)
+for the layout, [NexAdn's reverse engineering](https://github.com/NexAdn/ni-traktor-kontrol-f1)
+for the report, and the device's own HID report descriptor (fetched over the
+USB host stack) for what the interface declares.
 
 ## Files
 

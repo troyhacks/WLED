@@ -57,6 +57,16 @@ static volatile bool hid_ctrl_pending = false;
 // always available).
 static volatile int8_t  hid_last_report_status = -1;
 static volatile uint32_t hid_reports_ok = 0;
+static volatile int8_t  hid_last_out_status = -1;
+// The data a device-to-host control transfer brought back.
+static volatile bool   hid_ctrl_want_readback = false;
+static uint8_t  hid_readback[HIDCTL_READBACK_BYTES] = {};
+static uint8_t  hid_readback_len = 0;
+// The interface's OUT endpoint, if it has one (the F1's does: 0x01).
+static usb_transfer_t* hid_out_xfer = nullptr;
+static uint8_t  hid_out_ep = 0;
+static uint16_t hid_out_mps = 0;
+static volatile bool hid_out_in_flight = false;
 // What the device's configuration descriptor says about its interfaces.
 static HidctlIfaceInfo hid_ifaces[HIDCTL_MAX_IFACES] = {};
 static uint8_t hid_iface_count = 0;
@@ -68,6 +78,11 @@ const HidctlIfaceInfo* hid_usb_interfaces(uint8_t* count) {
 
 int8_t hid_usb_last_report_status(void) { return hid_last_report_status; }
 uint32_t hid_usb_reports_ok(void) { return hid_reports_ok; }
+int8_t hid_usb_last_out_status(void) { return hid_last_out_status; }
+const uint8_t* hid_usb_readback(uint8_t* len) {
+  if (len) *len = hid_readback_len;
+  return hid_readback;
+}
 
 static volatile bool hid_in_resubmit_needed = false;
 static volatile bool hid_in_error_recovery_needed = false;
@@ -76,6 +91,7 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* ar
 static void hid_in_transfer_cb(usb_transfer_t* xfer);
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
 static void hid_desc_transfer_cb(usb_transfer_t* xfer);
+static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
 
@@ -260,6 +276,8 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   int    claimed_iface = -1;
   uint8_t in_ep = 0;
   uint16_t in_mps = 0;
+  uint8_t out_ep = 0;
+  uint16_t out_mps = 0;
 
   for (uint8_t iface_num = 0; iface_num < 8; iface_num++) {
     int iface_off = 0;
@@ -272,11 +290,16 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
       const usb_ep_desc_t* ep = usb_parse_endpoint_descriptor_by_index(
           iface, ep_idx, cfg_desc->wTotalLength, &ep_off);
       if (!ep) continue;
-      if ((ep->bmAttributes & 0x03) != 3) continue;   // interrupt
       if (ep->bEndpointAddress & 0x80) {               // IN
-        in_ep = ep->bEndpointAddress;
-        in_mps = ep->wMaxPacketSize & 0x7FF;          // strip the mult bit
-        break;
+        if ((ep->bmAttributes & 0x03) == 3 && !in_ep) {  // interrupt
+          in_ep = ep->bEndpointAddress;
+          in_mps = ep->wMaxPacketSize & 0x7FF;          // strip the mult bit
+        }
+      } else {                                          // OUT
+        if (!out_ep) {
+          out_ep = ep->bEndpointAddress;
+          out_mps = ep->wMaxPacketSize & 0x7FF;
+        }
       }
     }
     claimed_iface = iface_num;
@@ -304,8 +327,23 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   hid_in_mps   = (in_mps > HIDCTL_MAX_REPORT) ? HIDCTL_MAX_REPORT : in_mps;
   if (hid_in_mps == 0) hid_in_mps = HIDCTL_MAX_REPORT;
 
-  HIDCTL_LOG("configure: CLAIMED iface=%d IN=0x%02X MPS=%u",
-             claimed_iface, in_ep, (unsigned)hid_in_mps);
+  HIDCTL_LOG("configure: CLAIMED iface=%d IN=0x%02X MPS=%u OUT=0x%02X MPS=%u",
+             claimed_iface, in_ep, (unsigned)hid_in_mps, out_ep, (unsigned)out_mps);
+
+  // The OUT endpoint, if the interface has one. Some controllers take
+  // their LED data here rather than over the control pipe.
+  hid_out_ep = out_ep;
+  hid_out_mps = out_mps;
+  if (out_ep && !hid_out_xfer) {
+    err = usb_host_transfer_alloc(HIDCTL_MAX_OUTPUT, 0, &hid_out_xfer);
+    if (err == ESP_OK) {
+      hid_out_xfer->callback = hid_out_transfer_cb;
+      hid_out_xfer->context = nullptr;
+    } else {
+      HIDCTL_LOG("configure: OUT transfer alloc failed: %s", esp_err_to_name(err));
+      hid_out_xfer = nullptr;
+    }
+  }
 
   // Log every interface of the configuration, so it is clear what else the
   // device offers (the F1 has a second interface for the LEDs).
@@ -396,6 +434,24 @@ bool hid_usb_connected(void) {
 // ---------------------------------------------------------------------------
 bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
                          const uint8_t* data, uint16_t len) {
+  return hid_usb_send_setup(0x21, 0x09, (uint16_t)(((report_type & 0x03) << 8) | report_id),
+                            data, len);
+}
+
+// A control transfer with the setup packet spelled out. NI's own driver
+// uses wValue = 0x0100 | reportID for its SET_REPORT, and 0x0200 |
+// reportID for its GET_REPORT (a readback of the LED state), so the
+// report-type field is not always what the HID spec would suggest.
+bool hid_usb_send_setup(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                        const uint8_t* data, uint16_t len) {
+  return hid_usb_send_setup_to(bmRequestType, bRequest, wValue, hid_iface, data, len);
+}
+
+// The same, but with an explicit interface index. NI's own driver sends its
+// class requests to the device's DFU interface (interface 1), not to the
+// HID one it reads the inputs from.
+bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                           uint8_t wIndex, const uint8_t* data, uint16_t len) {
   if (!hid_dev_hdl || !hid_ctrl_xfer || !data || len == 0) return false;
   if (len > HIDCTL_MAX_OUTPUT) return false;
 
@@ -406,10 +462,10 @@ bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
   }
 
   usb_setup_packet_t setup = {};
-  setup.bmRequestType = 0x21;   // Host-to-device | Class | Interface
-  setup.bRequest      = 0x09;   // SET_REPORT
-  setup.wValue        = (uint16_t)(((report_type & 0x03) << 8) | report_id);
-  setup.wIndex        = hid_iface;
+  setup.bmRequestType = bmRequestType;
+  setup.bRequest      = bRequest;
+  setup.wValue        = wValue;
+  setup.wIndex        = wIndex;
   setup.wLength       = len;
 
   memcpy(hid_ctrl_xfer->data_buffer, &setup, sizeof(setup));
@@ -418,10 +474,11 @@ bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,
   hid_ctrl_xfer->device_handle = hid_dev_hdl;
 
   hid_ctrl_in_flight = true;
+  hid_ctrl_want_readback = (bmRequestType & 0x80) != 0;
   esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_ctrl_xfer);
   if (err != ESP_OK) {
     hid_ctrl_in_flight = false;
-    HIDCTL_LOG("SET_REPORT submit failed: %s", esp_err_to_name(err));
+    HIDCTL_LOG("control transfer submit failed: %s", esp_err_to_name(err));
     return false;
   }
   return true;
@@ -431,13 +488,65 @@ bool hid_usb_send_output_report(uint8_t report_id, const uint8_t* data, uint16_t
   return hid_usb_send_report(0x02, report_id, data, len);
 }
 
+// ---------------------------------------------------------------------------
+// The interface's OUT endpoint
+// ---------------------------------------------------------------------------
+// Some controllers take their LED data on an OUT endpoint instead of over
+// the control pipe. The F1's HID interface has one (0x01).
+bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
+  if (!hid_dev_hdl || !hid_out_xfer || !data || len == 0) return false;
+  if (len > HIDCTL_MAX_OUTPUT) return false;
+  if (hid_out_in_flight) return false;
+
+  memcpy(hid_out_xfer->data_buffer, data, len);
+  hid_out_xfer->num_bytes = len;
+  hid_out_xfer->device_handle = hid_dev_hdl;
+  hid_out_xfer->bEndpointAddress = hid_out_ep;
+
+  hid_out_in_flight = true;
+  esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
+  if (err != ESP_OK) {
+    hid_out_in_flight = false;
+    HIDCTL_LOG("OUT endpoint submit failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+static void hid_out_transfer_cb(usb_transfer_t* xfer) {
+  if (xfer) {
+    hid_last_out_status = (int8_t)xfer->status;
+    HIDCTL_LOG("OUT endpoint transfer status=%d, %d bytes",
+               (int)xfer->status, (int)xfer->actual_num_bytes);
+  }
+  hid_out_in_flight = false;
+}
+
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
   if (xfer) {
     hid_last_report_status = (int8_t)xfer->status;
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
-      HIDCTL_LOG("SET_REPORT transfer status=%d", (int)xfer->status);
+      HIDCTL_LOG("control transfer status=%d", (int)xfer->status);
     } else {
       hid_reports_ok++;
+      // A device-to-host transfer brings data back: that is the LED state
+      // readback, so it is worth seeing.
+      if (hid_ctrl_want_readback && xfer->actual_num_bytes > 8) {
+        int n = xfer->actual_num_bytes - 8;
+        const uint8_t* d = xfer->data_buffer + 8;
+        char line[128];
+        int len = 0;
+        len += snprintf(line + len, sizeof(line) - len, "readback %d bytes:", n);
+        for (int i = 0; i < n && len < 100; i++) {
+          len += snprintf(line + len, sizeof(line) - len, " %02X", d[i]);
+        }
+        USER_PRINTF("[HIDCTL] %s\n", line);
+        // Keep the first bytes so they can be read over /json/ar.
+        for (uint8_t i = 0; i < HIDCTL_READBACK_BYTES && i < n; i++) {
+          hid_readback[i] = d[i];
+        }
+        hid_readback_len = (uint8_t)((n < HIDCTL_READBACK_BYTES) ? n : HIDCTL_READBACK_BYTES);
+      }
     }
   }
   hid_ctrl_in_flight = false;
