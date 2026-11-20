@@ -99,6 +99,10 @@
 					<input type="checkbox" onchange="tempoSongPhrase(this.checked)" />
 					<span>phrase</span>
 				</label>
+				<label id="tempoFills" class="tchk" title="Fake a fill on the last bar of a four-bar measure, now and then">
+					<input type="checkbox" onchange="tempoFakeFill(this.checked)" />
+					<span>fills</span>
+				</label>
 				<button id="tempoLock" class="tbtn" title="Lock the beat grid" onclick="tempoLock()">
 					<svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>
 				</button>

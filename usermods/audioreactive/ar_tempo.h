@@ -1135,6 +1135,14 @@ struct ArTempoState {
   uint32_t downbeatApplyAt;               // the beat the numbering shifts at
   uint32_t measureApplyAt;                // ... and the measure's, over sixteen
   uint32_t measure32ApplyAt;              // the beat the THIRTY-TWO begins at
+  // The IDENTITY of the user's mark: bumped every time the downbeat is
+  // marked or cleared.
+  //
+  // The publisher rebases the bar number when the mark's identity CHANGES,
+  // so two marks in a row must not look like one.  It is never reset - not
+  // even when the grid is thrown away and the mark goes with it - so a mark
+  // made after a reset is still a different mark from the one before it.
+  uint32_t downbeatGen;
 
   // ---- the ProLink OVERRIDE ----
   //
@@ -3083,6 +3091,11 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         arTempo.downbeatApplyAt = arTempo.beatIndex;
         arTempo.downbeatManual  = true;
         arTempo.downbeatKnown   = true;
+        // A NEW mark.  The publisher rebases the bar number when this
+        // changes, so the identity of the mark is what says "the user has
+        // marked again" - the beat it was marked on is not enough, because
+        // the same beat can be marked twice.
+        arTempo.downbeatGen++;
         // The beat the user marked is also the FIRST beat of the
         // sixteen-beat measure and of the thirty-two.  He set it by ear,
         // on the bar's start, so the measure begins there - and a global
@@ -3120,6 +3133,9 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
       arTempo.downbeatManual  = false;
       arTempo.downbeatKnown   = false;
       arTempo.downbeatApplyAt = 0xFFFFFFFFu;   // nothing applies until a new one is set
+      // The mark's identity moves on as well: the mark is gone, and the
+      // mark that comes after it is a NEW mark, not the old one coming back.
+      arTempo.downbeatGen++;
       // The deck's numbering goes back to the deck's own - that is what
       // "back to the Pro Link broadcast data" means.
       arTempo.deckOverride    = false;
@@ -3498,6 +3514,15 @@ static bool arTempoDownbeatKnown(void) {
 // numbering came from that person and not from the tracker.
 static bool arTempoDownbeatManual(void) {
   return arTempo.locked && arTempo.downbeatManual;
+}
+
+// The identity of the user's mark, for the publisher.
+//
+// It is bumped every time the downbeat is marked or cleared, so the
+// publisher can tell one mark from another - which is what tells it to
+// rebase the bar number on the mark.
+static uint32_t arTempoDownbeatGen(void) {
+  return arTempo.downbeatGen;
 }
 
 // How many beats have been counted since the reference point?

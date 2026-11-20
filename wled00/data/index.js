@@ -2500,6 +2500,20 @@ function tempoUpdate(t)
 		sp.classList.toggle('fill', !!t.fill);
 		sp.title = t.fill ? "The song's phrase - in a FILL" : "Take the downbeat from the song's phrase";
 	}
+	// The FAKE FILLS: the board's own state, and the FILL lights up while
+	// the music is in one the board invented.
+	//
+	// A deck that knows the song says where its fills are.  The other
+	// sources know nothing at all, so this is the board making one up: the
+	// last bar of a four-bar measure, a quarter of the time.
+	var sf = gId('tempoFills');
+	if (sf) {
+		var fbox = sf.querySelector('input');
+		if (fbox && fbox.checked !== !!t.ff) fbox.checked = !!t.ff;
+		sf.classList.toggle('on', !!t.ff);
+		sf.classList.toggle('fill', !!t.ffon);
+		sf.title = t.ffon ? "A FAKE fill - the board invented it" : "Fake a fill on the last bar of a four-bar measure";
+	}
 	// The downbeat's MARK is a state only with a deck.  With the
 	// estimator the button is one-shot: it always marks the beat that is
 	// sounding, and it never lights up, because there is nothing to turn
@@ -2611,6 +2625,20 @@ function tempoDown()
 function tempoSongPhrase(on)
 {
 	tempoCmd({AudioReactive: {songPhrase: on}});
+}
+
+// The FAKE FILLS.
+//
+// A deck that knows the song says where its fills are - the phrase packet
+// carries a fill flag and the beat the fill starts on.  StageLinq, Ableton
+// Link and the sound itself know nothing, so the board can invent one: the
+// last bar of a four-bar measure, a quarter of the time.
+//
+// It is a SETTING, posted like one, and the board's answer comes back in
+// the tempo frame.
+function tempoFakeFill(on)
+{
+	tempoCmd({AudioReactive: {fakeFill: on}});
 }
 
 // Move the grid onto the music. The RATE is not touched, so a locked

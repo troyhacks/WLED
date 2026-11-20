@@ -939,6 +939,7 @@ struct ArLiveSettings {
   bool    tempoPlaylist;         // DJ SET (false) or PLAYLIST (true)
   bool    tempoHold;             // the clock is frozen by the user's lock?
   bool    tempoSongPhrase;       // the downbeat comes from the SONG's phrase?
+  bool    tempoFakeFill;         // fake a fill for the sources that have none?
 };
 
 // The settings as they are on boot.
@@ -2637,6 +2638,10 @@ static ArLiveSettings arSettingsBoot() {
   // source knows the song's structure, and the source not knowing is not
   // an error - the board simply falls back to the user's own mark.
   s.tempoSongPhrase = true;
+  // The fake fills are OFF on boot.  A fill the song really has is the
+  // song's; one the board invents is a fiction, and a fiction is the
+  // user's choice to make.
+  s.tempoFakeFill   = false;
   return s;
 }
 
@@ -5643,7 +5648,9 @@ void arAnalysisTask(void * parameter)
       tf.beatInMeasure32 = arTempoBeatInMeasure32();
       tf.downbeatKnown = arTempoDownbeatKnown() ? 1 : 0;
       tf.downbeatSet   = arTempoDownbeatManual() ? 1 : 0;
+      tf.downbeatGen   = arTempoDownbeatGen();
       tf.songPhrase    = arFrameSettings.tempoSongPhrase ? 1 : 0;
+      tf.fakeFill      = arFrameSettings.tempoFakeFill ? 1 : 0;
       tf.deckOverride  = arTempoDeckOverride() ? 1 : 0;
       tf.deckDownbeat  = arTempoDeckDownbeat();
       tf.deckElapsedAtMark = arTempoDeckElapsedAtMark();
@@ -8127,6 +8134,9 @@ class AudioReactive : public Usermod {
         // The SONG'S PHRASE: whether the downbeat comes from it, and what
         // the phrase is when there is one.
         t["song_phrase"]   = tf.songPhrase != 0;
+        // The FAKE FILLS: the board inventing a fill for the sources that
+        // have no idea where the song's fills are.
+        t["fake_fills"]    = tf.fakeFill != 0;
         {
           ArSongPhrase ph;
           if (arCopySongPhrase(&ph) && ph.index >= 0) {
@@ -8225,6 +8235,9 @@ class AudioReactive : public Usermod {
           // the ProLink override is on, so the mark is visible here: the
           // bar it was taken on is bar zero.
           t["source_bar"]   = (int)bs.barCount;
+          // The bar we are in is a FAKE fill - the board's own fiction, for
+          // a source that knows nothing about the song's structure.
+          t["fake_fill"]    = bs.fakeFillOn != 0;
           t["source_phrase"] = (int)(((bs.barCount % 4u) * 4u +
                                       (uint32_t)(bs.beatInBar > 0u ? bs.beatInBar - 1u : 0u)) & 15u);
         }
@@ -9405,6 +9418,27 @@ class AudioReactive : public Usermod {
           USER_PRINTF("AR: the downbeat now comes from the song's phrase: %s\n",
                       want ? "yes" : "no");
         }
+        // THE FAKE FILLS, from the tempo panel's checkbox.
+        //
+        // A deck that knows the song says where its fills are: the phrase
+        // packet carries a fill flag and the beat the fill starts on, so a
+        // fill is the TAIL of a phrase.  The other sources know nothing
+        // about the song - StageLinq has no phrase structure, Ableton Link
+        // has a beat and a phase, and the sound says nothing.
+        //
+        // So the board can invent one: the last bar of a four-bar measure,
+        // a quarter of the time - the chance is AR_FAKE_FILL_PERCENT, and
+        // it is still being found.  It is a live SETTING, and it is saved:
+        // it is a choice about how the board follows the music.
+        if (usermod[F("fakeFill")].is<bool>()) {
+          const bool want = usermod[F("fakeFill")].as<bool>();
+          arSettingsEdit([want](ArLiveSettings& st) {
+            st.tempoFakeFill = want;
+          });
+          doSerializeConfig = true;
+          USER_PRINTF("AR: fills are %s\n",
+                      want ? "faked where the source has none" : "the song's own only");
+        }
         // THE LOCK, from the info pane's button.
         //
         // "Lock BPM and grid to current values - keep estimating, but
@@ -9757,6 +9791,12 @@ class AudioReactive : public Usermod {
       //               ON by default: the source not knowing is not an
       //               error, the board falls back to the user's own mark.
       tempo[F("song_phrase")] = st.tempoSongPhrase ? 1 : 0;
+      // "fake_fill"  the board invents a fill for the sources that have no
+      //               idea where the song's fills are: the last bar of a
+      //               four-bar measure, some of the time.  It is OFF
+      //               by default - a fill the song really has is the
+      //               song's, and one the board invents is a fiction.
+      tempo[F("fake_fill")] = st.tempoFakeFill ? 1 : 0;
 #endif
       JsonObject dynLim = top.createNestedObject("dynamics");
       // The limiter and the sync's "check_sequence" are written as 0/1
@@ -10105,13 +10145,21 @@ class AudioReactive : public Usermod {
         const bool havePhrase = arGetRangedNumber(top["tempo"][F("song_phrase")],
                                                    phraseRead, 0, 1);
 
+        // The fake fills: the same shape again.  A config written before
+        // this key existed is still a good config, and the fills stay off.
+        uint8_t fillRead = before.tempoFakeFill ? 1 : 0;
+        const bool haveFill = arGetRangedNumber(top["tempo"][F("fake_fill")],
+                                                 fillRead, 0, 1);
+
         arSettingsEdit([haveTempo, tempoOnRead, tolRead, haveQuant, quantRead,
-                        haveMode, modeRead, havePhrase, phraseRead](ArLiveSettings& st) {
+                        haveMode, modeRead, havePhrase, phraseRead,
+                        haveFill, fillRead](ArLiveSettings& st) {
           if (haveTempo) st.tempoEnabled = (tempoOnRead != 0);
           st.tempoTolMs = tolRead;
           if (haveQuant) st.tempoQuant = quantRead;
           if (haveMode) st.tempoPlaylist = (modeRead != 0);
           if (havePhrase) st.tempoSongPhrase = (phraseRead != 0);
+          if (haveFill) st.tempoFakeFill = (fillRead != 0);
         });
       }
 

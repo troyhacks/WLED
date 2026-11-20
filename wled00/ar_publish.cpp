@@ -10,6 +10,7 @@
 #include "ar_publish.h"
 
 #include <atomic>
+#include <esp_random.h>    // the hardware random, for the fake fill's roll
 #include <esp_timer.h>     // the native timer, for the handoff's decay
 #include <math.h>
 #include <string.h>
@@ -174,6 +175,8 @@ void arCopyTempoLocked(ArTempoFrame* dest) {
     dest->beatInBar = 0; dest->valid = 0;
     dest->beatInMeasure = 0; dest->beatInMeasure32 = 0;
     dest->downbeatKnown = 0; dest->downbeatSet = 0;
+    dest->downbeatGen = 0;
+    dest->fakeFill = 0;
     dest->downbeatT = 0.0f; dest->beatCount = 0;
     dest->refBpm = 0.0f; dest->refErrMs = 0.0f;
     dest->refBeat = 0; dest->refOurBeat = 0;
@@ -262,6 +265,20 @@ static float    arHandoffBpm    = 0.0f;   // the tempo of that source
 static float    arHandoffDeckAtMark = 0.0f;   // the grid's position at the marked beat
 static uint32_t arHandoffMarkGen    = 0;      // the mark's identity, as it was last time
 static uint8_t  arHandoffMarkOn     = 0;      // 1 when a mark was in force last time
+
+// THE FAKE FILL's roll.
+//
+// Which measure the roll was made for - the measure's number and the mark
+// it was counted from, so a new grid rolls again - and what the roll said.
+static uint64_t arFakeFillMeasure   = 0xFFFFFFFFFFFFFFFFull;
+static bool     arFakeFillOn        = false;
+
+// The chance that a four-bar measure ends in a fill, in PERCENT.
+//
+// 25 for now - one measure in four.  It was picked for the first test: if
+// the fakes read well it becomes a setting the user can turn, and if they
+// do not, it goes back to zero.
+#define AR_FAKE_FILL_PERCENT 25
 
 // How fast the correction is let go, in BEATS.  Four beats is a bar: the
 // light slows for a bar and is back on the grid by the next one.
@@ -412,6 +429,40 @@ static void arApplyHandoff(ArBeatSource* b) {
     arHandoffMarkOn = 0;
     const float accBar = floorf(arHandoffAcc / 4.0f);
     b->barCount = (accBar > 0.0f) ? (uint32_t)accBar : 0u;
+  }
+
+  // THE FAKE FILL.
+  //
+  // A Pioneer knows where its fills are: the phrase packet carries a fill
+  // flag and the beat the fill starts on, so a fill is the TAIL of a
+  // phrase.  The other sources know nothing about the song - StageLinq has
+  // no phrase structure at all, Ableton Link has a beat and a phase, and
+  // the sound says nothing.
+  //
+  // So the board can INVENT one, when the user asks for it: the last bar
+  // of a four-bar measure, some of the time.  A fill is the tail of
+  // something, so the fake one is the tail of the measure - the fourth
+  // bar, and it ends with it.  How often is AR_FAKE_FILL_PERCENT.
+  //
+  // The roll is made ONCE per measure, when the measure changes, so the
+  // whole measure agrees on whether it ends in a fill.  The mark is part
+  // of the roll's identity: a new grid is a new measure, and a new
+  // chance.
+  //
+  // A Pioneer is never given a fake fill: it knows the song, and a fill
+  // it does not have is a fill it does not want.
+  b->fakeFillOn = 0;
+  if (b->fakeFill && b->sourceId != AR_SRC_PROLINK && b->live) {
+    const uint64_t id = ((uint64_t)b->markGen << 32) | (uint64_t)(b->barCount / 4u);
+    if (id != arFakeFillMeasure) {
+      arFakeFillMeasure = id;
+      // The roll: AR_FAKE_FILL_PERCENT of the measures, and no more.
+      arFakeFillOn = (esp_random() % 100u) < (uint32_t)AR_FAKE_FILL_PERCENT;
+    }
+    if (arFakeFillOn && (b->barCount % 4u) == 3u) b->fakeFillOn = 1;
+  } else {
+    arFakeFillMeasure = 0xFFFFFFFFFFFFFFFFull;
+    arFakeFillOn = false;
   }
 
   arHandoffAccAt = now;
@@ -574,7 +625,7 @@ static void arApplySourceBeat(ArBeatSource* b, const ArSourceBeat& src,
                   ? (ph.currentBeat - ph.startBeat) : 0u;
       // The mark's identity: the phrase's own generation, so a new
       // phrase is a new mark and the counters are rebased on it.
-      b->markGen  = ph.generation | 0x80000000u;
+      b->markGen  = ph.generation | AR_MARK_GEN_PHRASE;
       b->markAt   = ph.startBeat;
       b->phraseOn   = 1;
       b->phraseFill = ph.fill;
@@ -652,6 +703,11 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
   ArTempoFrame tf;
   const bool haveTf = arCopyTempo(&tf);
 
+  // The FAKE FILLS setting: the board invents a fill for the sources that
+  // have no idea where the song's fills are.  It is asked for by the user,
+  // and the handoff below works out whether the bar we are in is one.
+  b.fakeFill = (haveTf && tf.fakeFill) ? 1 : 0;
+
   // A DECK, if there is one.
   //
   // ignoreProLink is the DEBUG switch: it ignores the deck and answers from
@@ -683,6 +739,28 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     // as good as the deck's.
     b.downbeatKnown = (tf.downbeatSet != 0) ? 1 : 0;
     b.downbeatSet   = tf.downbeatSet;
+    // THE USER'S MARK, with the estimator as the clock.
+    //
+    // With a deck, the mark is an OVERRIDE of the deck's numbering: the
+    // publish layer rotates the deck's beat in the bar onto the beat the
+    // user marked, and counts the bars from it.  With the estimator there
+    // is no deck to rotate - the estimator has ALREADY rotated its own
+    // numbering, so the beat that was sounding when the user marked it is
+    // beat one in arTempoBeatInBar() - so the only thing left to do is to
+    // say that the mark is there.
+    //
+    // Without this the mark was obeyed by the beat number and by the
+    // estimator's own counters, but NOT by the bar number - and the bar
+    // number is what the effects count on.  The mark used to be a rotation
+    // of the numbering and nothing else; this makes it what it is with a
+    // deck: the bar the user marked is bar zero, and the count runs from
+    // there.
+    if (tf.downbeatSet != 0) {
+      b.markOn   = 1;
+      b.markBeat = 0;      // the estimator's numbering is already the marked one
+      b.markBack = 0;      // the marked beat is the one sounding now
+      b.markGen  = tf.downbeatGen | AR_MARK_GEN_INTERNAL;
+    }
     // The master's BEAT COUNTER: it restarts when the user marks the
     // downbeat, so it is the number an effect counts on to stay with
     // the mark.
@@ -714,6 +792,9 @@ void arResetTempo() {  ArPublishGuard guard;
   arHandoffDeckAtMark = 0.0f;
   arHandoffMarkGen    = 0;
   arHandoffMarkOn     = 0;
+  // The fake fill's roll goes with it: the next measure is a new one.
+  arFakeFillMeasure   = 0xFFFFFFFFFFFFFFFFull;
+  arFakeFillOn        = false;
   arTempoFrame.bpm = 0.0f;
   arTempoFrame.beatProgress = 0.0f;
   arTempoFrame.score = 0.0f;
@@ -722,6 +803,7 @@ void arResetTempo() {  ArPublishGuard guard;
   arTempoFrame.beatInMeasure = 0;
   arTempoFrame.downbeatKnown = 0;
   arTempoFrame.downbeatSet = 0;
+  arTempoFrame.downbeatGen = 0;
   arTempoFrame.downbeatT = 0.0f;
   arTempoFrame.beatCount = 0;
   arTempoFrame.refBpm = 0.0f;

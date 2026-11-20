@@ -1019,6 +1019,13 @@ input[type=range]::-moz-range-thumb {
 	color: var(--c-f);
 }
 
+/* The FILL: the music is in a fill - the song's own, or one the board
+ * invented for a source that has no idea where the song's fills are.  The
+ * effects change their behaviour in a fill, so the panel says so too. */
+#tempowrap .tchk.fill {
+	color: var(--c-y);
+}
+
 /* The panel CENTRED in the title bar.
  *
  * Above 1250px there is room for the panel to sit in the MIDDLE of the

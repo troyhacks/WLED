@@ -571,7 +571,10 @@ static BeatClock beatClock(bool ignoreProLink = false) {
   c.fromProLink   = b.fromProLink;
   c.beatCount     = b.beatCount;
   c.phraseOn      = b.phraseOn;
-  c.phraseFill    = b.phraseFill;
+  // A FILL is a fill, whether the song's phrase says so or the board
+  // invented it: the effect cannot tell the difference, and it should
+  // not have to.
+  c.phraseFill    = (b.phraseFill || b.fakeFillOn) ? 1 : 0;
   c.phraseKind    = b.phraseKind;
   return c;
 }

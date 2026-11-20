@@ -175,7 +175,9 @@ struct ArTempoFrame {
   uint8_t  beatInMeasure32; // 1..32; 1 is the FIRST beat of the thirty-two
   uint8_t  downbeatKnown;   // 1 when the downbeat is a MEASUREMENT, not a convention
   uint8_t  downbeatSet;     // 1 when the USER marked the downbeat by hand
+  uint32_t downbeatGen;     // the identity of the user's mark - bumped on every mark
   uint8_t  songPhrase;      // 1 when the downbeat comes from the SONG's phrase
+  uint8_t  fakeFill;        // 1 when the user wants FILLS FAKED - for the sources that have none
   // The ProLink OVERRIDE: the user marked a downbeat while the deck was
   // playing, so the deck's numbering is rotated to the beat they marked.
   // It is an OFFSET from the deck's packets - the deck's tempo and phase
@@ -229,6 +231,17 @@ enum ArSourceId : uint8_t {
   AR_SRC_STAGELINQ = 2,   // a Denon DJ unit, over StageLinq
   AR_SRC_ABLETON   = 3    // Ableton Live, over Link
 };
+
+// The MARK's identity - the namespace each kind of mark lives in.
+//
+// The bar number is rebased when the mark's identity CHANGES, so two marks
+// must never share one identity.  There are three kinds: the song's
+// phrase, the user's mark on a deck, and the user's mark on the
+// estimator.  The phrase takes the top bit, the estimator's mark takes the
+// next, and the deck's mark carries the deck's own beat count in the low
+// bits - which is small enough never to reach them.
+#define AR_MARK_GEN_PHRASE   0x80000000u
+#define AR_MARK_GEN_INTERNAL  0x40000000u
 
 // What a source says about where the beat is.
 //
@@ -297,6 +310,19 @@ struct ArBeatSource {
   // The PHRASE: the song's structure, when there is one.
   uint8_t  phraseOn;        // 1 when there is a phrase
   uint8_t  phraseFill;      // 1 when the phrase is a FILL
+  // THE FAKE FILL.
+  //
+  // A Pioneer knows where its fills are - the phrase packet says "this
+  // phrase has a fill, starting at beat N" - so a fill is the TAIL of a
+  // phrase.  The other sources know nothing about the song: StageLinq has
+  // no phrase structure, Ableton Link has a beat and a phase, and the
+  // sound says nothing at all.
+  //
+  // So the board can INVENT one, when the user asks for it: the last bar
+  // of a four-bar measure, some of the time.  It is a fiction and it
+  // is used as one - it never moves the downbeat.
+  uint8_t  fakeFill;        // 1 when the user wants fills faked
+  uint8_t  fakeFillOn;      // 1 when the bar we are in IS a fake fill
   uint8_t  phraseKind;      // the phrase's TYPE - an ArPhraseKind
   int32_t  phraseIndex;     // the phrase's number in the track
   uint32_t phraseIn;        // the beats into the phrase

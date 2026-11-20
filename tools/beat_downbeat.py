@@ -93,11 +93,28 @@ async def run(deck):
                   f"dbo={f.get('dbo')} beat={f.get('beat')}")
             last = key
 
+    print("\n--- the BAR around each press ---")
+    print("  the bar must restart at zero when the downbeat is marked,")
+    print("  and it must go on counting from there")
+    for when, cmd in ((8.0, "set"), (16.0, "clear"), (22.0, "set")):
+        before = [f for t, f in frames if t < when - 0.3]
+        after = [f for t, f in frames if t > when + 0.3]
+        if not before or not after:
+            print(f"  {cmd:6s} at {when:5.1f}s  (no frames)")
+            continue
+        b0 = before[-1].get("bar")
+        b1 = after[0].get("bar")
+        verdict = "RESET" if cmd == "set" and b1 == 0 else \
+                  ("ok" if cmd == "clear" else "NOT RESET")
+        print(f"  {cmd:6s} at {when:5.1f}s  bar {b0} -> {b1}   {verdict}")
+
     print("\n--- the board's own numbers ---")
     t = tempo_now()
     for k in ("source", "source_bpm", "source_beat", "source_32",
+              "source_bar", "source_phrase",
               "downbeat_set", "downbeat_known", "deck_override",
-              "deck_downbeat", "beat_in_measure", "beat_in_measure32"):
+              "deck_downbeat", "beat_in_measure", "beat_in_measure32",
+              "beat_count"):
         print(f"  {k:20s} {t.get(k)}")
 
 
