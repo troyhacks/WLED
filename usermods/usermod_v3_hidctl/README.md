@@ -172,7 +172,26 @@ right pressed 24, 25, 26, 27 in that order, so that is what the profile uses
 — but if it turns out to be reversed, it is a one-line change in the profile
 file, no rebuild.
 
-### LED feedback
+### The LED demo
+
+The controller can be put into a demo pattern — the transport buttons
+chase, the lower buttons sweep, the pads turn a rainbow and the display
+counts — without a rebuild:
+
+```
+curl -X POST http://<board>/json/state -d '{"HIDCTL":{"demo":true}}'
+```
+
+or with the serial console's `r` key (it toggles). The state is in
+`/json/ar` under `HIDCTL.demo`.
+
+It is also how the brightness was measured: the transport row was given
+eight different levels and the lower buttons a gradient across each one's
+two halves. **The buttons take a brightness (00 to 7F), not an on/off
+code, and there is no flash code** — a byte above the maximum does
+nothing at all. Any flashing is the host's job: pulse the brightness.
+
+## LED feedback
 
 The F1's pads, buttons and two-digit display are driven by an 81-byte
 report (ID 0x80) that goes out on the interface's **interrupt OUT endpoint**

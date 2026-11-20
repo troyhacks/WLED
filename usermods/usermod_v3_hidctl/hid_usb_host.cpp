@@ -531,8 +531,12 @@ const uint8_t* hid_usb_last_out_report(uint8_t* len) {
 static void hid_out_transfer_cb(usb_transfer_t* xfer) {
   if (xfer) {
     hid_last_out_status = (int8_t)xfer->status;
-    HIDCTL_LOG("OUT endpoint transfer status=%d, %d bytes",
-               (int)xfer->status, (int)xfer->actual_num_bytes);
+    // Only the failures are worth a line: the reports go out several times a
+    // second and the console would drown in them.
+    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+      HIDCTL_LOG("OUT endpoint transfer status=%d, %d bytes",
+                 (int)xfer->status, (int)xfer->actual_num_bytes);
+    }
   }
   hid_out_in_flight = false;
 }
