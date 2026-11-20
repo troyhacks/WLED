@@ -107,6 +107,80 @@ class HidctlUsermod : public Usermod {
   // The AutoPlaylist's music slot, for the pad colours.
   uint8_t music_slot = 0;
 
+  // -------------------------------------------------------------------------
+  // The preset pages
+  // -------------------------------------------------------------------------
+  // The presets are paged in blocks of sixteen: the pads address the
+  // current page, and the encoder turns the page. Turning it clockwise
+  // goes forward a page and anticlockwise back; it never wraps - the
+  // first page stays the first and the last page stays the last.
+  static constexpr uint8_t PAGE_SIZE = 16;
+
+  uint8_t  page = 1;          // the page the pads are addressing
+  uint8_t  wheelLast = 0;     // the encoder's last position
+  bool     wheelSeen = false;
+  uint32_t showPageUntil = 0; // the page is on the display until then
+
+  // The highest preset slot that exists.
+  uint8_t highestSavedPreset() const {
+    for (int s = 250; s >= 1; s--) {
+      if (getCachedPresetExists(s)) return (uint8_t)s;
+    }
+    return 1;
+  }
+
+  // The last page that has anything on it.
+  uint8_t lastPage() const {
+    uint8_t highest = highestSavedPreset();
+    return (uint8_t)(((highest - 1) / PAGE_SIZE) + 1);
+  }
+
+  // The page the current preset is in.
+  uint8_t pageOfPreset(uint16_t preset) const {
+    if (preset < 1) preset = 1;
+    return (uint8_t)(((preset - 1) / PAGE_SIZE) + 1);
+  }
+
+  // The offset the pads are shifted by: page one is the first sixteen
+  // presets, page two the next sixteen, and so on.
+  uint16_t pageOffset() const {
+    return (uint16_t)((page - 1) * PAGE_SIZE);
+  }
+
+  // Move a page forward (1) or back (-1) and take the current preset
+  // with it, keeping its place in the page.
+  void turnPage(int direction) {
+    const uint8_t last = lastPage();
+    int want = (int)page + direction;
+    if (want < 1) want = 1;
+    if (want > last) want = last;
+    if (want == (int)page) return;
+    page = (uint8_t)want;
+
+    // The preset keeps its place in the page, so it moves by sixteen.
+    uint16_t offset = 0;
+    if (currentPreset >= 1) {
+      offset = (uint16_t)((currentPreset - 1) % PAGE_SIZE);
+    }
+    uint16_t target = (uint16_t)((page - 1) * PAGE_SIZE + offset + 1);
+    const uint8_t highest = highestSavedPreset();
+    if (target > highest) target = highest;
+    // Land on a preset that exists.
+    while (target > 1 && !getCachedPresetExists((uint8_t)target)) target--;
+    if (!getCachedPresetExists((uint8_t)target)) target = 1;
+
+    currentPreset = (uint8_t)target;
+    applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
+    handlePresets();
+    showPageUntil = millis() + 1500;
+    USER_PRINTF("[HIDCTL] page %u (preset %u)\n", page, currentPreset);
+  }
+
+  // Show the page on the display for a moment.
+  void showPageBriefly() {
+    showPageUntil = millis() + 1500;
+  }
+
   // The LED demo: a chase of brightnesses, a rainbow over the pads and a
   // counter on the display. It is switched on and off at runtime, so it
   // can be seen without rebuilding:
@@ -245,6 +319,15 @@ class HidctlUsermod : public Usermod {
         }
         p.output.display.segments_per_digit = n;
         if (n == 0) p.output.display.present = false;
+      }
+
+      // The wheel: a byte in the report that counts the encoder's
+      // position, so a difference tells which way it turned.
+      JsonObject wheel = j["wheel"];
+      if (!wheel.isNull()) {
+        p.wheel_present = true;
+        p.wheel_offset = (uint16_t)(wheel["offset"] | 0);
+        if (p.wheel_offset >= p.report_len) return false;
       }
 
       JsonArray lights = out["lights"];
@@ -451,6 +534,11 @@ class HidctlUsermod : public Usermod {
 #ifdef USERMOD_AUDIOREACTIVE
       audioReactiveTempoCommand('q');
 #endif
+      return;
+    }
+    if (!strcmp(action, "showpage")) {
+      // Show the page on the display for a moment.
+      showPageBriefly();
       return;
     }
 
@@ -741,6 +829,24 @@ class HidctlUsermod : public Usermod {
     }
   }
 
+  // Write a letter on the left-hand digit ("P" for the page).
+  void showLetter(uint8_t* report, HidctlProfile& p, char letter) {
+    if (!p.output.display.present || p.output.display.digit_count < 2) return;
+    // The strokes of a "P": top, upper-left, middle, lower-left, bottom.
+    uint8_t mask = 0;
+    switch (letter) {
+      case 'P': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
+      case 'E': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
+      default:  mask = 0; break;
+    }
+    uint16_t base = p.output.display.digit_offset[0];
+    for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
+      int canon = segmentIndexByName(p.output.display.segment_names[s]);
+      bool on = (canon >= 0) && ((mask >> canon) & 1);
+      report[base + s] = on ? 0x7F : 0x00;
+    }
+  }
+
   // The demo picture: the transport buttons chase, the lower buttons sweep,
   // the pads turn a rainbow and the display counts.
   void paintDemo(uint8_t* report, HidctlProfile& p) {
@@ -799,6 +905,14 @@ class HidctlUsermod : public Usermod {
     memset(report, 0, sizeof(report));
     report[0] = p.output.report_id;
 
+    // The page follows the preset when the preset is changed from
+    // somewhere else (the web UI), so the pads always address the page the
+    // current preset is on.
+    if (currentPreset >= 1) {
+      uint8_t want = pageOfPreset(currentPreset);
+      if (want != page && millis() >= showPageUntil) page = want;
+    }
+
     // The beat that is sounding now, from the tempo tracker.
     {
       ArTempoFrame tf;
@@ -809,9 +923,23 @@ class HidctlUsermod : public Usermod {
     }
     music_slot = queryAutoPlaylistMusicSlot();
 
-    // --- the display: the current preset number ---
+    // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
-    showNumber(report, p, val);
+    if (millis() < showPageUntil) {
+      showLetter(report, p, 'P');
+      // The page's number goes on the right-hand digit.
+      if (p.output.display.present && p.output.display.digit_count >= 2) {
+        uint16_t base = p.output.display.digit_offset[1];
+        uint8_t mask = digitMask((uint8_t)(page % 10));
+        for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
+          int canon = segmentIndexByName(p.output.display.segment_names[s]);
+          bool on = (canon >= 0) && ((mask >> canon) & 1);
+          report[base + s] = on ? 0x7F : 0x00;
+        }
+      }
+    } else {
+      showNumber(report, p, val);
+    }
 
     if (demoActive) {
       paintDemo(report, p);
@@ -832,8 +960,9 @@ class HidctlUsermod : public Usermod {
         //   a saved preset             blue
         //   a saved playlist           magenta (red when it is a one-shot)
         //   the music playlist         yellow
-        int slot = atoi(nm + 3);
-        if (slot >= 1 && slot <= 64) {
+        // The pads address the current page, so the colours do too.
+        int slot = atoi(nm + 3) + (int)pageOffset();
+        if (slot >= 1 && slot <= 250) {
           const bool is_music = (music_slot > 0 && slot == (int)music_slot);
           const bool is_playlist = presetIsPlaylist((uint8_t)slot);
           if (is_music) {
@@ -935,6 +1064,20 @@ class HidctlUsermod : public Usermod {
       }
     }
 
+    // --- the encoder -------------------------------------------------------
+    // Its byte counts the wheel's position, so the difference says which
+    // way it turned. One step is one page.
+    if (p.wheel_present && len > p.wheel_offset) {
+      uint8_t pos = data[p.wheel_offset];
+      if (wheelSeen) {
+        int8_t delta = (int8_t)(pos - wheelLast);   // the counter wraps
+        if (delta > 0) turnPage(delta);
+        else if (delta < 0) turnPage(delta);
+      }
+      wheelLast = pos;
+      wheelSeen = true;
+    }
+
     uint32_t pressed = now_buttons & ~buttons;
     buttons = now_buttons;
 
@@ -952,7 +1095,16 @@ class HidctlUsermod : public Usermod {
         if (!(pressed & (1UL << btn.index))) continue;
         const char* act = (mod_held && btn.mod_action[0]) ? btn.mod_action : btn.action;
         USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, act);
-        runAction(act, 255);
+        // The pads address the current page: "preset5" on page three is
+        // preset 37.
+        char shifted[HIDCTL_MAX_ACTION + 8];
+        const char* use = act;
+        if (!strncmp(act, "preset", 6) && isdigit(act[6])) {
+          uint16_t slot = (uint16_t)(atoi(act + 6) + pageOffset());
+          snprintf(shifted, sizeof(shifted), "preset%u", slot);
+          use = shifted;
+        }
+        runAction(use, 255);
       }
       // The LEDs may have changed (a button lights while it is held).
       paint();
@@ -1063,6 +1215,8 @@ class HidctlUsermod : public Usermod {
     top["presets_cached"] = cached;
     top["music_slot"] = music_slot;
     top["demo"] = demoActive;
+    top["page"] = page;
+    top["page_count"] = lastPage();
     top["report_status"] = hid_usb_last_report_status();
     top["reports_ok"] = hid_usb_reports_ok();
     uint8_t rb_len = 0;

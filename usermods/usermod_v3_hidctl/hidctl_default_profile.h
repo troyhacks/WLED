@@ -26,6 +26,7 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
   "report_id": 1,
   "report_len": 22,
   "buttons": { "bytes": [1, 2, 3, 4], "msb_first": true },
+  "wheel": { "offset": 5 },
   "controls": [
     { "name": "knob1",  "offset": 6,  "bits": 12, "action": "bri" },
     { "name": "knob2",  "offset": 8,  "bits": 12, "action": "effectSpeed" },
@@ -58,7 +59,7 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "index": 18, "name": "type",    "action": "nextpreset" },
     { "index": 19, "name": "size",    "action": "prevpreset" },
     { "index": 20, "name": "browse",  "action": "blackout" },
-    { "index": 21, "name": "encoder", "action": "full" },
+    { "index": 21, "name": "encoder", "action": "showpage" },
     { "index": 24, "name": "bar1", "action": "downbeat", "mod_action": "seg0" },
     { "index": 25, "name": "bar2", "action": "", "mod_action": "seg1" },
     { "index": 26, "name": "bar3", "action": "", "mod_action": "seg2" },

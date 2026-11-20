@@ -107,4 +107,7 @@ struct HidctlProfile {
   HidctlControl controls[HIDCTL_MAX_CONTROLS];
   HidctlButton buttons[HIDCTL_MAX_BUTTONS];
   HidctlOutput output;
+  // The wheel: a byte in the report that counts the encoder's position.
+  bool     wheel_present;
+  uint16_t wheel_offset;
 };
