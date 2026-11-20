@@ -276,6 +276,7 @@ void handleSerial() {
     //   y / Y    that band's trim, down / up by 1 dB         (calibration)
     //   k / K    the filter bank's detector, shorter / longer by 5 ms
     //   l / L    the loudness calibration, down / up by 1 dB       (calibration)
+    //   r        the HID control surface: its LED demo on / off
     //   w / W    the auto-range's release, shorter / longer by 500 ms
     //   c / C    the codec's input gain, down / up by 0.5 dB
     //   e / E    the tempo tracker's tolerance, down / up by 5 ms
@@ -293,6 +294,12 @@ void handleSerial() {
     //   G        plot the 16 display bands on the console
     //   d / D    the dB display trim, down / up by 1 dB
     // ---------------------------------------------------------------------
+    } else if (next == 'r') {
+#ifdef USERMOD_HIDCTL_USB
+      // The HID control surface's LED demo: the transport buttons chase,
+      // the pads turn a rainbow and the display counts.
+      hidctlToggleLedDemo();
+#endif
     } else if (next == 't') {
       // Run the input chain's self-test: it measures the chain as implemented
       // (impulse response and sine response) and compares both with the

@@ -559,3 +559,10 @@ uint8_t queryAutoPlaylistMusicSlot() {
 #endif
   return 0;
 }
+
+// The HID control surface's LED demo, from the serial console.
+#ifdef USERMOD_HIDCTL_USB
+void hidctlToggleLedDemo() {
+  if (hidctlUsermodPtr) hidctlUsermodPtr->toggleDemo();
+}
+#endif

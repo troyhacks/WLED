@@ -107,6 +107,15 @@ class HidctlUsermod : public Usermod {
   // The AutoPlaylist's music slot, for the pad colours.
   uint8_t music_slot = 0;
 
+  // The LED demo: a chase of brightnesses, a rainbow over the pads and a
+  // counter on the display. It is switched on and off at runtime, so it
+  // can be seen without rebuilding:
+  //
+  //   curl -X POST http://<board>/json/state -d '{"HIDCTL":{"demo":true}}'
+  //
+  bool demoActive = false;
+  uint32_t demoStart = 0;
+
   // Is this preset slot a saved playlist?
   static bool presetIsPlaylist(uint8_t slot) {
     if (slot == 0 || slot > 250) return false;
@@ -682,84 +691,6 @@ class HidctlUsermod : public Usermod {
   // Try every plausible shape of the output report, lighting everything,
   // and log which one the device accepts. Used to pin down a controller's
   // LED protocol when the sources disagree (report type, data length).
-  void probeFormats() {
-    if (!profiles || active_profile >= profile_count) return;
-    HidctlProfile& p = profiles[active_profile];
-    if (!p.output.present) return;
-
-    uint8_t buf[HIDCTL_MAX_OUTPUT];
-    memset(buf, 0, sizeof(buf));
-    uint8_t* data = buf;   // the report's data; the ID goes in wValue
-
-    // Everything on: the display, the buttons, the pads.
-    for (uint8_t i = 0; i < 16 && i < p.output.length; i++) data[i] = 0x7F;
-    for (uint8_t i = 16; i < 24 && i < p.output.length; i++) data[i] = 0x7F;
-    for (uint8_t i = 72; i < 80 && i < p.output.length; i++) data[i] = 0x7F;
-    for (uint8_t pad = 0; pad < 16; pad++) {
-      uint16_t base = 24 + pad * 3;
-      if (base + 2 < p.output.length) {
-        data[base + 0] = 0x00;   // blue
-        data[base + 1] = 0x7F;   // red
-        data[base + 2] = 0x00;   // green
-      }
-    }
-
-    // The LED report, in the layout NI's own reverse engineering found: 16
-    // bytes of display strokes, 8 bytes of special buttons, the 16 pads as
-    // three bytes each (blue, red, green) and the four lower buttons, two
-    // sides each. Light the pads red and the buttons white.
-    memset(buf, 0, sizeof(buf));
-    for (uint8_t i = 16; i < 24; i++) buf[i] = 0xFF;      // the 8 buttons
-    for (uint8_t pad = 0; pad < 16; pad++) {
-      uint16_t base = 24 + pad * 3;
-      if (base + 2 < p.output.length) {
-        buf[base + 0] = 0x00;   // blue
-        buf[base + 1] = 0xFF;   // red
-        buf[base + 2] = 0x00;   // green
-      }
-    }
-    for (uint8_t i = 72; i < 80 && i < p.output.length; i++) buf[i] = 0xFF;
-
-    // The F1's LED report. It goes out on the interface's interrupt OUT
-    // endpoint as the whole report: the ID byte first, then the data.
-    //
-    //   byte 0        report ID 0x80
-    //   bytes 1..7    the left display, seven segments
-    //   byte 8        the dot between the displays
-    //   bytes 9..15   the right display, seven segments
-    //   byte 16       (not identified)
-    //   bytes 17..24  Browse, Size, Type, Reverse, Shift, Capture, Quant, Sync
-    //   bytes 25..72  the 16 pads, three bytes each
-    //   bytes 73..80  the four lower buttons, two bytes each (left, right),
-    //                 in the order 4, 3, 2, 1
-    //
-    // Every byte is a brightness from 00 to 7F.
-    //
-    // This run identifies the details that are still unknown: the order of
-    // the seven strokes inside a digit. One segment at a time, byte 1
-    // through byte 7, then the dot byte 8.
-    uint8_t report[HIDCTL_MAX_OUTPUT];
-    for (uint8_t step = 0; step < 8; step++) {
-      memset(report, 0, sizeof(report));
-      report[0] = 0x80;
-      report[1 + step] = 0x7F;
-      hid_usb_send_out_endpoint(report, 81);
-      delay(1800);
-      USER_PRINTF("[HIDCTL] probe: segment byte %d alone\n", 1 + step);
-    }
-
-    bool ok = hid_usb_send_out_endpoint(report, 81);
-    delay(2000);
-    USER_PRINTF("[HIDCTL] probe: OUT endpoint, 81 bytes (identification) -> %s, status=%d\n",
-                ok ? "sent" : "FAILED", (int)hid_usb_last_out_status());
-    if (probe_result_count < HIDCTL_MAX_PROBE_RESULTS) {
-      probe_results[probe_result_count].type = 1;
-      probe_results[probe_result_count].id = 0;
-      probe_results[probe_result_count].len = 81;
-      probe_results[probe_result_count].status = hid_usb_last_out_status();
-      probe_result_count++;
-    }
-  }
 
   // Paint the LEDs and the display, then send the output report.
   //
@@ -767,6 +698,88 @@ class HidctlUsermod : public Usermod {
   // whole report: the ID byte first, then the data. The device does not
   // answer HID class requests (SET_REPORT stalls on every report ID and
   // length), so the OUT endpoint is the only way in.
+  // -------------------------------------------------------------------------
+  // The LED demo
+  // -------------------------------------------------------------------------
+  // A triangle wave over 256 steps: 0, 0x7F, 0, ...
+  static uint8_t triangle(uint8_t phase) {
+    uint8_t p = phase & 0xFF;
+    return (p < 128) ? (uint8_t)(p * 2) : (uint8_t)((255 - p) * 2);
+  }
+
+  // A full-saturation hue on the wheel, 0..255.
+  static void hue2rgb(uint8_t hue, uint8_t& r, uint8_t& g, uint8_t& b) {
+    uint8_t region = hue / 43;
+    uint8_t rem = (uint8_t)((hue - region * 43) * 6);
+    uint8_t rising = (uint8_t)(rem * 21);           // 0..127
+    uint8_t falling = (uint8_t)(127 - rising);
+    switch (region) {
+      case 0: r = 0x7F; g = rising;  b = 0;      break;
+      case 1: r = falling; g = 0x7F;  b = 0;      break;
+      case 2: r = 0;      g = 0x7F;  b = rising;  break;
+      case 3: r = 0;      g = falling; b = 0x7F; break;
+      case 4: r = rising;  g = 0;      b = 0x7F; break;
+      default: r = 0x7F; g = 0;      b = falling; break;
+    }
+  }
+
+  // Write a number on the seven-segment display.
+  void showNumber(uint8_t* report, HidctlProfile& p, uint16_t value) {
+    if (!p.output.display.present) return;
+    uint16_t divisor = 1;
+    for (uint8_t k = 1; k < p.output.display.digit_count; k++) divisor *= 10;
+    for (uint8_t d = 0; d < p.output.display.digit_count; d++) {
+      uint8_t digit = (uint8_t)((value / divisor) % 10);
+      divisor = (divisor > 1) ? divisor / 10 : 1;
+      uint8_t mask = digitMask(digit);
+      uint16_t base = p.output.display.digit_offset[d];
+      for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
+        int canon = segmentIndexByName(p.output.display.segment_names[s]);
+        bool on = (canon >= 0) && ((mask >> canon) & 1);
+        report[base + s] = on ? 0x7F : 0x00;
+      }
+    }
+  }
+
+  // The demo picture: the transport buttons chase, the lower buttons sweep,
+  // the pads turn a rainbow and the display counts.
+  void paintDemo(uint8_t* report, HidctlProfile& p) {
+    uint32_t t = millis() - demoStart;
+
+    // The transport row: a chase, each button a step behind the last.
+    for (uint8_t i = 0; i < 8; i++) {
+      report[17 + i] = triangle((uint8_t)((t / 50) + i * 10));
+    }
+    // The lower buttons: a sweep across both halves of each button.
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t s = 0; s < 2; s++) {
+        report[73 + i * 2 + s] = triangle((uint8_t)((t / 40) + i * 12 + s * 6));
+      }
+    }
+    // The pads: a rainbow that turns.
+    for (uint8_t k = 0; k < 16; k++) {
+      uint8_t r, g, b;
+      hue2rgb((uint8_t)(k * 16 + t / 10), r, g, b);
+      uint16_t base = 25 + k * 3;
+      report[base + 0] = b;
+      report[base + 1] = r;
+      report[base + 2] = g;
+    }
+    // The display: a counter.
+    showNumber(report, p, (uint16_t)((t / 500) % 100));
+  }
+
+  // Switch the demo on or off.
+  void setDemo(bool on) {
+    if (on == demoActive) return;
+    demoActive = on;
+    demoStart = millis();
+    USER_PRINTF("[HIDCTL] LED demo %s\n", on ? "on" : "off");
+  }
+
+  // The serial console's key.
+  void toggleDemo() { setDemo(!demoActive); }
+
   void paint() {
     if (!profiles || active_profile >= profile_count) return;
     HidctlProfile& p = profiles[active_profile];
@@ -793,21 +806,13 @@ class HidctlUsermod : public Usermod {
     music_slot = queryAutoPlaylistMusicSlot();
 
     // --- the display: the current preset number ---
-    if (p.output.display.present) {
-      uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
-      uint16_t divisor = 1;
-      for (uint8_t k = 1; k < p.output.display.digit_count; k++) divisor *= 10;
-      for (uint8_t d = 0; d < p.output.display.digit_count; d++) {
-        uint8_t digit = (uint8_t)((val / divisor) % 10);
-        divisor = (divisor > 1) ? divisor / 10 : 1;
-        uint8_t mask = digitMask(digit);
-        uint16_t base = p.output.display.digit_offset[d];
-        for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
-          int canon = segmentIndexByName(p.output.display.segment_names[s]);
-          bool on = (canon >= 0) && ((mask >> canon) & 1);
-          report[base + s] = on ? 0x7F : 0x00;
-        }
-      }
+    uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
+    showNumber(report, p, val);
+
+    if (demoActive) {
+      paintDemo(report, p);
+      hid_usb_send_out_endpoint(report, p.output.length);
+      return;
     }
 
     // --- the lights ---
@@ -1013,6 +1018,16 @@ class HidctlUsermod : public Usermod {
     }
   }
 
+  // The LED demo can be switched on and off from the web API, without a
+  // rebuild:
+  //   POST /json/state  {"HIDCTL":{"demo":true}}
+  void readFromJsonState(JsonObject& obj) override {
+    JsonObject h = obj[FPSTR(_name)];
+    if (h.isNull()) return;
+    bool demo = h["demo"] | false;
+    setDemo(demo);
+  }
+
   void addToJsonInfo(JsonObject& obj) override {
     // The info pane's rows are flat: each usermod publishes its own key in
     // "u", and only the first two elements of a row are rendered.
@@ -1043,6 +1058,7 @@ class HidctlUsermod : public Usermod {
     }
     top["presets_cached"] = cached;
     top["music_slot"] = music_slot;
+    top["demo"] = demoActive;
     top["report_status"] = hid_usb_last_report_status();
     top["reports_ok"] = hid_usb_reports_ok();
     uint8_t rb_len = 0;
