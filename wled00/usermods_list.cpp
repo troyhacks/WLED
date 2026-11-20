@@ -169,6 +169,13 @@
 MidiUsermod* midiUsermodPtr = nullptr;
 #endif
 
+// WLEDMM v3: the generic USB HID control surface. One profile per
+// controller, in /hidctl-*.json on the filesystem.
+#ifdef USERMOD_HIDCTL_USB
+#include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
+HidctlUsermod* hidctlUsermodPtr = nullptr;
+#endif
+
 // WLEDMM v3: the Denon DJ StageLinq usermod.  A Denon unit (a PRIME GO, a
 // PRIME 4) speaks StageLinq, and this follows its clock the way the ProLink
 // usermod follows a Pioneer's.  The two do not share any symbols, so they
@@ -413,6 +420,11 @@ void registerUsermods()
 #ifdef USERMOD_MIDI_USB
   midiUsermodPtr = new MidiUsermod();
   usermods.add(midiUsermodPtr);
+#endif
+
+#ifdef USERMOD_HIDCTL_USB
+  hidctlUsermodPtr = new HidctlUsermod();
+  usermods.add(hidctlUsermodPtr);
 #endif
 
 #ifdef USERMOD_ARTNETMAP

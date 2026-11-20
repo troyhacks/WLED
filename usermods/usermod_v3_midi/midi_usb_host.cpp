@@ -58,6 +58,22 @@ static const struct { uint16_t vid; uint16_t pid; const char* name; } kMidiDevic
   { 0x04D9, 0xE000, "Donner StarryPad" },
 };
 
+// Devices that are NOT MIDI controllers, even when their vendor is in the
+// list above. The Traktor Kontrol F1 is a HID device (class 3) that NI's
+// driver turns into MIDI on the PC; on the P4 the HID control-surface
+// client (usermod_v3_hidctl) claims it. Racing it here would mean one of
+// the two clients grabbing the device and the other failing to open it.
+static const struct { uint16_t vid; uint16_t pid; const char* name; } kNotMidiDevices[] = {
+  { 0x17CC, 0x1120, "Traktor Kontrol F1 (HID)" },
+};
+
+static bool is_not_midi_device(uint16_t vid, uint16_t pid) {
+  for (const auto& d : kNotMidiDevices) {
+    if (d.vid == vid && d.pid == pid) return true;
+  }
+  return false;
+}
+
 static bool is_known_midi_vendor(uint16_t vid) {
   for (uint16_t v : kMidiVendorIds) if (v == vid) return true;
   return false;
@@ -433,6 +449,12 @@ static esp_err_t midi_open_and_configure(uint8_t dev_addr) {
   // Per-client VID/PID filter: only accept known MIDI vendors (or exact
   // VID/PID in the known table). This prevents the MSC and MIDI clients
   // from fighting over the same device.
+  if (is_not_midi_device(midi_vendor, midi_product)) {
+    MIDI_LOG("configure: VID=0x%04X PID=0x%04X (%s) — not a MIDI device, releasing",
+             midi_vendor, midi_product, midi_device_lookup(midi_vendor, midi_product));
+    usb_host_device_close(midi_client, dev);
+    return ESP_FAIL;
+  }
   if (!is_known_midi_vendor(midi_vendor)) {
     MIDI_LOG("configure: VID=0x%04X not in MIDI vendor list — releasing for other clients",
       midi_vendor);

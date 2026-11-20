@@ -24,6 +24,11 @@
 #include "usb/usb_host.h"
 #include "usb/msc_host_vfs.h"
 
+#ifdef USERMOD_HIDCTL_USB
+// HIDCTL_MAX_REPORT — the size of the raw HID report the message carries.
+#include "../usermod_v3_hidctl/hidctl_types.h"
+#endif
+
 // Bytes of the raw deck input report copied alongside the parsed index/state,
 // so the usermod (and the serial log) can inspect fields the parser doesn't
 // yet interpret. Kept small — this rides on the app queue.
@@ -44,6 +49,11 @@ typedef struct {
     APP_DECK_DEVICE_CONNECTED = 21,    // Deck enumerated
     APP_DECK_DEVICE_DISCONNECTED = 22, // Deck gone
 #endif
+#ifdef USERMOD_HIDCTL_USB
+    APP_HIDCTL_PACKET = 30,                // Inbound HID report from a control surface
+    APP_HIDCTL_DEVICE_CONNECTED = 31,      // Control surface enumerated
+    APP_HIDCTL_DEVICE_DISCONNECTED = 32,   // Control surface gone
+#endif
   } id;
   union {
     uint8_t new_dev_address;                  // MSC device address for APP_DEVICE_CONNECTED
@@ -62,6 +72,19 @@ typedef struct {
       uint16_t pid;
       char     name[24];
     } midi_device_info;
+#endif
+#ifdef USERMOD_HIDCTL_USB
+    // The raw HID input report, straight from the device. What it means is
+    // decided by the profile (see usermod_v3_hidctl).
+    struct {
+      uint16_t len;
+      uint8_t  data[HIDCTL_MAX_REPORT];
+    } hidctl;
+    struct {
+      uint16_t vid;
+      uint16_t pid;
+      char     name[24];
+    } hidctl_device_info;
 #endif
 #ifdef USERMOD_DECK_USB
     struct {

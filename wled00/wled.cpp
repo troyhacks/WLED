@@ -58,6 +58,14 @@ static const char *TAG = "WLED";
     #include "../usermods/usermod_v3_deck/deck_usb_host.cpp"
   #endif
 
+  #ifdef USERMOD_HIDCTL_USB
+    // Same arrangement again: the generic HID control-surface client claims
+    // the HID interface (USB class 3) of a device one of the loaded
+    // profiles wants, and posts the raw reports to the app queue.
+    #include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
+    #include "../usermods/usermod_v3_hidctl/hid_usb_host.cpp"
+  #endif
+
   #define MNT_PATH "/usb"     // Base mount path prefix, devices will be mounted as /usb0, /usb1, /usb2...
   #define MAX_MSC_DEVICES  CONFIG_FATFS_VOLUME_COUNT 
 
@@ -452,6 +460,10 @@ static const char *TAG = "WLED";
       deck_usb_init();
       #endif
 
+      #ifdef USERMOD_HIDCTL_USB
+      hid_usb_init();
+      #endif
+
       bool has_clients = true;
       while (true) {
           uint32_t event_flags;
@@ -463,6 +475,10 @@ static const char *TAG = "WLED";
 
           #ifdef USERMOD_DECK_USB
           deck_usb_poll();
+          #endif
+
+          #ifdef USERMOD_HIDCTL_USB
+          hid_usb_poll();
           #endif
 
           // Release devices once all clients has deregistered
@@ -918,6 +934,30 @@ void background_loop_nonblocking(void* pvParameters) {
 
       case app_message_t::APP_DECK_DEVICE_DISCONNECTED: {
         USER_PRINTLN("Deck Disconnected");
+        break;
+      }
+      #endif
+
+      #ifdef USERMOD_HIDCTL_USB
+      case app_message_t::APP_HIDCTL_PACKET: {
+        if (hidctlUsermodPtr) {
+          hidctlUsermodPtr->handleIncomingReport(msg.data.hidctl.data,
+                                                 msg.data.hidctl.len);
+        }
+        break;
+      }
+      #endif
+
+      #ifdef USERMOD_HIDCTL_USB
+      case app_message_t::APP_HIDCTL_DEVICE_CONNECTED: {
+        if (hidctlUsermodPtr) {
+          hidctlUsermodPtr->onDeviceConnected(msg.data.hidctl_device_info.vid,
+                                              msg.data.hidctl_device_info.pid);
+        }
+        break;
+      }
+      case app_message_t::APP_HIDCTL_DEVICE_DISCONNECTED: {
+        if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected();
         break;
       }
       #endif
