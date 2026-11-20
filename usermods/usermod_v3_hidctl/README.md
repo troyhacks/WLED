@@ -90,11 +90,33 @@ in the P4 env (`esp32p4_8MB_troyhacks` in `platformio_override.ini`).
 | Group | Actions |
 |-------|---------|
 | parameters | `bri`, `effectSpeed`, `effectIntensity`, `effectPalette`, `effectCustom1`, `effectCustom2`, `seg0bri`..`seg7bri` |
-| verbs | `power`, `blackout`, `full`, `nextfx`, `prevfx`, `nextpal`, `prevpal`, `nextpreset`, `prevpreset`, `toggleFreeze`, `seg0`..`seg7` |
+| verbs | `power`, `blackout`, `full`, `nextfx`, `prevfx`, `nextpal`, `prevpal`, `nextpreset`, `prevpreset`, `toggleFreeze`, `seg0`..`seg7`, `downbeat`, `cleardownbeat`, `relock` |
 | presets | `preset1`..`preset64`, `savepreset1`..`savepreset64` |
 
 On the F1 the 16 pads are presets 1..16 and SHIFT + a pad is presets
 17..32.
+
+### The F1's pad colours and the beat counter
+
+The pads show the state of their preset, in the same categories the APC
+Mini's pads use:
+
+| State | Colour |
+|-------|--------|
+| the active preset | green |
+| a saved preset | blue |
+| a saved looping playlist | magenta |
+| a saved one-shot playlist | red |
+| the music playlist | yellow |
+| not saved | dark |
+
+That comes out of the core's preset cache (the same metadata the MIDI
+usermod's pads use).
+
+The four lower buttons are the **beat counter**: the beat that is sounding
+is lit, taken from the tempo tracker's published frame. The first of them
+**sets the downbeat** — the same request the serial console's `j` makes —
+and SHIFT with them still selects the segment.
 
 A parameter action is driven by a continuous control: the control's value is
 scaled to 0..255 and applied. A verb runs once per press.
