@@ -44,6 +44,9 @@ int8_t  hid_usb_last_out_status(void);
 // readback). Returns the buffer and its length.
 const uint8_t* hid_usb_readback(uint8_t* len);
 
+// The last report that went out on the OUT endpoint (the LED report).
+const uint8_t* hid_usb_last_out_report(uint8_t* len);
+
 // Send a report with an explicit type: 2 = Output, 3 = Feature. Used to
 // work out which shape a controller actually wants.
 bool hid_usb_send_report(uint8_t report_type, uint8_t report_id,

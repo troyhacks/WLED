@@ -62,6 +62,9 @@ static volatile int8_t  hid_last_out_status = -1;
 static volatile bool   hid_ctrl_want_readback = false;
 static uint8_t  hid_readback[HIDCTL_READBACK_BYTES] = {};
 static uint8_t  hid_readback_len = 0;
+// The last report that went out on the OUT endpoint.
+static uint8_t  hid_last_out_report[HIDCTL_READBACK_BYTES] = {};
+static uint8_t  hid_last_out_len = 0;
 // The interface's OUT endpoint, if it has one (the F1's does: 0x01).
 static usb_transfer_t* hid_out_xfer = nullptr;
 static uint8_t  hid_out_ep = 0;
@@ -503,6 +506,13 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   hid_out_xfer->device_handle = hid_dev_hdl;
   hid_out_xfer->bEndpointAddress = hid_out_ep;
 
+  // Keep a copy of what went out, so it can be read over /json/ar when
+  // something on the controller's display or its LEDs looks wrong.
+  if (len <= HIDCTL_READBACK_BYTES) {
+    memcpy(hid_last_out_report, data, len);
+    hid_last_out_len = (uint8_t)len;
+  }
+
   hid_out_in_flight = true;
   esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
   if (err != ESP_OK) {
@@ -511,6 +521,11 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
     return false;
   }
   return true;
+}
+
+const uint8_t* hid_usb_last_out_report(uint8_t* len) {
+  if (len) *len = hid_last_out_len;
+  return hid_last_out_report;
 }
 
 static void hid_out_transfer_cb(usb_transfer_t* xfer) {

@@ -53,6 +53,23 @@
 #include "hidctl_default_profile.h"
 #include "hid_usb_host.h"
 
+// The tempo tracker's published frame (the beat in the bar, the downbeat
+// state). ar_publish.h is a light header - just the structs.
+#include "ar_publish.h"
+
+#ifdef USERMOD_AUDIOREACTIVE
+// The tempo tracker's serial keys. 'j' sets the downbeat (the beat
+// sounding now is beat one), 'J' clears the mark, 'q' re-locks the grid.
+// Defined in usermods/audioreactive/ar_tempo.h, which the AudioReactive
+// usermod includes.
+void audioReactiveTempoCommand(char c);
+#endif
+
+// The AutoPlaylist's music slot (0 when there is none). Defined in
+// usermods_list.cpp, because auto_playlist.h cannot be included in more
+// than one translation unit.
+uint8_t queryAutoPlaylistMusicSlot();
+
 class HidctlUsermod : public Usermod {
  private:
   static constexpr const char _name[]    PROGMEM = "HIDCTL";
@@ -82,6 +99,22 @@ class HidctlUsermod : public Usermod {
 
   // Console log throttle for the continuous controls.
   uint32_t lastCtlLog = 0;
+
+  // The beat that is sounding (1..4), from the tempo tracker. The lower
+  // buttons show it.
+  uint8_t currentBeat = 0;
+
+  // The AutoPlaylist's music slot, for the pad colours.
+  uint8_t music_slot = 0;
+
+  // Is this preset slot a saved playlist?
+  static bool presetIsPlaylist(uint8_t slot) {
+    if (slot == 0 || slot > 250) return false;
+    String name;
+    bool isPlaylist = false;
+    if (!getCachedPresetMetadata(slot, name, isPlaylist)) return false;
+    return isPlaylist;
+  }
 
   // The last output-report attempts and their status, published over
   // /json/ar so they can be read without the console.
@@ -387,6 +420,28 @@ class HidctlUsermod : public Usermod {
       currentPreset = (uint8_t)slot;
       applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
       handlePresets();
+      return;
+    }
+
+    // ---- the tempo tracker -------------------------------------------------
+    if (!strcmp(action, "downbeat")) {
+      // "The beat sounding now is beat one." The same request the serial
+      // console's 'j' makes.
+#ifdef USERMOD_AUDIOREACTIVE
+      audioReactiveTempoCommand('j');
+#endif
+      return;
+    }
+    if (!strcmp(action, "cleardownbeat")) {
+#ifdef USERMOD_AUDIOREACTIVE
+      audioReactiveTempoCommand('J');
+#endif
+      return;
+    }
+    if (!strcmp(action, "relock")) {
+#ifdef USERMOD_AUDIOREACTIVE
+      audioReactiveTempoCommand('q');
+#endif
       return;
     }
 
@@ -727,6 +782,16 @@ class HidctlUsermod : public Usermod {
     memset(report, 0, sizeof(report));
     report[0] = p.output.report_id;
 
+    // The beat that is sounding now, from the tempo tracker.
+    {
+      ArTempoFrame tf;
+      currentBeat = 0;
+      if (arCopyTempo(&tf) && tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+        currentBeat = tf.beatInBar;
+      }
+    }
+    music_slot = queryAutoPlaylistMusicSlot();
+
     // --- the display: the current preset number ---
     if (p.output.display.present) {
       uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
@@ -752,20 +817,33 @@ class HidctlUsermod : public Usermod {
       const char* nm = li.name;
 
       if (!strncmp(nm, "pad", 3)) {
-        // A pad shows the state of its preset: the active one is green, a
-        // saved one is blue, the rest are dark.
+        // The pad shows the state of its preset, in the same categories the
+        // APC Mini's pads use:
+        //   the active preset          green
+        //   a saved preset             blue
+        //   a saved playlist           magenta (red when it is a one-shot)
+        //   the music playlist         yellow
         int slot = atoi(nm + 3);
         if (slot >= 1 && slot <= 64) {
-          if (slot == currentPreset) {
-            g = 0x7F;
+          const bool is_music = (music_slot > 0 && slot == (int)music_slot);
+          const bool is_playlist = presetIsPlaylist((uint8_t)slot);
+          if (is_music) {
+            r = g = 0x7F;                    // yellow
+          } else if (is_playlist) {
+            const bool finite = getPresetRepeat((uint8_t)slot) > 0;
+            if (finite) { r = b = 0x7F; }      // red
+            else        { r = b = 0x7F; }      // magenta
+          } else if (slot == (int)currentPreset && getCachedPresetExists(slot)) {
+            g = 0x7F;                          // green
           } else if (getCachedPresetExists(slot)) {
-            b = 0x7F;
+            b = 0x7F;                          // blue
           }
         }
       } else if (!strncmp(nm, "bar", 3)) {
-        // The four lower buttons show the selected segment.
+        // The four lower buttons are the BEAT COUNTER: the one that is
+        // sounding is lit.
         int n = atoi(nm + 3);
-        if (n >= 1 && (uint8_t)(n - 1) == selectedSegment()) {
+        if (n >= 1 && n <= 4 && n == currentBeat) {
           r = g = b = 0x7F;
         }
       } else if (buttonHeld(p, nm)) {
@@ -899,7 +977,12 @@ class HidctlUsermod : public Usermod {
     loadProfiles();
   }
 
-  void loop() override {}
+  void loop() override {
+    // The beat counter on the lower buttons moves on its own, so the LEDs
+    // have to be repainted even when nothing else changes. paint() rate
+    // limits itself.
+    paint();
+  }
 
   // The preset changed: the pads and the display have to follow.
   void onStateChange(uint8_t mode) override {
@@ -952,6 +1035,14 @@ class HidctlUsermod : public Usermod {
     top["device"] = profileName();
     top["profiles_loaded"] = profile_count;
     top["buttons"] = buttons;
+    // How many of the first 64 preset slots the core's cache knows about -
+    // the pads are coloured from it.
+    uint8_t cached = 0;
+    for (uint8_t s = 1; s <= 64; s++) {
+      if (getCachedPresetExists(s)) cached++;
+    }
+    top["presets_cached"] = cached;
+    top["music_slot"] = music_slot;
     top["report_status"] = hid_usb_last_report_status();
     top["reports_ok"] = hid_usb_reports_ok();
     uint8_t rb_len = 0;
@@ -963,6 +1054,16 @@ class HidctlUsermod : public Usermod {
         hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", rb[i]);
       }
       top["readback"] = hex;
+    }
+    uint8_t out_len = 0;
+    const uint8_t* out = hid_usb_last_out_report(&out_len);
+    if (out_len) {
+      char hex[2 * HIDCTL_READBACK_BYTES + 1];
+      int hl = 0;
+      for (uint8_t i = 0; i < out_len && hl < (int)sizeof(hex) - 3; i++) {
+        hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", out[i]);
+      }
+      top["led_report"] = hex;
     }
     JsonArray pr = top.createNestedArray("probe");
     for (uint8_t i = 0; i < probe_result_count; i++) {

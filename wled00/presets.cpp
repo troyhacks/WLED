@@ -397,10 +397,49 @@ void buildPresetCache() {
     return; // Failed to get lock
   }
 
-  if (!readObjectFromFile(getFileName(), nullptr, &doc)) {
-    releaseJSONBufferLock();
-    USER_PRINTLN(F("Preset cache build failed (read)."));
-    return; // File not found or corrupt
+  // Only the fields the cache keeps, and NOT the segments.
+  //
+  // A preset list with a few dozen full presets is tens of kilobytes of JSON,
+  // and the DOM of all of it needs several times that - more than the shared
+  // JSON buffer has. readObjectFromFile() reports success even when the
+  // parse runs out of memory, so without a filter the tail of the file is
+  // silently dropped and the presets at the end of the list never reach the
+  // cache (they still show in the GUI, which reads the file differently).
+  // The filter keeps the segments out of the DOM entirely, so the whole list
+  // fits and every slot is seen.
+  // The segments are the bulk of the file and the cache does not want
+  // them, so they are filtered out.
+  //
+  // The filter's "*" member is the rule for every key that is not named
+  // itself, and the rule has to be an OBJECT here: the root's keys are the
+  // numbered slots, and each slot is an object whose members are filtered
+  // by that rule. A "true" rule would mean "keep this member and
+  // everything under it", which would keep the segments too - and then the
+  // whole list does not fit the buffer again, and the parse fails at the
+  // end of the file instead of at the start.
+  StaticJsonDocument<192> filterDoc;
+  JsonObject slotRule = filterDoc.createNestedObject("*");
+  slotRule[F("n")] = true;          // the preset's name
+  slotRule[F("seg")] = false;       // the segments - the bulk of the file
+  slotRule[F("playlist")] = true;   // and the playlist it may hold
+  slotRule[F("ql")] = true;         // the quick-load name
+  slotRule[F("ledmap")] = true;     // the LED map it was saved with
+  DeserializationOption::Filter filter(filterDoc);
+
+  {
+    File pf = WLED_FS.open(getFileName(), "r");
+    if (!pf) {
+      releaseJSONBufferLock();
+      USER_PRINTLN(F("Preset cache build failed (open)."));
+      return;
+    }
+    DeserializationError perr = deserializeJson(doc, pf, filter);
+    pf.close();
+    if (perr) {
+      releaseJSONBufferLock();
+      USER_PRINTF(F("Preset cache build failed (parse: %s).\n"), perr.c_str());
+      return;
+    }
   }
 
   JsonObject root = doc.as<JsonObject>();

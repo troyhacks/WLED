@@ -542,3 +542,20 @@ AutoPlaylistState queryAutoPlaylist() {
   return s;
 }
 #endif  // USERMOD_MIDI_USB
+
+// The AutoPlaylist's music slot, for the HID control surface's pad colours
+// (the music playlist's pad is yellow, so it can be found at a glance).
+//
+// A plain uint8_t, so a usermod that only wants the slot does not have to
+// pull in the AutoPlaylistState type - which lives in the MIDI usermod's
+// header. The definition is here for the same reason queryAutoPlaylist() is:
+// auto_playlist.h cannot be included in more than one TU.
+uint8_t queryAutoPlaylistMusicSlot() {
+#ifdef USERMOD_AUTO_PLAYLIST
+  if (autoPlaylistUsermodPtr != nullptr) {
+    auto m = autoPlaylistUsermodPtr->getMidiState();
+    return m.musicPlaylist;
+  }
+#endif
+  return 0;
+}
