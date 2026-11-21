@@ -50,6 +50,10 @@ static usb_transfer_t* hid_ctrl_xfer = nullptr;
 // A separate transfer for the one-off GET_DESCRIPTOR of the report
 // descriptor (its own callback, and a bigger buffer).
 static usb_transfer_t* hid_desc_xfer = nullptr;
+// A transfer of its own for the class requests: if the device does not
+// answer them the transfer never completes, and it must not then block the
+// rest of the control pipe.
+static usb_transfer_t* hid_class_xfer = nullptr;
 static uint16_t hid_desc_desc_wvalue = 0;
 static volatile bool hid_ctrl_in_flight = false;
 static volatile bool hid_ctrl_pending = false;
@@ -57,6 +61,11 @@ static volatile bool hid_ctrl_pending = false;
 // always available).
 static volatile int8_t  hid_last_report_status = -1;
 static volatile bool   hid_want_descriptors = false;
+// The status of the last class request (-1 = none sent, 4 = stalled).
+static volatile int8_t  hid_class_status = -1;
+// When to send the class requests, and whether they have been sent.
+static uint32_t        hid_class_requests_at = 0;
+static bool            hid_class_requests_done = false;
 static volatile bool   hid_desc_in_flight = false;
 static volatile uint32_t hid_reports_ok = 0;
 static volatile int8_t  hid_last_out_status = -1;
@@ -96,6 +105,12 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* ar
 static void hid_in_transfer_cb(usb_transfer_t* xfer);
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
 static void hid_desc_transfer_cb(usb_transfer_t* xfer);
+static void hid_class_transfer_cb(usb_transfer_t* xfer) {
+  if (xfer) {
+    hid_class_status = (int8_t)xfer->status;
+    HIDCTL_LOG("class request answered: status=%d", (int)xfer->status);
+  }
+}
 static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue);
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
@@ -160,6 +175,12 @@ void hid_usb_poll(void) {
   if (!hid_client) return;
 
   usb_host_client_handle_events(hid_client, 0);
+
+  // NOTE: the class requests a HID host normally sends after claiming an
+  // interface (SET_PROTOCOL, SET_IDLE) are deliberately NOT sent. The F1
+  // does not answer them - the transfer never completes - and a control
+  // transfer that never completes blocks the control pipe, so the
+  // descriptor fetches below would never go out either.
 
   // The descriptors go out once the control pipe is free.
   if (hid_want_descriptors && !hid_desc_in_flight) {
@@ -228,6 +249,21 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
   if (xfer->status == USB_TRANSFER_STATUS_COMPLETED && xfer->actual_num_bytes > 0) {
     uint16_t n = (uint16_t)xfer->actual_num_bytes;
     if (n > HIDCTL_MAX_REPORT) n = HIDCTL_MAX_REPORT;
+    // A report whose length differs from the last one is worth knowing
+    // about: the HID stacks pad every report up to the report's size, but
+    // the raw host sees what the device really sent - and the F1 may send
+    // its wheel's position in a short packet of its own.
+    {
+      static uint16_t lastLen = 0;
+      if (n != lastLen) {
+        lastLen = n;
+        HIDCTL_LOG("report length %u:", n);
+        for (uint16_t i = 0; i < n && i < 12; i++) {
+          HIDCTL_LOG(" %02X", xfer->data_buffer[i]);
+        }
+        HIDCTL_LOG("");
+      }
+    }
     app_message_t m = {};
     m.id = app_message_t::APP_HIDCTL_PACKET;
     m.data.hidctl.len = n;
@@ -423,13 +459,17 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
                other, oifd->bInterfaceClass, cerr == ESP_OK ? "ok" : "failed");
   }
 
-  // NOTE: no SET_PROTOCOL / SET_IDLE here. The F1 does not answer them
-  // (the transfer never completes), and a control transfer that never
-  // completes blocks every later one.
-
   // The descriptors of the whole configuration and of the other interface,
   // so what the device really offers can be seen.
   hid_want_descriptors = true;
+
+  // The class requests a HID host sends once it owns the interface, a
+  // moment later - the device is not ready the instant the interface is
+  // claimed. They go on their own transfer: if the device does not answer
+  // them the transfer never completes, and that must not then block the
+  // control pipe.
+  hid_class_requests_at = millis() + 500;
+  hid_class_requests_done = false;
   return ESP_OK;
 }
 
@@ -557,6 +597,8 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   return true;
 }
 
+int8_t hid_usb_class_status(void) { return hid_class_status; }
+
 const uint8_t* hid_usb_last_out_report(uint8_t* len) {
   if (len) *len = hid_last_out_len;
   return hid_last_out_report;
@@ -615,7 +657,7 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
 // claims. A device can wait for them - the F1 does not report its wheel's
 // position until it has been told the host is there.
 static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue) {
-  if (!hid_dev_hdl || !hid_ctrl_xfer) return false;
+  if (!hid_dev_hdl || !hid_class_xfer) return false;
 
   usb_setup_packet_t setup = {};
   setup.bmRequestType = 0x21;   // Host-to-device | Class | Interface
@@ -624,15 +666,16 @@ static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue) {
   setup.wIndex        = hid_iface;
   setup.wLength       = 0;
 
-  memcpy(hid_ctrl_xfer->data_buffer, &setup, sizeof(setup));
-  hid_ctrl_xfer->num_bytes = sizeof(setup);
-  hid_ctrl_xfer->device_handle = hid_dev_hdl;
+  memcpy(hid_class_xfer->data_buffer, &setup, sizeof(setup));
+  hid_class_xfer->num_bytes = sizeof(setup);
+  hid_class_xfer->device_handle = hid_dev_hdl;
 
-  esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_ctrl_xfer);
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_class_xfer);
   if (err != ESP_OK) {
-    HIDCTL_DEBUG("class request %02X submit failed: %s", bRequest, esp_err_to_name(err));
+    HIDCTL_LOG("class request %02X submit failed: %s", bRequest, esp_err_to_name(err));
     return false;
   }
+  HIDCTL_LOG("class request %02X (wValue %u) sent", bRequest, wValue);
   return true;
 }
 

@@ -129,10 +129,13 @@ class HidctlUsermod : public Usermod {
     return 1;
   }
 
-  // The last page that has anything on it.
+  // The last page a preset can live on. The pages are not limited to the
+  // presets that happen to be saved: the user browses ahead of them and
+  // saves there.
+  static constexpr uint8_t LAST_PAGE = (250 + PAGE_SIZE - 1) / PAGE_SIZE;
+
   uint8_t lastPage() const {
-    uint8_t highest = highestSavedPreset();
-    return (uint8_t)(((highest - 1) / PAGE_SIZE) + 1);
+    return LAST_PAGE;
   }
 
   // The page the current preset is in.
@@ -163,11 +166,7 @@ class HidctlUsermod : public Usermod {
       offset = (uint16_t)((currentPreset - 1) % PAGE_SIZE);
     }
     uint16_t target = (uint16_t)((page - 1) * PAGE_SIZE + offset + 1);
-    const uint8_t highest = highestSavedPreset();
-    if (target > highest) target = highest;
-    // Land on a preset that exists.
-    while (target > 1 && !getCachedPresetExists((uint8_t)target)) target--;
-    if (!getCachedPresetExists((uint8_t)target)) target = 1;
+    if (target > 250) target = 250;
 
     currentPreset = (uint8_t)target;
     applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
@@ -289,6 +288,17 @@ class HidctlUsermod : public Usermod {
       p.button_count++;
     }
 
+    // The wheel: a byte in the INPUT report that counts the encoder's
+    // position, so a difference tells which way it turned. It describes the
+    // input, so it is read from the top level of the profile: a profile
+    // without an "output" section still has a wheel.
+    JsonObject wheel = j["wheel"];
+    if (!wheel.isNull()) {
+      p.wheel_present = true;
+      p.wheel_offset = (uint16_t)(wheel["offset"] | 0);
+      if (p.wheel_offset >= p.report_len) return false;
+    }
+
     // The output report: LEDs and the display.
     JsonObject out = j["output"];
     if (!out.isNull()) {
@@ -320,15 +330,6 @@ class HidctlUsermod : public Usermod {
         }
         p.output.display.segments_per_digit = n;
         if (n == 0) p.output.display.present = false;
-      }
-
-      // The wheel: a byte in the report that counts the encoder's
-      // position, so a difference tells which way it turned.
-      JsonObject wheel = j["wheel"];
-      if (!wheel.isNull()) {
-        p.wheel_present = true;
-        p.wheel_offset = (uint16_t)(wheel["offset"] | 0);
-        if (p.wheel_offset >= p.report_len) return false;
       }
 
       JsonArray lights = out["lights"];
@@ -473,6 +474,10 @@ class HidctlUsermod : public Usermod {
       control_taken[i] = 0;
     }
     buttons = 0;
+    // The wheel's position belongs to the connection: forget the old one so
+    // the first report after a reconnect is not read as a turn.
+    wheelSeen = false;
+    wheelLast = 0;
     USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
 #ifdef F1_PROBE
     // The discovery probe: it walks the candidate report shapes so the LED
@@ -1194,6 +1199,10 @@ class HidctlUsermod : public Usermod {
             control_taken[i] = 0;
           }
           buttons = 0;
+          // The wheel's position belongs to the connection: forget the old
+          // one so the first report after a reconnect is not read as a turn.
+          wheelSeen = false;
+          wheelLast = 0;
           USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
         }
       } else {
@@ -1250,6 +1259,9 @@ class HidctlUsermod : public Usermod {
     top["presets_cached"] = cached;
     top["music_slot"] = music_slot;
     top["demo"] = demoActive;
+    top["class_status"] = hid_usb_class_status();
+    top["wheel"] = wheelSeen ? wheelLast : 0;
+    top["wheel_seen"] = wheelSeen;
     top["page"] = page;
     top["page_count"] = lastPage();
     top["report_status"] = hid_usb_last_report_status();

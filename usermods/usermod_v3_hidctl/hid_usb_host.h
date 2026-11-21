@@ -60,6 +60,10 @@ bool hid_usb_send_setup(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue
 bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
                            uint8_t wIndex, const uint8_t* data, uint16_t len);
 
+// The status of the last class request (SET_PROTOCOL / SET_IDLE):
+// -1 = not sent, 0 = completed, 4 = stalled.
+int8_t  hid_usb_class_status(void);
+
 // The outcome of the last output report: 0 = completed, 4 = stalled, -1 =
 // none sent yet. And how many reports have gone through.
 int8_t  hid_usb_last_report_status(void);
