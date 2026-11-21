@@ -179,14 +179,6 @@ class HidctlUsermod : public Usermod {
   bool     wheelSeen = false;
   uint32_t showPageUntil = 0; // the page is on the display until then
 
-  // The highest preset slot that exists.
-  uint8_t highestSavedPreset() const {
-    for (int s = 250; s >= 1; s--) {
-      if (getCachedPresetExists(s)) return (uint8_t)s;
-    }
-    return 1;
-  }
-
   // The last page a preset can live on. The pages are not limited to the
   // presets that happen to be saved: the user browses ahead of them and
   // saves there.
@@ -247,6 +239,10 @@ class HidctlUsermod : public Usermod {
     }
     showPageUntil = millis() + 1500;
     USER_PRINTF("[HIDCTL] page %u (preset %u)\n", page, pick);
+    // The page is on the display for a moment, so paint it now - and the
+    // pads move to the new page's presets whether or not there is a
+    // preset there to apply.
+    paint();
   }
 
   // Show the page on the display for a moment.
@@ -324,7 +320,15 @@ class HidctlUsermod : public Usermod {
     p.button_byte_count = 0;
     for (JsonVariant v : bytes) {
       if (p.button_byte_count >= HIDCTL_MAX_BUTTON_BYTES) break;
-      p.button_bytes[p.button_byte_count++] = (uint8_t)(v.as<int>());
+      uint16_t off = (uint16_t)(v.as<int>());
+      // The button bytes are read out of the report, so they have to be
+      // inside it.
+      if (off >= p.report_len) {
+        USER_PRINTF("[HIDCTL] button byte %u is outside the %u-byte report\n",
+                    off, p.report_len);
+        continue;
+      }
+      p.button_bytes[p.button_byte_count++] = (uint8_t)off;
     }
     p.msb_first = bt["msb_first"] | true;
 
@@ -352,6 +356,14 @@ class HidctlUsermod : public Usermod {
       if (p.button_count >= HIDCTL_MAX_BUTTONS) break;
       HidctlButton& btn = p.buttons[p.button_count];
       btn.index = (uint8_t)(b["index"] | 0);
+      // The button bitmap is 32 bits wide, so a bit index of 32 or more
+      // has nowhere to go - and shifting by that much is undefined.
+      if (btn.index >= 32) {
+        const char* bn = b["name"];
+        USER_PRINTF("[HIDCTL] button %s: index %u is outside the 32-bit bitmap\n",
+                    bn ? bn : "?", btn.index);
+        continue;
+      }
       const char* bn = b["name"];
       copyStr(btn.name, bn);
       const char* act = b["action"];
@@ -1016,16 +1028,23 @@ class HidctlUsermod : public Usermod {
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
                    ? tracked_active_preset : 0;
     if (millis() < showPageUntil) {
-      showLetter(report, p, 'P');
-      // The page's number goes on the right-hand digit.
-      if (p.output.display.present && p.output.display.digit_count >= 2) {
-        uint16_t base = p.output.display.digit_offset[1];
-        uint8_t mask = digitMask((uint8_t)(page % 10));
-        for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
-          int canon = segmentIndexByName(p.output.display.segment_names[s]);
-          bool on = (canon >= 0) && ((mask >> canon) & 1);
-          report[base + s] = on ? 0x7F : 0x00;
+      if (page < 10) {
+        // "P" and the page's number on the right-hand digit.
+        showLetter(report, p, 'P');
+        if (p.output.display.present && p.output.display.digit_count >= 2) {
+          uint16_t base = p.output.display.digit_offset[1];
+          uint8_t mask = digitMask(page);
+          for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
+            int canon = segmentIndexByName(p.output.display.segment_names[s]);
+            bool on = (canon >= 0) && ((mask >> canon) & 1);
+            report[base + s] = on ? 0x7F : 0x00;
+          }
         }
+      } else {
+        // Ten and over: there is no room for the letter as well, so the
+        // two digits are the page number itself. There is no decimal
+        // point to mark it with - the F1's profile does not set one.
+        showNumber(report, p, page);
       }
     } else {
       showNumber(report, p, val);
@@ -1058,8 +1077,10 @@ class HidctlUsermod : public Usermod {
           if (is_music) {
             r = g = 0x7F;                    // yellow
           } else if (is_playlist) {
+            // A finite playlist is a one-shot: red. One that loops is
+            // magenta. The MIDI usermod paints its pads the same way.
             const bool finite = getPresetRepeat((uint8_t)slot) > 0;
-            if (finite) { r = b = 0x7F; }      // red
+            if (finite) { r = 0x7F; }          // red
             else        { r = b = 0x7F; }      // magenta
           } else if (slot == (int)tracked_active_preset && getCachedPresetExists(slot)) {
             g = 0x7F;                          // green
@@ -1098,6 +1119,23 @@ class HidctlUsermod : public Usermod {
   // incoming report
   // -------------------------------------------------------------------------
  public:
+  // Apply a control value that was held back by the throttle. This is
+  // called from the report handler and from loop(), so the last position
+  // of a sweep is applied even if the controller stops reporting when it
+  // is left alone.
+  void flushPendingControls() {
+    if (!profiles || active_profile >= profile_count) return;
+    HidctlProfile& p = profiles[active_profile];
+    const uint32_t now = millis();
+    for (uint8_t i = 0; i < p.control_count; i++) {
+      if (!control_pending[i]) continue;
+      if (control_has_applied[i] &&
+          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) continue;
+      applyControl(p, i, control_value[i], now);
+      control_pending[i] = false;
+    }
+  }
+
   // Drive one control into WLED. The soft takeover, the "did the result
   // actually change" test and the throttle all happen here.
   void applyControl(HidctlProfile& p, uint8_t idx, uint16_t raw, uint32_t now) {
@@ -1166,15 +1204,9 @@ class HidctlUsermod : public Usermod {
     // --- continuous controls ------------------------------------------------
     // A value that arrived while the throttle was closed goes first: it is
     // the newest one, and the knob may already have stopped there.
-    const uint32_t now = millis();
-    for (uint8_t i = 0; i < p.control_count; i++) {
-      if (!control_pending[i]) continue;
-      if (control_has_applied[i] &&
-          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) continue;
-      applyControl(p, i, control_value[i], now);
-      control_pending[i] = false;
-    }
+    flushPendingControls();
 
+    const uint32_t now = millis();
     for (uint8_t i = 0; i < p.control_count; i++) {
       HidctlControl& ctl = p.controls[i];
       uint16_t raw = 0;
@@ -1186,9 +1218,11 @@ class HidctlUsermod : public Usermod {
       if (control_has_applied[i] && raw == control_value[i]) continue;  // no change at all
       control_value[i] = raw;
 
-      // A step or two of jitter is not a movement. The baseline follows the
-      // knob all the same, so it stays a step away from where the knob is
-      // resting.
+      // A step or two of jitter is not a movement. While the change stays
+      // inside the deadband the baseline stays pinned where it was, so a
+      // slow drift still adds up to a movement - it is measured against
+      // the last value that passed the deadband, not against the last
+      // value seen.
       if (control_has_applied[i]) {
         int d = (int)raw - (int)control_applied[i];
         if (d < 0) d = -d;
@@ -1307,6 +1341,9 @@ class HidctlUsermod : public Usermod {
   }
 
   void loop() override {
+    // A control value held back by the throttle is applied here too, in
+    // case the controller has stopped reporting.
+    flushPendingControls();
     // The beat counter on the lower buttons moves on its own, so the LEDs
     // have to be repainted even when nothing else changes. paint() rate
     // limits itself.
@@ -1368,12 +1405,24 @@ class HidctlUsermod : public Usermod {
   //   POST /json/state  {"HIDCTL":{"demo":true}}
   // "paint" turns the LED painting off and on - useful to see whether the
   // device behaves differently when nothing is written to it.
+  // "page" jumps to a page of presets, 1 to 16. The encoder turns the
+  // page too, but it does not always reach the board, so the page can be
+  // set from here as well:
+  //   POST /json/state  {"HIDCTL":{"page":10}}
   void readFromJsonState(JsonObject& obj) override {
     JsonObject h = obj[FPSTR(_name)];
     if (h.isNull()) return;
     bool demo = h["demo"] | false;
     setDemo(demo);
     if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
+    if (h.containsKey("page")) {
+      int pg = h["page"] | 0;
+      if (pg >= 1 && pg <= (int)lastPage()) {
+        page = (uint8_t)pg;
+        showPageUntil = millis() + 1500;
+        paint();
+      }
+    }
   }
 
   void addToJsonInfo(JsonObject& obj) override {
