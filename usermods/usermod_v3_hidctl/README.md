@@ -227,6 +227,27 @@ for the layout, [NexAdn's reverse engineering](https://github.com/NexAdn/ni-trak
 for the report, and the device's own HID report descriptor (fetched over the
 USB host stack) for what the interface declares.
 
+### The encoder's rotation
+
+The encoder's position is byte 5 of the input report: it counts up one
+step per detent clockwise and down anticlockwise, wrapping at 8 bits, and
+the difference between two reports says which way it turned. Turning it
+pages the presets: the page moves forward or back, the preset keeps its
+place in the page (so it moves by sixteen), and the page never wraps —
+the first page stays the first and the last page stays the last.
+
+**Known gap:** the F1 reports its wheel's position to a PC's HID stack
+(verified with hidapi: byte 5 moves ±1 per detent) but **not** to the
+P4's — the P4 receives the same 22-byte reports at the same ~100 Hz, with
+the same button and knob bytes, but byte 5 stays at zero. Things that
+were ruled out: the report rate, the LED report going out (the same
+happens with the painting switched off), the class requests a HID host
+normally sends (the F1 does not answer SET_IDLE or SET_PROTOCOL — they
+never complete, which also blocks every later control transfer), claiming
+the device's second interface, and tapping the controller's blue
+BROWSE/MIDI button (the press does register in the HID report). The
+encoder's *button* works, and shows the page.
+
 ## Files
 
 - `usermod_v3_hidctl.h` — the usermod: profile loading, decoding, actions.

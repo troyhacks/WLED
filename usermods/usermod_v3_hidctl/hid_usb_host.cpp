@@ -56,6 +56,8 @@ static volatile bool hid_ctrl_pending = false;
 // The last report's outcome, published over /json/ar (the console is not
 // always available).
 static volatile int8_t  hid_last_report_status = -1;
+static volatile bool   hid_want_descriptors = false;
+static volatile bool   hid_desc_in_flight = false;
 static volatile uint32_t hid_reports_ok = 0;
 static volatile int8_t  hid_last_out_status = -1;
 // The data a device-to-host control transfer brought back.
@@ -94,6 +96,7 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* ar
 static void hid_in_transfer_cb(usb_transfer_t* xfer);
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
 static void hid_desc_transfer_cb(usb_transfer_t* xfer);
+static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue);
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
@@ -157,6 +160,13 @@ void hid_usb_poll(void) {
   if (!hid_client) return;
 
   usb_host_client_handle_events(hid_client, 0);
+
+  // The descriptors go out once the control pipe is free.
+  if (hid_want_descriptors && !hid_desc_in_flight) {
+    hid_want_descriptors = false;
+    hid_usb_get_descriptor(0x80, 0x0200, 256, 0);   // the configuration
+    hid_usb_get_descriptor(0x81, 0x2200, 256, 1);   // interface 1's reports
+  }
 
   if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
     hid_in_resubmit_needed = false;
@@ -396,6 +406,30 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
     }
   }
   HIDCTL_LOG("configure: 1 IN transfer submitted");
+
+  // Claim the device's other interface as well. The F1 has a second
+  // interface (class 0xFE) next to the HID one, and the F1 only reports its
+  // wheel's position once a host has claimed it - NI's own driver claims it
+  // too, and the wheel reports come on the machine where that driver is
+  // loaded.
+  for (uint8_t other = 0; other < 8; other++) {
+    if (other == claimed_iface) continue;
+    int ooff = 0;
+    const usb_intf_desc_t* oifd =
+        usb_parse_interface_descriptor(cfg_desc, other, 0, &ooff);
+    if (!oifd) break;
+    esp_err_t cerr = usb_host_interface_claim(hid_client, dev, other, 0);
+    HIDCTL_LOG("configure: also claimed interface %u (class 0x%02X) -> %s",
+               other, oifd->bInterfaceClass, cerr == ESP_OK ? "ok" : "failed");
+  }
+
+  // NOTE: no SET_PROTOCOL / SET_IDLE here. The F1 does not answer them
+  // (the transfer never completes), and a control transfer that never
+  // completes blocks every later one.
+
+  // The descriptors of the whole configuration and of the other interface,
+  // so what the device really offers can be seen.
+  hid_want_descriptors = true;
   return ESP_OK;
 }
 
@@ -575,6 +609,34 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
 }
 
 // ---------------------------------------------------------------------------
+// The class requests a HID host sends after claiming an interface
+// ---------------------------------------------------------------------------
+// Windows' HID driver sends SET_PROTOCOL and SET_IDLE to the interface it
+// claims. A device can wait for them - the F1 does not report its wheel's
+// position until it has been told the host is there.
+static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue) {
+  if (!hid_dev_hdl || !hid_ctrl_xfer) return false;
+
+  usb_setup_packet_t setup = {};
+  setup.bmRequestType = 0x21;   // Host-to-device | Class | Interface
+  setup.bRequest      = bRequest;
+  setup.wValue        = wValue;
+  setup.wIndex        = hid_iface;
+  setup.wLength       = 0;
+
+  memcpy(hid_ctrl_xfer->data_buffer, &setup, sizeof(setup));
+  hid_ctrl_xfer->num_bytes = sizeof(setup);
+  hid_ctrl_xfer->device_handle = hid_dev_hdl;
+
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_ctrl_xfer);
+  if (err != ESP_OK) {
+    HIDCTL_DEBUG("class request %02X submit failed: %s", bRequest, esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Descriptors
 // ---------------------------------------------------------------------------
 // The device itself knows what reports it has: the HID report descriptor
@@ -588,7 +650,7 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
 bool hid_usb_get_descriptor(uint8_t bmRequestType, uint16_t wValue,
                             uint16_t wLength, uint8_t wIndex) {
   if (!hid_dev_hdl || !hid_desc_xfer) return false;
-  if (hid_ctrl_in_flight) return false;
+  if (hid_desc_in_flight) return false;
 
   usb_setup_packet_t setup = {};
   setup.bmRequestType = bmRequestType;   // Device-to-host, Standard, Device or Interface
@@ -604,10 +666,10 @@ bool hid_usb_get_descriptor(uint8_t bmRequestType, uint16_t wValue,
   hid_desc_xfer->device_handle = hid_dev_hdl;
   hid_desc_desc_wvalue = wValue;
 
-  hid_ctrl_in_flight = true;
+  hid_desc_in_flight = true;
   esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_desc_xfer);
   if (err != ESP_OK) {
-    hid_ctrl_in_flight = false;
+    hid_desc_in_flight = false;
     HIDCTL_LOG("GET_DESCRIPTOR(%04X) submit failed: %s", wValue, esp_err_to_name(err));
     return false;
   }
@@ -615,7 +677,7 @@ bool hid_usb_get_descriptor(uint8_t bmRequestType, uint16_t wValue,
 }
 
 static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
-  hid_ctrl_in_flight = false;
+  hid_desc_in_flight = false;
   if (!xfer) return;
   if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
     HIDCTL_LOG("GET_DESCRIPTOR(%04X) status=%d", hid_desc_desc_wvalue, (int)xfer->status);

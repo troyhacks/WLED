@@ -189,6 +189,7 @@ class HidctlUsermod : public Usermod {
   //
   bool demoActive = false;
   uint32_t demoStart = 0;
+  bool paint_enabled = true;
 
   // Is this preset slot a saved playlist?
   static bool presetIsPlaylist(uint8_t slot) {
@@ -811,6 +812,17 @@ class HidctlUsermod : public Usermod {
     }
   }
 
+  // The first few bytes of a report, as hex.
+  static const char* bytes_to_hex(const uint8_t* d, uint8_t n) {
+    static char buf[40];
+    int len = 0;
+    buf[0] = '\0';
+    for (uint8_t i = 0; i < n && len < (int)sizeof(buf) - 4; i++) {
+      len += snprintf(buf + len, sizeof(buf) - len, "%02X ", d[i]);
+    }
+    return buf;
+  }
+
   // Write a number on the seven-segment display.
   void showNumber(uint8_t* report, HidctlProfile& p, uint16_t value) {
     if (!p.output.display.present) return;
@@ -832,10 +844,11 @@ class HidctlUsermod : public Usermod {
   // Write a letter on the left-hand digit ("P" for the page).
   void showLetter(uint8_t* report, HidctlProfile& p, char letter) {
     if (!p.output.display.present || p.output.display.digit_count < 2) return;
-    // The strokes of a "P": top, upper-left, middle, lower-left, bottom.
+    // The strokes of a "P": top, upper-left, middle, lower-left - and NO
+    // bottom bar, which is what tells it from an "E".
     uint8_t mask = 0;
     switch (letter) {
-      case 'P': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
+      case 'P': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6); break;
       case 'E': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
       default:  mask = 0; break;
     }
@@ -894,6 +907,7 @@ class HidctlUsermod : public Usermod {
     if (!profiles || active_profile >= profile_count) return;
     HidctlProfile& p = profiles[active_profile];
     if (!p.output.present) return;
+    if (!paint_enabled) return;
 
     // WLED fires a state change often; the LEDs do not need to follow every
     // one of them.
@@ -1014,7 +1028,13 @@ class HidctlUsermod : public Usermod {
     HidctlProfile& p = profiles[active_profile];
 
     if (len < p.report_len) return;
-    if (p.report_id && data[0] != p.report_id) return;
+    if (p.report_id && data[0] != p.report_id) {
+      // A report we did not ask for. Say so: the device may send the
+      // encoder's position in a report of its own.
+      USER_PRINTF("[HIDCTL] report id 0x%02X (%u bytes): %s\n", data[0], len,
+                  bytes_to_hex(data, len < 8 ? len : 8));
+      return;
+    }
 
     // --- continuous controls ------------------------------------------------
     for (uint8_t i = 0; i < p.control_count; i++) {
@@ -1071,11 +1091,24 @@ class HidctlUsermod : public Usermod {
       uint8_t pos = data[p.wheel_offset];
       if (wheelSeen) {
         int8_t delta = (int8_t)(pos - wheelLast);   // the counter wraps
-        if (delta > 0) turnPage(delta);
-        else if (delta < 0) turnPage(delta);
+        if (delta != 0) {
+          USER_PRINTF("[HIDCTL] wheel %u -> %u (delta %d)\n",
+                      wheelLast, pos, (int)delta);
+          turnPage(delta);
+        }
+      } else {
+        USER_PRINTF("[HIDCTL] wheel first value %u\n", pos);
       }
       wheelLast = pos;
       wheelSeen = true;
+    }
+
+    // A heartbeat of the report's first bytes, so the wire can be watched.
+    // It is slow on purpose: the console is read by a person.
+    static uint32_t lastBeat = 0;
+    if (millis() - lastBeat > 10000) {
+      lastBeat = millis();
+      USER_PRINTF("[HIDCTL] report: %s\n", bytes_to_hex(data, 8));
     }
 
     uint32_t pressed = now_buttons & ~buttons;
@@ -1094,9 +1127,7 @@ class HidctlUsermod : public Usermod {
         if (btn.modifier) continue;              // modifiers act on release
         if (!(pressed & (1UL << btn.index))) continue;
         const char* act = (mod_held && btn.mod_action[0]) ? btn.mod_action : btn.action;
-        USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, act);
-        // The pads address the current page: "preset5" on page three is
-        // preset 37.
+
         char shifted[HIDCTL_MAX_ACTION + 8];
         const char* use = act;
         if (!strncmp(act, "preset", 6) && isdigit(act[6])) {
@@ -1104,6 +1135,7 @@ class HidctlUsermod : public Usermod {
           snprintf(shifted, sizeof(shifted), "preset%u", slot);
           use = shifted;
         }
+        USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, use);
         runAction(use, 255);
       }
       // The LEDs may have changed (a button lights while it is held).
@@ -1177,11 +1209,14 @@ class HidctlUsermod : public Usermod {
   // The LED demo can be switched on and off from the web API, without a
   // rebuild:
   //   POST /json/state  {"HIDCTL":{"demo":true}}
+  // "paint" turns the LED painting off and on - useful to see whether the
+  // device behaves differently when nothing is written to it.
   void readFromJsonState(JsonObject& obj) override {
     JsonObject h = obj[FPSTR(_name)];
     if (h.isNull()) return;
     bool demo = h["demo"] | false;
     setDemo(demo);
+    if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
   }
 
   void addToJsonInfo(JsonObject& obj) override {
