@@ -93,12 +93,62 @@ class HidctlUsermod : public Usermod {
   uint32_t buttons = 0;
   uint32_t modifier_mask = 0;
 
+  // -------------------------------------------------------------------------
+  // The continuous controls, and how often they are allowed to drive WLED
+  // -------------------------------------------------------------------------
+  // A knob that nobody is touching still jitters by a count or two, and a
+  // knob being swept reports its new position every few milliseconds.
+  // Neither should reach WLED at the report rate: each one costs a segment
+  // re-apply, a state broadcast and an interface push. So:
+  //
+  //   control_applied     the raw value last driven into WLED - the
+  //                       baseline the deadband is measured against
+  //   control_mapped      the 0..255 value that produced, so an unchanged
+  //                       result is not driven again
+  //   control_pending     a newer value is waiting for the throttle
+  //   control_has_applied the baseline is meaningful
+  //   control_waited      the takeover wait has already been said once
+  //   control_applied_ms  when it was last driven
+  //   control_log_ms      when it was last written to the console
+  uint16_t control_applied[HIDCTL_MAX_CONTROLS]     = {0};
+  uint8_t  control_mapped[HIDCTL_MAX_CONTROLS]      = {0};
+  bool     control_has_applied[HIDCTL_MAX_CONTROLS] = {false};
+  bool     control_pending[HIDCTL_MAX_CONTROLS]      = {false};
+  bool     control_waited[HIDCTL_MAX_CONTROLS]       = {false};
+  uint32_t control_applied_ms[HIDCTL_MAX_CONTROLS]   = {0};
+  uint32_t control_log_ms[HIDCTL_MAX_CONTROLS]      = {0};
+
+  // A change smaller than this many raw counts is not a movement. A 12-bit
+  // knob jitters by one or two counts, so four takes that out.
+  static constexpr uint16_t CONTROL_DEADBAND = 4;
+
+  // How often a control may drive WLED, even when it is being swept fast.
+  // The report arrives about a hundred times a second; this is the rate the
+  // board actually works at.
+  static constexpr uint32_t CONTROL_APPLY_INTERVAL_MS = 50;
+
+  // How often a moving control is written to the console.
+  static constexpr uint32_t CONTROL_LOG_INTERVAL_MS = 500;
+
+  // Forget everything the controls were: the first report after a connect
+  // drives them all again.
+  void resetControls() {
+    for (uint8_t i = 0; i < HIDCTL_MAX_CONTROLS; i++) {
+      control_value[i] = 0xFFFF;   // force the next report to apply
+      control_taken[i] = 0;
+      control_applied[i] = 0;
+      control_mapped[i] = 0;
+      control_has_applied[i] = false;
+      control_pending[i] = false;
+      control_waited[i] = false;
+      control_applied_ms[i] = 0;
+      control_log_ms[i] = 0;
+    }
+  }
+
   // Websocket push throttle while a control is moving.
   uint32_t lastWsPush = 0;
   static constexpr uint32_t WS_PUSH_INTERVAL_MS = 250;
-
-  // Console log throttle for the continuous controls.
-  uint32_t lastCtlLog = 0;
 
   // The beat that is sounding (1..4), from the tempo tracker. The lower
   // buttons show it.
@@ -106,6 +156,14 @@ class HidctlUsermod : public Usermod {
 
   // The AutoPlaylist's music slot, for the pad colours.
   uint8_t music_slot = 0;
+
+  // The preset that is active, tracked across the core's wiping of
+  // currentPreset. The core sets currentPreset back to 0 as soon as
+  // anything changes ("something changed, so we are no longer in the
+  // preset" - wled00/led.cpp), which would take the green highlight off
+  // the active pad the moment a knob moved. The core's onPreStateChange
+  // hook fires before that wipe, so the value is latched here instead.
+  uint8_t tracked_active_preset = 0;
 
   // -------------------------------------------------------------------------
   // The preset pages
@@ -162,17 +220,33 @@ class HidctlUsermod : public Usermod {
 
     // The preset keeps its place in the page, so it moves by sixteen.
     uint16_t offset = 0;
-    if (currentPreset >= 1) {
-      offset = (uint16_t)((currentPreset - 1) % PAGE_SIZE);
+    if (tracked_active_preset >= 1) {
+      offset = (uint16_t)((tracked_active_preset - 1) % PAGE_SIZE);
     }
     uint16_t target = (uint16_t)((page - 1) * PAGE_SIZE + offset + 1);
     if (target > 250) target = 250;
 
-    currentPreset = (uint8_t)target;
-    applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
-    handlePresets();
+    // Land on a preset that exists: the one in the same place on this
+    // page, or else the first one that is there. A page with nothing
+    // saved on it is browsed without touching the running preset.
+    uint16_t pick = 0;
+    if (getCachedPresetExists((uint8_t)target)) {
+      pick = target;
+    } else {
+      for (uint16_t s = (uint16_t)((page - 1) * PAGE_SIZE + 1);
+           s <= (uint16_t)(page * PAGE_SIZE) && s <= 250; s++) {
+        if (getCachedPresetExists((uint8_t)s)) { pick = s; break; }
+      }
+    }
+
+    if (pick) {
+      // The core's PresetApplied event sets the tracked preset and the
+      // page; applying it here is what moves both.
+      applyPreset((uint8_t)pick, CALL_MODE_BUTTON_PRESET);
+      handlePresets();
+    }
     showPageUntil = millis() + 1500;
-    USER_PRINTF("[HIDCTL] page %u (preset %u)\n", page, currentPreset);
+    USER_PRINTF("[HIDCTL] page %u (preset %u)\n", page, pick);
   }
 
   // Show the page on the display for a moment.
@@ -469,10 +543,7 @@ class HidctlUsermod : public Usermod {
       return;
     }
     active_profile = idx;
-    for (uint8_t i = 0; i < HIDCTL_MAX_CONTROLS; i++) {
-      control_value[i] = 0xFFFF;   // force the first report to apply
-      control_taken[i] = 0;
-    }
+    resetControls();
     buttons = 0;
     // The wheel's position belongs to the connection: forget the old one so
     // the first report after a reconnect is not read as a turn.
@@ -515,8 +586,9 @@ class HidctlUsermod : public Usermod {
     if (!strncmp(action, "preset", 6)) {
       int slot = atoi(action + 6);
       if (slot < 1 || slot > 64) return;
-      currentPreset = (uint8_t)slot;
-      applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
+      // The core's PresetApplied event sets the tracked preset and the
+      // page; if the preset is not there, neither moves.
+      applyPreset((uint8_t)slot, CALL_MODE_BUTTON_PRESET);
       handlePresets();
       return;
     }
@@ -708,21 +780,23 @@ class HidctlUsermod : public Usermod {
 
   // Jump to the next/previous preset, skipping empty slots and playlists.
   void jumpPreset(int direction) {
-    if (currentPreset < 1) currentPreset = 1;
-    int start = currentPreset;
+    // Start from the preset that is really active, not from the core's
+    // currentPreset - that is 0 as soon as anything has changed.
+    int slot = tracked_active_preset ? (int)tracked_active_preset : 1;
+    int start = slot;
     for (int i = 0; i < 250; i++) {
-      currentPreset += direction;
-      if (currentPreset < 1)   currentPreset = 250;
-      if (currentPreset > 250) currentPreset = 1;
-      if (currentPreset == start) break;
-      if (getCachedPresetExists(currentPreset)
-          && !(presetCache != nullptr && presetCache[currentPreset].isPlaylist)) {
+      slot += direction;
+      if (slot < 1)   slot = 250;
+      if (slot > 250) slot = 1;
+      if (slot == start) break;
+      if (getCachedPresetExists(slot)
+          && !(presetCache != nullptr && presetCache[slot].isPlaylist)) {
         break;
       }
     }
-    if (getCachedPresetExists(currentPreset)
-        && !(presetCache != nullptr && presetCache[currentPreset].isPlaylist)) {
-      applyPreset(currentPreset, CALL_MODE_BUTTON_PRESET);
+    if (getCachedPresetExists(slot)
+        && !(presetCache != nullptr && presetCache[slot].isPlaylist)) {
+      applyPreset((uint8_t)slot, CALL_MODE_BUTTON_PRESET);
       handlePresets();
     }
   }
@@ -924,13 +998,9 @@ class HidctlUsermod : public Usermod {
     memset(report, 0, sizeof(report));
     report[0] = p.output.report_id;
 
-    // The page follows the preset when the preset is changed from
-    // somewhere else (the web UI), so the pads always address the page the
-    // current preset is on.
-    if (currentPreset >= 1) {
-      uint8_t want = pageOfPreset(currentPreset);
-      if (want != page && millis() >= showPageUntil) page = want;
-    }
+    // The page follows the preset, but only when a preset is really
+    // applied - the core's PresetApplied event sets it. A page that is
+    // being browsed (nothing saved on it) stays where it was put.
 
     // The beat that is sounding now, from the tempo tracker.
     {
@@ -943,7 +1013,8 @@ class HidctlUsermod : public Usermod {
     music_slot = queryAutoPlaylistMusicSlot();
 
     // --- the display: the page for a moment, then the preset number ---
-    uint16_t val = (currentPreset >= 1 && currentPreset <= 99) ? currentPreset : 0;
+    uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
+                   ? tracked_active_preset : 0;
     if (millis() < showPageUntil) {
       showLetter(report, p, 'P');
       // The page's number goes on the right-hand digit.
@@ -990,7 +1061,7 @@ class HidctlUsermod : public Usermod {
             const bool finite = getPresetRepeat((uint8_t)slot) > 0;
             if (finite) { r = b = 0x7F; }      // red
             else        { r = b = 0x7F; }      // magenta
-          } else if (slot == (int)currentPreset && getCachedPresetExists(slot)) {
+          } else if (slot == (int)tracked_active_preset && getCachedPresetExists(slot)) {
             g = 0x7F;                          // green
           } else if (getCachedPresetExists(slot)) {
             b = 0x7F;                          // blue
@@ -1027,6 +1098,57 @@ class HidctlUsermod : public Usermod {
   // incoming report
   // -------------------------------------------------------------------------
  public:
+  // Drive one control into WLED. The soft takeover, the "did the result
+  // actually change" test and the throttle all happen here.
+  void applyControl(HidctlProfile& p, uint8_t idx, uint16_t raw, uint32_t now) {
+    HidctlControl& ctl = p.controls[idx];
+    uint32_t full = (ctl.bits >= 16) ? 0xFFFFu : ((1u << ctl.bits) - 1);
+    uint8_t value = (uint8_t)((uint32_t)raw * 255u / full);
+
+    // Soft takeover: the control has to cross the parameter's current
+    // value before it starts driving it, so a knob that sits somewhere
+    // else does not yank the value when it is first touched.
+    if (!control_taken[idx]) {
+      int cur = currentValueOf(ctl.action);
+      if (cur >= 0) {
+        int curRaw = (int)((uint32_t)cur * full / 255u);
+        int delta = (int)raw - curRaw;
+        if (delta < 0) delta = -delta;
+        int wiggle = (int)(full / 255u * 8u) + 1;   // ~8/255 of the range
+        if (delta > wiggle) {
+          // Say it once, not once a report.
+          if (!control_waited[idx]) {
+            USER_PRINTF("[HIDCTL] %s: waiting for takeover (raw %u, target %u)\n",
+                        ctl.name, raw, (unsigned)cur);
+            control_waited[idx] = true;
+          }
+          return;    // not driven: the baseline stays where it was
+        }
+      }
+      control_taken[idx] = 1;
+      control_waited[idx] = false;
+    }
+
+    // The result did not change, so there is nothing to drive. The baseline
+    // still follows the knob, so its resting point is known.
+    if (control_has_applied[idx] && value == control_mapped[idx]) {
+      control_applied[idx] = raw;
+      control_applied_ms[idx] = now;
+      return;
+    }
+    control_mapped[idx] = value;
+    control_applied[idx] = raw;
+    control_applied_ms[idx] = now;
+    control_has_applied[idx] = true;
+
+    if (!ctl.action[0]) return;
+    if (now - control_log_ms[idx] >= CONTROL_LOG_INTERVAL_MS) {
+      control_log_ms[idx] = now;
+      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, ctl.action, value);
+    }
+    runAction(ctl.action, value);
+  }
+
   // Decode a raw report for the active profile and act on it.
   void handleIncomingReport(const uint8_t* data, uint16_t len) {
     if (!enabled || active_profile >= profile_count || !profiles) return;
@@ -1042,6 +1164,17 @@ class HidctlUsermod : public Usermod {
     }
 
     // --- continuous controls ------------------------------------------------
+    // A value that arrived while the throttle was closed goes first: it is
+    // the newest one, and the knob may already have stopped there.
+    const uint32_t now = millis();
+    for (uint8_t i = 0; i < p.control_count; i++) {
+      if (!control_pending[i]) continue;
+      if (control_has_applied[i] &&
+          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) continue;
+      applyControl(p, i, control_value[i], now);
+      control_pending[i] = false;
+    }
+
     for (uint8_t i = 0; i < p.control_count; i++) {
       HidctlControl& ctl = p.controls[i];
       uint16_t raw = 0;
@@ -1050,33 +1183,31 @@ class HidctlUsermod : public Usermod {
         raw |= (uint16_t)((uint16_t)data[ctl.offset + b] << (8 * b));   // little endian
       }
       if (ctl.bits < 16) raw &= (uint16_t)((1u << ctl.bits) - 1);
-      if (raw == control_value[i]) continue;
+      if (control_has_applied[i] && raw == control_value[i]) continue;  // no change at all
       control_value[i] = raw;
 
-      if (!ctl.action[0]) continue;
-      uint32_t full = (ctl.bits >= 16) ? 0xFFFFu : ((1u << ctl.bits) - 1);
-      uint8_t value = (uint8_t)((uint32_t)raw * 255u / full);
-      // A knob sweep reports ~100 times a second; log it at a readable rate.
-      if (millis() - lastCtlLog > 250) {
-        USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, ctl.action, value);
-        lastCtlLog = millis();
+      // A step or two of jitter is not a movement. The baseline follows the
+      // knob all the same, so it stays a step away from where the knob is
+      // resting.
+      if (control_has_applied[i]) {
+        int d = (int)raw - (int)control_applied[i];
+        if (d < 0) d = -d;
+        if (d < CONTROL_DEADBAND) {
+          control_pending[i] = false;
+          continue;
+        }
       }
 
-      // Soft takeover: the control has to cross the parameter's current
-      // value before it starts driving it, so a knob that sits somewhere
-      // else does not yank the value when it is first touched.
-      if (!control_taken[i]) {
-        int cur = currentValueOf(ctl.action);
-        if (cur >= 0) {
-          int curRaw = (int)((uint32_t)cur * full / 255u);
-          int delta = (int)raw - curRaw;
-          if (delta < 0) delta = -delta;
-          int wiggle = (int)(full / 255u * 8u) + 1;   // ~8/255 of the range
-          if (delta > wiggle) continue;
-        }
-        control_taken[i] = 1;
+      // Too soon after the last one. The next report carries a newer
+      // value, and that is the one worth driving.
+      if (control_has_applied[i] &&
+          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) {
+        control_pending[i] = true;
+        continue;
       }
-      runAction(ctl.action, value);
+
+      applyControl(p, i, raw, now);
+      control_pending[i] = false;
     }
 
     // --- buttons ------------------------------------------------------------
@@ -1187,17 +1318,34 @@ class HidctlUsermod : public Usermod {
     paint();
   }
 
+  // The core fires this BEFORE it wipes currentPreset to 0, so the active
+  // preset is read here and kept. Without it the green highlight on the
+  // active pad would vanish the moment anything changed.
+  void onPreStateChange(uint8_t mode) override {
+    if (currentPreset != 0) tracked_active_preset = currentPreset;
+  }
+
   void onEvent(const wled::Event& ev) override {
+    if (ev.type == wled::EventType::PresetApplied) {
+      // The core says a preset was applied, and which one. This is the
+      // authoritative answer: the core's own currentPreset is wiped to 0
+      // as soon as anything changes, so it cannot be read later.
+      uint8_t slot = ev.payload.presetApplied.preset;
+      if (slot >= 1) {
+        tracked_active_preset = slot;
+        // The pads address the page the active preset is on.
+        page = pageOfPreset(slot);
+        paint();
+      }
+      return;
+    }
     if (ev.type == wled::EventType::UsbDeviceChanged) {
       bool was = active_profile != 0xFF;
       if (ev.payload.usbDevice.connected) {
         uint8_t idx = matchDevice(ev.payload.usbDevice.vid, ev.payload.usbDevice.pid);
         if (idx != 0xFF) {
           active_profile = idx;
-          for (uint8_t i = 0; i < HIDCTL_MAX_CONTROLS; i++) {
-            control_value[i] = 0xFFFF;   // force the next report to apply
-            control_taken[i] = 0;
-          }
+          resetControls();
           buttons = 0;
           // The wheel's position belongs to the connection: forget the old
           // one so the first report after a reconnect is not read as a turn.
@@ -1264,6 +1412,9 @@ class HidctlUsermod : public Usermod {
     top["wheel_seen"] = wheelSeen;
     top["page"] = page;
     top["page_count"] = lastPage();
+    // The preset that is active, tracked across the core's wiping of
+    // currentPreset - this is the one the green pad shows.
+    top["active_preset"] = tracked_active_preset;
     top["report_status"] = hid_usb_last_report_status();
     top["reports_ok"] = hid_usb_reports_ok();
     uint8_t rb_len = 0;
