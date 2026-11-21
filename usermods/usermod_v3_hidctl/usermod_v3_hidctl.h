@@ -225,6 +225,7 @@ class HidctlUsermod : public Usermod {
   uint8_t  wheelLast = 0;     // the encoder's last position
   bool     wheelSeen = false;
   uint32_t showPageUntil = 0; // the page is on the display until then
+  uint32_t showWheelUntil = 0; // the encoder's position is on the display until then
 
   // The last page a preset can live on. The pages are not limited to the
   // presets that happen to be saved: the user browses ahead of them and
@@ -982,11 +983,14 @@ class HidctlUsermod : public Usermod {
   // Write a letter on the left-hand digit ("P" for the page).
   void showLetter(uint8_t* report, HidctlProfile& p, char letter) {
     if (!p.output.display.present || p.output.display.digit_count < 2) return;
-    // The strokes of a "P": top, upper-left, middle, lower-left - and NO
-    // bottom bar, which is what tells it from an "E".
+    // The strokes of a "P": top, upper-right, upper-left, middle - and NO
+    // bottom bar, which is what tells it from an "E". The segment order is
+    // the device's own: DP, G(middle), C(lower-right), B(upper-right),
+    // A(top), F(upper-left), E(lower-left), D(bottom) - so B is the
+    // upper-right bar and E the lower-left one.
     uint8_t mask = 0;
     switch (letter) {
-      case 'P': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6); break;
+      case 'P': mask = (1u << 4) | (1u << 3) | (1u << 5) | (1u << 1); break;
       case 'E': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
       default:  mask = 0; break;
     }
@@ -1074,7 +1078,12 @@ class HidctlUsermod : public Usermod {
     // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
                    ? tracked_active_preset : 0;
-    if (millis() < showPageUntil) {
+    if (millis() < showWheelUntil) {
+      // The encoder moved: show where it is. This is the one thing the
+      // display can do that no console and no web page can - it shows the
+      // encoder's own byte, on the controller, the moment it changes.
+      showNumber(report, p, wheelLast);
+    } else if (millis() < showPageUntil) {
       if (page < 10) {
         // "P" and the page's number on the right-hand digit.
         showLetter(report, p, 'P');
@@ -1324,6 +1333,7 @@ class HidctlUsermod : public Usermod {
         if (delta != 0) {
           USER_PRINTF("[HIDCTL] wheel %u -> %u (delta %d)\n",
                       wheelLast, pos, (int)delta);
+          showWheelUntil = millis() + 1000;   // show it on the display
           turnPage(delta);
         }
       } else {
@@ -1478,6 +1488,13 @@ class HidctlUsermod : public Usermod {
     // Send the class requests again - the vendor request and SET_IDLE that
     // a PC's HID stack sends and this host did not.
     if (h["classreq"]) hid_usb_request_class();
+    // Claim or release the device's other interface. A PC's HID stack
+    // leaves the F1's second interface alone; we claimed it on a hunch.
+    if (h.containsKey("otheriface")) hid_usb_set_other_interface(h["otheriface"] | true);
+    // Send the wake-up packet again.
+    if (h["a0"]) hid_usb_send_wakeup();
+    // Ask for the feature reports (a PC's HID stack does not).
+    if (h.containsKey("featrep")) hid_usb_set_feature_reports(h["featrep"] | true);
     if (h.containsKey("page")) {
       int pg = h["page"] | 0;
       if (pg >= 1 && pg <= (int)lastPage()) {
@@ -1521,6 +1538,21 @@ class HidctlUsermod : public Usermod {
     top["demo"] = demoActive;
     top["class_status"] = hid_usb_class_status();
     top["class_stage"] = hid_usb_class_stage();
+    top["other_iface"] = hid_usb_other_iface();
+    top["other_claimed"] = hid_usb_other_claimed();
+    {
+      uint8_t fl = 0;
+      const uint8_t* fd = hid_usb_feature_data(&fl);
+      if (fl) {
+        char hex[2 * 72 + 1];
+        int hl = 0;
+        for (uint8_t i = 0; i < fl && hl < (int)sizeof(hex) - 3; i++) {
+          hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", fd[i]);
+        }
+        top["feature"] = hex;
+        top["feature_len"] = fl;
+      }
+    }
     {
       uint8_t cl = 0;
       const uint8_t* cd = hid_usb_class_data(&cl);
@@ -1592,6 +1624,40 @@ class HidctlUsermod : public Usermod {
       o["id"] = probe_results[i].id;
       o["len"] = probe_results[i].len;
       o["status"] = probe_results[i].status;
+    }
+    // The wire log: every report that differed from the one before, with
+    // the packets that came in between. This is the data to crunch.
+    top["log_reports"] = hid_usb_log_reports();
+    top["log_zlps"] = hid_usb_log_zlps();
+    top["in_errors"] = hid_usb_in_errors();
+    {
+      uint8_t sc = 0;
+      uint16_t* lens = nullptr;
+      const uint8_t* sts = hid_usb_in_statuses(&sc, &lens);
+      JsonArray sa = top.createNestedArray("in_completions");
+      for (uint8_t i = 0; i < sc; i++) {
+        JsonObject o = sa.createNestedObject();
+        o["status"] = sts[i];
+        o["len"] = lens ? lens[i] : 0;
+      }
+    }
+    {
+      uint8_t lc = hid_usb_log_count();
+      JsonArray la = top.createNestedArray("log");
+      for (uint8_t i = 0; i < lc; i++) {
+        const HidLogEntry* ep = hid_usb_log(i);
+        if (!ep) continue;
+        const HidLogEntry& e = *ep;
+        JsonObject o = la.createNestedObject();
+        char hex[2 * HIDCTL_MAX_REPORT + 1];
+        int hl = 0;
+        hex[0] = '\0';
+        for (uint8_t k = 0; k < e.len && hl < (int)sizeof(hex) - 3; k++) {
+          hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", e.data[k]);
+        }
+        o["d"] = hex;
+        o["s"] = e.skipped;
+      }
     }
     // The configuration descriptor, as the device sent it. This is the
     // authority on the device's layout - the parse above can only be as

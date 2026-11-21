@@ -60,6 +60,24 @@ bool hid_usb_send_setup(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue
 bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
                            uint8_t wIndex, const uint8_t* data, uint16_t len);
 
+// The wire log: every report that differed from the one before, with the
+// number of packets that came in between.
+struct HidLogEntry {
+  uint16_t skipped;
+  uint8_t  data[HIDCTL_MAX_REPORT];
+  uint8_t  len;
+};
+// The log in chronological order: index 0 is the oldest entry kept.
+const HidLogEntry* hid_usb_log(uint8_t index);
+uint8_t hid_usb_log_count(void);
+uint32_t hid_usb_log_reports(void);
+uint32_t hid_usb_log_zlps(void);
+
+// The status and length of the last sixteen IN completions, and the count
+// of completions that came back with a status other than COMPLETED.
+const uint8_t* hid_usb_in_statuses(uint8_t* count, uint16_t** lengths);
+uint32_t hid_usb_in_errors(void);
+
 // The status of the last class request (SET_PROTOCOL / SET_IDLE):
 // -1 = not sent, 0 = completed, 4 = stalled.
 int8_t  hid_usb_class_status(void);
@@ -74,6 +92,23 @@ uint8_t hid_usb_class_stage(void);
 // Ask for the class requests again, so they can be tried without a
 // rebuild.
 void hid_usb_request_class(void);
+
+// Send the wake-up packet again: {0xA0, 0x00, 0x00} on the OUT
+// endpoint.
+void hid_usb_send_wakeup(void);
+
+// Ask for the feature reports too (or stop asking). A PC's HID stack
+// never asks for them.
+void hid_usb_set_feature_reports(bool want);
+
+// Claim or release the device's OTHER interface (the F1's second one). A
+// PC's HID stack leaves it alone.
+void hid_usb_set_other_interface(bool claim);
+uint8_t hid_usb_other_iface(void);
+bool    hid_usb_other_claimed(void);
+
+// The F1's feature report, if the device answered the request for it.
+const uint8_t* hid_usb_feature_data(uint8_t* len);
 
 // The configuration descriptor, exactly as the device sent it. This is the
 // authority on how many interfaces the device has and how many endpoints

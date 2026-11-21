@@ -1,0 +1,525 @@
+    0.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.4  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+    0.5  [HIDCTL] browse -> blackout
+    0.5  [ProLinkV3] PowerEdge wasOff=0 isOff=1
+    0.5  [ProLinkV3] PowerEdge wasOff=1 isOff=0
+    0.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+    0.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    1.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    1.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+    1.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    2.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+    2.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    2.2  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+    2.5  [HIDCTL] knob1 = 4091 -> bri = 254
+    2.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    3.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    3.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    3.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    3.5  [HIDCTL] bar1 -> downbeat
+    3.5  tempo: downbeat set - the beat sounding now is beat 1
+    3.6  tempo: downbeat set - the beat sounding now (was 4) is beat 1
+    3.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    4.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+    4.1  [HIDCTL] knob1 = 4092 -> bri = 254
+    4.3  [HIDCTL] knob1 = 4092 -> bri = 254
+    4.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    4.8  [HIDCTL] knob1 = 4092 -> bri = 254
+    5.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    5.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    5.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    5.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    6.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+    6.1  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+    6.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    6.7  [HIDCTL] knob1 = 4091 -> bri = 254
+    6.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    7.2  [HIDCTL] knob1 = 4092 -> bri = 254
+    7.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    7.7  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+    8.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    8.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+    8.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    8.5  [HIDCTL] knob1 = 4092 -> bri = 254
+    8.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+    9.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+    9.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+    9.5  [HIDCTL] bar1 -> downbeat
+    9.5  tempo: downbeat set - the beat sounding now is beat 1
+    9.5  tempo: downbeat set - the beat sounding now (was 2) is beat 1
+    9.5  [HIDCTL] knob1 = 4091 -> bri = 254
+    9.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   10.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   10.0  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   10.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   10.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   10.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   11.1  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   11.3  [HIDCTL] fader3 = 4088 -> seg2bri = 254
+   11.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   11.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   12.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   12.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   12.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   12.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   12.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   13.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   13.4  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   13.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   13.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   14.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   14.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   14.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   14.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   15.0  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   15.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   15.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   15.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   16.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   16.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   16.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   16.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   16.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   17.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   17.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   17.5  [HIDCTL] bar1 -> downbeat
+   17.5  tempo: downbeat set - the beat sounding now is beat 1
+   17.5  tempo: downbeat set - the beat sounding now (was 3) is beat 1
+   17.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   17.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   18.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   18.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   18.4  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   18.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   18.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   19.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   19.4  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   19.7  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   19.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   20.0  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   20.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   20.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   20.7  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   21.0  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   21.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   21.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   21.5  [HIDCTL] bar1 -> downbeat
+   21.5  tempo: downbeat set - the beat sounding now is beat 1
+   21.5  tempo: downbeat set - the beat sounding now (was 1) is beat 1
+   21.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   22.0  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   22.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   22.3  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   22.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   22.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   23.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   23.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   23.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   23.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   24.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   24.1  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   24.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   24.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   24.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   25.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   25.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   25.5  [HIDCTL] bar1 -> downbeat
+   25.5  tempo: downbeat set - the beat sounding now is beat 1
+   25.5  tempo: downbeat set - the beat sounding now (was 3) is beat 1
+   25.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   25.9  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   26.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   26.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   26.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   26.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   26.9  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   27.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   27.5  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   27.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   28.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   28.1  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   28.2  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   28.5  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   28.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   29.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   29.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   29.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   29.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   30.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   30.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   30.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   30.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   30.8  [HIDCTL] fader2 = 4088 -> seg1bri = 254
+   31.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   31.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   31.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   31.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   32.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   32.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   32.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   32.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   32.9  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   33.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   33.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   33.5  [HIDCTL] bar1 -> downbeat
+   33.5  tempo: downbeat set - the beat sounding now is beat 1
+   33.5  tempo: downbeat set - the beat sounding now (was 1) is beat 1
+   33.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   34.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   34.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   34.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   34.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   34.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   35.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   35.3  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   35.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   35.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   36.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   36.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   36.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   36.6  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   36.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   37.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   37.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   37.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   37.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   38.1  [HIDCTL] fader3 = 4089 -> seg2bri = 254
+   38.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   38.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   38.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   38.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   39.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   39.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   39.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   40.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   40.1  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   40.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   40.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   40.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   41.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   41.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   41.5  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   41.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   42.0  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   42.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   42.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   42.6  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   42.8  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   43.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   43.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   43.6  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   43.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   44.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   44.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   44.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   44.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   44.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   45.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   45.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   45.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   45.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   46.2  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   46.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   46.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   46.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   47.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   47.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   47.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   47.8  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   48.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   48.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   48.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   48.6  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   48.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   49.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   49.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   49.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   49.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   50.1  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   50.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   50.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   50.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   50.9  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   51.1  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   51.4  [HIDCTL] fader2 = 4089 -> seg1bri = 254
+   51.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   51.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   52.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   52.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   52.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   52.7  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   53.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   54.0  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   54.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   54.3  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   54.5  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   54.8  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   55.0  [HIDCTL] fader3 = 4088 -> seg2bri = 254
+   55.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   55.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   55.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   56.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   56.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   56.3  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   56.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   56.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   57.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   57.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   57.7  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   57.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   58.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   58.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   58.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   58.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   59.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   59.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   59.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   59.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   60.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   60.2  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   60.3  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   60.6  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   60.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   61.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   61.3  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   61.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   61.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   62.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   62.3  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   62.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   62.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   62.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   63.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   63.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   63.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   63.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   64.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   64.3  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   64.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   64.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   65.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   65.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   65.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   65.8  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   66.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   66.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   66.3  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   66.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   66.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   67.1  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   67.3  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   67.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   67.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   68.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   68.3  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   68.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   68.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   68.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   69.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   69.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   69.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   69.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   70.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   70.3  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   70.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   70.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   70.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   71.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   71.5  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   71.7  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   72.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   72.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   72.3  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   72.5  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   72.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   73.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   73.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   73.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   73.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   74.1  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   74.3  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   74.3  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   74.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   74.8  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   75.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   75.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   75.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   75.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   76.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   76.3  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   76.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   76.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   76.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   77.2  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   77.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   77.7  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   78.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   78.0  [HIDCTL] pad4 -> preset36
+   78.1  [ProLinkV3] EffectIndexChanged newIndex=233
+   78.1  [ProLinkV3] PresetApplied slot=36
+   78.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   78.3  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   78.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   78.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   79.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   79.3  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   79.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   79.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   80.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   80.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   80.3  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   80.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   80.8  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   81.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   81.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   81.6  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   81.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   82.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   82.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   82.4  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   82.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   82.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   83.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   83.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   83.5  [HIDCTL] pad5 -> preset37
+   83.5  [ProLinkV3] EffectIndexChanged newIndex=28
+   83.5  [ProLinkV3] PresetApplied slot=37
+   83.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   83.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   84.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   84.4  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   84.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   84.7  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   84.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   85.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   85.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   85.5  [HIDCTL] pad3 -> preset35
+   85.5  [ProLinkV3] EffectIndexChanged newIndex=228
+   85.5  [ProLinkV3] PresetApplied slot=35
+   85.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   86.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   86.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   86.4  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   86.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   86.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   87.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   87.3  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   87.5  [HIDCTL] pad1 -> preset33
+   87.5  [ProLinkV3] EffectIndexChanged newIndex=198
+   87.5  [ProLinkV3] PresetApplied slot=33
+   87.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   87.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   88.1  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   88.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   88.4  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   88.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   88.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   89.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   89.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   89.5  [HIDCTL] pad2 -> preset34
+   89.5  [ProLinkV3] EffectIndexChanged newIndex=233
+   89.5  [ProLinkV3] PresetApplied slot=34
+   89.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   89.9  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   90.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   90.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   90.4  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   90.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   90.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   91.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   91.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   91.7  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   92.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   92.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   92.4  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   92.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   92.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   93.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   93.2  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   93.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   93.5  [HIDCTL] pad11 -> preset43
+   93.6  [ProLinkV3] EffectIndexChanged newIndex=241
+   93.6  [ProLinkV3] PresetApplied slot=43
+   93.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   94.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   94.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   94.4  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+   94.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   94.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   95.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   95.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   95.6  [HIDCTL] pad9 -> preset41
+   95.6  [ProLinkV3] EffectIndexChanged newIndex=14
+   95.6  [ProLinkV3] PresetApplied slot=41
+   95.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   95.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   96.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   96.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   96.4  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   96.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   96.9  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   97.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   97.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   97.5  [HIDCTL] pad11 -> preset43
+   97.6  [ProLinkV3] EffectIndexChanged newIndex=241
+   97.6  [ProLinkV3] PresetApplied slot=43
+   97.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   97.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   98.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   98.4  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+   98.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   98.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   99.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   99.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   99.5  [HIDCTL] fader3 = 4088 -> seg2bri = 254
+   99.7  [HIDCTL] knob1 = 4091 -> bri = 254
+  100.0  [HIDCTL] knob1 = 4091 -> bri = 254
+  100.3  [HIDCTL] knob1 = 4092 -> bri = 254
+  100.4  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+  100.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  100.7  [HIDCTL] encoder -> showpage
+  100.8  [HIDCTL] knob1 = 4091 -> bri = 254
+  101.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  101.3  [HIDCTL] fader2 = 4089 -> seg1bri = 254
+  101.6  [HIDCTL] knob1 = 4091 -> bri = 254
+  101.8  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  102.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  102.3  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  102.5  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+  102.6  [HIDCTL] knob1 = 4092 -> bri = 254
+  102.9  [HIDCTL] knob1 = 4091 -> bri = 254
+  103.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  103.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  103.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  103.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  104.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  104.4  [HIDCTL] knob1 = 4092 -> bri = 254
+  104.5  [HIDCTL] report: 01 00 00 00 00 00 FC 0F   (201 reports in 2s)
+  104.7  [HIDCTL] fader3 = 4089 -> seg2bri = 254
+  104.9  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+  105.2  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  105.5  [HIDCTL] knob1 = 4092 -> bri = 254
+  105.5  [HIDCTL] pad11 -> preset43
+  105.5  [ProLinkV3] PresetApplied slot=43
+  105.7  [HIDCTL] fader3 = 4088 -> seg2bri = 254
+  106.0  [HIDCTL] knob1 = 4091 -> bri = 254
+  106.2  [HIDCTL] knob1 = 4091 -> bri = 254
+  106.5  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+  106.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  106.7  [HIDCTL] knob1 = 4091 -> bri = 254
+  107.0  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  107.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  107.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  107.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  108.0  [HIDCTL] knob1 = 4092 -> bri = 254
+  108.3  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  108.5  [HIDCTL] report: 01 00 00 00 00 00 FB 0F   (201 reports in 2s)
+  108.5  [HIDCTL] knob1 = 4091 -> bri = 254
+  108.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+  109.1  [HIDCTL] knob1 = 4092 -> bri = 254
+  109.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  109.6  [HIDCTL] knob1 = 4091 -> bri = 254
+  109.8  [HIDCTL] fader1 = 4087 -> seg0bri = 254

@@ -1,0 +1,1 @@
+serial error: ClearCommError failed (PermissionError(13, 'The device does not recognize the command.', None, 22))

@@ -76,11 +76,95 @@ static volatile uint32_t hid_in_zlp_count = 0;
 static volatile int8_t  hid_class_status = -1;
 
 // The answer to the last class request, if it brought one back.
-static uint8_t hid_class_data[8] = {};
+static uint8_t hid_class_data[72] = {};
 static uint8_t hid_class_data_len = 0;
+
+// The F1's 63-byte feature report (report ID 0xD0). The device declares
+// it and never sends it on its own; it answers when it is asked.
+static uint8_t hid_feature_data[72] = {};
+static uint8_t hid_feature_len = 0;
+
+// ---------------------------------------------------------------------------
+// The wire log
+// ---------------------------------------------------------------------------
+// Every report the device sends, and every zero-length packet that follows
+// one, so the traffic can be examined afterwards. Only reports that DIFFER
+// from the one before are kept - the wheel and the knobs sit still most of
+// the time - and each entry says how many packets came in between.
+static constexpr uint8_t HIDCTL_LOG_ENTRIES = 48;
+static HidLogEntry hid_log[HIDCTL_LOG_ENTRIES];
+static uint8_t  hid_log_count = 0;
+static uint8_t  hid_log_next = 0;
+static uint16_t hid_log_skipped = 0;
+static uint8_t  hid_log_last[HIDCTL_MAX_REPORT];
+static uint8_t  hid_log_last_len = 0;
+static bool     hid_log_have_last = false;
+static uint32_t hid_log_reports = 0;
+static uint32_t hid_log_zlps = 0;
+
+// Record a report that came in, or a zero-length packet.
+static void hid_log_event(const uint8_t* data, uint16_t len, bool zero_length) {
+  if (zero_length) {
+    hid_log_skipped++;
+    hid_log_zlps++;
+    return;
+  }
+  hid_log_reports++;
+  uint8_t n = (len > HIDCTL_MAX_REPORT) ? HIDCTL_MAX_REPORT : (uint8_t)len;
+  if (hid_log_have_last && n == hid_log_last_len &&
+      memcmp(data, hid_log_last, n) == 0) {
+    hid_log_skipped++;
+    return;                       // the same report again
+  }
+  HidLogEntry* e = &hid_log[hid_log_next];
+  e->skipped = hid_log_skipped;
+  e->len = n;
+  memcpy(e->data, data, n);
+  hid_log_skipped = 0;
+  hid_log_next = (uint8_t)((hid_log_next + 1) % HIDCTL_LOG_ENTRIES);
+  if (hid_log_count < HIDCTL_LOG_ENTRIES) hid_log_count++;
+  memcpy(hid_log_last, data, n);
+  hid_log_last_len = n;
+  hid_log_have_last = true;
+}
+
+// The log in chronological order: index 0 is the oldest entry kept.
+// The status and length of the last sixteen IN completions, and how many
+// completions have come back with a status that is not COMPLETED (those
+// are the ones that tear the endpoint down).
+static uint8_t  hid_in_status_ring[16];
+static uint16_t hid_in_len_ring[16];
+static uint8_t  hid_in_status_next = 0;
+static volatile uint32_t hid_in_error_count = 0;
+
+const HidLogEntry* hid_usb_log(uint8_t index) {
+  if (index >= hid_log_count) return nullptr;
+  return &hid_log[(hid_log_next + HIDCTL_LOG_ENTRIES - hid_log_count + index) % HIDCTL_LOG_ENTRIES];
+}
+uint8_t hid_usb_log_count(void) { return hid_log_count; }
+uint32_t hid_usb_log_reports(void) { return hid_log_reports; }
+
+// The status and length of the last sixteen IN completions, oldest first,
+// and the count of completions that were not COMPLETED.
+const uint8_t* hid_usb_in_statuses(uint8_t* count, uint16_t** lengths) {
+  static uint16_t lens[16];
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < 16; i++) {
+    uint8_t idx = (uint8_t)((hid_in_status_next + i) % 16);
+    lens[i] = hid_in_len_ring[idx];
+  }
+  *lengths = lens;
+  *count = 16;
+  return hid_in_status_ring;
+}
+uint32_t hid_usb_in_errors(void) { return hid_in_error_count; }
+uint32_t hid_usb_log_zlps(void) { return hid_log_zlps; }
 
 // The stage of the class-request sequence: 0 = not started, 1 = the vendor
 // request is due, 2 = SET_IDLE is due, 3 = done.
+// The feature reports are asked for only when they are wanted: a PC's HID
+// stack never asks for them.
+static bool hid_want_feature_reports = false;
 static uint8_t hid_class_stage = 0;
 static bool    hid_class_in_flight = false;
 static bool    hid_class_wanted = false;
@@ -122,6 +206,7 @@ const uint8_t* hid_usb_readback(uint8_t* len) {
 static volatile bool hid_in_resubmit_needed = false;
 static volatile bool hid_in_error_recovery_needed = false;
 
+
 static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
 static void hid_in_transfer_cb(usb_transfer_t* xfer);
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
@@ -136,6 +221,12 @@ static void hid_class_transfer_cb(usb_transfer_t* xfer) {
       if (n > (int)sizeof(hid_class_data)) n = (int)sizeof(hid_class_data);
       memcpy(hid_class_data, xfer->data_buffer + sizeof(usb_setup_packet_t), n);
       hid_class_data_len = (uint8_t)n;
+      // The feature report is 63 bytes - keep it where it cannot be
+      // overwritten by the next request.
+      if (n >= 32) {
+        memcpy(hid_feature_data, hid_class_data, n);
+        hid_feature_len = (uint8_t)n;
+      }
     }
     HIDCTL_LOG("class request answered: status=%d", (int)xfer->status);
   }
@@ -144,6 +235,72 @@ static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue);
 static bool hid_send_class_request_ex(uint8_t bmRequestType, uint8_t bRequest,
                                       uint16_t wValue, uint16_t wIndex,
                                       uint16_t wLength);
+
+// The device's other interface (the F1's second one, class 0xFE). A PC's
+// HID stack leaves it alone; we claimed it on a hunch, and the hunch was
+// never tested. It can be released and claimed again at runtime.
+static uint8_t hid_other_iface = 0xFF;
+static bool    hid_other_claimed = false;
+// Off by default: a PC's HID stack leaves the F1's second interface alone.
+static bool    hid_claim_other = false;
+
+static void hid_claim_other_interfaces(usb_device_handle_t dev, uint8_t skip_iface) {
+  if (!hid_claim_other) return;
+  const usb_config_desc_t* cfg_desc = nullptr;
+  if (usb_host_get_active_config_descriptor(dev, &cfg_desc) != ESP_OK || !cfg_desc) return;
+  for (uint8_t other = 0; other < 8; other++) {
+    if (other == skip_iface) continue;
+    int ooff = 0;
+    const usb_intf_desc_t* oifd =
+        usb_parse_interface_descriptor(cfg_desc, other, 0, &ooff);
+    if (!oifd) break;
+    esp_err_t cerr = usb_host_interface_claim(hid_client, dev, other, 0);
+    if (cerr == ESP_OK) {
+      hid_other_iface = other;
+      hid_other_claimed = true;
+    }
+    HIDCTL_LOG("configure: also claimed interface %u (class 0x%02X) -> %s",
+               other, oifd->bInterfaceClass, cerr == ESP_OK ? "ok" : "failed");
+  }
+}
+
+// Ask for the feature reports too (or stop asking).
+void hid_usb_set_feature_reports(bool want) { hid_want_feature_reports = want; }
+
+// Send the wake-up packet again: {0xA0, 0x00, 0x00} on the OUT
+// endpoint. It goes out once when the device is opened, and can be sent
+// again from the web API.
+void hid_usb_send_wakeup(void) {
+  static const uint8_t wakeup[3] = {0xA0, 0x00, 0x00};
+  if (!hid_out_xfer) return;
+  hid_usb_send_out_endpoint(wakeup, sizeof(wakeup));
+  HIDCTL_LOG("sent the wake-up packet A0 00 00");
+}
+
+// Claim or release the device's other interface.
+void hid_usb_set_other_interface(bool claim) {
+  if (!hid_dev_hdl) return;
+  hid_claim_other = claim;
+  if (!claim) {
+    if (hid_other_claimed && hid_other_iface != 0xFF) {
+      esp_err_t err = usb_host_interface_release(hid_client, hid_dev_hdl, hid_other_iface);
+      HIDCTL_LOG("released interface %u -> %s", hid_other_iface, esp_err_to_name(err));
+      hid_other_claimed = false;
+      hid_other_iface = 0xFF;
+    }
+    return;
+  }
+  if (!hid_other_claimed) hid_claim_other_interfaces(hid_dev_hdl, hid_iface);
+}
+
+uint8_t hid_usb_other_iface(void) { return hid_other_iface; }
+bool    hid_usb_other_claimed(void) { return hid_other_claimed; }
+
+// The F1's feature report, if the device answered the request for it.
+const uint8_t* hid_usb_feature_data(uint8_t* len) {
+  if (len) *len = hid_feature_len;
+  return hid_feature_data;
+}
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
@@ -189,8 +346,9 @@ void hid_usb_init(void) {
 
   // The class request transfer (setup packet plus the bytes that come
   // back). Without this there is no buffer to send a class request in -
-  // which is why SET_IDLE was never sent at all.
-  err = usb_host_transfer_alloc(8 + 8, 0, &hid_class_xfer);
+  // which is why SET_IDLE was never sent at all. It has to hold the
+  // F1's 63-byte feature report too.
+  err = usb_host_transfer_alloc(8 + 72, 0, &hid_class_xfer);
   if (err != ESP_OK) {
     HIDCTL_LOG("init: usb_host_transfer_alloc(class) failed: %s", esp_err_to_name(err));
     hid_class_xfer = nullptr;
@@ -232,16 +390,65 @@ void hid_usb_poll(void) {
     hid_usb_get_descriptor(0x80, 0x0200, 256, 0);   // the configuration
   }
 
-  // The two requests a PC's HID stack sends to this device and we did not.
-  // They are sent in the order the capture shows, and the vendor request
-  // comes first because the F1 stalls SET_IDLE - and a stalled control
-  // transfer leaves the control pipe unusable, so nothing may follow it.
-  if (hid_class_wanted && hid_class_stage == 1 && !hid_desc_in_flight && !hid_class_in_flight) {
-    hid_class_stage = 2;
-    hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
-  } else if (hid_class_wanted && hid_class_stage == 2 && !hid_class_in_flight) {
-    hid_class_stage = 3;
-    hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
+  // The two requests a PC's HID stack sends to this device and we did not,
+  // and the two feature reports the F1 declares but never sends. They go
+  // in the order the capture shows, and SET_IDLE goes last because the F1
+  // stalls it - a stalled control transfer leaves the control pipe
+  // unusable, so nothing may follow it.
+  if (hid_class_wanted && !hid_desc_in_flight && !hid_class_in_flight) {
+    switch (hid_class_stage) {
+      case 1:
+        hid_class_stage = 2;
+        // GET_REPORT, feature report 0xD0: 63 bytes of device state.
+        // A PC's HID stack never asks for these, so they are off by
+        // default - they are diagnostics, and they are the one host-side
+        // request the working PC does not make.
+        if (hid_want_feature_reports) {
+          hid_send_class_request_ex(0xA1, 0x01, (uint16_t)((3 << 8) | 0xD0), hid_iface, 63);
+        }
+        break;
+      case 2:
+        hid_class_stage = 3;
+        // GET_REPORT, feature report 0xF0: the knob and fader positions.
+        if (hid_want_feature_reports) {
+          hid_send_class_request_ex(0xA1, 0x01, (uint16_t)((3 << 8) | 0xF0), hid_iface, 8);
+        }
+        break;
+      case 3:
+        hid_class_stage = 4;
+        // The vendor request a PC's HID stack makes.
+        hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
+        break;
+      case 4:
+        hid_class_stage = 5;
+        // The string descriptors - the serial number among them. A PC's
+        // HID stack reads them; the F1's teardown notes mention the serial
+        // number as the only handshaking there is.
+        hid_send_class_request_ex(0x80, 0x06, 0x0300, 0x0400, 255);
+        break;
+      case 5:
+        hid_class_stage = 6;
+        hid_send_class_request_ex(0x80, 0x06, 0x0301, 0x0400, 255);
+        break;
+      case 6:
+        hid_class_stage = 7;
+        hid_send_class_request_ex(0x80, 0x06, 0x0302, 0x0400, 255);
+        break;
+      case 7:
+        hid_class_stage = 8;
+        hid_send_class_request_ex(0x80, 0x06, 0x0303, 0x0400, 255);
+        break;
+      case 8:
+        hid_class_stage = 9;
+        hid_send_class_request_ex(0x80, 0x00, 0x0000, 0x0000, 2);   // GET STATUS
+        break;
+      case 9:
+        hid_class_stage = 10;
+        hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
+        break;
+      default:
+        break;
+    }
   }
 
   if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
@@ -301,6 +508,22 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* /*
 static void hid_in_transfer_cb(usb_transfer_t* xfer) {
   if (!xfer) return;
 
+  // Every completion, logged: its status and its length. The zero-length
+  // packet the F1 sends after a report may well arrive with a status
+  // that is not COMPLETED, and a status that is not COMPLETED takes the
+  // recovery path - which tears the endpoint down.
+  {
+    static uint8_t last[16];
+    static uint8_t lastn = 0;
+    last[lastn] = (uint8_t)xfer->status;
+    lastn = (uint8_t)((lastn + 1) % 16);
+    hid_in_status_ring[hid_in_status_next] = (uint8_t)xfer->status;
+    hid_in_len_ring[hid_in_status_next] = (uint16_t)xfer->actual_num_bytes;
+    hid_in_status_next = (uint8_t)((hid_in_status_next + 1) % 16);
+    (void)last;
+  }
+  if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) hid_in_error_count++;
+
   if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
     uint16_t n = (uint16_t)xfer->actual_num_bytes;
     if (n > 0) {
@@ -326,6 +549,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
       m.data.hidctl.len = n;
       memcpy(m.data.hidctl.data, xfer->data_buffer, n);
       if (app_queue) xQueueSend(app_queue, &m, 0);
+      hid_log_event(xfer->data_buffer, n, false);
     } else {
       // A ZERO-LENGTH PACKET is not an error. The device sends one to
       // end a transfer it did not fill, and the F1 sends one after every
@@ -333,6 +557,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
       // down - halt, flush, clear - fifty times a second, which is a
       // hard reset of the device's endpoint state.
       hid_in_zlp_count++;
+      hid_log_event(nullptr, 0, true);
     }
     hid_in_error_recovery_needed = false;
   } else {
@@ -459,6 +684,16 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
     }
   }
 
+  // The wake-up packet. Every other host's driver sends one three-byte
+  // packet on the OUT endpoint when it opens the device - {0xA0, 0x00,
+  // 0x00} - and it is the only host-side write that is not the LED
+  // report. The F1's own descriptor says nothing about it.
+  if (out_ep && hid_out_xfer) {
+    static const uint8_t wakeup[3] = {0xA0, 0x00, 0x00};
+    hid_usb_send_out_endpoint(wakeup, sizeof(wakeup));
+    HIDCTL_LOG("configure: sent the wake-up packet A0 00 00");
+  }
+
   // Log every interface of the configuration, so it is clear what else the
   // device offers (the F1 has a second interface for the LEDs).
   hid_iface_count = 0;
@@ -509,20 +744,11 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   HIDCTL_LOG("configure: 1 IN transfer submitted");
 
   // Claim the device's other interface as well. The F1 has a second
-  // interface (class 0xFE) next to the HID one, and the F1 only reports its
-  // wheel's position once a host has claimed it - NI's own driver claims it
-  // too, and the wheel reports come on the machine where that driver is
-  // loaded.
-  for (uint8_t other = 0; other < 8; other++) {
-    if (other == claimed_iface) continue;
-    int ooff = 0;
-    const usb_intf_desc_t* oifd =
-        usb_parse_interface_descriptor(cfg_desc, other, 0, &ooff);
-    if (!oifd) break;
-    esp_err_t cerr = usb_host_interface_claim(hid_client, dev, other, 0);
-    HIDCTL_LOG("configure: also claimed interface %u (class 0x%02X) -> %s",
-               other, oifd->bInterfaceClass, cerr == ESP_OK ? "ok" : "failed");
-  }
+  // interface (class 0xFE) next to the HID one. A PC's HID stack leaves it
+  // alone; we claimed it on a hunch that the wheel only reports to a host
+  // that has claimed it - a hunch that was never tested, so it can be
+  // turned off and on again from the web API.
+  hid_claim_other_interfaces(dev, claimed_iface);
 
   // The descriptors of the whole configuration and of the other interface,
   // so what the device really offers can be seen.
@@ -862,7 +1088,10 @@ static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
   }
   // The report descriptor comes after the configuration: only one control
   // transfer can be in flight at a time, so it is asked for from here.
+  // The interface index is 0 - the HID interface. A PC's HID stack asks
+  // for it the same way; we had been asking interface 1, which is the
+  // F1's MIDI interface.
   if (hid_desc_desc_wvalue == 0x0200) {
-    hid_usb_get_descriptor(0x81, 0x2200, 256, 1);
+    hid_usb_get_descriptor(0x81, 0x2200, 256, 0);
   }
 }

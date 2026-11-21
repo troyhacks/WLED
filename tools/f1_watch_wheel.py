@@ -11,7 +11,7 @@ while time.time()<deadline:
     time.sleep(3)
 print("connected:",h.get('connected'),flush=True)
 t0=time.time(); r0=h.get('reports_in',0); z0=h.get('zlps',0)
-while time.time()-t0 < 170:
+while time.time()-t0 < 560:
     time.sleep(5)
     try: h=ar()
     except Exception: continue

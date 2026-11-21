@@ -1,0 +1,1752 @@
+    0.0   endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.1  [HIDCTL] knob1 = 4092 -> bri = 254
+    0.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    0.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    0.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    0.8  [HIDCTL] knob1 = 4091 -> bri = 254
+    0.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+    1.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.3  [HIDCTL] knob1 = 4091 -> bri = 254
+    1.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    1.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    1.8  [HIDCTL] knob1 = 4091 -> bri = 254
+    1.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.1  [HIDCTL] knob1 = 4091 -> bri = 254
+    2.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.3  [HIDCTL] knob1 = 4092 -> bri = 254
+    2.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+    2.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    2.8  [HIDCTL] knob1 = 4092 -> bri = 254
+    2.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+    3.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.4  [HIDCTL] knob1 = 4092 -> bri = 254
+    3.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.6  [HIDCTL] knob1 = 4091 -> bri = 254
+    3.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    3.9  [HIDCTL] knob1 = 4092 -> bri = 254
+    4.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.1  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+    4.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    4.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.7  [HIDCTL] knob1 = 4092 -> bri = 254
+    4.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    4.9  [HIDCTL] knob1 = 4091 -> bri = 254
+    5.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    5.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.4  [HIDCTL] knob1 = 4092 -> bri = 254
+    5.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    5.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    5.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.0  [HIDCTL] knob1 = 4091 -> bri = 254
+    6.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    6.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    6.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.7  [HIDCTL] knob1 = 4091 -> bri = 254
+    6.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    6.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.0  [HIDCTL] knob1 = 4092 -> bri = 254
+    7.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    7.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+    7.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    7.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+    7.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.0  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+    8.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.3  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+    8.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    8.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    8.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+    8.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.1  [HIDCTL] knob1 = 4091 -> bri = 254
+    9.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.3  [HIDCTL] knob1 = 4091 -> bri = 254
+    9.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.6  [HIDCTL] knob1 = 4092 -> bri = 254
+    9.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+    9.8  [HIDCTL] knob1 = 4091 -> bri = 254
+    9.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   10.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   10.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   10.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   10.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   11.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.1  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   11.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   11.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.7  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   11.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   11.9  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   12.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   12.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   12.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.7  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   12.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   12.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   13.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   13.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.5  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   13.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   13.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   13.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.0  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   14.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   14.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.5  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   14.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   14.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   14.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   15.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   15.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   15.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   15.8  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   15.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   16.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.3  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   16.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   16.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   16.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   16.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.1  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   17.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.4  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   17.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   17.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   17.9  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   18.0  [HIDCTL] bar1 -> downbeat
+   18.0  tempo: downbeat set - the beat sounding now is beat 1
+   18.0  tempo: downbeat set - the beat sounding now (was 4) is beat 1
+   18.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   18.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   18.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   18.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   18.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   19.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.2  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   19.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.5  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   19.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   19.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   19.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   20.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   20.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   20.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   20.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   20.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   21.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.3  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   21.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   21.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   21.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   21.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   22.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.3  [HIDCTL] fader3 = 4088 -> seg2bri = 254
+   22.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   22.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   22.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   22.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   23.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   23.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   23.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   23.9  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   24.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   24.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   24.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.7  [HIDCTL] fader3 = 4089 -> seg2bri = 254
+   24.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   24.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   25.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   25.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.4  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   25.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   25.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   25.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   26.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.2  [HIDCTL] fader2 = 4087 -> seg1bri = 254
+   26.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   26.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   26.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   26.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   27.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   27.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.5  [HIDCTL] fader1 = 3823 -> seg0bri = 238
+   27.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   27.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   27.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.0  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   28.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   28.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   28.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   28.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   28.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   29.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   29.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   29.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   29.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   30.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   30.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   30.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   30.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   30.9  [HIDCTL] fader1 = 2574 -> seg0bri = 160
+   31.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   31.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   31.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.7  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   31.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   31.9  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   32.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   32.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   32.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   32.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   32.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   33.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   33.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   33.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   33.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   33.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   34.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   34.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   34.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   34.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   34.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   35.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   35.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   35.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   35.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   35.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   36.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.4  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   36.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   36.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   36.9  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   37.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.1  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   37.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   37.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   37.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   37.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   38.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   38.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   38.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   38.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   38.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   39.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   39.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.5  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   39.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   39.8  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   39.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   40.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   40.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   40.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   40.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   40.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   41.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   41.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   41.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   41.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   41.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   42.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   42.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.6  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   42.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   42.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   43.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.2  [HIDCTL] knob1 = 4092 -> bri = 254
+   43.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   43.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   43.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   43.9  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   44.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   44.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   44.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   44.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   44.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   45.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   45.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   45.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   45.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   45.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.0  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   46.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   46.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   46.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   46.8  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   46.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   47.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   47.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   47.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   47.8  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   47.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   48.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   48.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   48.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   48.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   48.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   49.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   49.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   49.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   49.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   50.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.2  [HIDCTL] fader3 = 4089 -> seg2bri = 254
+   50.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   50.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   50.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   50.9  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   51.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   51.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   51.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   51.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   51.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.0  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   52.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   52.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   52.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   52.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   52.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   53.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   53.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   53.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   54.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.3  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   54.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.6  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   54.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   54.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   54.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   55.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.4  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   55.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   55.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   55.9  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   56.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   56.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   56.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   56.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   56.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   57.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   57.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   57.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   57.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   57.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   58.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   58.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   58.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.7  [HIDCTL] knob1 = 4092 -> bri = 254
+   58.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   58.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   59.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.3  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   59.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   59.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   59.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   59.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.0  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   60.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   60.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   60.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   60.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   60.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.1  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   61.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   61.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   61.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   61.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   62.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   62.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   62.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   62.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   62.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   63.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   63.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.2  [HIDCTL] bar1 -> downbeat
+   63.2  tempo: downbeat set - the beat sounding now is beat 1
+   63.2  tempo: downbeat set - the beat sounding now (was 4) is beat 1
+   63.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   63.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   63.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   63.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   64.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   64.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.5  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   64.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.7  [HIDCTL] fader3 = 4089 -> seg2bri = 254
+   64.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   64.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   65.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   65.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   65.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   65.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   65.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   66.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   66.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   66.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   66.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   66.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   67.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   67.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   67.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   67.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   68.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   68.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   68.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   68.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   68.9  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   69.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   69.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   69.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   69.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   69.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   70.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   70.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   70.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   70.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   70.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   71.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   71.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   71.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.8  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   71.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   71.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   72.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   72.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.5  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   72.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   72.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   72.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   73.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   73.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   73.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   73.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   73.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   74.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   74.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   74.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   74.9  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   74.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.1  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   75.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   75.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   75.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   75.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   76.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   76.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   76.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   76.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   76.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   77.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   77.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   77.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   77.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   77.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   78.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   78.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.4  [HIDCTL] bar1 -> downbeat
+   78.4  tempo: downbeat set - the beat sounding now is beat 1
+   78.4  tempo: downbeat set - the beat sounding now (was 3) is beat 1
+   78.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   78.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   78.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   78.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.0  [HIDCTL] knob1 = 4091 -> bri = 254
+   79.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   79.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   79.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   79.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   79.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.0  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   80.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.3  [HIDCTL] knob1 = 4091 -> bri = 254
+   80.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   80.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   80.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   80.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   81.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   81.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   81.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   81.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   82.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   82.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   82.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   82.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   82.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   83.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   83.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   83.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   83.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   83.9  [HIDCTL] knob1 = 4091 -> bri = 254
+   84.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   84.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   84.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.7  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   84.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   84.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   85.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   85.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.5  [HIDCTL] knob1 = 4092 -> bri = 254
+   85.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   85.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   85.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   86.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   86.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   86.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   86.8  [HIDCTL] knob1 = 4091 -> bri = 254
+   86.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.1  [HIDCTL] knob1 = 4092 -> bri = 254
+   87.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   87.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   87.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   87.8  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   87.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   88.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   88.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.6  [HIDCTL] knob1 = 4092 -> bri = 254
+   88.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   88.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   89.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.1  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   89.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   89.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.6  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   89.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   89.9  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   90.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   90.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.4  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+   90.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.7  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   90.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   90.9  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   91.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.2  [HIDCTL] knob1 = 4091 -> bri = 254
+   91.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.5  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   91.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   91.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   91.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.0  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   92.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   92.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   92.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   92.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   92.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.0  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   93.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   93.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   93.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   93.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   93.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   94.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.3  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+   94.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.6  [HIDCTL] knob1 = 4091 -> bri = 254
+   94.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   94.8  [HIDCTL] knob1 = 4092 -> bri = 254
+   94.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   95.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.4  [HIDCTL] knob1 = 4091 -> bri = 254
+   95.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.6  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   95.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   95.9  [HIDCTL] knob1 = 4092 -> bri = 254
+   96.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.1  [HIDCTL] knob1 = 4091 -> bri = 254
+   96.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.4  [HIDCTL] knob1 = 4092 -> bri = 254
+   96.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   96.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   96.9  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+   97.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   97.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+   97.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.7  [HIDCTL] knob1 = 4091 -> bri = 254
+   97.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   97.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.0  [HIDCTL] knob1 = 4092 -> bri = 254
+   98.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.2  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   98.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.5  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+   98.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.7  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+   98.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   98.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.0  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+   99.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.3  [HIDCTL] knob1 = 4092 -> bri = 254
+   99.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.5  [HIDCTL] knob1 = 4091 -> bri = 254
+   99.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+   99.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+   99.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.0  [HIDCTL] knob1 = 4092 -> bri = 254
+  100.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.3  [HIDCTL] knob1 = 4091 -> bri = 254
+  100.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.6  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  100.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  100.8  [HIDCTL] knob1 = 4092 -> bri = 254
+  100.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.1  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  101.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  101.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.6  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  101.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  101.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  101.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  102.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.4  [HIDCTL] knob1 = 4091 -> bri = 254
+  102.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.6  [HIDCTL] knob1 = 4092 -> bri = 254
+  102.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  102.9  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  103.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.2  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  103.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.4  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+  103.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.7  [HIDCTL] knob1 = 4091 -> bri = 254
+  103.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  103.9  [HIDCTL] knob1 = 4091 -> bri = 254
+  104.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.2  [HIDCTL] knob1 = 4092 -> bri = 254
+  104.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.4  [HIDCTL] fader1 = 4087 -> seg0bri = 254
+  104.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.7  [HIDCTL] knob1 = 4091 -> bri = 254
+  104.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  104.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.0  [HIDCTL] knob1 = 4091 -> bri = 254
+  105.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.2  [HIDCTL] knob1 = 4092 -> bri = 254
+  105.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  105.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.7  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  105.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  105.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.0  [HIDCTL] knob1 = 4091 -> bri = 254
+  106.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  106.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  106.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  106.8  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  106.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.0  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+  107.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.3  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  107.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.6  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  107.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  107.8  [HIDCTL] knob1 = 4091 -> bri = 254
+  107.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.1  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  108.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.3  [HIDCTL] knob1 = 4091 -> bri = 254
+  108.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.6  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  108.6  [HIDCTL] bar1 -> downbeat
+  108.6  tempo: downbeat set - the beat sounding now is beat 1
+  108.6  tempo: downbeat set - the beat sounding now (was 3) is beat 1
+  108.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  108.8  [HIDCTL] knob1 = 4091 -> bri = 254
+  108.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.1  [HIDCTL] knob4 = 4092 -> effectPalette = 254
+  109.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.4  [HIDCTL] knob1 = 4091 -> bri = 254
+  109.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.6  [HIDCTL] knob1 = 4092 -> bri = 254
+  109.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  109.9  [HIDCTL] knob1 = 4091 -> bri = 254
+  110.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.1  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  110.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.4  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  110.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.7  [HIDCTL] knob1 = 4091 -> bri = 254
+  110.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  110.9  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  111.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.2  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  111.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.4  [HIDCTL] knob1 = 4091 -> bri = 254
+  111.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.7  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+  111.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  111.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.0  [HIDCTL] knob1 = 4092 -> bri = 254
+  112.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.2  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+  112.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.5  [HIDCTL] knob1 = 4091 -> bri = 254
+  112.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  112.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  112.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.0  [HIDCTL] knob1 = 4092 -> bri = 254
+  113.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.2  [HIDCTL] knob1 = 4092 -> bri = 254
+  113.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.5  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  113.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  113.8  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+  113.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.0  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  114.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.3  [HIDCTL] knob1 = 4092 -> bri = 254
+  114.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.5  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  114.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  114.8  [HIDCTL] knob1 = 4092 -> bri = 254
+  114.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.1  [HIDCTL] knob1 = 4091 -> bri = 254
+  115.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.4  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  115.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.6  [HIDCTL] knob1 = 4092 -> bri = 254
+  115.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  115.9  [HIDCTL] knob1 = 4092 -> bri = 254
+  116.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.2  [HIDCTL] knob1 = 4092 -> bri = 254
+  116.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.4  [HIDCTL] knob3 = 4092 -> effectIntensity = 254
+  116.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.7  [HIDCTL] knob2 = 4092 -> effectSpeed = 254
+  116.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  116.9  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  117.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.2  [HIDCTL] knob1 = 4091 -> bri = 254
+  117.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.5  [HIDCTL] knob1 = 4092 -> bri = 254
+  117.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.7  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  117.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  117.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.0  [HIDCTL] knob4 = 4091 -> effectPalette = 254
+  118.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.2  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  118.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.5  [HIDCTL] knob1 = 4092 -> bri = 254
+  118.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.8  [HIDCTL] fader1 = 4088 -> seg0bri = 254
+  118.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  118.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.0  [HIDCTL] knob1 = 4091 -> bri = 254
+  119.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.2  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.3  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.3  [HIDCTL] knob2 = 4091 -> effectSpeed = 254
+  119.4  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.5  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.5  [HIDCTL] knob1 = 4092 -> bri = 254
+  119.6  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.7  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.8  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  119.8  [HIDCTL] knob3 = 4091 -> effectIntensity = 254
+  119.9  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  120.0  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
+  120.1  [HIDCTL] OUT endpoint transfer status=0, 81 bytes
