@@ -64,6 +64,16 @@ bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wVa
 // -1 = not sent, 0 = completed, 4 = stalled.
 int8_t  hid_usb_class_status(void);
 
+// The configuration descriptor, exactly as the device sent it. This is the
+// authority on how many interfaces the device has and how many endpoints
+// each one has.
+const uint8_t* hid_usb_config_desc(uint8_t* len);
+
+// The reports that have come in, and the zero-length packets that have
+// followed them (the F1 sends one after every report).
+uint32_t hid_usb_report_count(void);
+uint32_t hid_usb_zlp_count(void);
+
 // The outcome of the last output report: 0 = completed, 4 = stalled, -1 =
 // none sent yet. And how many reports have gone through.
 int8_t  hid_usb_last_report_status(void);

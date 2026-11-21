@@ -157,6 +157,53 @@ class HidctlUsermod : public Usermod {
   // The AutoPlaylist's music slot, for the pad colours.
   uint8_t music_slot = 0;
 
+  // -------------------------------------------------------------------------
+  // The reports that arrive
+  // -------------------------------------------------------------------------
+  // The profile asks for one report ID, but a device may send others, and
+  // the F1 declares three input report IDs (0x01, 0xF0 and 0xD0). They are
+  // recorded here - one entry per report ID, with the latest bytes and how
+  // many have arrived - so a report that is being thrown away can still be
+  // seen.
+  static constexpr uint8_t HIDCTL_SEEN_REPORTS = 8;
+  static constexpr uint8_t HIDCTL_SEEN_BYTES = 32;
+  struct SeenReport {
+    uint8_t  id;
+    uint8_t  len;
+    uint32_t count;
+    uint8_t  bytes[HIDCTL_SEEN_BYTES];
+  };
+  SeenReport seen[HIDCTL_SEEN_REPORTS] = {};
+  uint8_t    seen_count = 0;
+
+  // The wheel byte's lowest and highest value ever seen. "It never moves"
+  // is then a number, not a belief.
+  uint8_t wheel_min = 0xFF;
+  uint8_t wheel_max = 0;
+  bool    wheel_moved = false;
+
+  // Record a report: one entry per report ID, keeping the latest bytes
+  // and counting how many have arrived.
+  void recordReport(const uint8_t* data, uint16_t len) {
+    if (!data || len == 0) return;
+    uint8_t id = data[0];
+    SeenReport* s = nullptr;
+    for (uint8_t i = 0; i < seen_count; i++) {
+      if (seen[i].id == id) { s = &seen[i]; break; }
+    }
+    if (!s) {
+      if (seen_count >= HIDCTL_SEEN_REPORTS) return;
+      s = &seen[seen_count++];
+      s->id = id;
+      s->len = 0;
+      s->count = 0;
+    }
+    s->count++;
+    s->len = (uint8_t)(len > 255 ? 255 : len);
+    uint16_t n = (len > HIDCTL_SEEN_BYTES) ? HIDCTL_SEEN_BYTES : len;
+    memcpy(s->bytes, data, n);
+  }
+
   // The preset that is active, tracked across the core's wiping of
   // currentPreset. The core sets currentPreset back to 0 as soon as
   // anything changes ("something changed, so we are no longer in the
@@ -1192,6 +1239,19 @@ class HidctlUsermod : public Usermod {
     if (!enabled || active_profile >= profile_count || !profiles) return;
     HidctlProfile& p = profiles[active_profile];
 
+    // Record what arrived, whatever it is: a report the profile does not
+    // expect is still a report, and a short one is still a report.
+    recordReport(data, len);
+
+    // The wheel's byte, in any report: if it ever moves, the encoder is
+    // being reported in something.
+    if (p.wheel_present && len > p.wheel_offset) {
+      uint8_t pos = data[p.wheel_offset];
+      if (pos < wheel_min) wheel_min = pos;
+      if (pos > wheel_max) wheel_max = pos;
+      if (pos != 0) wheel_moved = true;
+    }
+
     if (len < p.report_len) return;
     if (p.report_id && data[0] != p.report_id) {
       // A report we did not ask for. Say so: the device may send the
@@ -1459,6 +1519,30 @@ class HidctlUsermod : public Usermod {
     top["class_status"] = hid_usb_class_status();
     top["wheel"] = wheelSeen ? wheelLast : 0;
     top["wheel_seen"] = wheelSeen;
+    // The lowest and highest value the wheel byte has ever had, and
+    // whether it has ever been anything but zero.
+    top["wheel_min"] = wheel_min;
+    top["wheel_max"] = wheel_max;
+    top["wheel_moved"] = wheel_moved;
+    // The reports that came in, and the zero-length packets after them.
+    top["reports_in"] = hid_usb_report_count();
+    top["zlps"] = hid_usb_zlp_count();
+    // Every report that has arrived: one entry per report ID, with the
+    // latest bytes and how many have come in.
+    JsonArray rs = top.createNestedArray("reports");
+    for (uint8_t i = 0; i < seen_count; i++) {
+      JsonObject o = rs.createNestedObject();
+      o["id"] = seen[i].id;
+      o["len"] = seen[i].len;
+      o["count"] = seen[i].count;
+      char hex[2 * HIDCTL_SEEN_BYTES + 1];
+      int hl = 0;
+      hex[0] = '\0';
+      for (uint8_t k = 0; k < seen[i].len && k < HIDCTL_SEEN_BYTES && hl < (int)sizeof(hex) - 3; k++) {
+        hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", seen[i].bytes[k]);
+      }
+      o["bytes"] = hex;
+    }
     top["page"] = page;
     top["page_count"] = lastPage();
     // The preset that is active, tracked across the core's wiping of
@@ -1477,8 +1561,7 @@ class HidctlUsermod : public Usermod {
       top["readback"] = hex;
     }
     uint8_t out_len = 0;
-    const uint8_t* out = hid_usb_last_out_report(&out_len);
-    if (out_len) {
+    const uint8_t* out = hid_usb_last_out_report(&out_len);    if (out_len) {
       char hex[2 * HIDCTL_READBACK_BYTES + 1];
       int hl = 0;
       for (uint8_t i = 0; i < out_len && hl < (int)sizeof(hex) - 3; i++) {
@@ -1493,6 +1576,21 @@ class HidctlUsermod : public Usermod {
       o["id"] = probe_results[i].id;
       o["len"] = probe_results[i].len;
       o["status"] = probe_results[i].status;
+    }
+    // The configuration descriptor, as the device sent it. This is the
+    // authority on the device's layout - the parse above can only be as
+    // good as the walk it does.
+    uint8_t cfg_len = 0;
+    const uint8_t* cfg = hid_usb_config_desc(&cfg_len);
+    if (cfg_len) {
+      char hex[2 * HIDCTL_READBACK_BYTES + 1];
+      int hl = 0;
+      hex[0] = '\0';
+      for (uint8_t i = 0; i < cfg_len && hl < (int)sizeof(hex) - 3; i++) {
+        hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", cfg[i]);
+      }
+      top["config_desc"] = hex;
+      top["config_len"] = cfg_len;
     }
     // What the device says it has: every interface and its endpoints.
     uint8_t ifcount = 0;

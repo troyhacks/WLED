@@ -61,6 +61,17 @@ static volatile bool hid_ctrl_pending = false;
 // always available).
 static volatile int8_t  hid_last_report_status = -1;
 static volatile bool   hid_want_descriptors = false;
+
+// The configuration descriptor, as the device sent it. The parse walks it,
+// but the raw bytes settle every question about it - how many interfaces
+// there really are, and how many endpoints each one has.
+static uint8_t  hid_config_desc[256] = {};
+static uint16_t hid_config_desc_len = 0;
+
+// How many reports came in, and how many zero-length packets followed
+// them. The F1 sends a ZLP after every report.
+static volatile uint32_t hid_in_report_count = 0;
+static volatile uint32_t hid_in_zlp_count = 0;
 // The status of the last class request (-1 = none sent, 4 = stalled).
 static volatile int8_t  hid_class_status = -1;
 // When to send the class requests, and whether they have been sent.
@@ -186,7 +197,6 @@ void hid_usb_poll(void) {
   if (hid_want_descriptors && !hid_desc_in_flight) {
     hid_want_descriptors = false;
     hid_usb_get_descriptor(0x80, 0x0200, 256, 0);   // the configuration
-    hid_usb_get_descriptor(0x81, 0x2200, 256, 1);   // interface 1's reports
   }
 
   if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
@@ -246,29 +256,39 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* /*
 static void hid_in_transfer_cb(usb_transfer_t* xfer) {
   if (!xfer) return;
 
-  if (xfer->status == USB_TRANSFER_STATUS_COMPLETED && xfer->actual_num_bytes > 0) {
+  if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
     uint16_t n = (uint16_t)xfer->actual_num_bytes;
-    if (n > HIDCTL_MAX_REPORT) n = HIDCTL_MAX_REPORT;
-    // A report whose length differs from the last one is worth knowing
-    // about: the HID stacks pad every report up to the report's size, but
-    // the raw host sees what the device really sent - and the F1 may send
-    // its wheel's position in a short packet of its own.
-    {
-      static uint16_t lastLen = 0;
-      if (n != lastLen) {
-        lastLen = n;
-        HIDCTL_LOG("report length %u:", n);
-        for (uint16_t i = 0; i < n && i < 12; i++) {
-          HIDCTL_LOG(" %02X", xfer->data_buffer[i]);
+    if (n > 0) {
+      if (n > HIDCTL_MAX_REPORT) n = HIDCTL_MAX_REPORT;
+      hid_in_report_count++;
+      // A report whose length differs from the last one is worth knowing
+      // about: the HID stacks pad every report up to the report's size, but
+      // the raw host sees what the device really sent - and the F1 may send
+      // its wheel's position in a short packet of its own.
+      {
+        static uint16_t lastLen = 0;
+        if (n != lastLen) {
+          lastLen = n;
+          HIDCTL_LOG("report length %u:", n);
+          for (uint16_t i = 0; i < n && i < 12; i++) {
+            HIDCTL_LOG(" %02X", xfer->data_buffer[i]);
+          }
+          HIDCTL_LOG("");
         }
-        HIDCTL_LOG("");
       }
+      app_message_t m = {};
+      m.id = app_message_t::APP_HIDCTL_PACKET;
+      m.data.hidctl.len = n;
+      memcpy(m.data.hidctl.data, xfer->data_buffer, n);
+      if (app_queue) xQueueSend(app_queue, &m, 0);
+    } else {
+      // A ZERO-LENGTH PACKET is not an error. The device sends one to
+      // end a transfer it did not fill, and the F1 sends one after every
+      // report. Treating it as a failure tore the interrupt endpoint
+      // down - halt, flush, clear - fifty times a second, which is a
+      // hard reset of the device's endpoint state.
+      hid_in_zlp_count++;
     }
-    app_message_t m = {};
-    m.id = app_message_t::APP_HIDCTL_PACKET;
-    m.data.hidctl.len = n;
-    memcpy(m.data.hidctl.data, xfer->data_buffer, n);
-    if (app_queue) xQueueSend(app_queue, &m, 0);
     hid_in_error_recovery_needed = false;
   } else {
     // The pipe is HALTED after an error; hid_usb_poll() recovers it.
@@ -599,6 +619,17 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
 
 int8_t hid_usb_class_status(void) { return hid_class_status; }
 
+// The configuration descriptor, exactly as the device sent it.
+const uint8_t* hid_usb_config_desc(uint8_t* len) {
+  if (len) *len = (uint8_t)hid_config_desc_len;
+  return hid_config_desc;
+}
+
+// The reports that came in, and the zero-length packets that followed
+// them.
+uint32_t hid_usb_report_count(void) { return hid_in_report_count; }
+uint32_t hid_usb_zlp_count(void) { return hid_in_zlp_count; }
+
 const uint8_t* hid_usb_last_out_report(uint8_t* len) {
   if (len) *len = hid_last_out_len;
   return hid_last_out_report;
@@ -733,6 +764,10 @@ static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
     return;
   }
   const uint8_t* d = xfer->data_buffer + sizeof(usb_setup_packet_t);
+  if (hid_desc_desc_wvalue == 0x0200 && n <= (int)sizeof(hid_config_desc)) {
+    memcpy(hid_config_desc, d, n);
+    hid_config_desc_len = (uint16_t)n;
+  }
   HIDCTL_LOG("descriptor %04X: %d bytes", hid_desc_desc_wvalue, n);
   for (int i = 0; i < n; i += 16) {
     char line[96];
@@ -742,5 +777,10 @@ static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
       len += snprintf(line + len, sizeof(line) - len, "%02X ", d[j]);
     }
     USER_PRINTF("%s\n", line);
+  }
+  // The report descriptor comes after the configuration: only one control
+  // transfer can be in flight at a time, so it is asked for from here.
+  if (hid_desc_desc_wvalue == 0x0200) {
+    hid_usb_get_descriptor(0x81, 0x2200, 256, 1);
   }
 }
