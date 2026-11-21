@@ -1475,6 +1475,9 @@ class HidctlUsermod : public Usermod {
     bool demo = h["demo"] | false;
     setDemo(demo);
     if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
+    // Send the class requests again - the vendor request and SET_IDLE that
+    // a PC's HID stack sends and this host did not.
+    if (h["classreq"]) hid_usb_request_class();
     if (h.containsKey("page")) {
       int pg = h["page"] | 0;
       if (pg >= 1 && pg <= (int)lastPage()) {
@@ -1517,6 +1520,19 @@ class HidctlUsermod : public Usermod {
     top["music_slot"] = music_slot;
     top["demo"] = demoActive;
     top["class_status"] = hid_usb_class_status();
+    top["class_stage"] = hid_usb_class_stage();
+    {
+      uint8_t cl = 0;
+      const uint8_t* cd = hid_usb_class_data(&cl);
+      if (cl) {
+        char hex[2 * 8 + 1];
+        int hl = 0;
+        for (uint8_t i = 0; i < cl && hl < (int)sizeof(hex) - 3; i++) {
+          hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", cd[i]);
+        }
+        top["class_data"] = hex;
+      }
+    }
     top["wheel"] = wheelSeen ? wheelLast : 0;
     top["wheel_seen"] = wheelSeen;
     // The lowest and highest value the wheel byte has ever had, and

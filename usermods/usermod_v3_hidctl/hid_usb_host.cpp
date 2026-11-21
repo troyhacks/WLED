@@ -74,6 +74,16 @@ static volatile uint32_t hid_in_report_count = 0;
 static volatile uint32_t hid_in_zlp_count = 0;
 // The status of the last class request (-1 = none sent, 4 = stalled).
 static volatile int8_t  hid_class_status = -1;
+
+// The answer to the last class request, if it brought one back.
+static uint8_t hid_class_data[8] = {};
+static uint8_t hid_class_data_len = 0;
+
+// The stage of the class-request sequence: 0 = not started, 1 = the vendor
+// request is due, 2 = SET_IDLE is due, 3 = done.
+static uint8_t hid_class_stage = 0;
+static bool    hid_class_in_flight = false;
+static bool    hid_class_wanted = false;
 // When to send the class requests, and whether they have been sent.
 static uint32_t        hid_class_requests_at = 0;
 static bool            hid_class_requests_done = false;
@@ -117,12 +127,23 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer);
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer);
 static void hid_desc_transfer_cb(usb_transfer_t* xfer);
 static void hid_class_transfer_cb(usb_transfer_t* xfer) {
+  hid_class_in_flight = false;
   if (xfer) {
     hid_class_status = (int8_t)xfer->status;
+    // Whatever came back with it (a vendor request answers with a byte).
+    int n = (int)xfer->actual_num_bytes - (int)sizeof(usb_setup_packet_t);
+    if (n > 0) {
+      if (n > (int)sizeof(hid_class_data)) n = (int)sizeof(hid_class_data);
+      memcpy(hid_class_data, xfer->data_buffer + sizeof(usb_setup_packet_t), n);
+      hid_class_data_len = (uint8_t)n;
+    }
     HIDCTL_LOG("class request answered: status=%d", (int)xfer->status);
   }
 }
 static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue);
+static bool hid_send_class_request_ex(uint8_t bmRequestType, uint8_t bRequest,
+                                      uint16_t wValue, uint16_t wIndex,
+                                      uint16_t wLength);
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
@@ -166,6 +187,18 @@ void hid_usb_init(void) {
   hid_ctrl_xfer->callback = hid_ctrl_transfer_cb;
   hid_ctrl_xfer->context = nullptr;
 
+  // The class request transfer (setup packet plus the bytes that come
+  // back). Without this there is no buffer to send a class request in -
+  // which is why SET_IDLE was never sent at all.
+  err = usb_host_transfer_alloc(8 + 8, 0, &hid_class_xfer);
+  if (err != ESP_OK) {
+    HIDCTL_LOG("init: usb_host_transfer_alloc(class) failed: %s", esp_err_to_name(err));
+    hid_class_xfer = nullptr;
+  } else {
+    hid_class_xfer->callback = hid_class_transfer_cb;
+    hid_class_xfer->context = nullptr;
+  }
+
   // The report descriptor transfer (setup packet + up to 512 bytes).
   err = usb_host_transfer_alloc(8 + 512, 0, &hid_desc_xfer);
   if (err != ESP_OK) {
@@ -197,6 +230,18 @@ void hid_usb_poll(void) {
   if (hid_want_descriptors && !hid_desc_in_flight) {
     hid_want_descriptors = false;
     hid_usb_get_descriptor(0x80, 0x0200, 256, 0);   // the configuration
+  }
+
+  // The two requests a PC's HID stack sends to this device and we did not.
+  // They are sent in the order the capture shows, and the vendor request
+  // comes first because the F1 stalls SET_IDLE - and a stalled control
+  // transfer leaves the control pipe unusable, so nothing may follow it.
+  if (hid_class_wanted && hid_class_stage == 1 && !hid_desc_in_flight && !hid_class_in_flight) {
+    hid_class_stage = 2;
+    hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
+  } else if (hid_class_wanted && hid_class_stage == 2 && !hid_class_in_flight) {
+    hid_class_stage = 3;
+    hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
   }
 
   if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
@@ -482,6 +527,10 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   // The descriptors of the whole configuration and of the other interface,
   // so what the device really offers can be seen.
   hid_want_descriptors = true;
+  // The class requests come after the descriptors, in the order a PC's HID
+  // stack sends them.
+  hid_class_stage = 1;
+  hid_class_wanted = true;
 
   // The class requests a HID host sends once it owns the interface, a
   // moment later - the device is not ready the instant the interface is
@@ -619,6 +668,24 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
 
 int8_t hid_usb_class_status(void) { return hid_class_status; }
 
+// The answer to the last class request, if it brought one back.
+const uint8_t* hid_usb_class_data(uint8_t* len) {
+  if (len) *len = hid_class_data_len;
+  return hid_class_data;
+}
+
+// The stage of the class-request sequence: 0 = not started, 1 = the vendor
+// request due, 2 = SET_IDLE due, 3 = done.
+uint8_t hid_usb_class_stage(void) { return hid_class_stage; }
+
+// Ask for the class requests again - they can be sent by hand from the
+// web API, so they can be tried again without a rebuild.
+void hid_usb_request_class(void) {
+  hid_class_stage = 1;
+  hid_class_wanted = true;
+  hid_class_data_len = 0;
+}
+
 // The configuration descriptor, exactly as the device sent it.
 const uint8_t* hid_usb_config_desc(uint8_t* len) {
   if (len) *len = (uint8_t)hid_config_desc_len;
@@ -688,25 +755,40 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
 // claims. A device can wait for them - the F1 does not report its wheel's
 // position until it has been told the host is there.
 static bool hid_send_class_request(uint8_t bRequest, uint16_t wValue) {
+  return hid_send_class_request_ex(0x21, bRequest, wValue, hid_iface, 0);
+}
+
+// A class request, with every field of the setup packet spelled out.
+// `bmRequestType` 0x21 is Host-to-device | Class | Interface; 0xC0 is
+// Device-to-host | Class | Device. `wLength` bytes come back for a
+// device-to-host request.
+static bool hid_send_class_request_ex(uint8_t bmRequestType, uint8_t bRequest,
+                                      uint16_t wValue, uint16_t wIndex,
+                                      uint16_t wLength) {
   if (!hid_dev_hdl || !hid_class_xfer) return false;
+  if (hid_class_in_flight) return false;
 
   usb_setup_packet_t setup = {};
-  setup.bmRequestType = 0x21;   // Host-to-device | Class | Interface
+  setup.bmRequestType = bmRequestType;
   setup.bRequest      = bRequest;
   setup.wValue        = wValue;
-  setup.wIndex        = hid_iface;
-  setup.wLength       = 0;
+  setup.wIndex        = wIndex;
+  setup.wLength       = wLength;
 
   memcpy(hid_class_xfer->data_buffer, &setup, sizeof(setup));
-  hid_class_xfer->num_bytes = sizeof(setup);
+  // The transfer holds the setup packet AND the data that comes back.
+  hid_class_xfer->num_bytes = sizeof(setup) + wLength;
   hid_class_xfer->device_handle = hid_dev_hdl;
 
+  hid_class_in_flight = true;
   esp_err_t err = usb_host_transfer_submit_control(hid_client, hid_class_xfer);
   if (err != ESP_OK) {
+    hid_class_in_flight = false;
     HIDCTL_LOG("class request %02X submit failed: %s", bRequest, esp_err_to_name(err));
     return false;
   }
-  HIDCTL_LOG("class request %02X (wValue %u) sent", bRequest, wValue);
+  HIDCTL_LOG("class request %02X (type %02X wValue %04X wIndex %u len %u) sent",
+             bRequest, bmRequestType, wValue, wIndex, wLength);
   return true;
 }
 

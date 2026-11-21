@@ -64,6 +64,17 @@ bool hid_usb_send_setup_to(uint8_t bmRequestType, uint8_t bRequest, uint16_t wVa
 // -1 = not sent, 0 = completed, 4 = stalled.
 int8_t  hid_usb_class_status(void);
 
+// The answer to the last class request, if it brought one back.
+const uint8_t* hid_usb_class_data(uint8_t* len);
+
+// The stage of the class-request sequence: 0 = not started, 1 = the vendor
+// request due, 2 = SET_IDLE due, 3 = done.
+uint8_t hid_usb_class_stage(void);
+
+// Ask for the class requests again, so they can be tried without a
+// rebuild.
+void hid_usb_request_class(void);
+
 // The configuration descriptor, exactly as the device sent it. This is the
 // authority on how many interfaces the device has and how many endpoints
 // each one has.
