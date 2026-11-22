@@ -558,8 +558,18 @@ void hid_usb_poll(void) {
       esp_err_t err = usb_host_transfer_submit(x);
       if (err != ESP_OK) {
         hid_in_resubmit_needed = true;
-        hid_in_error_recovery_needed = true;
-        HIDCTL_DEBUG("IN re-submit failed: %s", esp_err_to_name(err));
+        if (err == ESP_ERR_NOT_FINISHED) {
+          // The transfer object is still marked in flight: the driver
+          // refuses a second submit until the first one has reported.
+          // That is not a fault and it needs no recovery - the callback
+          // will come (or not) and the poll will try again.
+          HIDCTL_DEBUG("IN re-submit: the transfer is still in flight");
+        } else {
+          hid_in_error_recovery_needed = true;
+          // This one is worth a line: a submit that is refused means the
+          // pipe is stuck, and the recovery path will keep trying.
+          HIDCTL_LOG("IN re-submit failed: %s", esp_err_to_name(err));
+        }
       }
     }
   }
@@ -637,8 +647,10 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     // and a zero-length packet is a short one - as (received + mps - 2),
     // so an idle zero-length packet arrives as mps-2 bytes. The deck's
     // reports are exactly one packet long, so anything shorter than the
-    // maximum packet is not a report.
-    if (hid_in_exact_mps && n != hid_in_mps) {
+    // maximum packet is not a report. (Only when the transfer asks for
+    // one packet: asking for more changes the arithmetic, and the report
+    // comes back with a length that is not the packet's.)
+    if (hid_in_exact_mps && !hid_in_xfer_len && n != hid_in_mps) {
       hid_in_zlp_count++;
       hid_log_event(nullptr, 0, true);
       // A zero-length packet is the device saying it has nothing to say.
