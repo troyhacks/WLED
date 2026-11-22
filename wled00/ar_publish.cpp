@@ -483,6 +483,24 @@ static void arApplyHandoff(ArBeatSource* b) {
 // the numbers they publish, and it asks for them in the order they were
 // written: the Pioneer first, then the Denon, then Ableton.
 // ---------------------------------------------------------------------------
+// The beat a MoonModules sender decided, as the AudioReactive usermod received
+// it. The same volatile-globals handover the deck usermods use.
+static volatile float    arNetBeatBpm      = 0.0f;
+static volatile uint8_t  arNetBeatInBar    = 0;
+static volatile float    arNetBeatProgress = 0.0f;
+static volatile uint32_t arNetBeatElapsed  = 0;
+static volatile uint32_t arNetBeatAtMs     = 0;
+static constexpr uint32_t AR_NET_BEAT_STALE_MS = 2000;   // a sender silent this long has stopped
+static inline uint32_t arNetNowMs() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }   // the native timer, as the handoff uses
+
+void arPublishNetworkBeat(float bpm, uint8_t beatInBar, float beatProgress, uint32_t beatsElapsed) {
+  arNetBeatBpm      = bpm;
+  arNetBeatInBar    = beatInBar;
+  arNetBeatProgress = beatProgress;
+  arNetBeatElapsed  = beatsElapsed;
+  arNetBeatAtMs     = arNetNowMs();
+}
+
 bool arGetSourceBeat(ArSourceBeat* d) {
   if (!d) return false;
   memset(d, 0, sizeof(*d));
@@ -562,6 +580,28 @@ bool arGetSourceBeat(ArSourceBeat* d) {
     }
   }
   #endif
+
+  // Another board's beat, received over the network: after the decks and
+  // Ableton, so a deck this board hears itself wins. Between packets the phase
+  // runs on at the received tempo.
+  {
+    const uint32_t at  = arNetBeatAtMs;
+    const uint32_t now = arNetNowMs();
+    const float    bpm = arNetBeatBpm;
+    const uint8_t  bar = arNetBeatInBar;
+    if (at != 0u && (now - at) < AR_NET_BEAT_STALE_MS && bpm > 0.0f) {
+      const float    beats = arNetBeatProgress + (float)(now - at) * bpm / 60000.0f;
+      const uint32_t whole = (uint32_t)beats;
+      d->bpm          = bpm;
+      d->beatProgress = beats - (float)whole;
+      d->beatsElapsed = arNetBeatElapsed + whole;
+      d->beatInBar    = bar ? (uint8_t)(((bar - 1u + whole) % 4u) + 1u) : 0u;
+      d->barsElapsed  = d->beatsElapsed / 4u;
+      d->connected    = 1;
+      d->sourceId     = AR_SRC_NETWORK;
+      return true;
+    }
+  }
 
   return false;
 }

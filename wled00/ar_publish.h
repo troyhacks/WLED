@@ -229,7 +229,8 @@ enum ArSourceId : uint8_t {
   AR_SRC_NONE      = 0,
   AR_SRC_PROLINK   = 1,   // a Pioneer deck, over Pro DJ Link
   AR_SRC_STAGELINQ = 2,   // a Denon DJ unit, over StageLinq
-  AR_SRC_ABLETON   = 3    // Ableton Live, over Link
+  AR_SRC_ABLETON   = 3,   // Ableton Live, over Link
+  AR_SRC_NETWORK   = 4    // another board's beat, received in the MoonModules sync format
 };
 
 // The MARK's identity - the namespace each kind of mark lives in.
@@ -264,6 +265,13 @@ struct ArSourceBeat {
 // ONE deck drives at a time: the first one that is connected and has a
 // beat wins, and the other is ignored until this one goes away.
 bool arGetSourceBeat(ArSourceBeat* d);
+
+// A beat received over the network, in the MoonModules audio-sync format: the
+// beat another board decided, from its deck, Ableton or its estimator. It is a
+// source after the decks and Ableton, so a deck this board hears itself still
+// wins; it counts while packets keep coming, and its phase runs on at its
+// tempo between them.
+void arPublishNetworkBeat(float bpm, uint8_t beatInBar, float beatProgress, uint32_t beatsElapsed);
 
 // The BEAT SOURCE: the board's one answer to "what is the beat?"
 //
