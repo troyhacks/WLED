@@ -2699,6 +2699,10 @@ class HidctlUsermod : public Usermod {
     if (h["writedefaults"]) {
       writeDefaultProfiles();
     }
+    // How many bytes the interrupt IN transfer asks for, and a forced
+    // re-arm of the IN pipe. Both are diagnostics for the deck's input.
+    if (h.containsKey("inlen")) hid_usb_set_in_xfer_len((uint16_t)(h["inlen"] | 0));
+    if (h["inreset"]) hid_usb_reset_in_pipe();
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
     // diagnostic.
@@ -2817,6 +2821,7 @@ class HidctlUsermod : public Usermod {
     top["out_via_control"] = hid_usb_get_out_via_control() ? 1 : 0;
     top["out_drop_leading"] = hid_usb_get_out_drop_leading() ? 1 : 0;
     top["out_zlp"] = hid_usb_get_out_zlp() ? 1 : 0;
+    top["in_xfer_len"] = hid_usb_get_in_xfer_len();
     top["out_shift"] = hid_usb_get_out_shift() ? 1 : 0;
     top["out_cap"] = hid_usb_get_out_cap();
     top["out_gap"] = opendeck_out_gap;

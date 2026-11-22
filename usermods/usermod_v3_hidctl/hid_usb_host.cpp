@@ -234,6 +234,18 @@ static volatile uint8_t hid_link_speed = 0;    // 0 = unknown, 1 = full, 2 = hig
 // long: the OpenDeck-family decks. A shorter packet is then a zero-length
 // one, whatever the driver says its length is.
 static bool hid_in_exact_mps = false;
+// How many bytes the interrupt IN transfer asks for. It has to be a
+// whole number of maximum packets; asking for more than one leaves the
+// device's shorter packet to end the transfer.
+static uint16_t hid_in_xfer_len = 0;       // 0 = one maximum packet
+// Force the IN pipe to be torn down and armed again. A channel that
+// came up in the wrong state - a data toggle out of step, say - never
+// delivers, and this is the only way to make the host re-arm it.
+static bool hid_in_force_reset = false;
+
+void hid_usb_set_in_xfer_len(uint16_t n) { hid_in_xfer_len = n; }
+uint16_t hid_usb_get_in_xfer_len(void) { return hid_in_xfer_len; }
+void hid_usb_reset_in_pipe(void) { hid_in_force_reset = true; }
 
 
 static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
@@ -499,20 +511,26 @@ void hid_usb_poll(void) {
     }
   }
 
-  if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
+  // The IN transfer is re-armed when it completes, and when it is told
+  // to be torn down and armed again - a forced reset has to work even
+  // when the transfer has never completed at all.
+  if ((hid_in_resubmit_needed || hid_in_force_reset) && hid_dev_hdl && hid_in_xfer) {
     hid_in_resubmit_needed = false;
     usb_transfer_t* x = hid_in_xfer;
     if (x->device_handle) {
       // Only reset the pipe after an error: on a clean completion the data
       // toggle has advanced and clearing the endpoint would desync us from
       // the device (every following packet would be dropped).
-      if (hid_in_error_recovery_needed) {
+      if (hid_in_error_recovery_needed || hid_in_force_reset) {
         usb_host_endpoint_halt(x->device_handle, x->bEndpointAddress);
         usb_host_endpoint_flush(x->device_handle, x->bEndpointAddress);
         usb_host_endpoint_clear(x->device_handle, x->bEndpointAddress);
         hid_in_error_recovery_needed = false;
+        hid_in_force_reset = false;
+        HIDCTL_LOG("IN pipe: torn down and armed again");
       }
-      x->num_bytes = hid_in_mps ? hid_in_mps : HIDCTL_MAX_REPORT;
+      x->num_bytes = hid_in_xfer_len ? hid_in_xfer_len
+                                     : (hid_in_mps ? hid_in_mps : HIDCTL_MAX_REPORT);
       esp_err_t err = usb_host_transfer_submit(x);
       if (err != ESP_OK) {
         hid_in_resubmit_needed = true;
