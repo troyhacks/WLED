@@ -53,6 +53,7 @@
 #include "hidctl_default_profile.h"
 #include "hid_usb_host.h"
 #include "hid_dwc_probe.h"
+#include <LovyanGFX.hpp>
 // The OpenDeck-family protocol: the ASCII "CRT" commands and the input
 // report's message IDs. A port of `ambiso/mirajazz` (the crate the
 // OpenDeck plugin links against) and `ambiso/opendeck-akp05`.
@@ -2021,32 +2022,33 @@ class HidctlUsermod : public Usermod {
       // The number on the key is the slot it holds, so the deck reads as
       // a bank of presets.
       pic.number = (uint16_t)slot_no;
+      // Most of the device's key pictures are read upside down. The
+      // bottom row is the other way round, so those are sent as they are.
       opendeck_queue_count++;
     }
-    // The wide touch strip. On a deck whose strip is ONE screen it is a
-    // single picture across all of it; on the others it is four zones,
-    // one per encoder, and they are the reference's "dial" images.
-    const bool strip_one = (active_profile < profile_count && profiles)
-                           && profiles[active_profile].od_strip_one;
-    if (strip_one) {
+    // The wide touch strip. The reference sends the four encoder tiles
+    // (176 by 112) to the slots 1..4, and for a deck whose strip is one
+    // screen it also sends a picture across the whole strip ("BGPIC").
+    // Both go out and the deck decides which one it shows.
+    for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
+      const uint8_t hue = i * 36;
+      OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
+      pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
+      pic.colour[0] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
+      pic.colour[1] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
+      pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
+      pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
+      pic.number = (uint16_t)(i + 1);         // the encoder's number
+      opendeck_queue_count++;
+    }
+    if ((active_profile < profile_count && profiles) &&
+        profiles[active_profile].od_strip_one) {
       OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
       pic.slot = 0;                          // slot 0 is the whole strip
       pic.colour[0] = pic.colour[1] = pic.colour[2] = 0;
       pic.w = Opendeck::STRIP_W; pic.h = Opendeck::STRIP_H;
       pic.number = 0;
       opendeck_queue_count++;
-    } else {
-      for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
-        const uint8_t hue = i * 36;
-        OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
-        pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
-        pic.colour[0] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
-        pic.colour[1] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
-        pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
-        pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
-        pic.number = (uint16_t)(i + 1);         // the encoder's number
-        opendeck_queue_count++;
-      }
     }
     opendeck_queue_pos = 0;
     opendeck_jpeg_len = 0;
@@ -2054,89 +2056,54 @@ class HidctlUsermod : public Usermod {
     opendeck_stage = OPENDECK_STAGE_ENCODE;
   }
 
-  // Draw a number centred on a picture. The picture is in the encoder's
-  // order (blue first), so the colour is given that way too.
-  void opendeckDrawNumber(uint8_t* bgr, uint16_t w, uint16_t h, uint16_t number,
-                          uint8_t blue, uint8_t green, uint8_t red) {
-    char text[4];
-    snprintf(text, sizeof(text), "%u", number);
-    const uint8_t n = (uint8_t)strlen(text);
-    if (!n) return;
-    // Six columns per digit (five plus a gap), seven rows.
-    const uint16_t units_w = (uint16_t)(n * 6 - 1);
-    uint16_t scale = (uint16_t)(w / (units_w + 1));
-    uint16_t vscale = (uint16_t)(h / 8);
-    if (vscale < scale) scale = vscale;
-    if (!scale) return;
-    const uint16_t glyph_w = (uint16_t)(5 * scale);
-    const uint16_t glyph_h = (uint16_t)(7 * scale);
-    const uint16_t gap = scale;
-    const uint16_t text_w = (uint16_t)(n * glyph_w + (n - 1) * gap);
-    const uint16_t x0 = (uint16_t)((w > text_w) ? (w - text_w) / 2 : 0);
-    const uint16_t y0 = (uint16_t)((h > glyph_h) ? (h - glyph_h) / 2 : 0);
+  // The pictures are drawn with the same library the display uses, so the
+  // deck's screens carry the same font as the display - and the sprite's
+  // memory is in PSRAM, because the internal heap on this board is nearly
+  // full.
+  LGFX_Sprite opendeckSprite;
+  bool opendeckSpriteReady = false;
 
-    for (uint8_t d = 0; d < n; d++) {
-      const uint8_t digit = (uint8_t)(text[d] - '0');
-      if (digit > 9) continue;
-      for (uint8_t row = 0; row < 7; row++) {
-        const uint8_t bits = Opendeck::DIGIT_FONT[digit][row];
-        for (uint8_t col = 0; col < 5; col++) {
-          if (!(bits & (0x10 >> col))) continue;
-          const uint16_t px = (uint16_t)(x0 + d * (glyph_w + gap) + col * scale);
-          const uint16_t py = (uint16_t)(y0 + row * scale);
-          for (uint16_t sy = 0; sy < scale; sy++) {
-            uint8_t* p = bgr + ((size_t)(py + sy) * w + px) * 3;
-            for (uint16_t sx = 0; sx < scale; sx++) {
-              p[0] = blue; p[1] = green; p[2] = red;
-              p += 3;
-            }
-          }
-        }
-      }
+  bool opendeckSpriteBegin(uint16_t w, uint16_t h) {
+    if (!opendeckSpriteReady) {
+      opendeckSprite.setColorDepth(32);
+      opendeckSpriteReady = true;
     }
+    if (opendeckSprite.width() != w || opendeckSprite.height() != h) {
+      // PSRAM before the allocation, not after: the flag is read when the
+      // sprite is created. The internal heap on this board is nearly full,
+      // and a picture that does not fit there is a crash rather than a
+      // picture.
+      opendeckSprite.setPsram(true);
+      if (!opendeckSprite.createSprite(w, h) || !opendeckSprite.width()) {
+        USER_PRINTLN("[HIDCTL] the picture sprite would not start");
+        return false;
+      }
+      opendeckSprite.setFont(&fonts::DejaVu72);
+    }
+    if (!opendeckSprite.width()) {
+      USER_PRINTLN("[HIDCTL] the picture sprite would not start");
+      return false;
+    }
+    return true;
   }
 
-  // Draw a number centred on a rectangle of a picture, with the rectangle
-  // at (x0, y0) and the given size. The wide strip's tiles use it.
-  void opendeckDrawNumberIn(uint8_t* bgr, uint16_t w, uint16_t h,
-                            uint16_t x0, uint16_t y0, uint16_t rw, uint16_t rh,
-                            uint16_t number, uint8_t blue, uint8_t green, uint8_t red) {
-    char text[4];
-    snprintf(text, sizeof(text), "%u", number);
-    const uint8_t n = (uint8_t)strlen(text);
-    if (!n) return;
-    const uint16_t units_w = (uint16_t)(n * 6 - 1);
-    uint16_t scale = (uint16_t)(rw / (units_w + 1));
-    uint16_t vscale = (uint16_t)(rh / 8);
-    if (vscale < scale) scale = vscale;
-    if (!scale) return;
-    const uint16_t glyph_w = (uint16_t)(5 * scale);
-    const uint16_t glyph_h = (uint16_t)(7 * scale);
-    const uint16_t gap = scale;
-    const uint16_t text_w = (uint16_t)(n * glyph_w + (n - 1) * gap);
-    const uint16_t tx = (uint16_t)(x0 + (rw > text_w ? (rw - text_w) / 2 : 0));
-    const uint16_t ty = (uint16_t)(y0 + (rh > glyph_h ? (rh - glyph_h) / 2 : 0));
+  // Fill a rectangle of the sprite with a colour and put a number in the
+  // middle of it. The colour is in the encoder's order: blue first.
+  void opendeckSpriteTile(uint16_t x0, uint16_t y0, uint16_t rw, uint16_t rh,
+                          const char* text, uint8_t blue, uint8_t green, uint8_t red) {
+    opendeckSprite.fillRect(x0, y0, rw, rh, lgfx::color565(red, green, blue));
+    if (!text || !text[0]) return;
+    opendeckSprite.setTextColor(0xFFFF);
+    const int tw = opendeckSprite.textWidth(text);
+    const int th = opendeckSprite.fontHeight();
+    opendeckSprite.drawString(text, x0 + (int)((rw > tw) ? (rw - tw) / 2 : 0),
+                                    y0 + (int)((rh > th) ? (rh - th) / 2 : 0));
+  }
 
-    for (uint8_t d = 0; d < n; d++) {
-      const uint8_t digit = (uint8_t)(text[d] - '0');
-      if (digit > 9) continue;
-      for (uint8_t row = 0; row < 7; row++) {
-        const uint8_t bits = Opendeck::DIGIT_FONT[digit][row];
-        for (uint8_t col = 0; col < 5; col++) {
-          if (!(bits & (0x10 >> col))) continue;
-          const uint16_t px = (uint16_t)(tx + d * (glyph_w + gap) + col * scale);
-          const uint16_t py = (uint16_t)(ty + row * scale);
-          if (px + scale > w || py + scale > h) continue;
-          for (uint16_t sy = 0; sy < scale; sy++) {
-            uint8_t* p = bgr + ((size_t)(py + sy) * w + px) * 3;
-            for (uint16_t sx = 0; sx < scale; sx++) {
-              p[0] = blue; p[1] = green; p[2] = red;
-              p += 3;
-            }
-          }
-        }
-      }
-    }
+  // The picture, in the order the encoder reads it: the first byte of a
+  // pixel is the blue one.
+  void opendeckSpriteToBuffer(uint8_t* bgr, uint16_t w, uint16_t h) {
+    opendeckSprite.readRectRGB(0, 0, w, h, bgr);
   }
 
   // The wide touch strip is ONE screen: 800 by 128 pixels, cut into a
@@ -2155,14 +2122,18 @@ class HidctlUsermod : public Usermod {
     if (!jpeg) { free(buf); return false; }
 
     // Black, then a coloured tile per encoder with its number on it.
-    memset(buf, 0, pic_len);
+    if (!opendeckSpriteBegin(w, h)) { free(buf); free(jpeg); return false; }
+    opendeckSprite.fillScreen(0x0000);
     // The page number takes the whole strip for a moment, the way the
     // F1's two-digit display does when it is asked to show the page.
     if (showPageUntil > millis()) {
       opendeck_page_until = showPageUntil;
-      opendeckDrawNumberIn(buf, w, h, 0, 0, w, h, page, 0xFF, 0xFF, 0xFF);
+      char pagetext[8];
+      snprintf(pagetext, sizeof(pagetext), "%u", page);
+      opendeckSpriteTile(0, 0, w, h, pagetext, 0, 0, 0);
+      opendeckSpriteToBuffer(buf, w, h);
       size_t jpeg_len = 0;
-      const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 16384, jpeg_len);
+      const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 32768, jpeg_len);
       free(buf);
       if (!ok) { free(jpeg); return false; }
       if (opendeck_jpeg) free(opendeck_jpeg);
@@ -2177,32 +2148,18 @@ class HidctlUsermod : public Usermod {
       const uint8_t g = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
       const uint8_t r = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
       const uint16_t x0 = (uint16_t)(i * Opendeck::STRIP_TILE_W);
-      for (uint16_t y = 0; y < h; y++) {
-        uint8_t* p = buf + ((size_t)y * w + x0) * 3;
-        for (uint16_t x = 0; x < Opendeck::STRIP_TILE_W; x++) {
-          p[0] = b; p[1] = g; p[2] = r;
-          p += 3;
-        }
-      }
-      opendeckDrawNumberIn(buf, w, h, x0, 0, Opendeck::STRIP_TILE_W, h,
-                            (uint16_t)(i + 1), 0xFF, 0xFF, 0xFF);
+      char text[8];
+      snprintf(text, sizeof(text), "%u", (unsigned)(i + 1));
       // The beat that is sounding lights its tile, the way the F1's lower
       // buttons do.
-      if (currentBeat >= 1 && currentBeat <= Opendeck::STRIP_TILES &&
-          currentBeat == (int)i + 1) {
-        opendeckDrawNumberIn(buf, w, h, x0, 0, Opendeck::STRIP_TILE_W, h,
-                              (uint16_t)(i + 1), 0xFF, 0xFF, 0xFF);
-        for (uint16_t y = 0; y < h; y++) {
-          uint8_t* p = buf + ((size_t)y * w + x0) * 3;
-          for (uint16_t x = 0; x < Opendeck::STRIP_TILE_W; x++) {
-            p[0] = (uint8_t)((uint16_t)p[0] + 0x60);
-            p[1] = (uint8_t)((uint16_t)p[1] + 0x60);
-            p[2] = (uint8_t)((uint16_t)p[2] + 0x60);
-            p += 3;
-          }
-        }
-      }
+      const bool beat = (currentBeat >= 1 && currentBeat <= Opendeck::STRIP_TILES &&
+                         currentBeat == (int)i + 1);
+      opendeckSpriteTile(x0, 0, Opendeck::STRIP_TILE_W, h, text,
+                         beat ? (uint8_t)(b + 0x60) : b,
+                         beat ? (uint8_t)(g + 0x60) : g,
+                         beat ? (uint8_t)(r + 0x60) : r);
     }
+    opendeckSpriteToBuffer(buf, w, h);
 
     // The device reads its pictures upside down.
     {
@@ -2242,38 +2199,57 @@ class HidctlUsermod : public Usermod {
 
     uint8_t* buf = opendeckAlloc(pic_len);
     if (!buf) return false;
-    uint8_t* jpeg = opendeckAlloc(pic_len + 8192);
+    uint8_t* jpeg = opendeckAlloc(pic_len + 32768);
     if (!jpeg) { free(buf); return false; }
 
-    uint8_t* px = buf;
-    for (size_t n = 0; n < pic_len; n += 3) {
-      *px++ = pic.colour[0]; *px++ = pic.colour[1]; *px++ = pic.colour[2];
-    }
-    // The slot number on the picture: a row of coloured squares is no
-    // use as a preset bank.
-    if (pic.number) {
-      opendeckDrawNumber(buf, w, h, pic.number, 0xFF, 0xFF, 0xFF);
-    }
-    // The device reads its pictures upside down: a 180 degree turn, so the
-    // rows and the columns both go.
-    const size_t row = (size_t)w * 3;
-    uint8_t* tmp = opendeckAlloc(row);
-    if (tmp) {
-      for (uint16_t y = 0; y < h; y++) {
-        uint8_t* src = buf + (size_t)(h - 1 - y) * row;
-        uint8_t* dst = buf + (size_t)y * row;
-        memcpy(tmp, src, row);
-        for (uint16_t x = 0; x < w; x++) {
-          memcpy(dst + (size_t)x * 3, tmp + (size_t)(w - 1 - x) * 3, 3);
+    // The picture is drawn with the display's own library and font: the
+    // slot number on it, in the key's colour.
+    if (!opendeckSpriteBegin(w, h)) { free(buf); free(jpeg); return false; }
+    char text[8];
+    snprintf(text, sizeof(text), "%u", pic.number);
+    opendeckSpriteTile(0, 0, w, h, text, pic.colour[0], pic.colour[1], pic.colour[2]);
+    opendeckSpriteToBuffer(buf, w, h);
+
+    // The device reads its pictures upside down, so the picture is turned
+    // 180 degrees: the rows and the columns both go.
+    //
+    // The turn has to be done a pair of rows at a time. Done row by row
+    // in place, the second half of the picture is read from rows that have
+    // already been written, and the picture comes out with its top half
+    // rotated onto its bottom half.
+    {
+      const size_t row = (size_t)w * 3;
+      uint8_t* tmp = opendeckAlloc(row);
+      if (tmp) {
+        for (uint16_t y = 0; y < h / 2; y++) {
+          uint8_t* top = buf + (size_t)y * row;
+          uint8_t* bot = buf + (size_t)(h - 1 - y) * row;
+          memcpy(tmp, top, row);
+          for (uint16_t x = 0; x < w; x++) {
+            memcpy(top + (size_t)x * 3, bot + (size_t)(w - 1 - x) * 3, 3);
+          }
+          for (uint16_t x = 0; x < w; x++) {
+            memcpy(bot + (size_t)x * 3, tmp + (size_t)(w - 1 - x) * 3, 3);
+          }
         }
+        free(tmp);
       }
-      free(tmp);
     }
 
     size_t jpeg_len = 0;
-    const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 8192, jpeg_len);
+    const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 32768, jpeg_len);
     free(buf);
     if (!ok) { free(jpeg); return false; }
+
+    // A copy of the last picture, so it can be looked at: the deck's
+    // screens are the only place it shows up otherwise.
+    {
+      File f = WLED_FS.open("/hidctl-preview.jpg", "w");
+      if (f) {
+        f.write(jpeg, jpeg_len);
+        f.close();
+      }
+    }
 
     // The JPEG has to outlive this call: the chunks go out over the next
     // passes of the loop.
