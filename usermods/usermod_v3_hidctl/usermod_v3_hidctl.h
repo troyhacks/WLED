@@ -1948,13 +1948,19 @@ class HidctlUsermod : public Usermod {
   // up by ten JPEG encodings in a row.
   static constexpr uint8_t OPENDECK_KEYS = 10;
   static constexpr uint8_t OPENDECK_ZONES = 4;    // the touch strip's four zones
-  static constexpr uint8_t OPENDECK_PICS = OPENDECK_KEYS + OPENDECK_ZONES;
+  // The ten keys, the four encoder tiles and the picture across the whole
+  // strip. The array has to hold all of them: an entry past the end of it
+  // is a write into whatever follows it in memory, which is how the board
+  // ended up crashing in a task that had nothing to do with the deck.
+  static constexpr uint8_t OPENDECK_PICS = OPENDECK_KEYS + OPENDECK_ZONES + 1;
 
   struct OpendeckPic {
     uint8_t  slot;        // the BAT slot
     uint8_t  colour[3];   // blue, green, red
     uint16_t w, h;        // the picture's size
     uint16_t number;      // the number to draw on it, 0 = none
+    uint16_t value;       // the value under it, 0 = none
+    bool     has_value;   // the value is a number, not a word
   };
   OpendeckPic opendeck_pics[OPENDECK_PICS] = {};
   uint8_t opendeck_queue_count = 0;
@@ -1979,6 +1985,7 @@ class HidctlUsermod : public Usermod {
         (active_profile < profile_count && profiles[active_profile].od_keys)
             ? profiles[active_profile].od_keys : OPENDECK_KEYS;
     for (uint8_t i = 0; i < keys && i < OPENDECK_KEYS; i++) {
+      if (opendeck_queue_count >= OPENDECK_PICS) break;
       const uint8_t slot = opendeckSlotFor(i);
       if (!slot) continue;
       // The key shows the same preset the pad of the F1 would: the one at
@@ -2031,6 +2038,7 @@ class HidctlUsermod : public Usermod {
     // screen it also sends a picture across the whole strip ("BGPIC").
     // Both go out and the deck decides which one it shows.
     for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
+      if (opendeck_queue_count >= OPENDECK_PICS) break;
       const uint8_t hue = i * 36;
       OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
       pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
@@ -2039,10 +2047,29 @@ class HidctlUsermod : public Usermod {
       pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
       pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
       pic.number = (uint16_t)(i + 1);         // the encoder's number
+      // And what it is doing: the page it is on, or the parameter it
+      // drives. The strip is the deck's readout, so it says what the
+      // encoders are doing.
+      if (active_profile < profile_count && profiles &&
+          i < profiles[active_profile].od_encoders &&
+          profiles[active_profile].encoders[i].action[0]) {
+        const char* act = profiles[active_profile].encoders[i].action;
+        if (!strcmp(act, "page")) {
+          pic.value = page;
+          pic.has_value = true;
+        } else {
+          const int cur = currentValueOf(act);
+          if (cur >= 0) {
+            pic.value = (uint16_t)cur;
+            pic.has_value = true;
+          }
+        }
+      }
       opendeck_queue_count++;
     }
     if ((active_profile < profile_count && profiles) &&
-        profiles[active_profile].od_strip_one) {
+        profiles[active_profile].od_strip_one &&
+        opendeck_queue_count < OPENDECK_PICS) {
       OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
       pic.slot = 0;                          // slot 0 is the whole strip
       pic.colour[0] = pic.colour[1] = pic.colour[2] = 0;
@@ -2089,11 +2116,30 @@ class HidctlUsermod : public Usermod {
 
   // Fill a rectangle of the sprite with a colour and put a number in the
   // middle of it. The colour is in the encoder's order: blue first.
+  //
+  // With a second text, the number goes in the top half and the second
+  // text under it: the wide strip's tiles show which encoder they are
+  // and what it is doing.
   void opendeckSpriteTile(uint16_t x0, uint16_t y0, uint16_t rw, uint16_t rh,
-                          const char* text, uint8_t blue, uint8_t green, uint8_t red) {
+                          const char* text, uint8_t blue, uint8_t green, uint8_t red,
+                          const char* sub = nullptr) {
     opendeckSprite.fillRect(x0, y0, rw, rh, lgfx::color565(red, green, blue));
-    if (!text || !text[0]) return;
     opendeckSprite.setTextColor(0xFFFF);
+    if (sub && sub[0]) {
+      opendeckSprite.setFont(&fonts::DejaVu72);
+      const int tw = opendeckSprite.textWidth(text ? text : "");
+      const int th = opendeckSprite.fontHeight();
+      opendeckSprite.drawString(text ? text : "", x0 + (int)((rw > tw) ? (rw - tw) / 2 : 0),
+                                          y0 + (int)((rh / 2 > th) ? (rh / 2 - th) / 2 : 0));
+      opendeckSprite.setFont(&fonts::DejaVu40);
+      const int sw = opendeckSprite.textWidth(sub);
+      const int sh = opendeckSprite.fontHeight();
+      opendeckSprite.drawString(sub, x0 + (int)((rw > sw) ? (rw - sw) / 2 : 0),
+                                      y0 + rh / 2 + (int)((rh / 2 > sh) ? (rh / 2 - sh) / 2 : 0));
+      return;
+    }
+    if (!text || !text[0]) return;
+    opendeckSprite.setFont(&fonts::DejaVu72);
     const int tw = opendeckSprite.textWidth(text);
     const int th = opendeckSprite.fontHeight();
     opendeckSprite.drawString(text, x0 + (int)((rw > tw) ? (rw - tw) / 2 : 0),
@@ -2207,7 +2253,9 @@ class HidctlUsermod : public Usermod {
     if (!opendeckSpriteBegin(w, h)) { free(buf); free(jpeg); return false; }
     char text[8];
     snprintf(text, sizeof(text), "%u", pic.number);
-    opendeckSpriteTile(0, 0, w, h, text, pic.colour[0], pic.colour[1], pic.colour[2]);
+    char sub[8] = "";
+    if (pic.has_value) snprintf(sub, sizeof(sub), "%u", pic.value);
+    opendeckSpriteTile(0, 0, w, h, text, pic.colour[0], pic.colour[1], pic.colour[2], sub);
     opendeckSpriteToBuffer(buf, w, h);
 
     // The device reads its pictures upside down, so the picture is turned
@@ -2261,6 +2309,44 @@ class HidctlUsermod : public Usermod {
 
   uint8_t* opendeck_jpeg = nullptr;
 
+  // The pictures are built on core 1.
+  //
+  // Drawing a picture and encoding it as a JPEG takes long enough to trip
+  // the watchdog when it happens on the main loop, and core 1 is free for
+  // it. The USB transfers stay on the main loop - only the building moves.
+  TaskHandle_t opendeck_build_task = nullptr;
+  volatile uint8_t opendeck_build_index = 0;
+  volatile bool opendeck_build_request = false;
+  volatile bool opendeck_build_busy = false;   // the task is building it
+  volatile bool opendeck_build_ready = false;
+  volatile bool opendeck_build_failed = false;
+
+  static void opendeckBuildTask(void* arg) {
+    HidctlUsermod* self = (HidctlUsermod*)arg;
+    for (;;) {
+      while (!self->opendeck_build_request) vTaskDelay(2);
+      self->opendeck_build_request = false;
+      self->opendeck_build_busy = true;
+      const uint8_t index = self->opendeck_build_index;
+      bool ok;
+      if (self->opendeck_pics[index].slot == 0) {
+        // The picture across the whole strip.
+        uint8_t* j = nullptr;
+        uint16_t len = 0;
+        ok = self->opendeckEncodeStrip(j, len);
+      } else {
+        ok = self->opendeckEncodeKey(index);
+      }
+      self->opendeck_build_failed = !ok;
+      if (!ok) {
+        USER_PRINTF("[HIDCTL] the picture for slot %u would not build\n",
+                    (unsigned)self->opendeck_pics[index].slot);
+      }
+      self->opendeck_build_busy = false;
+      self->opendeck_build_ready = true;
+    }
+  }
+
   // One packet per pass of the main loop.
   //
   // A picture takes three steps and each one is a separate pass, because
@@ -2288,16 +2374,25 @@ class HidctlUsermod : public Usermod {
       return;
     }
     if (opendeck_stage == OPENDECK_STAGE_ENCODE) {
-      // This screen's picture has to be made first.
-      const bool strip = opendeck_pics[opendeck_queue_pos].slot == 0;
-      const bool ok = strip ? opendeckEncodeStrip(opendeck_jpeg, opendeck_jpeg_len)
-                            : opendeckEncodeKey(opendeck_queue_pos);
-      if (!ok) {
-        opendeck_queue_pos++;
+      // This screen's picture has to be made first - on core 1, so the
+      // main loop is not held up while it is drawn and encoded.
+      if (opendeck_build_ready) {
+        opendeck_build_ready = false;
+        if (opendeck_build_failed) {
+          opendeck_build_failed = false;
+          opendeck_queue_pos++;
+          return;
+        }
+        opendeck_stage = OPENDECK_STAGE_BAT;
         return;
       }
-      opendeck_stage = OPENDECK_STAGE_BAT;
-      return;
+      if (!opendeck_build_request && !opendeck_build_busy && opendeck_build_task) {
+        opendeck_build_index = opendeck_queue_pos;
+        opendeck_build_request = true;
+        USER_PRINTF("[HIDCTL] deck: building picture %u on core 1\n",
+                    (unsigned)opendeck_queue_pos);
+      }
+      return;                     // come back for it when it is ready
     }
     if (opendeck_stage == OPENDECK_STAGE_BAT) {
       const OpendeckPic& pic = opendeck_pics[opendeck_queue_pos];
@@ -2539,6 +2634,19 @@ class HidctlUsermod : public Usermod {
     writeDefaultProfileIfMissing(HIDCTL_PROFILE_DIR "hidctl-soomfon-cn003.json",
                                  HIDCTL_CN003_PROFILE_JSON);
     loadProfiles();
+
+    // The pictures are built on core 1, so the main loop is not held up
+    // while one is drawn and encoded.
+    if (!opendeck_build_task) {
+      BaseType_t ok = xTaskCreatePinnedToCore(opendeckBuildTask, "hidctl_pic",
+                                              8192, this, 1, &opendeck_build_task, 1);
+      if (ok != pdPASS) {
+        opendeck_build_task = nullptr;
+        USER_PRINTLN("[HIDCTL] the picture task would not start");
+      } else {
+        USER_PRINTLN("[HIDCTL] the picture task is running on core 1");
+      }
+    }
   }
 
   void loop() override {
