@@ -19,6 +19,54 @@
 
 #pragma once
 
+// The Soomfon CN003 - and the rest of the OpenDeck family.
+//
+// It is not a plain HID device. Its input reports are 512 bytes and each
+// one is a SINGLE EVENT: "ACK" at byte 0, the message ID at byte 9 and the
+// state at byte 10. Its output is the ASCII "CRT" command protocol, every
+// command zero-padded to 1025 bytes.
+//
+// The message IDs are the ones opendeck-akp05 uses:
+//
+//   0x01..0x0A   the ten keys with displays (button indices 0..9)
+//   0x00, 0x40..0x43  the five buttons without displays (indices 11..15)
+//   0x37, 0x35, 0x33, 0x36   the four encoders' push buttons
+//   0xa0/0xa1, 0x50/0x51, 0x90/0x91, 0x70/0x71   the four encoders,
+//               twisted: the low bit of the ID is the direction
+//
+// The touch strip's four zones are the same 0x40..0x43 messages.
+static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
+  "name": "Soomfon CN003",
+  "vid": "0x1500",
+  "pid": "0x3002",
+  "kind": "opendeck",
+  "report_id": 0,
+  "report_len": 512,
+  "encoders": [
+    { "name": "enc1", "action": "bri",           "push_action": "showpage" },
+    { "name": "enc2", "action": "effectSpeed",   "push_action": "" },
+    { "name": "enc3", "action": "effectIntensity","push_action": "" },
+    { "name": "enc4", "action": "effectPalette", "push_action": "" }
+  ],
+  "button_map": [
+    { "index": 0,  "name": "key1",  "action": "preset1" },
+    { "index": 1,  "name": "key2",  "action": "preset2" },
+    { "index": 2,  "name": "key3",  "action": "preset3" },
+    { "index": 3,  "name": "key4",  "action": "preset4" },
+    { "index": 4,  "name": "key5",  "action": "preset5" },
+    { "index": 5,  "name": "key6",  "action": "preset6" },
+    { "index": 6,  "name": "key7",  "action": "preset7" },
+    { "index": 7,  "name": "key8",  "action": "preset8" },
+    { "index": 8,  "name": "key9",  "action": "preset9" },
+    { "index": 9,  "name": "key10", "action": "preset10" },
+    { "index": 11, "name": "key11", "action": "" },
+    { "index": 12, "name": "key12", "action": "" },
+    { "index": 13, "name": "key13", "action": "" },
+    { "index": 14, "name": "key14", "action": "" },
+    { "index": 15, "name": "key15", "action": "" }
+  ]
+})JSON";
+
 static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
   "name": "Traktor Kontrol F1",
   "vid": "0x17CC",

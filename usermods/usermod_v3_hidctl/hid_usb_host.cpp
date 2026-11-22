@@ -208,6 +208,22 @@ const uint8_t* hid_usb_readback(uint8_t* len) {
   return hid_readback;
 }
 
+static volatile uint32_t hid_out_count = 0;   // OUT transfers completed
+static uint8_t hid_report_desc[256] = {};      // the device's own report descriptor
+static uint16_t hid_report_desc_len = 0;
+static volatile uint32_t hid_out_bytes = 0;   // what the host thinks it sent
+static volatile uint32_t hid_ctrl_out_count = 0;  // output reports over the pipe
+static uint16_t hid_out_total = 0;            // the packet being sent
+static uint8_t  hid_out_first[32] = {};        // the first packet that went out
+static uint8_t  hid_out_first_len = 0;
+static uint16_t hid_out_sent = 0;             // how much of it has gone
+static volatile uint32_t hid_out_refused_no_device = 0;
+static volatile uint32_t hid_out_refused_too_long = 0;
+static volatile uint32_t hid_out_refused_busy = 0;      // one was still in flight
+static volatile uint32_t hid_out_refused_submit = 0;    // the host said no
+static volatile int8_t   hid_out_submit_error = 0;
+static volatile uint32_t hid_out_stuck = 0;      // a transfer that never finished
+static volatile uint32_t hid_out_started_ms = 0; // when the one in flight went
 static volatile bool hid_in_resubmit_needed = false;
 static volatile bool hid_in_error_recovery_needed = false;
 
@@ -307,6 +323,8 @@ const uint8_t* hid_usb_feature_data(uint8_t* len) {
   return hid_feature_data;
 }
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
+static bool hid_out_send_next_piece(void);
+static void hid_out_watchdog(void);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
 
@@ -382,6 +400,9 @@ void hid_usb_poll(void) {
   if (!hid_client) return;
 
   usb_host_client_handle_events(hid_client, 0);
+
+  // A transfer that never finishes would block every later packet.
+  hid_out_watchdog();
 
   // ONE control transfer at a time. The control pipe is a single pipe: a
   // second transfer started while the first is in flight confuses both
@@ -878,24 +899,99 @@ bool hid_usb_send_output_report(uint8_t report_id, const uint8_t* data, uint16_t
 // ---------------------------------------------------------------------------
 // Some controllers take their LED data on an OUT endpoint instead of over
 // the control pipe. The F1's HID interface has one (0x01).
-bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
-  if (!hid_dev_hdl || !hid_out_xfer || !data || len == 0) return false;
-  if (len > HIDCTL_MAX_OUTPUT) return false;
-  if (hid_out_in_flight) return false;
+// Some devices only take their output report over the control pipe
+// (SET_REPORT) and not over the interrupt OUT endpoint. Which one is
+// used is a runtime choice, because it is a per-device thing and a build
+// flag would cost a full rebuild to change.
+static bool hid_out_via_control = false;
 
+void hid_usb_set_out_via_control(bool on) { hid_out_via_control = on; }
+
+// The packet's first byte is a report ID. A host that has no report IDs
+// (or one that strips it) sends the command from byte one, so the byte
+// is optional.
+static bool hid_out_drop_leading = false;
+
+void hid_usb_set_out_drop_leading(bool on) { hid_out_drop_leading = on; }
+bool hid_usb_get_out_drop_leading(void) { return hid_out_drop_leading; }
+bool hid_usb_get_out_via_control(void) { return hid_out_via_control; }
+
+bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
+  if (!hid_dev_hdl || !hid_out_xfer || !data || len == 0) { hid_out_refused_no_device++; return false; }
+  if (hid_out_drop_leading && len > 1) {
+    data++; len--;
+  }
+  if (hid_out_via_control) {
+    // Over the control pipe: the report ID goes in wValue and the data
+    // has no ID in it.
+    if (len < 2) return false;
+    return hid_usb_send_output_report(data[0], data + 1, (uint16_t)(len - 1));
+  }
+  if (len > HIDCTL_MAX_OUTPUT) { hid_out_refused_too_long++; return false; }
+  if (hid_out_in_flight) { hid_out_refused_busy++; return false; }
+
+  // The whole packet goes into the transfer's buffer and it is sent in
+  // pieces.
+  //
+  // The F1's LED report is 81 bytes on a 64-byte endpoint and it works,
+  // so a device accumulates its report over several packets and a short
+  // piece is fine. The deck's packet is 1025 bytes on a 1024-byte
+  // endpoint, and a piece that big is NOT delivered: the transfer
+  // completes with nothing in it. So the piece size is capped at what is
+  // known to work.
   memcpy(hid_out_xfer->data_buffer, data, len);
-  hid_out_xfer->num_bytes = len;
+  hid_out_total = len;
+  hid_out_sent = 0;
+  uint16_t piece = hid_out_mps ? hid_out_mps : 64;
+  hid_out_xfer->num_bytes = (piece < len) ? piece : len;
   hid_out_xfer->device_handle = hid_dev_hdl;
   hid_out_xfer->bEndpointAddress = hid_out_ep;
 
-  // Keep a copy of what went out, so it can be read over /json/ar when
+  // Keep the head of what went out, so it can be read over /json/ar when
   // something on the controller's display or its LEDs looks wrong.
-  if (len <= HIDCTL_READBACK_BYTES) {
-    memcpy(hid_last_out_report, data, len);
-    hid_last_out_len = (uint8_t)len;
+  {
+    uint16_t keep = len < HIDCTL_READBACK_BYTES ? len : HIDCTL_READBACK_BYTES;
+    memcpy(hid_last_out_report, data, keep);
+    hid_last_out_len = (uint8_t)keep;
+  }
+  if (!hid_out_first_len) {
+    uint16_t keep = len < sizeof(hid_out_first) ? len : sizeof(hid_out_first);
+    memcpy(hid_out_first, data, keep);
+    hid_out_first_len = (uint8_t)keep;
   }
 
   hid_out_in_flight = true;
+  esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
+  if (err != ESP_OK) {
+    hid_out_in_flight = false;
+    hid_out_submit_error = (int8_t)err;
+    hid_out_refused_submit++;
+    HIDCTL_LOG("OUT endpoint submit failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  hid_out_submit_error = 0;
+  hid_out_sent = hid_out_xfer->num_bytes;
+  return true;
+}
+
+// Send the next piece of a packet that goes out in pieces.
+static bool hid_out_send_next_piece(void) {
+  if (!hid_out_xfer || hid_out_sent >= hid_out_total) {
+    hid_out_total = 0;
+    hid_out_sent = 0;
+    return false;
+  }
+  uint16_t piece = hid_out_mps ? hid_out_mps : 64;
+  uint16_t left = (uint16_t)(hid_out_total - hid_out_sent);
+  hid_out_xfer->num_bytes = (piece < left) ? piece : left;
+  // The piece is already in the buffer; move it to the front.
+  memmove(hid_out_xfer->data_buffer, hid_out_xfer->data_buffer + hid_out_sent,
+          hid_out_xfer->num_bytes);
+  hid_out_xfer->device_handle = hid_dev_hdl;
+  hid_out_xfer->bEndpointAddress = hid_out_ep;
+  hid_out_sent += hid_out_xfer->num_bytes;
+  hid_out_in_flight = true;
+  hid_out_started_ms = millis();
   esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
   if (err != ESP_OK) {
     hid_out_in_flight = false;
@@ -947,6 +1043,36 @@ const uint8_t* hid_usb_config_desc(uint8_t* len) {
 // The reports that came in, and the zero-length packets that followed
 // them.
 uint32_t hid_usb_report_count(void) { return hid_in_report_count; }
+uint32_t hid_usb_out_count(void) { return hid_out_count; }
+// Why the last OUT packet did not go out: the counts say which door it
+// went out of.
+uint32_t hid_usb_out_refused(uint8_t which) {
+  switch (which) {
+    case 0: return hid_out_refused_no_device;
+    case 1: return hid_out_refused_too_long;
+    case 2: return hid_out_refused_busy;
+    case 3: return hid_out_refused_submit;
+    default: return 0;
+  }
+}
+int8_t hid_usb_out_submit_error(void) { return hid_out_submit_error; }
+uint32_t hid_usb_out_stuck(void) { return hid_out_stuck; }
+uint32_t hid_usb_ctrl_out_count(void) { return hid_ctrl_out_count; }
+const uint8_t* hid_usb_out_first(uint8_t* len) {
+  if (len) *len = hid_out_first_len;
+  return hid_out_first;
+}
+uint32_t hid_usb_out_bytes(void) { return hid_out_bytes; }
+const uint8_t* hid_usb_report_desc(uint16_t* len) {
+  if (len) *len = hid_report_desc_len;
+  return hid_report_desc;
+}
+// The head of the last packet that went out on the OUT endpoint.
+const uint8_t* hid_usb_last_out_head(uint8_t* len) {
+  if (len) *len = hid_last_out_len > 24 ? 24 : hid_last_out_len;
+  return hid_last_out_report;
+}
+void hid_usb_out_watchdog(void) { hid_out_watchdog(); }
 uint32_t hid_usb_zlp_count(void) { return hid_in_zlp_count; }
 
 const uint8_t* hid_usb_last_out_report(uint8_t* len) {
@@ -957,6 +1083,7 @@ const uint8_t* hid_usb_last_out_report(uint8_t* len) {
 static void hid_out_transfer_cb(usb_transfer_t* xfer) {
   if (xfer) {
     hid_last_out_status = (int8_t)xfer->status;
+    hid_out_count++;
     // Only the failures are worth a line: the reports go out several times a
     // second and the console would drown in them.
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
@@ -965,9 +1092,32 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
     }
   }
   hid_out_in_flight = false;
+  hid_out_started_ms = 0;
+  // More of the packet to go?
+  if (hid_out_sent < hid_out_total) hid_out_send_next_piece();
+}
+
+// A transfer that never finishes would leave the OUT pipe stuck for ever
+// and every later packet would be refused, so it is given a deadline.
+#define HID_OUT_TIMEOUT_MS 2000
+
+static void hid_out_watchdog(void) {
+  if (!hid_out_in_flight || !hid_out_started_ms) return;
+  if ((uint32_t)(millis() - hid_out_started_ms) < HID_OUT_TIMEOUT_MS) return;
+  hid_out_stuck++;
+  HIDCTL_LOG("OUT endpoint: the transfer did not finish in %u ms",
+             (unsigned)HID_OUT_TIMEOUT_MS);
+  if (hid_dev_hdl && hid_out_xfer) {
+    usb_host_endpoint_halt(hid_dev_hdl, hid_out_ep);
+    usb_host_endpoint_flush(hid_dev_hdl, hid_out_ep);
+    usb_host_endpoint_clear(hid_dev_hdl, hid_out_ep);
+  }
+  hid_out_in_flight = false;
+  hid_out_started_ms = 0;
 }
 
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
+  if (xfer && hid_out_via_control) hid_ctrl_out_count++;
   if (xfer) {
     hid_last_report_status = (int8_t)xfer->status;
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
@@ -1101,6 +1251,14 @@ static void hid_desc_transfer_cb(usb_transfer_t* xfer) {
   if (hid_desc_desc_wvalue == 0x0200 && n <= (int)sizeof(hid_config_desc)) {
     memcpy(hid_config_desc, d, n);
     hid_config_desc_len = (uint16_t)n;
+  }
+  if (hid_desc_desc_wvalue == 0x2200) {
+    // The device's own declaration of its reports: how big they are, which
+    // report ID they carry and whether there is an OUTPUT report at all.
+    if (n <= (int)sizeof(hid_report_desc)) {
+      memcpy(hid_report_desc, d, n);
+      hid_report_desc_len = (uint16_t)n;
+    }
   }
   HIDCTL_LOG("descriptor %04X: %d bytes", hid_desc_desc_wvalue, n);
   for (int i = 0; i < n; i += 16) {

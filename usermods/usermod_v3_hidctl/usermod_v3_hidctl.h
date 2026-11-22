@@ -52,6 +52,22 @@
 #include "hidctl_types.h"
 #include "hidctl_default_profile.h"
 #include "hid_usb_host.h"
+// The OpenDeck-family protocol: the ASCII "CRT" commands and the input
+// report's message IDs. A port of `ambiso/mirajazz` (the crate the
+// OpenDeck plugin links against) and `ambiso/opendeck-akp05`.
+#include "opendeck_proto.h"
+
+// The P4 has a hardware JPEG encoder, which is what makes the deck's
+// pictures possible. On any other target there is no encoder, so the
+// pictures are simply not pushed.
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(SOC_JPEG_ENCODE_SUPPORTED)
+  #include "driver/jpeg_encode.h"
+  #include <esp_cache.h>
+  #include <esp_heap_caps.h>
+  #define HIDCTL_HAS_JPEG 1
+#else
+  #define HIDCTL_HAS_JPEG 0
+#endif
 
 // The tempo tracker's published frame (the beat in the bar, the downbeat
 // state). ar_publish.h is a light header - just the structs.
@@ -474,8 +490,16 @@ class HidctlUsermod : public Usermod {
     p.pid = pid;
 
     p.report_id = (uint8_t)(j["report_id"] | 0);
-    p.report_len = (uint8_t)(j["report_len"] | 0);
+    p.report_len = (uint16_t)(j["report_len"] | 0);
     if (p.report_len == 0 || p.report_len > HIDCTL_MAX_REPORT) return false;
+
+    // The kind of device. "opendeck" is the OpenDeck-family protocol: the
+    // input is single events with a message ID, and the output is the
+    // ASCII "CRT" command protocol rather than an LED report.
+    {
+      const char* kind = j["kind"] | "";
+      p.opendeck = (kind && !strcmp(kind, "opendeck"));
+    }
 
     // Button bitmap bytes.
     JsonObject bt = j["buttons"];
@@ -513,6 +537,23 @@ class HidctlUsermod : public Usermod {
       if (ctl.bits == 0 || ctl.bits > 16) return false;
       if (ctl.offset + ((ctl.bits + 7) / 8) > p.report_len) return false;
       p.control_count++;
+    }
+
+    // The rotary encoders of an OpenDeck-family deck. They report a twist
+    // of plus or minus one and a push, not a position.
+    JsonArray encs = j["encoders"];
+    p.encoder_count = 0;
+    for (JsonObject e : encs) {
+      if (p.encoder_count >= HIDCTL_MAX_ENCODERS) break;
+      HidctlEncoder& enc = p.encoders[p.encoder_count];
+      const char* en = e["name"];
+      copyStr(enc.name, en);
+      const char* act = e["action"];
+      copyAction(enc.action, act);
+      const char* push = e["push_action"];
+      copyAction(enc.push_action, push);
+      enc.value = 0;
+      p.encoder_count++;
     }
 
     // Buttons.
@@ -678,11 +719,12 @@ class HidctlUsermod : public Usermod {
       }
       JsonObject j = doc.as<JsonObject>();
       if (parseProfile(j, profiles[profile_count])) {
-        USER_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons\n",
+        USER_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons%s\n",
                     profile_count, profiles[profile_count].name,
                     profiles[profile_count].vid, profiles[profile_count].pid,
                     profiles[profile_count].control_count,
-                    profiles[profile_count].button_count);
+                    profiles[profile_count].button_count,
+                    profiles[profile_count].opendeck ? " opendeck" : "");
         profile_count++;
       } else {
         USER_PRINTF("[HIDCTL] %s: profile rejected\n", path.c_str());
@@ -728,6 +770,14 @@ class HidctlUsermod : public Usermod {
     wheelSeen = false;
     wheelLast = 0;
     USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
+    // An OpenDeck-family deck needs its session opened: DIS resets the
+    // display, LIG sets the backlight, and CONNECT keeps the session
+    // alive. Its keys are LCDs, so they are given pictures. The work
+    // itself is done by loop() - this is not the task that owns the USB.
+    if (profiles[idx].opendeck) {
+      opendeck_pending_init = true;
+      opendeck_pending_paint = true;
+    }
 #ifdef F1_PROBE
     // The discovery probe: it walks the candidate report shapes so the LED
     // protocol can be worked out against the hardware. Off by default - it
@@ -1494,6 +1544,441 @@ class HidctlUsermod : public Usermod {
     runAction(act, value);
   }
 
+  // -------------------------------------------------------------------------
+  // an OpenDeck-family deck
+  // -------------------------------------------------------------------------
+  //
+  // Its input is one event per report, with the event in a message ID, and
+  // its output is the ASCII "CRT" command protocol.
+  //
+  // The report is the raw USB packet, so it still carries the report ID
+  // (0x00) in front. The reference reads it through hidraw, which strips
+  // that byte, so it finds "ACK" at byte 0; here it is at byte 1. Look for
+  // it either way.
+  void handleOpendeckReport(HidctlProfile& p, const uint8_t* data, uint16_t len) {
+    int ack = -1;
+    if (len >= 12 && data[0] == 'A' && data[1] == 'C' && data[2] == 'K') ack = 0;
+    else if (len >= 13 && data[1] == 'A' && data[2] == 'C' && data[3] == 'K') ack = 1;
+    if (ack < 0) return;                    // not one of the device's own
+
+    const uint8_t msg   = data[ack + 9];
+    const uint8_t state = data[ack + 10];
+    const Opendeck::EventInfo ev = Opendeck::decodeMessage(msg);
+    if (ev.type == Opendeck::Event::None) return;
+
+    switch (ev.type) {
+      case Opendeck::Event::ButtonDown: {
+        // The button index is the one the reference uses, so the profile's
+        // button_map lines up with it.
+        const uint8_t idx = ev.index;
+        if (idx >= 32) break;
+        const char* act = buttonActionFor(p, idx);
+        if (act && act[0]) {
+          USER_PRINTF("[HIDCTL] %s -> %s\n", buttonNameFor(p, idx), act);
+          runAction(act, 255);
+        }
+        paint();
+        break;
+      }
+      case Opendeck::Event::EncoderDown: {
+        if (ev.index >= p.encoder_count) break;
+        HidctlEncoder& enc = p.encoders[ev.index];
+        if (enc.push_action[0]) {
+          USER_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, enc.push_action);
+          runAction(enc.push_action, 255);
+        }
+        paint();
+        break;
+      }
+      case Opendeck::Event::EncoderTwist: {
+        if (ev.index >= p.encoder_count) break;
+        HidctlEncoder& enc = p.encoders[ev.index];
+        if (!enc.action[0]) break;
+        // A twist is plus or minus one, so the value it drives is the one
+        // it drove last, moved by one.
+        int v = (int)enc.value + ev.delta;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        enc.value = (uint8_t)v;
+        USER_PRINTF("[HIDCTL] %s twist -> %s = %u\n", enc.name, enc.action, v);
+        runAction(enc.action, v);
+        break;
+      }
+      default:
+        break;
+    }
+    (void)state;
+  }
+
+  // The action a button index drives, and its name, from the profile.
+  const char* buttonActionFor(HidctlProfile& p, uint8_t index) {
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      if (p.buttons[i].index == index) return p.buttons[i].action;
+    }
+    return nullptr;
+  }
+  const char* buttonNameFor(HidctlProfile& p, uint8_t index) {
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      if (p.buttons[i].index == index) return p.buttons[i].name;
+    }
+    return "button";
+  }
+
+  // ---- the output side --------------------------------------------------
+  //
+  // Every command is zero-padded to 1025 bytes and the device ignores a
+  // short one. The session has to be kept alive with CONNECT every ten
+  // seconds, or the deck drops it and goes back to its own splash screen.
+  //
+  // The OUT pipe takes ONE transfer at a time, so the commands are queued
+  // and go out one per pass of the main loop. A burst would have all but
+  // the first refused.
+  static constexpr uint8_t OPENDECK_CMD_MAX = 8;
+  uint8_t opendeck_cmd[OPENDECK_CMD_MAX][16] = {};
+  uint8_t opendeck_cmd_len[OPENDECK_CMD_MAX] = {};
+  uint8_t opendeck_cmd_count = 0;
+  uint8_t opendeck_cmd_pos = 0;
+
+  // Queue one command. It is small - every opcode is at most thirteen
+  // bytes - and it is padded to the wire length when it goes out.
+  void opendeckQueue(const uint8_t* body, size_t len) {
+    if (opendeck_cmd_count >= OPENDECK_CMD_MAX) return;
+    if (len > 16) len = 16;
+    memcpy(opendeck_cmd[opendeck_cmd_count], body, len);
+    opendeck_cmd_len[opendeck_cmd_count] = (uint8_t)len;
+    opendeck_cmd_count++;
+  }
+
+  // Send the next queued command, if the pipe is free.
+  bool opendeckFlushCmd() {
+    if (opendeck_cmd_pos >= opendeck_cmd_count) return false;
+    memset(led_report, 0, Opendeck::WIRE_LEN);
+    memcpy(led_report, opendeck_cmd[opendeck_cmd_pos], opendeck_cmd_len[opendeck_cmd_pos]);
+    if (!hid_usb_send_out_endpoint(led_report, Opendeck::WIRE_LEN)) return false;
+    opendeck_cmd_pos++;
+    if (opendeck_cmd_pos >= opendeck_cmd_count) {
+      opendeck_cmd_count = 0;
+      opendeck_cmd_pos = 0;
+    }
+    return true;
+  }
+
+  bool opendeckCmdPending() { return opendeck_cmd_pos < opendeck_cmd_count; }
+
+  void opendeckInit() {
+    // The builders put the command at the front of the buffer and pad it;
+    // only the first bytes matter here, so that is what is queued.
+    Opendeck::dis(led_report);
+    opendeckQueue(led_report, 9);
+    Opendeck::lig(led_report, 50);
+    opendeckQueue(led_report, 12);
+    Opendeck::cle(led_report, Opendeck::CLEAR_ALL);
+    opendeckQueue(led_report, 13);
+    Opendeck::stp(led_report);
+    opendeckQueue(led_report, 9);
+    opendeck_last_keepalive = millis();
+  }
+
+  void opendeckKeepalive() {
+    if (millis() - opendeck_last_keepalive < 9000) return;
+    opendeck_last_keepalive = millis();
+    Opendeck::connect(led_report);
+    opendeckQueue(led_report, 13);
+  }
+
+  uint32_t opendeck_last_keepalive = 0;
+  // The deck's USB work belongs to the main loop, like everything else:
+  // the event bus runs its handlers in the PUBLISHER's task, and submitting
+  // a transfer from there is how the USB stack got corrupted before.
+  bool opendeck_pending_init = false;
+  bool opendeck_pending_paint = false;
+
+  // ---- the images -------------------------------------------------------
+  //
+  // The deck's keys are LCDs, so what it shows is a picture and not a
+  // colour. A key image is 112x112 JPEG, rotated 180 degrees, and it is
+  // pushed in 1024-byte chunks after a "BAT" header that names the key.
+  //
+  // The P4 has a hardware JPEG encoder, so the chip does the work. Its
+  // input is in BGR order, and the buffers have to be in PSRAM: the
+  // internal heap is nearly full on this board and a picture does not fit
+  // in it. The DMA reads the picture, so the CPU's cache has to be told
+  // about it - the DMA does not see it.
+  static uint8_t* opendeckAlloc(size_t size) {
+    const size_t aligned = (size + 63) & ~(size_t)63;
+    uint8_t* p = (uint8_t*)heap_caps_aligned_alloc(64, aligned,
+                          MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!p) p = (uint8_t*)heap_caps_aligned_alloc(64, aligned,
+                          MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    return p;
+  }
+
+#if HIDCTL_HAS_JPEG
+  // The encoder's engine. It is made once and kept: the screenshot code
+  // does the same, because a per-picture engine would pay for its working
+  // memory every time.
+  jpeg_encoder_handle_t opendeckEncoder = nullptr;
+
+  bool opendeckEncoderGet(jpeg_encoder_handle_t& enc) {
+    if (opendeckEncoder) { enc = opendeckEncoder; return true; }
+    jpeg_encode_engine_cfg_t cfg = {};
+    cfg.intr_priority = 0;        // the driver picks
+    cfg.timeout_ms  = 1000;
+    if (jpeg_new_encoder_engine(&cfg, &opendeckEncoder) != ESP_OK || !opendeckEncoder) {
+      opendeckEncoder = nullptr;
+      USER_PRINTLN("[HIDCTL] the JPEG encoder would not start");
+      return false;
+    }
+    enc = opendeckEncoder;
+    return true;
+  }
+
+  // Encode one picture for a key. `bgr` is the picture in the order the
+  // encoder reads it (blue first). The JPEG comes back in `jpeg`.
+  bool opendeckEncodeJpeg(const uint8_t* bgr, uint16_t w, uint16_t h,
+                           uint8_t* jpeg, size_t jpeg_cap, size_t& jpeg_len) {
+    jpeg_len = 0;
+    jpeg_encoder_handle_t enc = nullptr;
+    if (!opendeckEncoderGet(enc)) return false;
+
+    jpeg_encode_cfg_t cfg = {};
+    cfg.width         = w;
+    cfg.height        = h;
+    cfg.src_type      = JPEG_ENCODE_IN_FORMAT_RGB888;
+    cfg.sub_sample    = JPEG_DOWN_SAMPLING_YUV444;
+    cfg.image_quality = 90;
+
+    // The CPU filled the picture, the DMA reads it.
+    esp_cache_msync((void*)(uintptr_t)bgr, (size_t)w * h * 3, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    uint32_t outSize = 0;
+    const esp_err_t err = jpeg_encoder_process(enc, &cfg, bgr,
+                                               (uint32_t)((size_t)w * h * 3),
+                                               jpeg, (uint32_t)jpeg_cap, &outSize);
+    if (err != ESP_OK || outSize == 0) {
+      USER_PRINTF("[HIDCTL] the JPEG encoder refused the picture (%d)\n", (int)err);
+      return false;
+    }
+    // The DMA wrote the JPEG, the CPU reads it.
+    esp_cache_msync((void*)(uintptr_t)jpeg, outSize, ESP_CACHE_MSYNC_FLAG_DIR_C2M
+                                           | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    jpeg_len = outSize;
+    return true;
+  }
+
+  // Which BAT slot a key's image goes to. The deck's own key numbering is
+  // not the physical order - the reference remaps it, and the BAT target
+  // is the remapped number plus one.
+  static uint8_t opendeckSlotFor(uint8_t button_index) {
+    uint8_t pos = Opendeck::mapPosition(button_index, false);
+    if (pos == 0xFF) return 0xFF;
+    return (uint8_t)(pos + 1);
+  }
+
+#endif  // HIDCTL_HAS_JPEG
+
+  // Send one packet on the OUT endpoint. It is false when the pipe is
+  // busy - the OUT pipe takes one transfer at a time - and the caller
+  // tries again on the next pass.
+  bool opendeckSend(uint8_t* built) {
+    return hid_usb_send_out_endpoint(built, Opendeck::WIRE_LEN);
+  }
+
+  // ---- the pictures -----------------------------------------------------
+  //
+  // A key's picture is a flat colour in the same categories the F1's pads
+  // use: green for the preset that is running, blue for one that is saved,
+  // red or magenta for a playlist, yellow for the music playlist. The
+  // picture is drawn in the encoder's order (blue first) and rotated 180
+  // degrees, because that is how the device reads it.
+  //
+  // The picture and the JPEG live in PSRAM - the internal heap is nearly
+  // full and a picture does not fit in it.
+#if HIDCTL_HAS_JPEG
+  // ---- the picture push, as a state machine ---------------------------
+  //
+  // The deck's OUT pipe takes ONE transfer at a time, and a picture is
+  // three of them (the BAT header, the image chunk and the commit), so
+  // the push cannot be a burst: everything but the F1's single LED report
+  // would be refused. One packet goes out per pass of the main loop, and
+  // the picture is encoded one key at a time so the main loop is not held
+  // up by ten JPEG encodings in a row.
+  static constexpr uint8_t OPENDECK_KEYS = 10;
+  static constexpr uint8_t OPENDECK_ZONES = 4;    // the touch strip's four zones
+  static constexpr uint8_t OPENDECK_PICS = OPENDECK_KEYS + OPENDECK_ZONES;
+
+  struct OpendeckPic {
+    uint8_t  slot;        // the BAT slot
+    uint8_t  colour[3];   // blue, green, red
+    uint16_t w, h;        // the picture's size
+  };
+  OpendeckPic opendeck_pics[OPENDECK_PICS] = {};
+  uint8_t opendeck_queue_count = 0;
+  uint8_t opendeck_queue_pos = 0;
+  uint16_t opendeck_jpeg_len = 0;
+  uint16_t opendeck_chunk_off = 0;
+  bool opendeck_painting = false;
+
+  // Work out what each screen should show.
+  //
+  // The ten keys with displays get the same categories the F1's pads use -
+  // green for the preset that is running, blue for one that is saved, red
+  // or magenta for a playlist, yellow for the music playlist.
+  //
+  // The wide touch strip is four zones, one per encoder, and they get a
+  // colour each so the encoders can be told apart. The reference calls
+  // these the "dial" images: they are what shows what each rotary
+  // encoder is doing.
+  void opendeckBuildQueue() {
+    opendeck_queue_count = 0;
+    for (uint8_t i = 0; i < OPENDECK_KEYS; i++) {
+      const uint8_t slot = opendeckSlotFor(i);
+      if (!slot) continue;
+      // The key shows the same preset the pad of the F1 would: the one at
+      // this key's place in the CURRENT PAGE. Using the key's own number
+      // instead would mean the active preset could never be highlighted
+      // when it lives past the first ten.
+      const int slot_no = (int)pageOffset() + (int)i + 1;
+      uint8_t r = 0, g = 0, b = 0;
+      const bool is_music = (music_slot > 0 && slot_no == (int)music_slot);
+      const bool is_playlist = getCachedPresetExists((uint8_t)slot_no)
+                            && presetCache != nullptr && presetCache[slot_no].isPlaylist;
+      if (is_music) {
+        r = 0x7F; g = 0x7F;                      // yellow
+      } else if (is_playlist) {
+        const bool finite = getPresetRepeat((uint8_t)slot_no) > 0;
+        if (finite) r = 0x7F; else { r = 0x7F; b = 0x7F; }
+      } else if (slot_no == (int)tracked_active_preset
+                 && getCachedPresetExists((uint8_t)slot_no)) {
+        g = 0x7F;                                 // green
+      } else if (getCachedPresetExists((uint8_t)slot_no)) {
+        b = 0x7F;                                 // blue
+      }
+      OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
+      pic.slot = slot;
+      pic.colour[0] = b; pic.colour[1] = g; pic.colour[2] = r;
+      pic.w = Opendeck::KEY_W; pic.h = Opendeck::KEY_H;
+      opendeck_queue_count++;
+    }
+    // The four zones of the touch strip, one per encoder. The reference
+    // sends these as the "dial" images; the CN003's encoders have no LED
+    // rings, so this is where their state is shown.
+    for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
+      const uint8_t hue = i * 36;
+      OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
+      pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
+      pic.colour[0] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
+      pic.colour[1] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
+      pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
+      pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
+      opendeck_queue_count++;
+    }
+    opendeck_queue_pos = 0;
+    opendeck_jpeg_len = 0;
+    opendeck_chunk_off = 0;
+  }
+
+  // Draw one picture and encode it. The picture is in the encoder's
+  // order (blue first) and turned 180 degrees, because that is how the
+  // device reads it.
+  bool opendeckEncodeKey(uint8_t index) {
+    const OpendeckPic& pic = opendeck_pics[index];
+    const uint16_t w = pic.w, h = pic.h;
+    const size_t pic_len = (size_t)w * h * 3;
+
+    uint8_t* buf = opendeckAlloc(pic_len);
+    if (!buf) return false;
+    uint8_t* jpeg = opendeckAlloc(pic_len + 8192);
+    if (!jpeg) { free(buf); return false; }
+
+    uint8_t* px = buf;
+    for (size_t n = 0; n < pic_len; n += 3) {
+      *px++ = pic.colour[0]; *px++ = pic.colour[1]; *px++ = pic.colour[2];
+    }
+    // The device reads its pictures upside down: a 180 degree turn, so the
+    // rows and the columns both go.
+    const size_t row = (size_t)w * 3;
+    uint8_t* tmp = opendeckAlloc(row);
+    if (tmp) {
+      for (uint16_t y = 0; y < h; y++) {
+        uint8_t* src = buf + (size_t)(h - 1 - y) * row;
+        uint8_t* dst = buf + (size_t)y * row;
+        memcpy(tmp, src, row);
+        for (uint16_t x = 0; x < w; x++) {
+          memcpy(dst + (size_t)x * 3, tmp + (size_t)(w - 1 - x) * 3, 3);
+        }
+      }
+      free(tmp);
+    }
+
+    size_t jpeg_len = 0;
+    const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 8192, jpeg_len);
+    free(buf);
+    if (!ok) { free(jpeg); return false; }
+
+    // The JPEG has to outlive this call: the chunks go out over the next
+    // passes of the loop.
+    if (opendeck_jpeg) free(opendeck_jpeg);
+    opendeck_jpeg = jpeg;
+    opendeck_jpeg_len = (uint16_t)jpeg_len;
+    return true;
+  }
+
+  uint8_t* opendeck_jpeg = nullptr;
+
+  // One packet per pass of the main loop.
+  void opendeckPaintStep() {
+    if (!opendeck_painting) return;
+    if (opendeck_queue_pos >= opendeck_queue_count) {
+      // The last picture is away: commit the batch. Without it nothing
+      // appears on the keys.
+      Opendeck::stp(led_report);
+      if (opendeckSend(led_report)) {
+        opendeck_painting = false;
+        USER_PRINTF("[HIDCTL] deck: %u pictures are away\n", opendeck_queue_count);
+      }
+      return;
+    }
+    if (opendeck_jpeg_len == 0) {
+      // This screen's picture has to be made first.
+      if (!opendeckEncodeKey(opendeck_queue_pos)) {
+        opendeck_queue_pos++;
+        return;
+      }
+      Opendeck::bat(led_report, (uint8_t)(opendeck_pics[opendeck_queue_pos].slot - 1),
+                    opendeck_jpeg_len);
+      if (!opendeckSend(led_report)) return;    // the pipe is busy: try again
+      USER_PRINTF("[HIDCTL] deck: picture for slot %u (%ux%u, %u bytes)\n",
+                  opendeck_pics[opendeck_queue_pos].slot,
+                  opendeck_pics[opendeck_queue_pos].w, opendeck_pics[opendeck_queue_pos].h,
+                  opendeck_jpeg_len);
+      opendeck_chunk_off = 0;
+      return;
+    }
+    if (opendeck_chunk_off < opendeck_jpeg_len) {
+      uint16_t n = (uint16_t)(opendeck_jpeg_len - opendeck_chunk_off);
+      if (n > Opendeck::PACKET_SIZE) n = Opendeck::PACKET_SIZE;
+      memset(led_report, 0, Opendeck::WIRE_LEN);
+      memcpy(led_report + 1, opendeck_jpeg + opendeck_chunk_off, n);
+      if (!opendeckSend(led_report)) return;    // the pipe is busy: try again
+      opendeck_chunk_off += n;
+      return;
+    }
+    // This key is done: on to the next one.
+    opendeck_queue_pos++;
+    opendeck_jpeg_len = 0;
+  }
+
+  void opendeckPaintKeys() {
+    if (opendeck_painting) return;         // one push at a time
+    opendeckBuildQueue();
+    opendeck_painting = true;
+  }
+#else
+  // No hardware encoder on this target, so there are no pictures.
+  void opendeckPaintKeys() {}
+#endif
+
   // Decode a raw report for the active profile and act on it.
   void handleIncomingReport(const uint8_t* data, uint16_t len) {
     if (!enabled || active_profile >= profile_count || !profiles) return;
@@ -1502,6 +1987,13 @@ class HidctlUsermod : public Usermod {
     // Record what arrived, whatever it is: a report the profile does not
     // expect is still a report, and a short one is still a report.
     recordReport(data, len);
+
+    // An OpenDeck-family deck is not a plain HID device: its reports are
+    // single events, and its output is a command protocol.
+    if (p.opendeck) {
+      handleOpendeckReport(p, data, len);
+      return;
+    }
 
     // The wheel's byte, in any report: if it ever moves, the encoder is
     // being reported in something.
@@ -1663,10 +2155,25 @@ class HidctlUsermod : public Usermod {
   void setup() override {
     writeDefaultProfileIfMissing(HIDCTL_PROFILE_DIR HIDCTL_DEFAULT_PROFILE_FILE,
                                  defaultProfileText());
+    // The OpenDeck-family deck, as a second profile.
+    writeDefaultProfileIfMissing(HIDCTL_PROFILE_DIR "hidctl-soomfon-cn003.json",
+                                 HIDCTL_CN003_PROFILE_JSON);
     loadProfiles();
   }
 
   void loop() override {
+    // A heartbeat, so it is visible whether this loop is running at all.
+    {
+      static uint32_t lastBeat = 0;
+      if (millis() - lastBeat > 10000) {
+        lastBeat = millis();
+        USER_PRINTF("[HIDCTL] loop: active=%u count=%u opendeck=%u pending=%u\n",
+                    active_profile, profile_count,
+                    (active_profile < profile_count && profiles)
+                        ? (profiles[active_profile].opendeck ? 1 : 0) : 0,
+                    opendeck_pending_init ? 1 : 0);
+      }
+    }
     // A control value held back by the throttle is applied here too, in
     // case the controller has stopped reporting.
     flushPendingControls();
@@ -1677,6 +2184,24 @@ class HidctlUsermod : public Usermod {
     // The LED report goes out from here and nowhere else: this is the
     // task that owns the USB host stack.
     flushLedReport();
+    // An OpenDeck-family deck: its session and its pictures are handled
+    // here, because this is the task that owns the USB host stack.
+    if (active_profile < profile_count && profiles[active_profile].opendeck) {
+      if (opendeck_pending_init) {
+        opendeck_pending_init = false;
+        opendeck_pending_paint = false;
+        opendeckInit();
+        opendeckPaintKeys();
+      } else if (opendeck_pending_paint) {
+        opendeck_pending_paint = false;
+        opendeckPaintKeys();
+      }
+      // The commands and the pictures go out one packet at a time: the
+      // OUT pipe takes one transfer at a time.
+      if (!opendeckCmdPending()) opendeckPaintStep();
+      else opendeckFlushCmd();
+      opendeckKeepalive();
+    }
     // Commands from the web API that touch the USB.
     if (cmd_wakeup) {
       cmd_wakeup = false;
@@ -1732,6 +2257,13 @@ class HidctlUsermod : public Usermod {
           wheelSeen = false;
           wheelLast = 0;
           USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
+          // An OpenDeck-family deck needs its session opened: DIS resets
+          // the display, LIG sets the backlight, and CONNECT keeps the
+          // session alive. Its keys are LCDs, so they are given pictures.
+          if (profiles[idx].opendeck) {
+            opendeck_pending_init = true;
+            opendeck_pending_paint = true;
+          }
         }
       } else {
         active_profile = 0xFF;
@@ -1758,6 +2290,17 @@ class HidctlUsermod : public Usermod {
     bool demo = h["demo"] | false;
     setDemo(demo);
     if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
+    // Send the output report over the control pipe (SET_REPORT) instead
+    // of the interrupt OUT endpoint. Some devices only take it that way.
+    if (h.containsKey("ctrlout")) hid_usb_set_out_via_control(h["ctrlout"] | false);
+    // Send the packet without its leading report-ID byte.
+    if (h.containsKey("nolead")) hid_usb_set_out_drop_leading(h["nolead"] | false);
+    // Open the deck's session again and push its pictures: the device
+    // only shows them after a DIS.
+    if (h["repaint"]) {
+      opendeck_pending_init = true;
+      opendeck_pending_paint = true;
+    }
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
     // diagnostic.
@@ -1863,6 +2406,49 @@ class HidctlUsermod : public Usermod {
     // The reports that came in, and the zero-length packets after them.
     top["reports_in"] = hid_usb_report_count();
     top["zlps"] = hid_usb_zlp_count();
+    top["out_sent"] = hid_usb_out_count();
+    top["out_status"] = hid_usb_last_out_status();
+    top["out_no_device"] = hid_usb_out_refused(0);
+    top["out_too_long"] = hid_usb_out_refused(1);
+    top["out_busy"] = hid_usb_out_refused(2);
+    top["out_submit_err"] = hid_usb_out_refused(3);
+    top["out_submit_code"] = hid_usb_out_submit_error();
+    top["out_stuck"] = hid_usb_out_stuck();
+    top["ctrl_out"] = hid_usb_ctrl_out_count();
+    top["out_bytes"] = hid_usb_out_bytes();
+    top["out_via_control"] = hid_usb_get_out_via_control() ? 1 : 0;
+    top["out_drop_leading"] = hid_usb_get_out_drop_leading() ? 1 : 0;
+    {
+      uint8_t fl = 0;
+      const uint8_t* fb = hid_usb_out_first(&fl);
+      char fhex[2 * 32 + 1];
+      int fhl = 0;
+      for (uint8_t i = 0; i < fl && fhl < (int)sizeof(fhex) - 3; i++) {
+        fhl += snprintf(fhex + fhl, sizeof(fhex) - fhl, "%02X", fb[i]);
+      }
+      top["out_first"] = fhex;
+    }
+    {
+      // The device's own report descriptor and the head of the last
+      // packet that went out: between them they say what the device
+      // expects and what we sent it.
+      uint16_t dl = 0;
+      const uint8_t* dd = hid_usb_report_desc(&dl);
+      char hex[2 * 256 + 1];
+      int hl = 0;
+      for (uint16_t i = 0; i < dl && hl < (int)sizeof(hex) - 3; i++) {
+        hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", dd[i]);
+      }
+      top["report_desc"] = hex;
+      uint8_t ol = 0;
+      const uint8_t* oh = hid_usb_last_out_head(&ol);
+      char ohex[2 * 24 + 1];
+      int ohl = 0;
+      for (uint8_t i = 0; i < ol && ohl < (int)sizeof(ohex) - 3; i++) {
+        ohl += snprintf(ohex + ohl, sizeof(ohex) - ohl, "%02X", oh[i]);
+      }
+      top["last_out_head"] = ohex;
+    }
     // Every report that has arrived: one entry per report ID, with the
     // latest bytes and how many have come in.
     JsonArray rs = top.createNestedArray("reports");

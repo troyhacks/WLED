@@ -122,6 +122,21 @@ const uint8_t* hid_usb_config_desc(uint8_t* len);
 // The reports that have come in, and the zero-length packets that have
 // followed them (the F1 sends one after every report).
 uint32_t hid_usb_report_count(void);
+uint32_t hid_usb_out_count(void);
+uint32_t hid_usb_out_refused(uint8_t which);   // 0 no device, 1 too long,
+                                                // 2 busy, 3 the host said no
+int8_t  hid_usb_out_submit_error(void);
+uint32_t hid_usb_out_stuck(void);     // transfers that never finished
+uint32_t hid_usb_ctrl_out_count(void);   // output reports over the control pipe
+uint32_t hid_usb_out_bytes(void);    // what the last OUT transfer carried
+void     hid_usb_set_out_via_control(bool on);
+bool     hid_usb_get_out_via_control(void);
+void     hid_usb_set_out_drop_leading(bool on);
+bool     hid_usb_get_out_drop_leading(void);
+const uint8_t* hid_usb_out_first(uint8_t* len);
+const uint8_t* hid_usb_report_desc(uint16_t* len);
+const uint8_t* hid_usb_last_out_head(uint8_t* len);
+void     hid_usb_out_watchdog(void);
 uint32_t hid_usb_zlp_count(void);
 
 // The outcome of the last output report: 0 = completed, 4 = stalled, -1 =
