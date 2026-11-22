@@ -2727,6 +2727,11 @@ class HidctlUsermod : public Usermod {
     // re-arm of the IN pipe. Both are diagnostics for the deck's input.
     if (h.containsKey("inlen")) hid_usb_set_in_xfer_len((uint16_t)(h["inlen"] | 0));
     if (h["inreset"]) hid_usb_reset_in_pipe();
+    // The SET_IDLE rate, in ms. Zero is what a PC asks for: the device
+    // reports only when its state changes. A rate makes it report
+    // whether or not anything happens, which is how a device nobody is
+    // touching is told apart from one whose input path is broken.
+    if (h.containsKey("idle")) hid_usb_set_idle_rate((uint16_t)(h["idle"] | 0));
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
     // diagnostic.
@@ -2846,6 +2851,7 @@ class HidctlUsermod : public Usermod {
     top["out_drop_leading"] = hid_usb_get_out_drop_leading() ? 1 : 0;
     top["out_zlp"] = hid_usb_get_out_zlp() ? 1 : 0;
     top["in_xfer_len"] = hid_usb_get_in_xfer_len();
+    top["idle_rate"] = hid_usb_get_idle_rate();
     top["out_shift"] = hid_usb_get_out_shift() ? 1 : 0;
     top["out_cap"] = hid_usb_get_out_cap();
     top["out_gap"] = opendeck_out_gap;

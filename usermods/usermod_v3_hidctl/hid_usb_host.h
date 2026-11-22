@@ -145,6 +145,8 @@ bool     hid_usb_get_out_zlp(void);
 void     hid_usb_set_in_xfer_len(uint16_t n);
 uint16_t hid_usb_get_in_xfer_len(void);
 void     hid_usb_reset_in_pipe(void);
+void     hid_usb_set_idle_rate(uint16_t ms);
+uint16_t hid_usb_get_idle_rate(void);
 bool     hid_usb_pump_out(void);   // sends the pending zero-length packet
 const uint8_t* hid_usb_out_first(uint8_t* len);
 const uint8_t* hid_usb_report_desc(uint16_t* len);

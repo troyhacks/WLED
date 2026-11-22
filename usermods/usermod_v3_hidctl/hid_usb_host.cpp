@@ -165,6 +165,17 @@ uint32_t hid_usb_log_zlps(void) { return hid_log_zlps; }
 // The feature reports are asked for only when they are wanted: a PC's HID
 // stack never asks for them.
 static bool hid_want_feature_reports = false;
+// The SET_IDLE rate in milliseconds: 0 = report only when the state
+// changes (what a PC asks for), and anything else = report that often
+// whether or not anything happens.
+static uint16_t hid_idle_rate_ms = 0;
+static bool hid_idle_rate_changed = false;
+
+void hid_usb_set_idle_rate(uint16_t ms) {
+  hid_idle_rate_ms = ms;
+  hid_idle_rate_changed = true;
+}
+uint16_t hid_usb_get_idle_rate(void) { return hid_idle_rate_ms; }
 // The vendor request 0xDD. The Traktor F1 answers it; the deck stalls it,
 // and a stall on the control pipe is not something this host clears well.
 static bool hid_class_vendor_request = true;
@@ -447,9 +458,22 @@ void hid_usb_poll(void) {
   //
   // SET_IDLE goes first because that is where the capture has it. It used
   // to go last, and the encoder never reported.
+  // A new SET_IDLE rate: the request goes out again, and the SET_IDLE is
+  // the first thing in the sequence.
+  if (hid_idle_rate_changed && pipe_free) {
+    hid_idle_rate_changed = false;
+    hid_class_stage = 1;
+    hid_class_wanted = true;
+  }
   if (hid_class_wanted && hid_class_stage == 1 && pipe_free) {
     hid_class_stage = 2;
-    hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
+    // SET_IDLE. The rate is in the high byte of wValue: zero means
+    // "report only when the state changes", which is what a PC's HID
+    // stack asks for. A rate makes the device report whether or not
+    // anything happens, which is how a device with a broken input path
+    // can be told apart from a device nobody is touching.
+    hid_send_class_request_ex(0x21, 0x0A, (uint16_t)(hid_idle_rate_ms << 8),
+                              hid_iface, 0);
   } else if (hid_want_descriptors && pipe_free) {
     // The descriptors go out once the control pipe is free.
     hid_want_descriptors = false;
