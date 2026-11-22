@@ -569,6 +569,16 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     hid_in_len_ring[hid_in_status_next] = (uint16_t)xfer->actual_num_bytes;
     hid_in_status_next = (uint8_t)((hid_in_status_next + 1) % 16);
     (void)last;
+    // The first few completions are worth a line each: whether the
+    // interrupt IN pipe completes at all is the question the deck's input
+    // depends on, and a silent pipe looks exactly like a quiet device.
+    static uint8_t logged = 0;
+    if (logged < 8) {
+      logged++;
+      HIDCTL_LOG("IN completion %u: status=%d bytes=%u",
+                 (unsigned)logged, (int)xfer->status,
+                 (unsigned)xfer->actual_num_bytes);
+    }
   }
   if (xfer->status != USB_TRANSFER_STATUS_COMPLETED &&
       xfer->status != USB_TRANSFER_STATUS_CANCELED &&
@@ -589,6 +599,14 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     if (hid_in_exact_mps && n != hid_in_mps) {
       hid_in_zlp_count++;
       hid_log_event(nullptr, 0, true);
+      // A zero-length packet is the device saying it has nothing to say.
+      // It is worth one line: on this deck it is the only thing that
+      // arrives until a key is touched.
+      static uint32_t zlp_lines = 0;
+      if (zlp_lines < 4) {
+        zlp_lines++;
+        HIDCTL_LOG("IN: a zero-length packet (the device has nothing to say)");
+      }
       hid_in_error_recovery_needed = false;
       hid_in_resubmit_needed = true;
       return;

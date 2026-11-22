@@ -994,6 +994,12 @@ class HidctlUsermod : public Usermod {
       ctrl_bri = value;
       if (ctrl_bri < CTRL_BRI_MIN) ctrl_bri = CTRL_BRI_MIN;
       USER_PRINTF("[HIDCTL] controller brightness %u\n", ctrl_bri);
+      // On a deck the controller's own brightness is the backlight, which
+      // is the "LIG" command. The same floor applies.
+      if (active_profile < profile_count && profiles && profiles[active_profile].opendeck) {
+        Opendeck::lig(led_report, (uint8_t)((uint16_t)ctrl_bri * 100 / 255));
+        opendeckSend(led_report);
+      }
       paint();
       return;
     }
@@ -1617,6 +1623,8 @@ class HidctlUsermod : public Usermod {
     const uint8_t msg   = data[ack + 9];
     const uint8_t state = data[ack + 10];
     const Opendeck::EventInfo ev = Opendeck::decodeMessage(msg);
+    USER_PRINTF("[HIDCTL] deck: event %u, message 0x%02X, state %u\n",
+                (unsigned)len, (unsigned)msg, (unsigned)state);
     if (ev.type == Opendeck::Event::None) return;
 
     // The device reports a press and a release as two reports, so the
@@ -1692,6 +1700,16 @@ class HidctlUsermod : public Usermod {
       return buf;
     }
     return act;
+  }
+
+  // The profile's button with that index, or null.
+  const HidctlButton* buttonByIndex(uint8_t index) {
+    if (active_profile >= profile_count || !profiles) return nullptr;
+    HidctlProfile& p = profiles[active_profile];
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      if (p.buttons[i].index == index) return &p.buttons[i];
+    }
+    return nullptr;
   }
 
   // The action a button index drives, and its name, from the profile.
@@ -1967,6 +1985,20 @@ class HidctlUsermod : public Usermod {
         g = 0x7F;                                 // green
       } else if (getCachedPresetExists((uint8_t)slot_no)) {
         b = 0x7F;                                 // blue
+      }
+      // A key that is blinking: white in its "on" half, or its own colour
+      // with the off half dark (the playlist chaser). The F1's pads use
+      // the same rules.
+      {
+        char nm[HIDCTL_MAX_NAME];
+        const HidctlButton* btn = buttonByIndex(i);
+        snprintf(nm, sizeof(nm), "%s", btn ? btn->name : "");
+        const int phase = blinkPhase(nm);
+        if (phase == 0) {
+          b = r = g = 0;
+        } else if (phase == 1 && !blinkKeepsColour(nm)) {
+          r = g = b = 0x7F;
+        }
       }
       OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
       pic.slot = slot;
@@ -2281,9 +2313,34 @@ class HidctlUsermod : public Usermod {
     opendeckBuildQueue();
     opendeck_painting = true;
   }
+
+  // The playlist chaser for a deck: the key that holds the running
+  // playlist pulses slowly and the key that holds the track that is
+  // playing blinks fast - the same pattern the MIDI usermod uses and the
+  // F1's pads follow.
+  void opendeckChaser() {
+    if (active_profile >= profile_count || !profiles) return;
+    HidctlProfile& p = profiles[active_profile];
+    if (!p.opendeck) return;
+    const bool playlist_active = (currentPlaylist >= 0);
+    const int parent = playlist_active ? (int)currentPlaylist : 0;
+    const int child = (int)tracked_active_preset;
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      const HidctlButton& b = p.buttons[i];
+      if (b.index >= 10 || !b.name[0]) continue;    // only the keys with screens
+      const int slot = (int)pageOffset() + (int)b.index + 1;
+      if (slot < 1 || slot > 250) continue;
+      if (slot == parent) {
+        blinkSet(b.name, 1.0f, 1000, true);        // the parent: a slow pulse
+      } else if (slot == child) {
+        blinkSet(b.name, 4.0f, 1000, true);        // the child: a fast blink
+      }
+    }
+  }
 #else
   // No hardware encoder on this target, so there are no pictures.
   void opendeckPaintKeys() {}
+  void opendeckChaser() {}
 #endif
 
   // Decode a raw report for the active profile and act on it.
@@ -2493,6 +2550,17 @@ class HidctlUsermod : public Usermod {
     // An OpenDeck-family deck: its session and its pictures are handled
     // here, because this is the task that owns the USB host stack.
     if (active_profile < profile_count && profiles[active_profile].opendeck) {
+      // The chaser sets the blinks, and a blink on a deck is in the
+      // PICTURE, so the pictures have to go out again at the blink's rate.
+      opendeckChaser();
+      {
+        static uint32_t last_deck_push = 0;
+        if (blinkActive() && !opendeck_pending_init && !opendeck_painting &&
+            (uint32_t)(millis() - last_deck_push) > 60) {
+          last_deck_push = millis();
+          opendeck_pending_paint = true;
+        }
+      }
       if (opendeck_pending_init) {
         opendeck_pending_init = false;
         opendeck_pending_paint = false;
