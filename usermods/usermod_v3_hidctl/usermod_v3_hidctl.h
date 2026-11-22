@@ -52,6 +52,7 @@
 #include "hidctl_types.h"
 #include "hidctl_default_profile.h"
 #include "hid_usb_host.h"
+#include "hid_dwc_probe.h"
 // The OpenDeck-family protocol: the ASCII "CRT" commands and the input
 // report's message IDs. A port of `ambiso/mirajazz` (the crate the
 // OpenDeck plugin links against) and `ambiso/opendeck-akp05`.
@@ -2760,6 +2761,20 @@ class HidctlUsermod : public Usermod {
     // whether or not anything happens, which is how a device nobody is
     // touching is told apart from one whose input path is broken.
     if (h.containsKey("idle")) hid_usb_set_idle_rate((uint16_t)(h["idle"] | 0));
+    // The SET_IDLE rate in the low byte of wValue instead of the high
+    // one. The specification says the high byte, but this device is not
+    // a conformant HID stack.
+    if (h.containsKey("idlelow")) hid_usb_set_idle_rate_low_byte(h["idlelow"] | false);
+    // The data toggle of the interrupt IN channel. The driver only
+    // writes it for control pipes, so a pipe that has never transferred
+    // keeps whatever the channel had - and a device whose toggle is out
+    // of step ignores every token.
+    if (h.containsKey("pid")) {
+      bool ok = hid_usb_set_in_pid((uint8_t)(h["pid"] | 0));
+      USER_PRINTF("[HIDCTL] the IN channel's data toggle: %s\n", ok ? "set" : "no channel");
+    }
+    // Ask the device for its firmware, the way the reference does.
+    if (h["fwver"]) hid_usb_read_firmware();
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
     // diagnostic.
@@ -2880,6 +2895,49 @@ class HidctlUsermod : public Usermod {
     top["out_zlp"] = hid_usb_get_out_zlp() ? 1 : 0;
     top["in_xfer_len"] = hid_usb_get_in_xfer_len();
     top["idle_rate"] = hid_usb_get_idle_rate();
+    top["idle_low"] = hid_usb_get_idle_rate_low_byte() ? 1 : 0;
+    // The DWC2's own registers: whether the deck's IN channel is polled
+    // at all, and what the controller thinks of it.
+    {
+      static HidctlDwcProbe probe;
+      hidctlDwcSnapshot(probe);
+      JsonObject d = top.createNestedObject("dwc");
+      if (probe.ok) {
+        d["rx_fifo"] = probe.grxfsiz;      // the RX FIFO, in lines
+        d["nptx_fifo"] = probe.gnptxfsiz;
+        d["ptx_fifo"] = probe.hptxfsiz;
+        d["gintsts"] = probe.gintsts;
+        d["hcfg"] = probe.hcfg;
+        d["hfnum"] = probe.hfnum;
+        d["haint"] = probe.haint;
+        d["hflbaddr"] = probe.hflbaddr;
+        d["channels"] = probe.channel_count;
+        JsonArray fl = d.createNestedArray("frame_list");
+        for (uint8_t i = 0; i < 4; i++) fl.add(probe.frame_list[i]);
+        JsonArray chans = d.createNestedArray("chan");
+        for (uint8_t c = 0; c < 16; c++) {
+          const HidctlDwcChannel& cc = probe.channels[c];
+          if (!cc.hcchar) continue;
+          JsonObject co = chans.createNestedObject();
+          co["n"] = c;
+          co["chena"] = cc.chena;
+          co["ep"] = cc.epnum;
+          co["dir"] = cc.epdir;             // 1 = IN
+          co["type"] = cc.eptype;          // 1 = interrupt
+          co["mps"] = cc.mps;
+          co["addr"] = cc.devaddr;
+          co["hcint"] = cc.hcint;
+          co["size"] = cc.xfersize;
+          co["pkts"] = cc.pktcnt;
+          co["pid"] = cc.pid;
+          co["frames"] = cc.frames;        // how many frames poll it
+          co["qtd"] = cc.qtd_status;
+          co["qtdbuf"] = cc.qtd_buffer;
+          co["qtdfld"] = cc.qtd_fields;
+          co["left"] = cc.qtd_remaining;
+        }
+      }
+    }
     top["out_shift"] = hid_usb_get_out_shift() ? 1 : 0;
     top["out_cap"] = hid_usb_get_out_cap();
     top["out_gap"] = opendeck_out_gap;

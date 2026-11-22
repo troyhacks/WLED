@@ -21,6 +21,7 @@
 #include "../usermods/usermod_v3_hidctl/hid_usb_host.h"
 #include "../usermods/usermod_v3_midi/usb_host_messages.h"
 #include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
+#include "../usermods/usermod_v3_hidctl/hid_dwc_probe.h"
 
 #include <cstring>
 #include "usb/usb_host.h"
@@ -253,10 +254,45 @@ static uint16_t hid_in_xfer_len = 0;       // 0 = one maximum packet
 // came up in the wrong state - a data toggle out of step, say - never
 // delivers, and this is the only way to make the host re-arm it.
 static bool hid_in_force_reset = false;
+// The IN transfer is armed from the main loop rather than from the
+// client's event callback.
+static bool hid_in_arm_pending = false;
 
 void hid_usb_set_in_xfer_len(uint16_t n) { hid_in_xfer_len = n; }
 uint16_t hid_usb_get_in_xfer_len(void) { return hid_in_xfer_len; }
 void hid_usb_reset_in_pipe(void) { hid_in_force_reset = true; }
+
+// The SET_IDLE rate goes in the high byte of wValue and the report ID in
+// the low one, which is what the HID specification says. This device is
+// not a conformant HID stack, so the other way round is worth a try: the
+// rate in the low byte.
+static bool hid_idle_rate_low_byte = false;
+
+void hid_usb_set_idle_rate_low_byte(bool on) { hid_idle_rate_low_byte = on; }
+bool hid_usb_get_idle_rate_low_byte(void) { return hid_idle_rate_low_byte; }
+
+// Set the data toggle of the interrupt IN channel.
+//
+// The driver only writes the PID for control pipes, so a pipe that has
+// never transferred keeps whatever the channel object had. If the
+// device's toggle is out of step with the host's, the device ignores
+// every token and nothing ever arrives - and nothing else can change
+// it.
+bool hid_usb_set_in_pid(uint8_t pid) {
+  if (!hid_dev_hdl || !hid_in_ep) return false;
+  return hidctlDwcSetInPid(hid_cur_addr, (uint8_t)(hid_in_ep & 0x0F), pid);
+}
+
+// Ask the device for its firmware, the way the reference does: a
+// GET_REPORT for the feature report with the ID 1, into a twenty-byte
+// buffer. The deck's own answer to a vendor request was five bytes, so
+// it does answer requests - this is the one the reference uses.
+bool hid_usb_read_firmware(void) {
+  if (!hid_dev_hdl) return false;
+  hid_class_stage = 11;         // a stage of its own, below
+  hid_class_wanted = true;
+  return true;
+}
 
 
 static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
@@ -472,7 +508,10 @@ void hid_usb_poll(void) {
     // stack asks for. A rate makes the device report whether or not
     // anything happens, which is how a device with a broken input path
     // can be told apart from a device nobody is touching.
-    hid_send_class_request_ex(0x21, 0x0A, (uint16_t)(hid_idle_rate_ms << 8),
+    hid_send_class_request_ex(0x21, 0x0A,
+                              hid_idle_rate_low_byte
+                                  ? (uint16_t)hid_idle_rate_ms
+                                  : (uint16_t)(hid_idle_rate_ms << 8),
                               hid_iface, 0);
   } else if (hid_want_descriptors && pipe_free) {
     // The descriptors go out once the control pipe is free.
@@ -530,29 +569,50 @@ void hid_usb_poll(void) {
           hid_send_class_request_ex(0xA1, 0x01, (uint16_t)((3 << 8) | 0xF0), hid_iface, 8);
         }
         break;
+      case 11:
+        // The reference asks for the firmware with a GET_REPORT for the
+        // feature report 1, into a twenty-byte buffer.
+        hid_class_stage = 12;
+        hid_send_class_request_ex(0xA1, 0x01, 0x0301, hid_iface, 20);
+        break;
       default:
         break;
     }
   }
 
-  // The IN transfer is re-armed when it completes, and when it is told
-  // to be torn down and armed again - a forced reset has to work even
-  // when the transfer has never completed at all.
-  if ((hid_in_resubmit_needed || hid_in_force_reset) && hid_dev_hdl && hid_in_xfer) {
+  // The IN transfer is armed from here and not from the event callback:
+  // the previous session found that arming it from the callback stopped
+  // the reports arriving.
+  if (hid_in_arm_pending && hid_dev_hdl && hid_in_xfer) {
+    hid_in_arm_pending = false;
+    usb_transfer_t* x = hid_in_xfer;
+    x->num_bytes = hid_in_xfer_len ? hid_in_xfer_len
+                                   : (hid_in_mps ? hid_in_mps : HIDCTL_MAX_REPORT);
+    esp_err_t err = usb_host_transfer_submit(x);
+    if (err != ESP_OK) {
+      hid_in_arm_pending = true;
+      HIDCTL_LOG("IN: the transfer would not arm: %s", esp_err_to_name(err));
+    } else {
+      HIDCTL_LOG("IN: the transfer is armed for %u bytes", (unsigned)x->num_bytes);
+    }
+  }
+
+  // A forced re-arm: the transfer is flushed (which cancels it, and the
+  // callback is what clears the driver's in-flight mark) and then armed
+  // again. NOT halted and NOT cleared: a periodic channel must not be
+  // halted, and clearing the endpoint resets the data toggle, which
+  // leaves the host out of step with the device.
+  if (hid_in_force_reset && hid_dev_hdl && hid_in_xfer) {
+    hid_in_force_reset = false;
+    usb_host_endpoint_flush(hid_dev_hdl, hid_in_xfer->bEndpointAddress);
+    HIDCTL_LOG("IN: the transfer is flushed and will be armed again");
+  }
+
+  // The IN transfer is re-armed when it completes.
+  if (hid_in_resubmit_needed && hid_dev_hdl && hid_in_xfer) {
     hid_in_resubmit_needed = false;
     usb_transfer_t* x = hid_in_xfer;
     if (x->device_handle) {
-      // Only reset the pipe after an error: on a clean completion the data
-      // toggle has advanced and clearing the endpoint would desync us from
-      // the device (every following packet would be dropped).
-      if (hid_in_error_recovery_needed || hid_in_force_reset) {
-        usb_host_endpoint_halt(x->device_handle, x->bEndpointAddress);
-        usb_host_endpoint_flush(x->device_handle, x->bEndpointAddress);
-        usb_host_endpoint_clear(x->device_handle, x->bEndpointAddress);
-        hid_in_error_recovery_needed = false;
-        hid_in_force_reset = false;
-        HIDCTL_LOG("IN pipe: torn down and armed again");
-      }
       x->num_bytes = hid_in_xfer_len ? hid_in_xfer_len
                                      : (hid_in_mps ? hid_in_mps : HIDCTL_MAX_REPORT);
       esp_err_t err = usb_host_transfer_submit(x);
@@ -565,7 +625,6 @@ void hid_usb_poll(void) {
           // will come (or not) and the poll will try again.
           HIDCTL_DEBUG("IN re-submit: the transfer is still in flight");
         } else {
-          hid_in_error_recovery_needed = true;
           // This one is worth a line: a submit that is refused means the
           // pipe is stuck, and the recovery path will keep trying.
           HIDCTL_LOG("IN re-submit failed: %s", esp_err_to_name(err));
@@ -920,13 +979,13 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   if (x) {
     x->device_handle = dev;
     x->bEndpointAddress = in_ep;
-    x->num_bytes = hid_in_mps;
-    err = usb_host_transfer_submit(x);
-    if (err != ESP_OK) {
-      HIDCTL_LOG("configure: initial IN submit failed: %s", esp_err_to_name(err));
-    }
+    x->num_bytes = hid_in_xfer_len ? hid_in_xfer_len : hid_in_mps;
+    // The transfer is armed from the main loop, not from here: this runs
+    // inside the client's event callback, and the previous session found
+    // that a transfer armed from there never delivered.
+    hid_in_arm_pending = true;
   }
-  HIDCTL_LOG("configure: 1 IN transfer submitted");
+  HIDCTL_LOG("configure: the IN transfer will be armed from the main loop");
 
   // Claim the device's other interface as well. The F1 has a second
   // interface (class 0xFE) next to the HID one. A PC's HID stack leaves it

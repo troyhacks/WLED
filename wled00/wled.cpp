@@ -383,6 +383,9 @@ static const char *TAG = "WLED";
             .controller = USB_PHY_CTRL_OTG,
             .target = USB_PHY_TARGET_UTMI,
             .otg_mode = USB_OTG_MODE_HOST,
+            // HIGH, and the device decides the speed: the deck is a
+            // high-speed device and it enumerates as one even when the
+            // PHY is configured for full speed.
             .otg_speed = USB_PHY_SPEED_HIGH, // <-- the fix
             .ext_io_conf = nullptr,
             .otg_io_conf = nullptr,
