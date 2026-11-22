@@ -53,6 +53,14 @@ static constexpr uint8_t OP_CLE[]     = { 0x43, 0x4C, 0x45 };                   
 static constexpr uint8_t OP_STP[]     = { 0x53, 0x54, 0x50 };                     // "STP"
 static constexpr uint8_t OP_HAN[]     = { 0x48, 0x41, 0x4E };                     // "HAN"
 static constexpr uint8_t OP_CONNECT[] = { 0x43, 0x4F, 0x4E, 0x4E, 0x45, 0x43, 0x54 }; // "CONNECT"
+static constexpr uint8_t OP_BGPIC[]   = { 0x42, 0x47, 0x50, 0x49, 0x43 };             // "BGPIC"
+
+// The wide touch strip is ONE screen: 800 by 128 pixels, cut into four
+// tiles of 200 by 128, one per encoder.
+static constexpr uint16_t STRIP_W = 800;
+static constexpr uint16_t STRIP_H = 128;
+static constexpr uint8_t  STRIP_TILES = 4;
+static constexpr uint16_t STRIP_TILE_W = STRIP_W / STRIP_TILES;
 static constexpr uint8_t OP_MOD[]     = { 0x4D, 0x4F, 0x44 };                     // "MOD"
 static constexpr uint8_t OP_QUCMD[]   = { 0x51, 0x55, 0x43, 0x4D, 0x44 };         // "QUCMD"
 
@@ -63,6 +71,21 @@ static constexpr uint16_t WIRE_LEN   = 1 + PACKET_SIZE;   // 1025
 
 // The key index that means "every key".
 static constexpr uint8_t CLEAR_ALL = 0xFF;
+
+// A five-by-seven font for the digits, so a key can show which slot it
+// holds. Each row is five bits, the leftmost in bit 4.
+static constexpr uint8_t DIGIT_FONT[10][7] = {
+  {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E},   // 0
+  {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},   // 1
+  {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F},   // 2
+  {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},   // 3
+  {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02},   // 4
+  {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},   // 5
+  {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E},   // 6
+  {0x1F,0x01,0x02,0x04,0x08,0x08,0x08},   // 7
+  {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E},   // 8
+  {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C},   // 9
+};
 
 // The number of buttons the device reports: the ten keys with displays and
 // five without.
@@ -190,6 +213,30 @@ static inline size_t bat(uint8_t* out, uint8_t key, uint16_t len) {
   return padToWire(out, 14);
 }
 
+// "BGPIC" - one picture across the whole wide strip.
+//
+// The header is the magic, then the length of the JPEG that follows (four
+// bytes, big-endian), then the position and the size (two bytes each,
+// big-endian), then a zero byte and the layer. The picture itself goes
+// out in the usual 1024-byte chunks.
+static inline size_t bgpic(uint8_t* out, uint32_t len, uint16_t x, uint16_t y,
+                           uint16_t w, uint16_t h) {
+  memcpy(out, HDR, HDR_LEN);
+  memcpy(out + HDR_LEN, OP_BGPIC, sizeof(OP_BGPIC));
+  size_t p = HDR_LEN + sizeof(OP_BGPIC);
+  out[p++] = (uint8_t)(len >> 24);
+  out[p++] = (uint8_t)(len >> 16);
+  out[p++] = (uint8_t)(len >> 8);
+  out[p++] = (uint8_t)len;
+  out[p++] = (uint8_t)(x >> 8); out[p++] = (uint8_t)x;
+  out[p++] = (uint8_t)(y >> 8); out[p++] = (uint8_t)y;
+  out[p++] = (uint8_t)(w >> 8); out[p++] = (uint8_t)w;
+  out[p++] = (uint8_t)(h >> 8); out[p++] = (uint8_t)h;
+  out[p++] = 0x00;
+  out[p++] = 0x00;
+  return padToWire(out, p);
+}
+
 // The shutdown sequence: "CLE" with the magic key 0x44 0x43, then "HAN".
 static inline size_t shutdown_cmd(uint8_t* out) {
   memcpy(out, HDR, HDR_LEN);
@@ -225,7 +272,6 @@ static inline size_t imageChunk(uint8_t* out, const uint8_t* payload, uint16_t l
 
 static constexpr uint16_t KEY_W = 112, KEY_H = 112;
 static constexpr uint16_t DIAL_W = 176, DIAL_H = 112;
-static constexpr uint16_t STRIP_W = 800, STRIP_H = 128;
 
 // ---------------------------------------------------------------------------
 // Inbound
@@ -251,31 +297,33 @@ struct EventInfo {
   int8_t   delta = 0;    // the twist, -1 or +1
 };
 
-// The message IDs, from opendeck-akp05/src/inputs.rs.
+// The message IDs, from opendeck-akp05/src/inputs.rs and from what the
+// device actually sends (a USB capture of a host that drives it).
 //
 //   1..10   the ten keys with displays
-//   0x00, 0x40..0x43, 0x38   the five buttons without displays
+//   0x00, 0x40..0x43   the touch strip's four zones and the button
+//                      without a display
 //   0x37, 0x35, 0x33, 0x36   the four encoder push buttons
 //   0xa0/0xa1, 0x50/0x51,
 //   0x90/0x91, 0x70/0x71       the four encoders, twisted: the low bit
 //                              of the ID is the direction (-1, +1)
 //
-// The button index the reference uses (its keypad's own numbering) is
-// returned, and the caller maps that to the physical position with
-// mapPosition().
+// The reference's button vector is 0..9, so the ten keys with displays
+// are 0..9 here; the touch strip's zones are 11..15, which is the
+// numbering the profile's button_map uses.
 inline EventInfo decodeMessage(uint8_t msg) {
   EventInfo e;
   if (msg >= 1 && msg <= 10) {
     e.type = Event::ButtonDown;
-    e.index = msg;                 // 1..10 - the keys with displays
+    e.index = msg - 1;             // the keys with displays: 0..9
     return e;
   }
   switch (msg) {
     case 0x00: e.index = 11; break;   // the buttons without displays
-    case 0x41: e.index = 12; break;
-    case 0x42: e.index = 13; break;
-    case 0x43: e.index = 14; break;
-    case 0x38: e.index = 15; break;
+    case 0x40: e.index = 12; break;
+    case 0x41: e.index = 13; break;
+    case 0x42: e.index = 14; break;
+    case 0x43: e.index = 15; break;
     case 0x37: e.type = Event::EncoderDown; e.index = 0; return e;
     case 0x35: e.type = Event::EncoderDown; e.index = 1; return e;
     case 0x33: e.type = Event::EncoderDown; e.index = 2; return e;
@@ -292,6 +340,13 @@ inline EventInfo decodeMessage(uint8_t msg) {
   }
   e.type = Event::ButtonDown;
   return e;
+}
+
+// Is this message one of the touch strip's zones and the button without
+// a display? They report only the one state, so their action runs on
+// every report rather than on the rising edge of a press.
+inline bool isPlainButtonMessage(uint8_t msg) {
+  return msg == 0x00 || (msg >= 0x40 && msg <= 0x43);
 }
 
 // The keypad's own key numbering is not the physical order: the reference

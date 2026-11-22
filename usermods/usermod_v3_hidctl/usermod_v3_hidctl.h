@@ -285,6 +285,8 @@ class HidctlUsermod : public Usermod {
     // The page is on the display for a moment, and the pads move to the
     // new page's slots whether or not a preset is saved on them.
     paint();
+    // A deck's screens show the page's slots, so they change with it.
+    repaintDeck();
   }
 
   // Show the page on the display for a moment.
@@ -499,6 +501,16 @@ class HidctlUsermod : public Usermod {
     {
       const char* kind = j["kind"] | "";
       p.opendeck = (kind && !strcmp(kind, "opendeck"));
+      JsonObject od = j["opendeck"];
+      if (!od.isNull()) {
+        // How many screens and encoders this deck has, and whether its
+        // wide touch strip is one screen (a "BGPIC" picture across the
+        // whole strip) or four separate zones.
+        p.od_keys       = (uint8_t)(od["keys"] | 10);
+        p.od_encoders   = (uint8_t)(od["encoders"] | 4);
+        p.od_strip_slot = (uint8_t)(od["strip_slot"] | 0);
+        p.od_strip_one  = od["strip_one"] | false;
+      }
     }
 
     // Button bitmap bytes.
@@ -649,16 +661,32 @@ class HidctlUsermod : public Usermod {
   static const char* defaultProfileText() { return HIDCTL_DEFAULT_PROFILE_JSON; }
 
   void writeDefaultProfileIfMissing(const char* filename, const char* content) {
-    if (!WLED_FS.exists(filename)) {
-      File f = WLED_FS.open(filename, "w");
-      if (!f) {
-        USER_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
-        return;
-      }
-      f.print(content);
-      f.close();
-      USER_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
+    if (!WLED_FS.exists(filename)) writeDefaultProfile(filename, content);
+  }
+
+  // Write a profile over whatever is there. The defaults are only written
+  // when the file is missing, so a profile that was written by an older
+  // firmware keeps its old contents until it is written again - which is
+  // what the "writedefaults" command from the web API does.
+  void writeDefaultProfile(const char* filename, const char* content) {
+    File f = WLED_FS.open(filename, "w");
+    if (!f) {
+      USER_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
+      return;
     }
+    f.print(content);
+    f.close();
+    USER_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
+  }
+
+  // Write both built-in profiles over the ones on the filesystem and read
+  // them back.
+  void writeDefaultProfiles() {
+    writeDefaultProfile(HIDCTL_PROFILE_DIR HIDCTL_DEFAULT_PROFILE_FILE,
+                        defaultProfileText());
+    writeDefaultProfile(HIDCTL_PROFILE_DIR "hidctl-soomfon-cn003.json",
+                        HIDCTL_CN003_PROFILE_JSON);
+    loadProfiles();
   }
 
   // Load every profile in /hidctl/*.json.
@@ -750,6 +778,13 @@ class HidctlUsermod : public Usermod {
     return "";
   }
 
+  // Is this profile one of the OpenDeck-family decks? They are not plain
+  // HID devices: their packets are a command protocol, and the way they
+  // go on the wire is different too.
+  bool profileIsOpendeck(uint8_t idx) const {
+    return idx < profile_count && profiles[idx].opendeck;
+  }
+
   void setActiveProfile(uint8_t idx) { active_profile = idx; }
 
   // The USB host client found a device. Bind the first profile that wants it.
@@ -775,6 +810,18 @@ class HidctlUsermod : public Usermod {
     // alive. Its keys are LCDs, so they are given pictures. The work
     // itself is done by loop() - this is not the task that owns the USB.
     if (profiles[idx].opendeck) {
+      // How the deck's packets go on the wire, from the capture of a
+      // host that drives it and from the reference:
+      //
+      //   - the report-ID byte is not on the wire. The packet starts with
+      //     "CRT"; a PC's HID stack strips the byte the reference writes,
+      //     and the device drops any frame that does not start "CRT".
+      //   - the report is 1024 bytes and it is sent as it is: no
+      //     terminator. The zero-length packet in a Windows capture is
+      //     the Windows HID stack flushing its report.
+      hid_usb_set_out_drop_leading(true);
+      hid_usb_set_out_shift(false);
+      hid_usb_set_out_zlp(false);
       opendeck_pending_init = true;
       opendeck_pending_paint = true;
     }
@@ -804,7 +851,7 @@ class HidctlUsermod : public Usermod {
     // ---- preset slots ------------------------------------------------------
     if (!strncmp(action, "savepreset", 10)) {
       int slot = atoi(action + 10);
-      if (slot < 1 || slot > 64) return;
+      if (slot < 1 || slot > 250) return;
       char nm[40];
       snprintf(nm, sizeof(nm), "HIDCTL preset %d", slot);
       savePreset((uint8_t)slot, nm);
@@ -813,7 +860,9 @@ class HidctlUsermod : public Usermod {
     }
     if (!strncmp(action, "preset", 6)) {
       int slot = atoi(action + 6);
-      if (slot < 1 || slot > 64) return;
+      // There are 250 presets and 16 pages of 16 slots, so the slot a
+      // page addresses can be well past 64.
+      if (slot < 1 || slot > 250) return;
       // Picking a preset stops the playlist that was running - the same
       // "switch to a preset cleanly" pattern the MIDI and ProLink usermods
       // use. Without it the playlist would carry on over the top of the
@@ -1049,6 +1098,10 @@ class HidctlUsermod : public Usermod {
     }
     if (getCachedPresetExists(slot)
         && !(presetCache != nullptr && presetCache[slot].isPlaylist)) {
+      // Picking a preset stops the playlist: while it runs, the core
+      // puts its own preset back on the next tick and the jump is
+      // invisible.
+      if (currentPlaylist >= 0) unloadPlaylist();
       applyPreset((uint8_t)slot, CALL_MODE_BUTTON_PRESET);
       handlePresets();
     }
@@ -1566,6 +1619,15 @@ class HidctlUsermod : public Usermod {
     const Opendeck::EventInfo ev = Opendeck::decodeMessage(msg);
     if (ev.type == Opendeck::Event::None) return;
 
+    // The device reports a press and a release as two reports, so the
+    // action runs on the rising edge. The touch strip's zones report only
+    // one state, and they act on every report.
+    if (ev.type == Opendeck::Event::ButtonDown ||
+        ev.type == Opendeck::Event::EncoderDown) {
+      const bool plain = Opendeck::isPlainButtonMessage(msg);
+      if (!plain && state == 0) return;        // the release
+    }
+
     switch (ev.type) {
       case Opendeck::Event::ButtonDown: {
         // The button index is the one the reference uses, so the profile's
@@ -1574,14 +1636,19 @@ class HidctlUsermod : public Usermod {
         if (idx >= 32) break;
         const char* act = buttonActionFor(p, idx);
         if (act && act[0]) {
-          USER_PRINTF("[HIDCTL] %s -> %s\n", buttonNameFor(p, idx), act);
-          runAction(act, 255);
+          // The page's offset applies here too: the keys on a page are
+          // the slots from pageOffset()+1 up, or the deck's pictures and
+          // its actions would disagree.
+          char shifted[HIDCTL_MAX_ACTION + 8];
+          const char* use = withPageOffset(act, shifted, sizeof(shifted));
+          USER_PRINTF("[HIDCTL] %s -> %s\n", buttonNameFor(p, idx), use);
+          runAction(use, 255);
         }
         paint();
         break;
       }
       case Opendeck::Event::EncoderDown: {
-        if (ev.index >= p.encoder_count) break;
+        if (ev.index >= (p.od_encoders ? p.od_encoders : 4)) break;
         HidctlEncoder& enc = p.encoders[ev.index];
         if (enc.push_action[0]) {
           USER_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, enc.push_action);
@@ -1591,9 +1658,15 @@ class HidctlUsermod : public Usermod {
         break;
       }
       case Opendeck::Event::EncoderTwist: {
-        if (ev.index >= p.encoder_count) break;
+        if (ev.index >= (p.od_encoders ? p.od_encoders : 4)) break;
         HidctlEncoder& enc = p.encoders[ev.index];
         if (!enc.action[0]) break;
+        if (!strcmp(enc.action, "page")) {
+          // The encoder browses the pages of slots. It must not change
+          // the preset itself - that is the keys' job.
+          turnPage(ev.delta);
+          break;
+        }
         // A twist is plus or minus one, so the value it drives is the one
         // it drove last, moved by one.
         int v = (int)enc.value + ev.delta;
@@ -1610,9 +1683,19 @@ class HidctlUsermod : public Usermod {
     (void)state;
   }
 
+  // The action with the page's offset applied: the presets on a page are
+  // the slots from pageOffset()+1 up. The buffer is the caller's.
+  const char* withPageOffset(const char* act, char* buf, size_t buflen) {
+    if (!strncmp(act, "preset", 6) && isdigit(act[6])) {
+      uint16_t slot = (uint16_t)(atoi(act + 6) + pageOffset());
+      snprintf(buf, buflen, "preset%u", slot);
+      return buf;
+    }
+    return act;
+  }
+
   // The action a button index drives, and its name, from the profile.
-  const char* buttonActionFor(HidctlProfile& p, uint8_t index) {
-    for (uint8_t i = 0; i < p.button_count; i++) {
+  const char* buttonActionFor(HidctlProfile& p, uint8_t index) {    for (uint8_t i = 0; i < p.button_count; i++) {
       if (p.buttons[i].index == index) return p.buttons[i].action;
     }
     return nullptr;
@@ -1654,7 +1737,7 @@ class HidctlUsermod : public Usermod {
     if (opendeck_cmd_pos >= opendeck_cmd_count) return false;
     memset(led_report, 0, Opendeck::WIRE_LEN);
     memcpy(led_report, opendeck_cmd[opendeck_cmd_pos], opendeck_cmd_len[opendeck_cmd_pos]);
-    if (!hid_usb_send_out_endpoint(led_report, Opendeck::WIRE_LEN)) return false;
+    if (!opendeckSend(led_report)) return false;
     opendeck_cmd_pos++;
     if (opendeck_cmd_pos >= opendeck_cmd_count) {
       opendeck_cmd_count = 0;
@@ -1687,6 +1770,15 @@ class HidctlUsermod : public Usermod {
   }
 
   uint32_t opendeck_last_keepalive = 0;
+
+  // Push the deck's pictures again, without opening a new session: the
+  // reference sends its DIS once per connection and the device does not
+  // like it repeated.
+  void repaintDeck() {
+    if (active_profile < profile_count && profiles && profiles[active_profile].opendeck) {
+      opendeck_pending_paint = true;
+    }
+  }
   // The deck's USB work belongs to the main loop, like everything else:
   // the event bus runs its handlers in the PUBLISHER's task, and submitting
   // a transfer from there is how the USB stack got corrupted before.
@@ -1749,7 +1841,8 @@ class HidctlUsermod : public Usermod {
     cfg.image_quality = 90;
 
     // The CPU filled the picture, the DMA reads it.
-    esp_cache_msync((void*)(uintptr_t)bgr, (size_t)w * h * 3, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    esp_cache_msync((void*)(uintptr_t)bgr, (size_t)w * h * 3,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
 
     uint32_t outSize = 0;
     const esp_err_t err = jpeg_encoder_process(enc, &cfg, bgr,
@@ -1759,9 +1852,12 @@ class HidctlUsermod : public Usermod {
       USER_PRINTF("[HIDCTL] the JPEG encoder refused the picture (%d)\n", (int)err);
       return false;
     }
-    // The DMA wrote the JPEG, the CPU reads it.
-    esp_cache_msync((void*)(uintptr_t)jpeg, outSize, ESP_CACHE_MSYNC_FLAG_DIR_C2M
-                                           | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    // The DMA wrote the JPEG, the CPU reads it. The length is the size of
+    // the JPEG, which is not a whole number of cache lines, so the sync is
+    // told it need not be aligned.
+    esp_cache_msync((void*)(uintptr_t)jpeg, outSize,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE
+                    | ESP_CACHE_MSYNC_FLAG_TYPE_DATA | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
     jpeg_len = outSize;
     return true;
   }
@@ -1780,8 +1876,22 @@ class HidctlUsermod : public Usermod {
   // Send one packet on the OUT endpoint. It is false when the pipe is
   // busy - the OUT pipe takes one transfer at a time - and the caller
   // tries again on the next pass.
+  //
+  // The gap is how long there has to be between two packets. A PC's HID
+  // stack leaves 20 ms between them, and the deck's own firmware may
+  // need the space: it answers each command on its IN endpoint, and a
+  // command that arrives before the answer to the last one may be lost.
+  uint32_t opendeck_out_gap = 0;         // ms, 0 = as fast as the pipe allows
+  uint32_t opendeck_last_send_ms = 0;
+
   bool opendeckSend(uint8_t* built) {
-    return hid_usb_send_out_endpoint(built, Opendeck::WIRE_LEN);
+    if (opendeck_out_gap &&
+        (uint32_t)(millis() - opendeck_last_send_ms) < opendeck_out_gap) {
+      return false;                       // not yet: try again next pass
+    }
+    bool ok = hid_usb_send_out_endpoint(built, Opendeck::WIRE_LEN);
+    if (ok) opendeck_last_send_ms = millis();
+    return ok;
   }
 
   // ---- the pictures -----------------------------------------------------
@@ -1811,6 +1921,7 @@ class HidctlUsermod : public Usermod {
     uint8_t  slot;        // the BAT slot
     uint8_t  colour[3];   // blue, green, red
     uint16_t w, h;        // the picture's size
+    uint16_t number;      // the number to draw on it, 0 = none
   };
   OpendeckPic opendeck_pics[OPENDECK_PICS] = {};
   uint8_t opendeck_queue_count = 0;
@@ -1831,7 +1942,10 @@ class HidctlUsermod : public Usermod {
   // encoder is doing.
   void opendeckBuildQueue() {
     opendeck_queue_count = 0;
-    for (uint8_t i = 0; i < OPENDECK_KEYS; i++) {
+    const uint8_t keys =
+        (active_profile < profile_count && profiles[active_profile].od_keys)
+            ? profiles[active_profile].od_keys : OPENDECK_KEYS;
+    for (uint8_t i = 0; i < keys && i < OPENDECK_KEYS; i++) {
       const uint8_t slot = opendeckSlotFor(i);
       if (!slot) continue;
       // The key shows the same preset the pad of the F1 would: the one at
@@ -1858,24 +1972,187 @@ class HidctlUsermod : public Usermod {
       pic.slot = slot;
       pic.colour[0] = b; pic.colour[1] = g; pic.colour[2] = r;
       pic.w = Opendeck::KEY_W; pic.h = Opendeck::KEY_H;
+      // The number on the key is the slot it holds, so the deck reads as
+      // a bank of presets.
+      pic.number = (uint16_t)slot_no;
       opendeck_queue_count++;
     }
-    // The four zones of the touch strip, one per encoder. The reference
-    // sends these as the "dial" images; the CN003's encoders have no LED
-    // rings, so this is where their state is shown.
-    for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
-      const uint8_t hue = i * 36;
+    // The wide touch strip. On a deck whose strip is ONE screen it is a
+    // single picture across all of it; on the others it is four zones,
+    // one per encoder, and they are the reference's "dial" images.
+    const bool strip_one = (active_profile < profile_count && profiles)
+                           && profiles[active_profile].od_strip_one;
+    if (strip_one) {
       OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
-      pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
-      pic.colour[0] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
-      pic.colour[1] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
-      pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
-      pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
+      pic.slot = 0;                          // slot 0 is the whole strip
+      pic.colour[0] = pic.colour[1] = pic.colour[2] = 0;
+      pic.w = Opendeck::STRIP_W; pic.h = Opendeck::STRIP_H;
+      pic.number = 0;
       opendeck_queue_count++;
+    } else {
+      for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
+        const uint8_t hue = i * 36;
+        OpendeckPic& pic = opendeck_pics[opendeck_queue_count];
+        pic.slot = (uint8_t)(i + 1);            // the strip zones are slots 1..4
+        pic.colour[0] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
+        pic.colour[1] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
+        pic.colour[2] = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
+        pic.w = Opendeck::DIAL_W; pic.h = Opendeck::DIAL_H;
+        pic.number = (uint16_t)(i + 1);         // the encoder's number
+        opendeck_queue_count++;
+      }
     }
     opendeck_queue_pos = 0;
     opendeck_jpeg_len = 0;
     opendeck_chunk_off = 0;
+    opendeck_stage = OPENDECK_STAGE_ENCODE;
+  }
+
+  // Draw a number centred on a picture. The picture is in the encoder's
+  // order (blue first), so the colour is given that way too.
+  void opendeckDrawNumber(uint8_t* bgr, uint16_t w, uint16_t h, uint16_t number,
+                          uint8_t blue, uint8_t green, uint8_t red) {
+    char text[4];
+    snprintf(text, sizeof(text), "%u", number);
+    const uint8_t n = (uint8_t)strlen(text);
+    if (!n) return;
+    // Six columns per digit (five plus a gap), seven rows.
+    const uint16_t units_w = (uint16_t)(n * 6 - 1);
+    uint16_t scale = (uint16_t)(w / (units_w + 1));
+    uint16_t vscale = (uint16_t)(h / 8);
+    if (vscale < scale) scale = vscale;
+    if (!scale) return;
+    const uint16_t glyph_w = (uint16_t)(5 * scale);
+    const uint16_t glyph_h = (uint16_t)(7 * scale);
+    const uint16_t gap = scale;
+    const uint16_t text_w = (uint16_t)(n * glyph_w + (n - 1) * gap);
+    const uint16_t x0 = (uint16_t)((w > text_w) ? (w - text_w) / 2 : 0);
+    const uint16_t y0 = (uint16_t)((h > glyph_h) ? (h - glyph_h) / 2 : 0);
+
+    for (uint8_t d = 0; d < n; d++) {
+      const uint8_t digit = (uint8_t)(text[d] - '0');
+      if (digit > 9) continue;
+      for (uint8_t row = 0; row < 7; row++) {
+        const uint8_t bits = Opendeck::DIGIT_FONT[digit][row];
+        for (uint8_t col = 0; col < 5; col++) {
+          if (!(bits & (0x10 >> col))) continue;
+          const uint16_t px = (uint16_t)(x0 + d * (glyph_w + gap) + col * scale);
+          const uint16_t py = (uint16_t)(y0 + row * scale);
+          for (uint16_t sy = 0; sy < scale; sy++) {
+            uint8_t* p = bgr + ((size_t)(py + sy) * w + px) * 3;
+            for (uint16_t sx = 0; sx < scale; sx++) {
+              p[0] = blue; p[1] = green; p[2] = red;
+              p += 3;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Draw a number centred on a rectangle of a picture, with the rectangle
+  // at (x0, y0) and the given size. The wide strip's tiles use it.
+  void opendeckDrawNumberIn(uint8_t* bgr, uint16_t w, uint16_t h,
+                            uint16_t x0, uint16_t y0, uint16_t rw, uint16_t rh,
+                            uint16_t number, uint8_t blue, uint8_t green, uint8_t red) {
+    char text[4];
+    snprintf(text, sizeof(text), "%u", number);
+    const uint8_t n = (uint8_t)strlen(text);
+    if (!n) return;
+    const uint16_t units_w = (uint16_t)(n * 6 - 1);
+    uint16_t scale = (uint16_t)(rw / (units_w + 1));
+    uint16_t vscale = (uint16_t)(rh / 8);
+    if (vscale < scale) scale = vscale;
+    if (!scale) return;
+    const uint16_t glyph_w = (uint16_t)(5 * scale);
+    const uint16_t glyph_h = (uint16_t)(7 * scale);
+    const uint16_t gap = scale;
+    const uint16_t text_w = (uint16_t)(n * glyph_w + (n - 1) * gap);
+    const uint16_t tx = (uint16_t)(x0 + (rw > text_w ? (rw - text_w) / 2 : 0));
+    const uint16_t ty = (uint16_t)(y0 + (rh > glyph_h ? (rh - glyph_h) / 2 : 0));
+
+    for (uint8_t d = 0; d < n; d++) {
+      const uint8_t digit = (uint8_t)(text[d] - '0');
+      if (digit > 9) continue;
+      for (uint8_t row = 0; row < 7; row++) {
+        const uint8_t bits = Opendeck::DIGIT_FONT[digit][row];
+        for (uint8_t col = 0; col < 5; col++) {
+          if (!(bits & (0x10 >> col))) continue;
+          const uint16_t px = (uint16_t)(tx + d * (glyph_w + gap) + col * scale);
+          const uint16_t py = (uint16_t)(ty + row * scale);
+          if (px + scale > w || py + scale > h) continue;
+          for (uint16_t sy = 0; sy < scale; sy++) {
+            uint8_t* p = bgr + ((size_t)(py + sy) * w + px) * 3;
+            for (uint16_t sx = 0; sx < scale; sx++) {
+              p[0] = blue; p[1] = green; p[2] = red;
+              p += 3;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // The wide touch strip is ONE screen: 800 by 128 pixels, cut into a
+  // 200 by 128 tile per encoder. The reference composites the four
+  // encoder pictures into it and sends it as one "BGPIC".
+  //
+  // The canvas is built here, in PSRAM, and the JPEG comes out of it.
+  bool opendeckEncodeStrip(uint8_t*& jpeg_out, uint16_t& jpeg_len_out) {
+    jpeg_out = nullptr;
+    jpeg_len_out = 0;
+    const uint16_t w = Opendeck::STRIP_W, h = Opendeck::STRIP_H;
+    const size_t pic_len = (size_t)w * h * 3;
+    uint8_t* buf = opendeckAlloc(pic_len);
+    if (!buf) return false;
+    uint8_t* jpeg = opendeckAlloc(pic_len + 16384);
+    if (!jpeg) { free(buf); return false; }
+
+    // Black, then a coloured tile per encoder with its number on it.
+    memset(buf, 0, pic_len);
+    for (uint8_t i = 0; i < Opendeck::STRIP_TILES; i++) {
+      const uint8_t hue = i * 36;
+      const uint8_t b = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
+      const uint8_t g = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 120) / 180)));
+      const uint8_t r = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * hue / 180)));
+      const uint16_t x0 = (uint16_t)(i * Opendeck::STRIP_TILE_W);
+      for (uint16_t y = 0; y < h; y++) {
+        uint8_t* p = buf + ((size_t)y * w + x0) * 3;
+        for (uint16_t x = 0; x < Opendeck::STRIP_TILE_W; x++) {
+          p[0] = b; p[1] = g; p[2] = r;
+          p += 3;
+        }
+      }
+      opendeckDrawNumberIn(buf, w, h, x0, 0, Opendeck::STRIP_TILE_W, h,
+                            (uint16_t)(i + 1), 0xFF, 0xFF, 0xFF);
+    }
+
+    // The device reads its pictures upside down.
+    {
+      const size_t row = (size_t)w * 3;
+      uint8_t* tmp = opendeckAlloc(row);
+      if (tmp) {
+        for (uint16_t y = 0; y < h; y++) {
+          uint8_t* src = buf + (size_t)(h - 1 - y) * row;
+          uint8_t* dst = buf + (size_t)y * row;
+          memcpy(tmp, src, row);
+          for (uint16_t x = 0; x < w; x++) {
+            memcpy(dst + (size_t)x * 3, tmp + (size_t)(w - 1 - x) * 3, 3);
+          }
+        }
+        free(tmp);
+      }
+    }
+
+    size_t jpeg_len = 0;
+    const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 16384, jpeg_len);
+    free(buf);
+    if (!ok) { free(jpeg); return false; }
+    if (opendeck_jpeg) free(opendeck_jpeg);
+    opendeck_jpeg = jpeg;
+    jpeg_out = jpeg;
+    jpeg_len_out = (uint16_t)jpeg_len;
+    return true;
   }
 
   // Draw one picture and encode it. The picture is in the encoder's
@@ -1894,6 +2171,11 @@ class HidctlUsermod : public Usermod {
     uint8_t* px = buf;
     for (size_t n = 0; n < pic_len; n += 3) {
       *px++ = pic.colour[0]; *px++ = pic.colour[1]; *px++ = pic.colour[2];
+    }
+    // The slot number on the picture: a row of coloured squares is no
+    // use as a preset bank.
+    if (pic.number) {
+      opendeckDrawNumber(buf, w, h, pic.number, 0xFF, 0xFF, 0xFF);
     }
     // The device reads its pictures upside down: a 180 degree turn, so the
     // rows and the columns both go.
@@ -1927,6 +2209,19 @@ class HidctlUsermod : public Usermod {
   uint8_t* opendeck_jpeg = nullptr;
 
   // One packet per pass of the main loop.
+  //
+  // A picture takes three steps and each one is a separate pass, because
+  // the OUT pipe takes one transfer at a time: make the picture, announce
+  // it (the "BAT" header, which names the key and the length), and then
+  // send it (the chunks). The steps have to be kept apart: if the "BAT"
+  // header is built while the pipe is busy and the picture is sent
+  // anyway, the device gets the image with no header and does not know
+  // which key it is for.
+  static constexpr uint8_t OPENDECK_STAGE_ENCODE = 0;
+  static constexpr uint8_t OPENDECK_STAGE_BAT    = 1;
+  static constexpr uint8_t OPENDECK_STAGE_CHUNK  = 2;
+  uint8_t opendeck_stage = OPENDECK_STAGE_ENCODE;
+
   void opendeckPaintStep() {
     if (!opendeck_painting) return;
     if (opendeck_queue_pos >= opendeck_queue_count) {
@@ -1939,20 +2234,31 @@ class HidctlUsermod : public Usermod {
       }
       return;
     }
-    if (opendeck_jpeg_len == 0) {
+    if (opendeck_stage == OPENDECK_STAGE_ENCODE) {
       // This screen's picture has to be made first.
-      if (!opendeckEncodeKey(opendeck_queue_pos)) {
+      const bool strip = opendeck_pics[opendeck_queue_pos].slot == 0;
+      const bool ok = strip ? opendeckEncodeStrip(opendeck_jpeg, opendeck_jpeg_len)
+                            : opendeckEncodeKey(opendeck_queue_pos);
+      if (!ok) {
         opendeck_queue_pos++;
         return;
       }
-      Opendeck::bat(led_report, (uint8_t)(opendeck_pics[opendeck_queue_pos].slot - 1),
-                    opendeck_jpeg_len);
+      opendeck_stage = OPENDECK_STAGE_BAT;
+      return;
+    }
+    if (opendeck_stage == OPENDECK_STAGE_BAT) {
+      const OpendeckPic& pic = opendeck_pics[opendeck_queue_pos];
+      if (pic.slot == 0) {
+        // The wide strip: one picture across all of it.
+        Opendeck::bgpic(led_report, opendeck_jpeg_len, 0, 0, pic.w, pic.h);
+      } else {
+        Opendeck::bat(led_report, (uint8_t)(pic.slot - 1), opendeck_jpeg_len);
+      }
       if (!opendeckSend(led_report)) return;    // the pipe is busy: try again
       USER_PRINTF("[HIDCTL] deck: picture for slot %u (%ux%u, %u bytes)\n",
-                  opendeck_pics[opendeck_queue_pos].slot,
-                  opendeck_pics[opendeck_queue_pos].w, opendeck_pics[opendeck_queue_pos].h,
-                  opendeck_jpeg_len);
+                  pic.slot, pic.w, pic.h, opendeck_jpeg_len);
       opendeck_chunk_off = 0;
+      opendeck_stage = OPENDECK_STAGE_CHUNK;
       return;
     }
     if (opendeck_chunk_off < opendeck_jpeg_len) {
@@ -1967,6 +2273,7 @@ class HidctlUsermod : public Usermod {
     // This key is done: on to the next one.
     opendeck_queue_pos++;
     opendeck_jpeg_len = 0;
+    opendeck_stage = OPENDECK_STAGE_ENCODE;
   }
 
   void opendeckPaintKeys() {
@@ -2117,12 +2424,7 @@ class HidctlUsermod : public Usermod {
         const char* act = (mod_held && btn.mod_action[0]) ? btn.mod_action : btn.action;
 
         char shifted[HIDCTL_MAX_ACTION + 8];
-        const char* use = act;
-        if (!strncmp(act, "preset", 6) && isdigit(act[6])) {
-          uint16_t slot = (uint16_t)(atoi(act + 6) + pageOffset());
-          snprintf(shifted, sizeof(shifted), "preset%u", slot);
-          use = shifted;
-        }
+        const char* use = withPageOffset(act, shifted, sizeof(shifted));
         USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, use);
         runAction(use, 255);
       }
@@ -2184,6 +2486,10 @@ class HidctlUsermod : public Usermod {
     // The LED report goes out from here and nowhere else: this is the
     // task that owns the USB host stack.
     flushLedReport();
+    // The zero-length packet that ends a report goes out from here too:
+    // a transfer submitted from inside the completion of another one is
+    // what the USB stack here does not survive.
+    hid_usb_pump_out();
     // An OpenDeck-family deck: its session and its pictures are handled
     // here, because this is the task that owns the USB host stack.
     if (active_profile < profile_count && profiles[active_profile].opendeck) {
@@ -2217,6 +2523,8 @@ class HidctlUsermod : public Usermod {
   // The preset changed: the pads and the display have to follow.
   void onStateChange(uint8_t mode) override {
     paint();
+    // A deck's screens are pictures, so they have to be pushed again.
+    repaintDeck();
   }
 
   // The core fires this BEFORE it wipes currentPreset to 0, so the active
@@ -2241,6 +2549,7 @@ class HidctlUsermod : public Usermod {
                     (presetCache != nullptr && presetCache[slot].isPlaylist) ? 1 : 0,
                     music_slot);
         paint();
+        repaintDeck();
       }
       return;
     }
@@ -2295,11 +2604,32 @@ class HidctlUsermod : public Usermod {
     if (h.containsKey("ctrlout")) hid_usb_set_out_via_control(h["ctrlout"] | false);
     // Send the packet without its leading report-ID byte.
     if (h.containsKey("nolead")) hid_usb_set_out_drop_leading(h["nolead"] | false);
-    // Open the deck's session again and push its pictures: the device
-    // only shows them after a DIS.
+    // End the packet with a zero-length packet. A device whose report is
+    // exactly the size of its endpoint's maximum packet needs it.
+    if (h.containsKey("zlp")) hid_usb_set_out_zlp(h["zlp"] | false);
+    // Move the report to the front of the packet and keep the packet's
+    // length, so a pad byte ends the transfer.
+    if (h.containsKey("shift")) hid_usb_set_out_shift(h["shift"] | false);
+    // Cap how many bytes of the packet go out. The deck's report is 1024
+    // bytes and its endpoint's maximum packet is 1024, so the 1025-byte
+    // packet goes out as 1024 and then a short packet of one byte. A
+    // Windows HID stack drops that trailing byte, so the device may only
+    // ever see 1024 - and a short packet in the middle of a stream may
+    // throw its parser out.
+    if (h.containsKey("outcap")) hid_usb_set_out_cap((uint16_t)(h["outcap"] | 0));
+    // The gap between two packets to the deck, in ms. A PC's HID stack
+    // leaves 20 ms between them and the deck may need the room.
+    if (h.containsKey("outgap")) opendeck_out_gap = (uint32_t)(h["outgap"] | 0);
+    // Push the pictures again. NOT a new session: the reference sends its
+    // DIS once per connection and the device does not like it repeated.
     if (h["repaint"]) {
-      opendeck_pending_init = true;
       opendeck_pending_paint = true;
+    }
+    // Write the built-in profiles over the ones on the filesystem and read
+    // them back. The defaults are only written when the file is missing,
+    // so a profile written by an older firmware keeps its old contents.
+    if (h["writedefaults"]) {
+      writeDefaultProfiles();
     }
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
@@ -2418,6 +2748,11 @@ class HidctlUsermod : public Usermod {
     top["out_bytes"] = hid_usb_out_bytes();
     top["out_via_control"] = hid_usb_get_out_via_control() ? 1 : 0;
     top["out_drop_leading"] = hid_usb_get_out_drop_leading() ? 1 : 0;
+    top["out_zlp"] = hid_usb_get_out_zlp() ? 1 : 0;
+    top["out_shift"] = hid_usb_get_out_shift() ? 1 : 0;
+    top["out_cap"] = hid_usb_get_out_cap();
+    top["out_gap"] = opendeck_out_gap;
+    top["link_speed"] = hid_usb_link_speed();
     {
       uint8_t fl = 0;
       const uint8_t* fb = hid_usb_out_first(&fl);

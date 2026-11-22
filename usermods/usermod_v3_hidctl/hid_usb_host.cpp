@@ -165,6 +165,9 @@ uint32_t hid_usb_log_zlps(void) { return hid_log_zlps; }
 // The feature reports are asked for only when they are wanted: a PC's HID
 // stack never asks for them.
 static bool hid_want_feature_reports = false;
+// The vendor request 0xDD. The Traktor F1 answers it; the deck stalls it,
+// and a stall on the control pipe is not something this host clears well.
+static bool hid_class_vendor_request = true;
 static uint8_t hid_class_stage = 0;
 static bool    hid_class_in_flight = false;
 static bool    hid_class_wanted = false;
@@ -226,6 +229,11 @@ static volatile uint32_t hid_out_stuck = 0;      // a transfer that never finish
 static volatile uint32_t hid_out_started_ms = 0; // when the one in flight went
 static volatile bool hid_in_resubmit_needed = false;
 static volatile bool hid_in_error_recovery_needed = false;
+static volatile uint8_t hid_link_speed = 0;    // 0 = unknown, 1 = full, 2 = high
+// True for a device whose reports are always exactly one maximum packet
+// long: the OpenDeck-family decks. A shorter packet is then a zero-length
+// one, whatever the driver says its length is.
+static bool hid_in_exact_mps = false;
 
 
 static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* arg);
@@ -287,6 +295,8 @@ static void hid_claim_other_interfaces(usb_device_handle_t dev, uint8_t skip_ifa
 
 // Ask for the feature reports too (or stop asking).
 void hid_usb_set_feature_reports(bool want) { hid_want_feature_reports = want; }
+void hid_usb_set_class_vendor_request(bool want) { hid_class_vendor_request = want; }
+bool hid_usb_get_class_vendor_request(void) { return hid_class_vendor_request; }
 
 // Send the wake-up packet again: {0xA0, 0x00, 0x00} on the OUT
 // endpoint. It goes out once when the device is opened, and can be sent
@@ -324,6 +334,7 @@ const uint8_t* hid_usb_feature_data(uint8_t* len) {
 }
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
 static bool hid_out_send_next_piece(void);
+static bool hid_out_send_zlp(void);
 static void hid_out_watchdog(void);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
 static void      hid_close_device(void);
@@ -462,7 +473,9 @@ void hid_usb_poll(void) {
       case 7:
         hid_class_stage = 8;
         // The vendor request a PC's HID stack makes.
-        hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
+        if (hid_class_vendor_request) {
+          hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
+        }
         break;
       case 8:
         hid_class_stage = 9;
@@ -557,10 +570,29 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     hid_in_status_next = (uint8_t)((hid_in_status_next + 1) % 16);
     (void)last;
   }
-  if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) hid_in_error_count++;
+  if (xfer->status != USB_TRANSFER_STATUS_COMPLETED &&
+      xfer->status != USB_TRANSFER_STATUS_CANCELED &&
+      xfer->status != USB_TRANSFER_STATUS_NO_DEVICE) {
+    // A CANCELLED transfer is the result of our own flush, not a fault
+    // of the device: counting it as an error sends the recovery path
+    // round again, and the pipe never comes back.
+    hid_in_error_count++;
+  }
 
   if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
     uint16_t n = (uint16_t)xfer->actual_num_bytes;
+    // IDF v5.5 computes the byte count of a short interrupt IN packet -
+    // and a zero-length packet is a short one - as (received + mps - 2),
+    // so an idle zero-length packet arrives as mps-2 bytes. The deck's
+    // reports are exactly one packet long, so anything shorter than the
+    // maximum packet is not a report.
+    if (hid_in_exact_mps && n != hid_in_mps) {
+      hid_in_zlp_count++;
+      hid_log_event(nullptr, 0, true);
+      hid_in_error_recovery_needed = false;
+      hid_in_resubmit_needed = true;
+      return;
+    }
     if (n > 0) {
       if (n > HIDCTL_MAX_REPORT) n = HIDCTL_MAX_REPORT;
       hid_in_report_count++;
@@ -597,9 +629,15 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     hid_in_error_recovery_needed = false;
   } else {
     // The pipe is HALTED after an error; hid_usb_poll() recovers it.
+    // A CANCELLED transfer is our own flush coming back, and a device
+    // that has gone away is not something to recover from: either one
+    // would send the recovery path round for ever.
     HIDCTL_DEBUG("IN callback: status=%d bytes=%d (recover in poll)",
                  (int)xfer->status, (int)xfer->actual_num_bytes);
-    hid_in_error_recovery_needed = true;
+    if (xfer->status != USB_TRANSFER_STATUS_CANCELED &&
+        xfer->status != USB_TRANSFER_STATUS_NO_DEVICE) {
+      hid_in_error_recovery_needed = true;
+    }
   }
 
   hid_in_resubmit_needed = true;
@@ -626,6 +664,17 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   hid_vendor  = dev_desc->idVendor;
   hid_product = dev_desc->idProduct;
 
+  // How fast is the link? A full-speed link carries at most 64 bytes in an
+  // interrupt packet, so a device whose endpoints claim 512 and 1024 can
+  // only work at high speed - and a host that has quietly dropped to full
+  // speed would explain a device that enumerates and then says nothing.
+  {
+    usb_device_info_t dev_info = {};
+    if (usb_host_device_info(dev, &dev_info) == ESP_OK) {
+      hid_link_speed = (uint8_t)dev_info.speed;
+    }
+  }
+
   // Does any profile want this device? If not, let it go.
   uint8_t profile = 0xFF;
   if (hidctlUsermodPtr) profile = hidctlUsermodPtr->matchDevice(hid_vendor, hid_product);
@@ -637,6 +686,38 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   }
   HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — profile %u wants it",
              hid_vendor, hid_product, profile);
+
+  // How the packets go on the wire is a property of the device, and it
+  // has to be set before anything is sent.
+  //
+  // The deck's report ID byte is not on the wire - a PC's HID stack
+  // strips it, and the device drops any frame whose first three bytes
+  // are not "CRT". The report is 1024 bytes, the endpoint's maximum
+  // packet is 1024, and the reference sends exactly that with no
+  // terminator: the zero-length packet in a Windows capture is the
+  // Windows HID stack flushing its report, not part of the protocol.
+  //
+  // The deck also stalls the vendor request 0xDD, which the F1 answers,
+  // and a stall on the control pipe is not something this host clears
+  // well. The reference only asks for that report off Windows, so it is
+  // not asked for here either.
+  if (hidctlUsermodPtr && hidctlUsermodPtr->profileIsOpendeck(profile)) {
+    hid_usb_set_out_drop_leading(true);
+    hid_usb_set_out_shift(false);
+    hid_usb_set_out_zlp(false);
+    hid_usb_set_class_vendor_request(false);
+    hid_in_exact_mps = true;
+    HIDCTL_LOG("configure: deck framing: no report ID on the wire, "
+               "1024-byte report, no terminator");
+  } else {
+    // A device that is not a deck gets the plain framing back: the
+    // report-ID byte stays where it is.
+    hid_usb_set_out_drop_leading(false);
+    hid_usb_set_out_shift(false);
+    hid_usb_set_out_zlp(false);
+    hid_usb_set_class_vendor_request(true);
+    hid_in_exact_mps = false;
+  }
 
   const usb_config_desc_t* cfg_desc = nullptr;
   err = usb_host_get_active_config_descriptor(dev, &cfg_desc);
@@ -912,14 +993,72 @@ void hid_usb_set_out_via_control(bool on) { hid_out_via_control = on; }
 // is optional.
 static bool hid_out_drop_leading = false;
 
+// Move the report to the front of the packet and keep the packet's
+// length, so the report is followed by one pad byte.
+//
+// The deck's report is 1024 bytes and its OUT endpoint's maximum packet
+// is 1024, so the report fills a packet exactly and the transfer has to
+// be ended by a short packet or the device never learns that it has the
+// whole report. A zero-length packet would do it, but the DWC2's HAL
+// asserts on one. A single pad byte is short as well.
+static bool hid_out_shift = false;
+
+void hid_usb_set_out_shift(bool on) { hid_out_shift = on; }
+bool hid_usb_get_out_shift(void) { return hid_out_shift; }
+
 void hid_usb_set_out_drop_leading(bool on) { hid_out_drop_leading = on; }
 bool hid_usb_get_out_drop_leading(void) { return hid_out_drop_leading; }
+
+// Cap on how many bytes of a packet go out. The deck's output report is
+// 1024 bytes and its endpoint's maximum packet is 1024, so a 1025-byte
+// packet goes out as two packets: 1024 and then a short one of a single
+// byte. A Windows HID stack drops that trailing byte, so the device may
+// only ever see 1024. The cap makes the same packet go out as one.
+static uint16_t hid_out_cap = 0;          // 0 = no cap
+
+void hid_usb_set_out_cap(uint16_t n) { hid_out_cap = n; }
+uint16_t hid_usb_get_out_cap(void) { return hid_out_cap; }
+
+// End the packet with a zero-length packet.
+//
+// The deck's report is 1024 bytes and its OUT endpoint's maximum packet
+// is 1024, so a report of that size is not a short packet and the device
+// cannot tell that it has the whole thing. A PC's HID stack sends a
+// zero-length packet to end the transfer, and the capture of a host that
+// drives the deck shows exactly that: 1024 bytes, then nothing, then the
+// next report. Without it the device waits for the end of a report that
+// never comes.
+static bool hid_out_zlp = false;
+static bool hid_out_zlp_pending = false;
+
+void hid_usb_set_out_zlp(bool on) { hid_out_zlp = on; }
+bool hid_usb_get_out_zlp(void) { return hid_out_zlp; }
+
+// Send the zero-length packet that ends a report.
+//
+// It goes from the main loop and not from the transfer callback: a
+// transfer submitted from inside the completion of another one is what
+// the USB stack here does not survive - the DWC2 raises an error
+// interrupt and the HAL asserts on it (usb_dwc_hal.c:502, the
+// channel-halted check).
+bool hid_usb_pump_out(void) {
+  if (!hid_out_zlp_pending || hid_out_in_flight) return false;
+  hid_out_zlp_pending = false;
+  return hid_out_send_zlp();
+}
 bool hid_usb_get_out_via_control(void) { return hid_out_via_control; }
 
 bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   if (!hid_dev_hdl || !hid_out_xfer || !data || len == 0) { hid_out_refused_no_device++; return false; }
+  bool shifted = false;
   if (hid_out_drop_leading && len > 1) {
-    data++; len--;
+    if (hid_out_shift) {
+      // The report moves to the front of the packet and the packet keeps
+      // its length: the report is followed by one pad byte.
+      shifted = true;
+    } else {
+      data++; len--;
+    }
   }
   if (hid_out_via_control) {
     // Over the control pipe: the report ID goes in wValue and the data
@@ -927,8 +1066,12 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
     if (len < 2) return false;
     return hid_usb_send_output_report(data[0], data + 1, (uint16_t)(len - 1));
   }
+  if (hid_out_cap && len > hid_out_cap) len = hid_out_cap;
   if (len > HIDCTL_MAX_OUTPUT) { hid_out_refused_too_long++; return false; }
   if (hid_out_in_flight) { hid_out_refused_busy++; return false; }
+  // The last packet still needs its zero-length packet, and that has to go
+  // before this one or the device sees the reports out of order.
+  if (hid_out_zlp_pending) { hid_out_refused_busy++; return false; }
 
   // The whole packet goes into the transfer's buffer and it is sent in
   // pieces.
@@ -939,7 +1082,12 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   // endpoint, and a piece that big is NOT delivered: the transfer
   // completes with nothing in it. So the piece size is capped at what is
   // known to work.
-  memcpy(hid_out_xfer->data_buffer, data, len);
+  if (shifted) {
+    memcpy(hid_out_xfer->data_buffer, data + 1, len - 1);
+    hid_out_xfer->data_buffer[len - 1] = 0x00;
+  } else {
+    memcpy(hid_out_xfer->data_buffer, data, len);
+  }
   hid_out_total = len;
   hid_out_sent = 0;
   uint16_t piece = hid_out_mps ? hid_out_mps : 64;
@@ -951,12 +1099,14 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   // something on the controller's display or its LEDs looks wrong.
   {
     uint16_t keep = len < HIDCTL_READBACK_BYTES ? len : HIDCTL_READBACK_BYTES;
-    memcpy(hid_last_out_report, data, keep);
+    // What actually goes on the wire, which is not always what was handed
+    // in: the report ID byte may be off it.
+    memcpy(hid_last_out_report, hid_out_xfer->data_buffer, keep);
     hid_last_out_len = (uint8_t)keep;
   }
   if (!hid_out_first_len) {
     uint16_t keep = len < sizeof(hid_out_first) ? len : sizeof(hid_out_first);
-    memcpy(hid_out_first, data, keep);
+    memcpy(hid_out_first, hid_out_xfer->data_buffer, keep);
     hid_out_first_len = (uint8_t)keep;
   }
 
@@ -971,12 +1121,41 @@ bool hid_usb_send_out_endpoint(const uint8_t* data, uint16_t len) {
   }
   hid_out_submit_error = 0;
   hid_out_sent = hid_out_xfer->num_bytes;
+  hid_out_bytes += hid_out_xfer->num_bytes;
+  // The packet has to be ended with a zero-length packet: see the note on
+  // hid_out_zlp.
+  hid_out_zlp_pending = hid_out_zlp && (hid_out_sent >= hid_out_total);
+  return true;
+}
+
+// End a packet with a zero-length packet.
+//
+// A device whose report is exactly the size of its endpoint's maximum
+// packet cannot tell that it has the whole report: the packet is not a
+// short one. A PC's HID stack ends the transfer with a zero-length
+// packet, and the capture of a host that drives the deck shows it: a
+// 1024-byte packet, then a zero-length one, then the next report.
+static bool hid_out_send_zlp(void) {
+  if (!hid_out_xfer || !hid_dev_hdl) return false;
+  hid_out_xfer->num_bytes = 0;
+  hid_out_xfer->device_handle = hid_dev_hdl;
+  hid_out_xfer->bEndpointAddress = hid_out_ep;
+  hid_out_in_flight = true;
+  hid_out_started_ms = millis();
+  esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
+  if (err != ESP_OK) {
+    hid_out_in_flight = false;
+    hid_out_started_ms = 0;
+    hid_out_submit_error = (int8_t)err;
+    HIDCTL_LOG("OUT endpoint: the zero-length packet was refused: %s",
+               esp_err_to_name(err));
+    return false;
+  }
   return true;
 }
 
 // Send the next piece of a packet that goes out in pieces.
-static bool hid_out_send_next_piece(void) {
-  if (!hid_out_xfer || hid_out_sent >= hid_out_total) {
+static bool hid_out_send_next_piece(void) {  if (!hid_out_xfer || hid_out_sent >= hid_out_total) {
     hid_out_total = 0;
     hid_out_sent = 0;
     return false;
@@ -990,6 +1169,8 @@ static bool hid_out_send_next_piece(void) {
   hid_out_xfer->device_handle = hid_dev_hdl;
   hid_out_xfer->bEndpointAddress = hid_out_ep;
   hid_out_sent += hid_out_xfer->num_bytes;
+  hid_out_bytes += hid_out_xfer->num_bytes;
+  hid_out_zlp_pending = hid_out_zlp && (hid_out_sent >= hid_out_total);
   hid_out_in_flight = true;
   hid_out_started_ms = millis();
   esp_err_t err = usb_host_transfer_submit(hid_out_xfer);
@@ -1063,6 +1244,8 @@ const uint8_t* hid_usb_out_first(uint8_t* len) {
   return hid_out_first;
 }
 uint32_t hid_usb_out_bytes(void) { return hid_out_bytes; }
+// 0 = unknown, 1 = full speed, 2 = high speed.
+uint8_t hid_usb_link_speed(void) { return hid_link_speed; }
 const uint8_t* hid_usb_report_desc(uint16_t* len) {
   if (len) *len = hid_report_desc_len;
   return hid_report_desc;
@@ -1094,7 +1277,12 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
   hid_out_in_flight = false;
   hid_out_started_ms = 0;
   // More of the packet to go?
-  if (hid_out_sent < hid_out_total) hid_out_send_next_piece();
+  if (hid_out_sent < hid_out_total) {
+    hid_out_send_next_piece();
+    return;
+  }
+  // The packet is complete. If the device needs the transfer ended with a
+  // zero-length packet, it is due - the main loop sends it.
 }
 
 // A transfer that never finishes would leave the OUT pipe stuck for ever

@@ -317,6 +317,12 @@ def main():
         push_pattern(deck, args.number)
     if args.strip:
         push_strip(deck)
+    if args.bgpic:
+        print("pushing one picture across the whole strip (BGPIC)...")
+        jpeg = strip_image((0, 90, 40), (800, 128), text="THE WIDE STRIP")
+        deck.bgpic(jpeg, 800, 128)
+        print(f"  BGPIC, {len(jpeg)} bytes")
+        deck.stp()
 
     if args.read:
         print(f"reading for {args.read}s - press the keys, turn the encoders")

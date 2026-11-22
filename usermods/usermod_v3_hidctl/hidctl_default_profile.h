@@ -42,11 +42,12 @@ static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
   "kind": "opendeck",
   "report_id": 0,
   "report_len": 512,
+  "opendeck": { "keys": 10, "encoders": 4, "strip_one": true },
   "encoders": [
-    { "name": "enc1", "action": "bri",           "push_action": "showpage" },
-    { "name": "enc2", "action": "effectSpeed",   "push_action": "" },
-    { "name": "enc3", "action": "effectIntensity","push_action": "" },
-    { "name": "enc4", "action": "effectPalette", "push_action": "" }
+    { "name": "enc1", "action": "page", "push_action": "showpage" },
+    { "name": "enc2", "action": "page", "push_action": "" },
+    { "name": "enc3", "action": "page", "push_action": "" },
+    { "name": "enc4", "action": "page", "push_action": "" }
   ],
   "button_map": [
     { "index": 0,  "name": "key1",  "action": "preset1" },
@@ -59,11 +60,11 @@ static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
     { "index": 7,  "name": "key8",  "action": "preset8" },
     { "index": 8,  "name": "key9",  "action": "preset9" },
     { "index": 9,  "name": "key10", "action": "preset10" },
-    { "index": 11, "name": "key11", "action": "" },
-    { "index": 12, "name": "key12", "action": "" },
-    { "index": 13, "name": "key13", "action": "" },
-    { "index": 14, "name": "key14", "action": "" },
-    { "index": 15, "name": "key15", "action": "" }
+    { "index": 11, "name": "zone1", "action": "nextpreset" },
+    { "index": 12, "name": "zone2", "action": "prevpreset" },
+    { "index": 13, "name": "zone3", "action": "nextfx" },
+    { "index": 14, "name": "zone4", "action": "prevfx" },
+    { "index": 15, "name": "zone5", "action": "blackout" }
   ]
 })JSON";
 

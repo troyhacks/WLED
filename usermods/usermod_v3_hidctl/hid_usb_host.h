@@ -104,6 +104,8 @@ void hid_usb_send_wakeup(void);
 // Ask for the feature reports too (or stop asking). A PC's HID stack
 // never asks for them.
 void hid_usb_set_feature_reports(bool want);
+void hid_usb_set_class_vendor_request(bool want);
+bool hid_usb_get_class_vendor_request(void);
 
 // Claim or release the device's OTHER interface (the F1's second one). A
 // PC's HID stack leaves it alone.
@@ -128,11 +130,19 @@ uint32_t hid_usb_out_refused(uint8_t which);   // 0 no device, 1 too long,
 int8_t  hid_usb_out_submit_error(void);
 uint32_t hid_usb_out_stuck(void);     // transfers that never finished
 uint32_t hid_usb_ctrl_out_count(void);   // output reports over the control pipe
-uint32_t hid_usb_out_bytes(void);    // what the last OUT transfer carried
+uint32_t hid_usb_out_bytes(void);    // how many bytes went on the OUT pipe
+uint8_t  hid_usb_link_speed(void);   // 0 unknown, 1 full speed, 2 high speed
 void     hid_usb_set_out_via_control(bool on);
 bool     hid_usb_get_out_via_control(void);
 void     hid_usb_set_out_drop_leading(bool on);
 bool     hid_usb_get_out_drop_leading(void);
+void     hid_usb_set_out_shift(bool on);
+bool     hid_usb_get_out_shift(void);
+void     hid_usb_set_out_cap(uint16_t n);
+uint16_t hid_usb_get_out_cap(void);
+void     hid_usb_set_out_zlp(bool on);
+bool     hid_usb_get_out_zlp(void);
+bool     hid_usb_pump_out(void);   // sends the pending zero-length packet
 const uint8_t* hid_usb_out_first(uint8_t* len);
 const uint8_t* hid_usb_report_desc(uint16_t* len);
 const uint8_t* hid_usb_last_out_head(uint8_t* len);

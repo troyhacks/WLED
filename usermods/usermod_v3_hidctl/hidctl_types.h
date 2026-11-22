@@ -136,4 +136,15 @@ struct HidctlProfile {
   // events with a message ID in them, and its output is the ASCII "CRT"
   // command protocol rather than an LED report.
   bool     opendeck;
+  // How many of the deck's screens there are and how many encoders it has.
+  // The family differs: the CN003 has ten keys with displays and four
+  // encoders, and the whole strip can be one picture on some of them.
+  uint8_t  od_keys;
+  uint8_t  od_encoders;
+  uint8_t  od_strip_slot;   // the BAT slot for one picture across the
+                              // whole strip; 0 = the strip is four zones
+  // True when the wide touch strip is ONE screen: a single picture
+  // across all of it, cut into a tile per encoder. The reference calls
+  // that a "BGPIC".
+  bool     od_strip_one;
 };
