@@ -168,6 +168,11 @@ static bool hid_want_feature_reports = false;
 static uint8_t hid_class_stage = 0;
 static bool    hid_class_in_flight = false;
 static bool    hid_class_wanted = false;
+// The class requests are on unless something turns them off. They go in the
+// order a host that reads the encoder sends them (usb4.pcapng), and
+// SET_IDLE goes FIRST there - it used to go last, and the encoder never
+// reported.
+static bool    hid_class_enabled = true;
 // When to send the class requests, and whether they have been sent.
 static uint32_t        hid_class_requests_at = 0;
 static bool            hid_class_requests_done = false;
@@ -378,27 +383,68 @@ void hid_usb_poll(void) {
 
   usb_host_client_handle_events(hid_client, 0);
 
-  // NOTE: the class requests a HID host normally sends after claiming an
-  // interface (SET_PROTOCOL, SET_IDLE) are deliberately NOT sent. The F1
-  // does not answer them - the transfer never completes - and a control
-  // transfer that never completes blocks the control pipe, so the
-  // descriptor fetches below would never go out either.
+  // ONE control transfer at a time. The control pipe is a single pipe: a
+  // second transfer started while the first is in flight confuses both
+  // ends.
+  const bool pipe_free = !hid_desc_in_flight && !hid_class_in_flight;
 
-  // The descriptors go out once the control pipe is free.
-  if (hid_want_descriptors && !hid_desc_in_flight) {
+  // The class requests, in the order the capture of a host that reads the
+  // encoder shows (usb4.pcapng):
+  //
+  //   1  SET_IDLE          (0x21, 0x0A)  <- the FIRST thing it sends
+  //   2  GET_DESCRIPTOR    the HID report descriptor
+  //   3  GET_STATUS
+  //   4  GET_DESCRIPTOR    the string descriptors
+  //   5  the vendor request 0xDD
+  //
+  // The two feature reports the F1 declares but never sends (0xD0, 0xF0)
+  // come last and only if they are asked for - a PC's HID stack never asks
+  // for them.
+  //
+  // SET_IDLE goes first because that is where the capture has it. It used
+  // to go last, and the encoder never reported.
+  if (hid_class_wanted && hid_class_stage == 1 && pipe_free) {
+    hid_class_stage = 2;
+    hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
+  } else if (hid_want_descriptors && pipe_free) {
+    // The descriptors go out once the control pipe is free.
     hid_want_descriptors = false;
     hid_usb_get_descriptor(0x80, 0x0200, 256, 0);   // the configuration
-  }
-
-  // The two requests a PC's HID stack sends to this device and we did not,
-  // and the two feature reports the F1 declares but never sends. They go
-  // in the order the capture shows, and SET_IDLE goes last because the F1
-  // stalls it - a stalled control transfer leaves the control pipe
-  // unusable, so nothing may follow it.
-  if (hid_class_wanted && !hid_desc_in_flight && !hid_class_in_flight) {
+  } else if (hid_class_wanted && hid_class_stage >= 2 && pipe_free) {
     switch (hid_class_stage) {
-      case 1:
-        hid_class_stage = 2;
+      case 2:
+        hid_class_stage = 3;
+        // GET_STATUS
+        hid_send_class_request_ex(0x80, 0x00, 0x0000, 0x0000, 2);
+        break;
+      case 3:
+        hid_class_stage = 4;
+        // The string descriptors - the serial number among them. A PC's
+        // HID stack reads them; the F1's teardown notes mention the serial
+        // number as the only handshaking there is.
+        // 255 would not fit the class transfer's buffer (8 + 72 bytes);
+        // a string descriptor is a few bytes at most.
+        hid_send_class_request_ex(0x80, 0x06, 0x0300, 0x0400, 64);
+        break;
+      case 4:
+        hid_class_stage = 5;
+        hid_send_class_request_ex(0x80, 0x06, 0x0301, 0x0400, 64);
+        break;
+      case 5:
+        hid_class_stage = 6;
+        hid_send_class_request_ex(0x80, 0x06, 0x0302, 0x0400, 64);
+        break;
+      case 6:
+        hid_class_stage = 7;
+        hid_send_class_request_ex(0x80, 0x06, 0x0303, 0x0400, 64);
+        break;
+      case 7:
+        hid_class_stage = 8;
+        // The vendor request a PC's HID stack makes.
+        hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
+        break;
+      case 8:
+        hid_class_stage = 9;
         // GET_REPORT, feature report 0xD0: 63 bytes of device state.
         // A PC's HID stack never asks for these, so they are off by
         // default - they are diagnostics, and they are the one host-side
@@ -407,44 +453,12 @@ void hid_usb_poll(void) {
           hid_send_class_request_ex(0xA1, 0x01, (uint16_t)((3 << 8) | 0xD0), hid_iface, 63);
         }
         break;
-      case 2:
-        hid_class_stage = 3;
+      case 9:
+        hid_class_stage = 10;
         // GET_REPORT, feature report 0xF0: the knob and fader positions.
         if (hid_want_feature_reports) {
           hid_send_class_request_ex(0xA1, 0x01, (uint16_t)((3 << 8) | 0xF0), hid_iface, 8);
         }
-        break;
-      case 3:
-        hid_class_stage = 4;
-        // The vendor request a PC's HID stack makes.
-        hid_send_class_request_ex(0xC0, 0xDD, 0x0000, 0x0000, 1);
-        break;
-      case 4:
-        hid_class_stage = 5;
-        // The string descriptors - the serial number among them. A PC's
-        // HID stack reads them; the F1's teardown notes mention the serial
-        // number as the only handshaking there is.
-        hid_send_class_request_ex(0x80, 0x06, 0x0300, 0x0400, 255);
-        break;
-      case 5:
-        hid_class_stage = 6;
-        hid_send_class_request_ex(0x80, 0x06, 0x0301, 0x0400, 255);
-        break;
-      case 6:
-        hid_class_stage = 7;
-        hid_send_class_request_ex(0x80, 0x06, 0x0302, 0x0400, 255);
-        break;
-      case 7:
-        hid_class_stage = 8;
-        hid_send_class_request_ex(0x80, 0x06, 0x0303, 0x0400, 255);
-        break;
-      case 8:
-        hid_class_stage = 9;
-        hid_send_class_request_ex(0x80, 0x00, 0x0000, 0x0000, 2);   // GET STATUS
-        break;
-      case 9:
-        hid_class_stage = 10;
-        hid_send_class_request_ex(0x21, 0x0A, 0x0000, hid_iface, 0);   // SET_IDLE
         break;
       default:
         break;
@@ -684,15 +698,12 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
     }
   }
 
-  // The wake-up packet. Every other host's driver sends one three-byte
-  // packet on the OUT endpoint when it opens the device - {0xA0, 0x00,
-  // 0x00} - and it is the only host-side write that is not the LED
-  // report. The F1's own descriptor says nothing about it.
-  if (out_ep && hid_out_xfer) {
-    static const uint8_t wakeup[3] = {0xA0, 0x00, 0x00};
-    hid_usb_send_out_endpoint(wakeup, sizeof(wakeup));
-    HIDCTL_LOG("configure: sent the wake-up packet A0 00 00");
-  }
+  // The wake-up packet. Other hosts' drivers send one three-byte packet
+  // on the OUT endpoint when they open the device - {0xA0, 0x00, 0x00} -
+  // but the capture of a host that reads the encoder (usb4.pcapng) shows
+  // no OUT packet at all. So it is NOT sent when the device is opened; it
+  // can still be sent by hand from the web API.
+  //   POST /json/state  {"HIDCTL":{"a0":true}}
 
   // Log every interface of the configuration, so it is clear what else the
   // device offers (the F1 has a second interface for the LEDs).
@@ -754,9 +765,11 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   // so what the device really offers can be seen.
   hid_want_descriptors = true;
   // The class requests come after the descriptors, in the order a PC's HID
-  // stack sends them.
-  hid_class_stage = 1;
-  hid_class_wanted = true;
+  // stack sends them - and SET_IDLE goes first among them.
+  if (hid_class_enabled) {
+    hid_class_stage = 1;
+    hid_class_wanted = true;
+  }
 
   // The class requests a HID host sends once it owns the interface, a
   // moment later - the device is not ready the instant the interface is
@@ -909,7 +922,20 @@ uint8_t hid_usb_class_stage(void) { return hid_class_stage; }
 void hid_usb_request_class(void) {
   hid_class_stage = 1;
   hid_class_wanted = true;
+  hid_class_enabled = true;
   hid_class_data_len = 0;
+}
+
+// Turn the class requests on or off. They are off by default: the F1
+// stalls them, and a stalled control endpoint is not cleared here.
+void hid_usb_set_class_requests(bool want) {
+  hid_class_enabled = want;
+  if (want) {
+    hid_usb_request_class();
+  } else {
+    hid_class_wanted = false;
+    hid_class_stage = 0;
+  }
 }
 
 // The configuration descriptor, exactly as the device sent it.

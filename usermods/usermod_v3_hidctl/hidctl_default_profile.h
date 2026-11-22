@@ -31,7 +31,7 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "name": "knob1",  "offset": 6,  "bits": 12, "action": "bri" },
     { "name": "knob2",  "offset": 8,  "bits": 12, "action": "effectSpeed" },
     { "name": "knob3",  "offset": 10, "bits": 12, "action": "effectIntensity" },
-    { "name": "knob4",  "offset": 12, "bits": 12, "action": "effectPalette" },
+    { "name": "knob4",  "offset": 12, "bits": 12, "action": "effectPalette", "mod_action": "ctrlbri" },
     { "name": "fader1", "offset": 14, "bits": 12, "action": "seg0bri" },
     { "name": "fader2", "offset": 16, "bits": 12, "action": "seg1bri" },
     { "name": "fader3", "offset": 18, "bits": 12, "action": "seg2bri" },
@@ -55,8 +55,8 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "index": 14, "name": "pad15", "action": "preset15", "mod_action": "preset31" },
     { "index": 15, "name": "pad16", "action": "preset16", "mod_action": "preset32" },
     { "index": 16, "name": "shift", "modifier": true },
-    { "index": 17, "name": "reverse", "action": "prevpal" },
-    { "index": 18, "name": "type",    "action": "nextpreset" },
+    { "index": 17, "name": "reverse", "action": "nextpreset" },
+    { "index": 18, "name": "type",    "action": "nextfx" },
     { "index": 19, "name": "size",    "action": "prevpreset" },
     { "index": 20, "name": "browse",  "action": "blackout" },
     { "index": 21, "name": "encoder", "action": "showpage" },
@@ -65,8 +65,8 @@ static const char HIDCTL_DEFAULT_PROFILE_JSON[] = R"JSON({
     { "index": 26, "name": "bar3", "action": "", "mod_action": "seg2" },
     { "index": 27, "name": "bar4", "action": "", "mod_action": "seg3" },
     { "index": 28, "name": "sync",    "action": "nextfx" },
-    { "index": 29, "name": "quant",   "action": "prevfx" },
-    { "index": 30, "name": "capture", "action": "nextpal" }
+    { "index": 29, "name": "quant",   "action": "prevpreset" },
+    { "index": 30, "name": "capture", "action": "prevfx" }
   ],
   "output": {
     "report_id": 128,

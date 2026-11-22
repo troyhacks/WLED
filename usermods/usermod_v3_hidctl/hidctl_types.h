@@ -38,6 +38,7 @@
 struct HidctlControl {
   char     name[HIDCTL_MAX_NAME];
   char     action[HIDCTL_MAX_ACTION];
+  char     mod_action[HIDCTL_MAX_ACTION];   // what it drives with a modifier held
   uint16_t offset;
   uint8_t  bits;
   uint8_t  taken_over;

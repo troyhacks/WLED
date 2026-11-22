@@ -149,18 +149,12 @@ void applyPresetWithFallback(uint8_t index, uint8_t callMode, uint8_t effectID, 
   //these two will be overwritten if preset exists in handlePresets()
   effectCurrent = effectID;
   effectPalette = paletteID;
-  // WLEDMM v3: publish EffectIndexChanged so subscribers (e.g., a
-  // future LED feedback usermod, or anything watching for the legacy
-  // global) can react. Posted AFTER the assignment so subscribers
-  // reading the global see the new value.
-  {
-    wled::Event ev = {};
-    ev.type = wled::EventType::EffectIndexChanged;
-    ev.timestamp_ms = millis();
-    ev.source_id = 0;  // WLED core
-    ev.payload.effectIndexChanged.newIndex = effectID;
-    wled::EventBus::publish(ev);
-  }
+  // WLEDMM v3: NO EffectIndexChanged here. This is the FALLBACK effect -
+  // "these two will be overwritten if preset exists" - so publishing it
+  // reports a change that may never happen, and when the preset does
+  // exist Segment::setEffect() publishes the real change anyway. Two
+  // publishes for one preset, one of them about somebody else's work.
+  // The event belongs to the place the index actually changes.
 }
 
 void handlePresets() {

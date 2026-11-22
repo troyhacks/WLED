@@ -248,8 +248,15 @@ class HidctlUsermod : public Usermod {
     return (uint16_t)((page - 1) * PAGE_SIZE);
   }
 
-  // Move a page forward (1) or back (-1) and take the current preset
-  // with it, keeping its place in the page.
+  // Move a page forward (1) or back (-1).
+  //
+  // A page is sixteen SLOTS, not sixteen presets: some of them may have
+  // nothing saved on them. The page is what the pads address.
+  //
+  // Turning the page does NOT touch the running preset. The preset moves
+  // only when it is changed from outside the controller - and then the
+  // page jumps to the preset (onEvent's PresetApplied), not the other way
+  // round.
   void turnPage(int direction) {
     const uint8_t last = lastPage();
     int want = (int)page + direction;
@@ -257,39 +264,10 @@ class HidctlUsermod : public Usermod {
     if (want > last) want = last;
     if (want == (int)page) return;
     page = (uint8_t)want;
-
-    // The preset keeps its place in the page, so it moves by sixteen.
-    uint16_t offset = 0;
-    if (tracked_active_preset >= 1) {
-      offset = (uint16_t)((tracked_active_preset - 1) % PAGE_SIZE);
-    }
-    uint16_t target = (uint16_t)((page - 1) * PAGE_SIZE + offset + 1);
-    if (target > 250) target = 250;
-
-    // Land on a preset that exists: the one in the same place on this
-    // page, or else the first one that is there. A page with nothing
-    // saved on it is browsed without touching the running preset.
-    uint16_t pick = 0;
-    if (getCachedPresetExists((uint8_t)target)) {
-      pick = target;
-    } else {
-      for (uint16_t s = (uint16_t)((page - 1) * PAGE_SIZE + 1);
-           s <= (uint16_t)(page * PAGE_SIZE) && s <= 250; s++) {
-        if (getCachedPresetExists((uint8_t)s)) { pick = s; break; }
-      }
-    }
-
-    if (pick) {
-      // The core's PresetApplied event sets the tracked preset and the
-      // page; applying it here is what moves both.
-      applyPreset((uint8_t)pick, CALL_MODE_BUTTON_PRESET);
-      handlePresets();
-    }
     showPageUntil = millis() + 1500;
-    USER_PRINTF("[HIDCTL] page %u (preset %u)\n", page, pick);
-    // The page is on the display for a moment, so paint it now - and the
-    // pads move to the new page's presets whether or not there is a
-    // preset there to apply.
+    USER_PRINTF("[HIDCTL] page %u\n", page);
+    // The page is on the display for a moment, and the pads move to the
+    // new page's slots whether or not a preset is saved on them.
     paint();
   }
 
@@ -307,6 +285,11 @@ class HidctlUsermod : public Usermod {
   bool demoActive = false;
   uint32_t demoStart = 0;
   bool paint_enabled = true;
+  // The LED report goes on the interrupt OUT endpoint. It is 81 bytes and
+  // that endpoint takes 64, but the F1 takes it there and nowhere else -
+  // and the control pipe is no use anyway: the F1 stalls SET_IDLE and a
+  // stalled control endpoint stays stalled.
+  bool led_out_endpoint = true;
 
   // Is this preset slot a saved playlist?
   static bool presetIsPlaylist(uint8_t slot) {
@@ -323,6 +306,138 @@ class HidctlUsermod : public Usermod {
   struct ProbeResult { uint8_t type; uint8_t id; uint16_t len; int8_t status; };
   ProbeResult probe_results[HIDCTL_MAX_PROBE_RESULTS] = {};
   uint8_t probe_result_count = 0;
+
+  // -------------------------------------------------------------------------
+  // who owns the USB
+  // -------------------------------------------------------------------------
+  // The USB host stack belongs to ONE task: the main loop, which calls
+  // hid_usb_poll() and the class requests. Everything else - the event
+  // bus's handlers (they run in the publisher's task), the core's state
+  // change callback, the web API - must not touch it.
+  //
+  // Submitting a transfer from another task corrupts the host stack: the
+  // transfer is not reentrant, and two tasks submitting it at once is how
+  // the board ended up with a null-pointer store in the USB task.
+  //
+  // So the LED report is BUILT wherever it is convenient and SENT by
+  // loop(), and the runtime commands that touch USB are carried there too.
+  uint8_t led_report[HIDCTL_MAX_OUTPUT] = {};
+  uint16_t led_report_len = 0;
+  bool led_report_pending = false;
+  bool cmd_wakeup = false;        // send the wake-up packet
+  int8_t cmd_other_iface = -1;    // 0 = release the other interface, 1 = claim
+
+  // The BROWSE button is a latch: the room is dark, or it is not.
+  bool blackout_latched = false;
+  uint8_t bri_before_blackout = 255;
+  // The controller's own button brightness (SHIFT + knob4). Never zero:
+  // the pads have to stay readable enough to see the active preset.
+  static constexpr uint8_t CTRL_BRI_MIN = 26;   // about a tenth
+  uint8_t ctrl_bri = 255;
+
+  // -------------------------------------------------------------------------
+  // blinking
+  // -------------------------------------------------------------------------
+  // A light - or the two-digit display - that alternates at a rate for a
+  // while. The controller has no other way to say "that happened".
+  //
+  //   blink("sync", 2.0f, 3000);   // the SYNC button, twice a second, 3 s
+  //   blink("", 4.0f, 500);         // the display, four times a second
+  //
+  // An empty name means the display. A light keeps its own colour in the
+  // "off" half of the cycle and is white in the "on" half.
+  static constexpr uint8_t HIDCTL_MAX_BLINKS = 6;
+  struct Blink {
+    char     name[HIDCTL_MAX_NAME];   // the light's name; "" = the display
+    float    rate;                     // Hz
+    uint32_t started_ms;
+    uint32_t until_ms;
+    bool     keep_colour;              // true: the light keeps its colour and
+                                        //       goes dark in the off half
+  };
+  Blink blinks[HIDCTL_MAX_BLINKS] = {};
+  uint8_t blink_count = 0;
+
+ public:
+  // Start a blink. A new one for the same light replaces the old one; one
+  // that is already running keeps its phase and is only extended, so a
+  // chaser that refreshes itself every paint does not stutter.
+  //
+  // keep_colour: the light keeps its own colour and goes dark in the off
+  // half (the playlist chaser). Otherwise it flashes white.
+  void blink(const char* name, float rate_hz, uint32_t duration_ms,
+             bool keep_colour = false) {
+    if (blinkSet(name, rate_hz, duration_ms, keep_colour)) paint();
+  }
+
+  // Set the blink WITHOUT painting. The paint itself uses this - painting
+  // from inside the paint would recurse.
+  bool blinkSet(const char* name, float rate_hz, uint32_t duration_ms,
+                bool keep_colour = false) {
+    if (rate_hz <= 0.0f || duration_ms == 0) return false;
+    const char* want = name ? name : "";
+    // Drop the blinks that have run out, so the slots are free again.
+    const uint32_t now = millis();
+    uint8_t w = 0;
+    for (uint8_t i = 0; i < blink_count; i++) {
+      if ((int32_t)(blinks[i].until_ms - now) > 0) {
+        if (w != i) blinks[w] = blinks[i];
+        w++;
+      }
+    }
+    blink_count = w;
+
+    uint8_t slot = blink_count;
+    bool fresh = true;
+    for (uint8_t i = 0; i < blink_count; i++) {
+      if (!strcmp(blinks[i].name, want)) { slot = i; fresh = false; break; }
+    }
+    if (slot >= HIDCTL_MAX_BLINKS) return false;
+    if (slot == blink_count) blink_count++;
+    copyStr(blinks[slot].name, want);
+    blinks[slot].rate = rate_hz;
+    blinks[slot].keep_colour = keep_colour;
+    if (fresh) blinks[slot].started_ms = now;
+    blinks[slot].until_ms = now + duration_ms;
+    return true;
+  }
+
+  // Is anything blinking right now? While it is, the LEDs are repainted
+  // faster than the usual ten times a second, so a fast blink is fast.
+  bool blinkActive() const {
+    const uint32_t now = millis();
+    for (uint8_t i = 0; i < blink_count; i++) {
+      if ((int32_t)(blinks[i].until_ms - now) > 0) return true;
+    }
+    return false;
+  }
+
+  // Where this light (or the display, for an empty name) is in its cycle:
+  // -1 = not blinking, 0 = the off half, 1 = the on half.
+  int blinkPhase(const char* name) const {
+    const uint32_t now = millis();
+    const char* want = name ? name : "";
+    for (uint8_t i = 0; i < blink_count; i++) {
+      if (strcmp(blinks[i].name, want)) continue;
+      if ((int32_t)(blinks[i].until_ms - now) <= 0) continue;
+      uint32_t period_ms = (uint32_t)(1000.0f / blinks[i].rate);
+      if (period_ms < 4) period_ms = 4;          // the half-period must not be 0
+      uint32_t half = period_ms / 2;
+      return (int)((((now - blinks[i].started_ms) / half) % 2) == 0);
+    }
+    return -1;
+  }
+
+  // Does this light keep its own colour while it blinks?
+  bool blinkKeepsColour(const char* name) const {
+    const char* want = name ? name : "";
+    for (uint8_t i = 0; i < blink_count; i++) {
+      if (!strcmp(blinks[i].name, want)) return blinks[i].keep_colour;
+    }
+    return false;
+  }
+
+ private:
 
   // -------------------------------------------------------------------------
   // profile handling
@@ -392,6 +507,9 @@ class HidctlUsermod : public Usermod {
       ctl.bits = (uint8_t)(c["bits"] | 12);
       const char* act = c["action"];
       copyAction(ctl.action, act);
+      // What the control drives while a modifier is held.
+      const char* mact = c["mod_action"];
+      copyAction(ctl.mod_action, mact);
       if (ctl.bits == 0 || ctl.bits > 16) return false;
       if (ctl.offset + ((ctl.bits + 7) / 8) > p.report_len) return false;
       p.control_count++;
@@ -646,6 +764,11 @@ class HidctlUsermod : public Usermod {
     if (!strncmp(action, "preset", 6)) {
       int slot = atoi(action + 6);
       if (slot < 1 || slot > 64) return;
+      // Picking a preset stops the playlist that was running - the same
+      // "switch to a preset cleanly" pattern the MIDI and ProLink usermods
+      // use. Without it the playlist would carry on over the top of the
+      // preset the user just picked.
+      if (currentPlaylist >= 0) unloadPlaylist();
       // The core's PresetApplied event sets the tracked preset and the
       // page; if the preset is not there, neither moves.
       applyPreset((uint8_t)slot, CALL_MODE_BUTTON_PRESET);
@@ -750,9 +873,29 @@ class HidctlUsermod : public Usermod {
       return;
     }
     if (!strcmp(action, "blackout")) {
-      bri = 0;
-      strip.setBrightness(0, true);
+      // A LATCH: press once and the room goes dark, press again and it
+      // comes back at the brightness it had.
+      if (blackout_latched) {
+        blackout_latched = false;
+        bri = bri_before_blackout;
+        strip.setBrightness(bri, true);
+      } else {
+        blackout_latched = true;
+        bri_before_blackout = bri;
+        bri = 0;
+        strip.setBrightness(0, true);
+      }
       stateUpdated(CALL_MODE_BUTTON);
+      return;
+    }
+    if (!strcmp(action, "ctrlbri")) {
+      // The controller's own button brightness - SHIFT + knob4. It has a
+      // floor: the pads must never go completely dark, or there is no way
+      // to see which one is the active preset.
+      ctrl_bri = value;
+      if (ctrl_bri < CTRL_BRI_MIN) ctrl_bri = CTRL_BRI_MIN;
+      USER_PRINTF("[HIDCTL] controller brightness %u\n", ctrl_bri);
+      paint();
       return;
     }
     if (!strcmp(action, "full")) {
@@ -983,14 +1126,15 @@ class HidctlUsermod : public Usermod {
   // Write a letter on the left-hand digit ("P" for the page).
   void showLetter(uint8_t* report, HidctlProfile& p, char letter) {
     if (!p.output.display.present || p.output.display.digit_count < 2) return;
-    // The strokes of a "P": top, upper-right, upper-left, middle - and NO
-    // bottom bar, which is what tells it from an "E". The segment order is
-    // the device's own: DP, G(middle), C(lower-right), B(upper-right),
-    // A(top), F(upper-left), E(lower-left), D(bottom) - so B is the
-    // upper-right bar and E the lower-left one.
+    // The strokes of a "P": top, upper-right, upper-left, middle - and the
+    // lower-left bar as well, so the stem runs the full height. Without it
+    // the letter is a bowl with a floating middle bar and reads as a
+    // square. The segment order is the device's own: DP, G(middle),
+    // C(lower-right), B(upper-right), A(top), F(upper-left), E(lower-left),
+    // D(bottom) - so B is the upper-right bar and E the lower-left one.
     uint8_t mask = 0;
     switch (letter) {
-      case 'P': mask = (1u << 4) | (1u << 3) | (1u << 5) | (1u << 1); break;
+      case 'P': mask = (1u << 4) | (1u << 3) | (1u << 5) | (1u << 6) | (1u << 1); break;
       case 'E': mask = (1u << 4) | (1u << 5) | (1u << 1) | (1u << 6) | (1u << 7); break;
       default:  mask = 0; break;
     }
@@ -1052,9 +1196,11 @@ class HidctlUsermod : public Usermod {
     if (!paint_enabled) return;
 
     // WLED fires a state change often; the LEDs do not need to follow every
-    // one of them.
+    // one of them. A blink is the exception - it has to be repainted fast
+    // enough to show the rate it was asked for.
     static uint32_t lastPaint = 0;
-    if (millis() - lastPaint < 100) return;
+    uint32_t minGap = blinkActive() ? 20 : 100;
+    if (millis() - lastPaint < minGap) return;
     lastPaint = millis();
 
     uint8_t report[HIDCTL_MAX_OUTPUT];
@@ -1078,12 +1224,9 @@ class HidctlUsermod : public Usermod {
     // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
                    ? tracked_active_preset : 0;
-    if (millis() < showWheelUntil) {
-      // The encoder moved: show where it is. This is the one thing the
-      // display can do that no console and no web page can - it shows the
-      // encoder's own byte, on the controller, the moment it changes.
-      showNumber(report, p, wheelLast);
-    } else if (millis() < showPageUntil) {
+    if (millis() < showPageUntil) {
+      // The encoder turned the page: show the page. That is what the
+      // encoder is for, so it is what the display shows.
       if (page < 10) {
         // "P" and the page's number on the right-hand digit.
         showLetter(report, p, 'P');
@@ -1102,13 +1245,60 @@ class HidctlUsermod : public Usermod {
         // point to mark it with - the F1's profile does not set one.
         showNumber(report, p, page);
       }
+    } else if (millis() < showWheelUntil) {
+      // The encoder moved but the page did not (it is at the first or the
+      // last one): show the encoder's own byte. This is the one thing the
+      // display can do that no console and no web page can.
+      showNumber(report, p, wheelLast);
     } else {
       showNumber(report, p, val);
     }
 
+    // The display blinks as a whole when it is told to.
+    if (blinkPhase("") == 0) {
+      for (uint8_t d = 0; d < p.output.display.digit_count; d++) {
+        uint16_t base = p.output.display.digit_offset[d];
+        for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
+          report[base + s] = 0x00;
+        }
+      }
+    }
+
+    // The playlist chaser, like the MIDI usermod's: while a playlist is
+    // running, the parent's pad pulses slowly and the child that is playing
+    // blinks fast. The blinks are set before the lights are painted, so the
+    // phase they are on is the one the lights get.
+    const bool playlist_active = (currentPlaylist >= 0);
+    const int playlist_parent = playlist_active ? (int)currentPlaylist : 0;
+    // Say it once when the chaser's targets change, so the console shows
+    // which pad is the parent and which is the child.
+    {
+      static int last_parent = -1;
+      static int last_child = -1;
+      if (playlist_parent != last_parent ||
+          (int)tracked_active_preset != last_child) {
+        last_parent = playlist_parent;
+        last_child = (int)tracked_active_preset;
+        USER_PRINTF("[HIDCTL] playlist %d, child %d\n", last_parent, last_child);
+      }
+    }
+    if (playlist_active) {
+      for (uint8_t i = 0; i < p.output.light_count; i++) {
+        const char* nm = p.output.lights[i].name;
+        if (strncmp(nm, "pad", 3)) continue;
+        int slot = atoi(nm + 3) + (int)pageOffset();
+        if (slot < 1 || slot > 250) continue;
+        if (slot == playlist_parent) {
+          blinkSet(nm, 1.0f, 1000, true);          // the parent: a slow pulse
+        } else if (slot == (int)tracked_active_preset) {
+          blinkSet(nm, 4.0f, 1000, true);          // the child: a fast blink
+        }
+      }
+    }
+
     if (demoActive) {
       paintDemo(report, p);
-      hid_usb_send_out_endpoint(report, p.output.length);
+      sendLedReport(p, report);
       return;
     }
 
@@ -1156,6 +1346,23 @@ class HidctlUsermod : public Usermod {
         r = g = b = 0x7F;
       }
 
+      // A blinking light: white in its "on" half (a flash), or its own
+      // colour with the off half dark (the playlist chaser).
+      const int phase = blinkPhase(nm);
+      if (phase == 0) {
+        b = r = g = 0;
+      } else if (phase == 1 && !blinkKeepsColour(nm)) {
+        r = g = b = 0x7F;
+      }
+
+      // The controller's own brightness (SHIFT + knob4). The display is
+      // left alone - it is the readout.
+      if (ctrl_bri < 255) {
+        b = (uint8_t)((uint16_t)b * ctrl_bri / 255u);
+        r = (uint8_t)((uint16_t)r * ctrl_bri / 255u);
+        g = (uint8_t)((uint16_t)g * ctrl_bri / 255u);
+      }
+
       if (li.bytes == 3) {
         report[li.offset + 0] = b;
         report[li.offset + 1] = r;
@@ -1168,7 +1375,45 @@ class HidctlUsermod : public Usermod {
       }
     }
 
-    hid_usb_send_out_endpoint(report, p.output.length);
+    sendLedReport(p, report);
+  }
+
+  // Send the LED report to the device.
+  //
+  // The report is 81 bytes - the report ID and 80 brightness values - and
+  // the F1's interrupt OUT endpoint takes only 64 bytes at a time. So it
+  // does not go there: it goes over the control pipe as a SET_REPORT,
+  // which is what a report that long needs. A host that reads the encoder
+  // (the capture in usb4.pcapng) writes nothing to the OUT endpoint at
+  // all.
+  //
+  // "ledout" puts it back on the OUT endpoint:
+  //   POST /json/state  {"HIDCTL":{"ledout":true}}
+  // Queue the LED report. It is BUILT here and SENT by loop(): the USB
+  // host stack belongs to the main loop's task, and this can be called
+  // from an event handler (the publisher's task), from the core's state
+  // change callback, or from the web API.
+  void sendLedReport(const HidctlProfile& p, const uint8_t* report) {
+    uint16_t len = p.output.length;
+    if (len > HIDCTL_MAX_OUTPUT) len = HIDCTL_MAX_OUTPUT;
+    memcpy(led_report, report, len);
+    led_report_len = len;
+    led_report_pending = true;
+  }
+
+  // Send the queued LED report. Only the main loop calls this.
+  void flushLedReport() {
+    if (!led_report_pending) return;
+    led_report_pending = false;
+    if (!profiles || active_profile >= profile_count) return;
+    HidctlProfile& p = profiles[active_profile];
+    if (led_out_endpoint) {
+      hid_usb_send_out_endpoint(led_report, led_report_len);
+      return;
+    }
+    // The report ID goes in wValue, not in the data.
+    hid_usb_send_output_report(p.output.report_id, led_report + 1,
+                                (uint16_t)(led_report_len - 1));
   }
 
   // -------------------------------------------------------------------------
@@ -1199,11 +1444,17 @@ class HidctlUsermod : public Usermod {
     uint32_t full = (ctl.bits >= 16) ? 0xFFFFu : ((1u << ctl.bits) - 1);
     uint8_t value = (uint8_t)((uint32_t)raw * 255u / full);
 
+    // A modifier turns the control into something else: SHIFT + knob4 is
+    // the controller's own brightness, not the palette.
+    const char* act = ctl.action;
+    if (ctl.mod_action[0] && (buttons & modifier_mask) != 0) act = ctl.mod_action;
+    if (!act[0]) return;
+
     // Soft takeover: the control has to cross the parameter's current
     // value before it starts driving it, so a knob that sits somewhere
     // else does not yank the value when it is first touched.
     if (!control_taken[idx]) {
-      int cur = currentValueOf(ctl.action);
+      int cur = currentValueOf(act);
       if (cur >= 0) {
         int curRaw = (int)((uint32_t)cur * full / 255u);
         int delta = (int)raw - curRaw;
@@ -1235,12 +1486,12 @@ class HidctlUsermod : public Usermod {
     control_applied_ms[idx] = now;
     control_has_applied[idx] = true;
 
-    if (!ctl.action[0]) return;
+    if (!act[0]) return;
     if (now - control_log_ms[idx] >= CONTROL_LOG_INTERVAL_MS) {
       control_log_ms[idx] = now;
-      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, ctl.action, value);
+      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act, value);
     }
-    runAction(ctl.action, value);
+    runAction(act, value);
   }
 
   // Decode a raw report for the active profile and act on it.
@@ -1269,6 +1520,29 @@ class HidctlUsermod : public Usermod {
                   bytes_to_hex(data, len < 8 ? len : 8));
       return;
     }
+
+    // --- buttons ------------------------------------------------------------
+    // The button bitmap is read BEFORE the controls are applied: a report
+    // that carries a modifier AND a control has to see the modifier, or
+    // SHIFT + knob4 would drive the palette as well as the controller's
+    // brightness.
+    uint32_t now_buttons = 0;
+    for (uint8_t bi = 0; bi < p.button_byte_count; bi++) {
+      uint8_t byte = data[p.button_bytes[bi]];
+      for (uint8_t bit = 0; bit < 8; bit++) {
+        bool set = p.msb_first ? (byte & (0x80 >> bit)) : (byte & (1 << bit));
+        if (set) now_buttons |= (1UL << (bi * 8 + bit));
+      }
+    }
+    uint32_t was_buttons = buttons;
+    buttons = now_buttons;
+
+    // Modifiers are buttons whose action is only meaningful while held.
+    modifier_mask = 0;
+    for (uint8_t i = 0; i < p.button_count; i++) {
+      if (p.buttons[i].modifier) modifier_mask |= (1UL << p.buttons[i].index);
+    }
+    bool mod_held = (now_buttons & modifier_mask) != 0;
 
     // --- continuous controls ------------------------------------------------
     // A value that arrived while the throttle was closed goes first: it is
@@ -1313,16 +1587,6 @@ class HidctlUsermod : public Usermod {
       control_pending[i] = false;
     }
 
-    // --- buttons ------------------------------------------------------------
-    uint32_t now_buttons = 0;
-    for (uint8_t bi = 0; bi < p.button_byte_count; bi++) {
-      uint8_t byte = data[p.button_bytes[bi]];
-      for (uint8_t bit = 0; bit < 8; bit++) {
-        bool set = p.msb_first ? (byte & (0x80 >> bit)) : (byte & (1 << bit));
-        if (set) now_buttons |= (1UL << (bi * 8 + bit));
-      }
-    }
-
     // --- the encoder -------------------------------------------------------
     // Its byte counts the wheel's position, so the difference says which
     // way it turned. One step is one page.
@@ -1351,15 +1615,7 @@ class HidctlUsermod : public Usermod {
       USER_PRINTF("[HIDCTL] report: %s\n", bytes_to_hex(data, 8));
     }
 
-    uint32_t pressed = now_buttons & ~buttons;
-    buttons = now_buttons;
-
-    // Modifiers are buttons whose action is only meaningful while held.
-    modifier_mask = 0;
-    for (uint8_t i = 0; i < p.button_count; i++) {
-      if (p.buttons[i].modifier) modifier_mask |= (1UL << p.buttons[i].index);
-    }
-    bool mod_held = (now_buttons & modifier_mask) != 0;
+    uint32_t pressed = now_buttons & ~was_buttons;
 
     if (pressed) {
       for (uint8_t i = 0; i < p.button_count; i++) {
@@ -1418,6 +1674,19 @@ class HidctlUsermod : public Usermod {
     // have to be repainted even when nothing else changes. paint() rate
     // limits itself.
     paint();
+    // The LED report goes out from here and nowhere else: this is the
+    // task that owns the USB host stack.
+    flushLedReport();
+    // Commands from the web API that touch the USB.
+    if (cmd_wakeup) {
+      cmd_wakeup = false;
+      hid_usb_send_wakeup();
+    }
+    if (cmd_other_iface >= 0) {
+      int8_t claim = cmd_other_iface;
+      cmd_other_iface = -1;
+      hid_usb_set_other_interface(claim != 0);
+    }
   }
 
   // The preset changed: the pads and the display have to follow.
@@ -1442,6 +1711,10 @@ class HidctlUsermod : public Usermod {
         tracked_active_preset = slot;
         // The pads address the page the active preset is on.
         page = pageOfPreset(slot);
+        USER_PRINTF("[HIDCTL] preset %u -> page %u (cached=%u playlist=%u music=%u)\n",
+                    slot, page, getCachedPresetExists(slot) ? 1 : 0,
+                    (presetCache != nullptr && presetCache[slot].isPlaylist) ? 1 : 0,
+                    music_slot);
         paint();
       }
       return;
@@ -1485,14 +1758,29 @@ class HidctlUsermod : public Usermod {
     bool demo = h["demo"] | false;
     setDemo(demo);
     if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
+    // Put the LED report on the control pipe instead of the interrupt OUT
+    // endpoint. The F1 takes it on the OUT endpoint, so this is a
+    // diagnostic.
+    if (h.containsKey("ledout")) led_out_endpoint = h["ledout"] | true;
     // Send the class requests again - the vendor request and SET_IDLE that
-    // a PC's HID stack sends and this host did not.
-    if (h["classreq"]) hid_usb_request_class();
+    // a PC's HID stack sends and this host did not. They are off by
+    // default: the F1 stalls them, and this host does not clear the stall.
+    // Blink a light, or the display (an empty name):
+    //   POST /json/state  {"HIDCTL":{"blink":"sync","rate":2,"ms":3000}}
+    if (h.containsKey("blink")) {
+      const char* what = h["blink"] | "";
+      float rate = h["rate"] | 1.0f;
+      uint32_t ms = h["ms"] | 1000;
+      blink(what, rate, ms);
+    }
+    if (h.containsKey("classreq")) hid_usb_set_class_requests(h["classreq"] | false);
     // Claim or release the device's other interface. A PC's HID stack
     // leaves the F1's second interface alone; we claimed it on a hunch.
-    if (h.containsKey("otheriface")) hid_usb_set_other_interface(h["otheriface"] | true);
-    // Send the wake-up packet again.
-    if (h["a0"]) hid_usb_send_wakeup();
+    // The web API runs in the async_tcp task and the USB stack belongs to
+    // the main loop, so the command is carried there.
+    if (h.containsKey("otheriface")) cmd_other_iface = (h["otheriface"] | true) ? 1 : 0;
+    // Send the wake-up packet again - also carried to the main loop.
+    if (h["a0"]) cmd_wakeup = true;
     // Ask for the feature reports (a PC's HID stack does not).
     if (h.containsKey("featrep")) hid_usb_set_feature_reports(h["featrep"] | true);
     if (h.containsKey("page")) {

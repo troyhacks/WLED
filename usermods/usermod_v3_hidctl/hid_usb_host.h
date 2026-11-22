@@ -93,6 +93,10 @@ uint8_t hid_usb_class_stage(void);
 // rebuild.
 void hid_usb_request_class(void);
 
+// Turn the class requests on or off. They are off by default: the F1
+// stalls them and the stalled control endpoint is never cleared here.
+void hid_usb_set_class_requests(bool want);
+
 // Send the wake-up packet again: {0xA0, 0x00, 0x00} on the OUT
 // endpoint.
 void hid_usb_send_wakeup(void);
