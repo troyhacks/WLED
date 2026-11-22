@@ -45,7 +45,7 @@ static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
   "opendeck": { "keys": 10, "encoders": 4, "strip_one": true },
   "encoders": [
     { "name": "enc1", "action": "page", "push_action": "showpage" },
-    { "name": "enc2", "action": "page", "push_action": "" },
+    { "name": "enc2", "action": "page", "push_action": "ctrlbri" },
     { "name": "enc3", "action": "page", "push_action": "" },
     { "name": "enc4", "action": "page", "push_action": "" }
   ],

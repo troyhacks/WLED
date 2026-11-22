@@ -1802,6 +1802,10 @@ class HidctlUsermod : public Usermod {
   // a transfer from there is how the USB stack got corrupted before.
   bool opendeck_pending_init = false;
   bool opendeck_pending_paint = false;
+  // When the strip is showing the page number instead of the encoders,
+  // and when that is over. The pictures have to go out again then, or
+  // the strip would keep showing the page.
+  uint32_t opendeck_page_until = 0;
 
   // ---- the images -------------------------------------------------------
   //
@@ -2142,6 +2146,21 @@ class HidctlUsermod : public Usermod {
 
     // Black, then a coloured tile per encoder with its number on it.
     memset(buf, 0, pic_len);
+    // The page number takes the whole strip for a moment, the way the
+    // F1's two-digit display does when it is asked to show the page.
+    if (showPageUntil > millis()) {
+      opendeck_page_until = showPageUntil;
+      opendeckDrawNumberIn(buf, w, h, 0, 0, w, h, page, 0xFF, 0xFF, 0xFF);
+      size_t jpeg_len = 0;
+      const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 16384, jpeg_len);
+      free(buf);
+      if (!ok) { free(jpeg); return false; }
+      if (opendeck_jpeg) free(opendeck_jpeg);
+      opendeck_jpeg = jpeg;
+      jpeg_out = jpeg;
+      jpeg_len_out = (uint16_t)jpeg_len;
+      return true;
+    }
     for (uint8_t i = 0; i < Opendeck::STRIP_TILES; i++) {
       const uint8_t hue = i * 36;
       const uint8_t b = (uint8_t)(127 * (1 + 0.9 * __builtin_cosf(3.14159f * (hue + 240) / 180)));
@@ -2553,6 +2572,11 @@ class HidctlUsermod : public Usermod {
       // The chaser sets the blinks, and a blink on a deck is in the
       // PICTURE, so the pictures have to go out again at the blink's rate.
       opendeckChaser();
+      // The strip was showing the page number: put the encoders back.
+      if (opendeck_page_until && (int32_t)(millis() - opendeck_page_until) >= 0) {
+        opendeck_page_until = 0;
+        opendeck_pending_paint = true;
+      }
       {
         static uint32_t last_deck_push = 0;
         if (blinkActive() && !opendeck_pending_init && !opendeck_painting &&
