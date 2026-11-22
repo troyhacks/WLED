@@ -1298,6 +1298,23 @@ class HidctlUsermod : public Usermod {
   // The serial console's key.
   void toggleDemo() { setDemo(!demoActive); }
 
+  // The beat that is sounding now and the music playlist's slot.
+  //
+  // They are worked out here and not inside paint(), because a deck's
+  // state is in its PICTURES and paint() does nothing for a deck: the
+  // beat and the music playlist would never reach one.
+  void refreshTrackerState() {
+    static uint32_t last = 0;
+    if (millis() - last < 100) return;
+    last = millis();
+    ArTempoFrame tf;
+    currentBeat = 0;
+    if (arCopyTempo(&tf) && tf.beatInBar >= 1 && tf.beatInBar <= 4) {
+      currentBeat = tf.beatInBar;
+    }
+    music_slot = queryAutoPlaylistMusicSlot();
+  }
+
   void paint() {
     if (!profiles || active_profile >= profile_count) return;
     HidctlProfile& p = profiles[active_profile];
@@ -1320,15 +1337,7 @@ class HidctlUsermod : public Usermod {
     // applied - the core's PresetApplied event sets it. A page that is
     // being browsed (nothing saved on it) stays where it was put.
 
-    // The beat that is sounding now, from the tempo tracker.
-    {
-      ArTempoFrame tf;
-      currentBeat = 0;
-      if (arCopyTempo(&tf) && tf.beatInBar >= 1 && tf.beatInBar <= 4) {
-        currentBeat = tf.beatInBar;
-      }
-    }
-    music_slot = queryAutoPlaylistMusicSlot();
+    refreshTrackerState();
 
     // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
@@ -2176,6 +2185,22 @@ class HidctlUsermod : public Usermod {
       }
       opendeckDrawNumberIn(buf, w, h, x0, 0, Opendeck::STRIP_TILE_W, h,
                             (uint16_t)(i + 1), 0xFF, 0xFF, 0xFF);
+      // The beat that is sounding lights its tile, the way the F1's lower
+      // buttons do.
+      if (currentBeat >= 1 && currentBeat <= Opendeck::STRIP_TILES &&
+          currentBeat == (int)i + 1) {
+        opendeckDrawNumberIn(buf, w, h, x0, 0, Opendeck::STRIP_TILE_W, h,
+                              (uint16_t)(i + 1), 0xFF, 0xFF, 0xFF);
+        for (uint16_t y = 0; y < h; y++) {
+          uint8_t* p = buf + ((size_t)y * w + x0) * 3;
+          for (uint16_t x = 0; x < Opendeck::STRIP_TILE_W; x++) {
+            p[0] = (uint8_t)((uint16_t)p[0] + 0x60);
+            p[1] = (uint8_t)((uint16_t)p[1] + 0x60);
+            p[2] = (uint8_t)((uint16_t)p[2] + 0x60);
+            p += 3;
+          }
+        }
+      }
     }
 
     // The device reads its pictures upside down.
@@ -2572,6 +2597,9 @@ class HidctlUsermod : public Usermod {
       // The chaser sets the blinks, and a blink on a deck is in the
       // PICTURE, so the pictures have to go out again at the blink's rate.
       opendeckChaser();
+      // The beat and the music playlist's slot: a deck shows them in its
+      // pictures, and paint() does nothing for a deck.
+      refreshTrackerState();
       // The strip was showing the page number: put the encoders back.
       if (opendeck_page_until && (int32_t)(millis() - opendeck_page_until) >= 0) {
         opendeck_page_until = 0;
