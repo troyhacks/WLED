@@ -37,7 +37,10 @@ bool hid_usb_send_output_report(uint8_t d, uint8_t report_id, const uint8_t* dat
 
 // Send data on the interface's OUT endpoint (some controllers take their
 // LED data there rather than over the control pipe).
-bool hid_usb_send_out_endpoint(uint8_t d, const uint8_t* data, uint16_t len);
+// Queue a packet for a device's interrupt OUT endpoint. Safe from any
+// task: it copies the bytes and returns. The task that owns the USB stack
+// sends them, one at a time, when the pipe is free.
+bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len);
 int8_t hid_usb_last_out_status(uint8_t d);
 
 // The bytes a device-to-host control transfer brought back (the LED state
@@ -151,7 +154,6 @@ void hid_usb_set_idle_rate_low_byte(uint8_t d, bool on);
 bool hid_usb_get_idle_rate_low_byte(uint8_t d);
 bool hid_usb_set_in_pid(uint8_t d, uint8_t pid);
 bool hid_usb_read_firmware(uint8_t d);
-bool hid_usb_pump_out(void);      // sends the pending zero-length packets
 const uint8_t* hid_usb_out_first(uint8_t d, uint8_t* len);
 const uint8_t* hid_usb_report_desc(uint8_t d, uint16_t* len);
 const uint8_t* hid_usb_last_out_head(uint8_t d, uint8_t* len);

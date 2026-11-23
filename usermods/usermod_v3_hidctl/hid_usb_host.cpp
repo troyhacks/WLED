@@ -93,6 +93,28 @@ struct HidDevice {
   bool     out_zlp = false;
   uint16_t out_cap = 0;
 
+  // The outgoing queue.
+  //
+  // The producer copies a packet in and returns; the sender - the one
+  // task that owns the USB stack - takes it out and submits it. The queue
+  // is a ring of fixed slots, each holding one packet: the deck's packets
+  // are 1024 bytes and the F1's are 81, so the slot size is the device's.
+  uint8_t*  out_q = nullptr;      // the slots, in PSRAM
+  uint16_t out_q_slots = 0;       // how many there are
+  uint16_t out_q_stride = 0;      // the bytes per slot
+  uint16_t out_q_head = 0;        // the next free slot
+  uint16_t out_q_tail = 0;        // the next slot to send
+  uint16_t out_q_count = 0;       // the slots in use
+  SemaphoreHandle_t out_q_lock = nullptr;
+  // The recovery: a pipe that has wedged is halted, flushed and cleared,
+  // and if it does not come back the interface is taken and claimed
+  // again, which gives the device a new pipe. The steps are run one per
+  // pass of the poll, because the flush's cancellation has to be
+  // delivered before the interface can be released.
+  uint8_t out_recovery = 0;       // 0 = none, 1 = halt, 2 = flush, ...
+  // The last transfer did not go out.
+  volatile bool out_failed = false;
+
   // The OUT transfer's state.
   volatile bool   out_in_flight = false;
   volatile bool   out_zlp_pending = false;
@@ -181,6 +203,11 @@ static HidDevice hid_dev[HIDCTL_MAX_DEVICES];
 // calls, and the transfers are submitted from there too. So one index is
 // enough to say whose device the code below is about.
 static uint8_t HIDCTL_D = 0;
+// The device an index names. An index that is not a device (0xFF means
+// "none") must not be used as one: it would walk off the end of the array.
+static inline HidDevice* hid_dev_of(uint8_t d) {
+  return &hid_dev[d < HIDCTL_MAX_DEVICES ? d : 0];
+}
 // The device being worked on. An index that is not a device (0xFF means
 // "none") must not be used as one: it would walk off the end of the array.
 #define D (&hid_dev[HIDCTL_D < HIDCTL_MAX_DEVICES ? HIDCTL_D : 0])
@@ -281,7 +308,7 @@ uint32_t hid_usb_log_reports(void) { return hid_log_reports; }
 // The status and length of the last sixteen IN completions, oldest first,
 // and the count of completions that were not COMPLETED.
 const uint8_t* hid_usb_in_statuses(uint8_t d, uint8_t* count, uint16_t** lengths) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   static uint16_t lens[16];
   uint8_t n = 0;
   for (uint8_t i = 0; i < 16; i++) {
@@ -293,7 +320,7 @@ const uint8_t* hid_usb_in_statuses(uint8_t d, uint8_t* count, uint16_t** lengths
   return hid_in_status_ring;
 }
 uint32_t hid_usb_in_errors(uint8_t d) {
-  HIDCTL_D = d; return hid_in_error_count; }
+  HidDevice* dev = hid_dev_of(d); return hid_in_error_count; }
 uint32_t hid_usb_log_zlps(void) { return hid_log_zlps; }
 
 // The stage of the class-request sequence: 0 = not started, 1 = the vendor
@@ -305,12 +332,12 @@ uint32_t hid_usb_log_zlps(void) { return hid_log_zlps; }
 // whether or not anything happens.
 
 void hid_usb_set_idle_rate(uint8_t d, uint16_t ms) {
-  HIDCTL_D = d;
-  D->idle_rate_ms = ms;
-  D->idle_rate_changed = true;
+  HidDevice* dev = hid_dev_of(d);
+  dev->idle_rate_ms = ms;
+  dev->idle_rate_changed = true;
 }
 uint16_t hid_usb_get_idle_rate(uint8_t d) {
-  HIDCTL_D = d; return D->idle_rate_ms; }
+  HidDevice* dev = hid_dev_of(d); return dev->idle_rate_ms; }
 // The vendor request 0xDD. The Traktor F1 answers it; the deck stalls it,
 // and a stall on the control pipe is not something this host clears well.
 // The class requests are on unless something turns them off. They go in the
@@ -324,21 +351,21 @@ uint16_t hid_usb_get_idle_rate(uint8_t d) {
 // What the device's configuration descriptor says about its interfaces.
 
 const HidctlIfaceInfo* hid_usb_interfaces(uint8_t d, uint8_t* count) {
-  HIDCTL_D = d;
-  if (count) *count = D->iface_count;
-  return D->ifaces;
+  HidDevice* dev = hid_dev_of(d);
+  if (count) *count = dev->iface_count;
+  return dev->ifaces;
 }
 
 int8_t hid_usb_last_report_status(uint8_t d) {
-  HIDCTL_D = d; return D->last_report_status; }
+  HidDevice* dev = hid_dev_of(d); return dev->last_report_status; }
 uint32_t hid_usb_reports_ok(uint8_t d) {
-  HIDCTL_D = d; return D->reports_ok; }
+  HidDevice* dev = hid_dev_of(d); return dev->reports_ok; }
 int8_t hid_usb_last_out_status(uint8_t d) {
-  HIDCTL_D = d; return D->last_out_status; }
+  HidDevice* dev = hid_dev_of(d); return dev->last_out_status; }
 const uint8_t* hid_usb_readback(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->readback_len;
-  return D->readback;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->readback_len;
+  return dev->readback;
 }
 
 static uint8_t hid_report_desc[256] = {};      // the device's own report descriptor
@@ -362,11 +389,11 @@ static volatile bool hid_in_error_recovery_needed = false;
 // client's event callback.
 
 void hid_usb_set_in_xfer_len(uint8_t d, uint16_t n) {
-  HIDCTL_D = d; D->in_xfer_len = n; }
+  HidDevice* dev = hid_dev_of(d); dev->in_xfer_len = n; }
 uint16_t hid_usb_get_in_xfer_len(uint8_t d) {
-  HIDCTL_D = d; return D->in_xfer_len; }
+  HidDevice* dev = hid_dev_of(d); return dev->in_xfer_len; }
 void hid_usb_reset_in_pipe(uint8_t d) {
-  HIDCTL_D = d; D->in_force_reset = true; }
+  HidDevice* dev = hid_dev_of(d); dev->in_force_reset = true; }
 
 // The SET_IDLE rate goes in the high byte of wValue and the report ID in
 // the low one, which is what the HID specification says. This device is
@@ -374,9 +401,9 @@ void hid_usb_reset_in_pipe(uint8_t d) {
 // rate in the low byte.
 
 void hid_usb_set_idle_rate_low_byte(uint8_t d, bool on) {
-  HIDCTL_D = d; D->idle_rate_low_byte = on; }
+  HidDevice* dev = hid_dev_of(d); dev->idle_rate_low_byte = on; }
 bool hid_usb_get_idle_rate_low_byte(uint8_t d) {
-  HIDCTL_D = d; return D->idle_rate_low_byte; }
+  HidDevice* dev = hid_dev_of(d); return dev->idle_rate_low_byte; }
 
 // Set the data toggle of the interrupt IN channel.
 //
@@ -386,9 +413,9 @@ bool hid_usb_get_idle_rate_low_byte(uint8_t d) {
 // every token and nothing ever arrives - and nothing else can change
 // it.
 bool hid_usb_set_in_pid(uint8_t d, uint8_t pid) {
-  HIDCTL_D = d;
-  if (!D->handle || !D->in_ep) return false;
-  return hidctlDwcSetInPid(D->addr, (uint8_t)(D->in_ep & 0x0F), pid);
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle || !dev->in_ep) return false;
+  return hidctlDwcSetInPid(dev->addr, (uint8_t)(dev->in_ep & 0x0F), pid);
 }
 
 // Ask the device for its firmware, the way the reference does: a
@@ -396,10 +423,10 @@ bool hid_usb_set_in_pid(uint8_t d, uint8_t pid) {
 // buffer. The deck's own answer to a vendor request was five bytes, so
 // it does answer requests - this is the one the reference uses.
 bool hid_usb_read_firmware(uint8_t d) {
-  HIDCTL_D = d;
-  if (!D->handle) return false;
-  D->class_stage = 11;         // a stage of its own, below
-  D->class_wanted = true;
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle) return false;
+  dev->class_stage = 11;         // a stage of its own, below
+  dev->class_wanted = true;
   return true;
 }
 
@@ -461,53 +488,53 @@ static void hid_claim_other_interfaces(usb_device_handle_t dev, uint8_t skip_ifa
 
 // Ask for the feature reports too (or stop asking).
 void hid_usb_set_feature_reports(uint8_t d, bool want) {
-  HIDCTL_D = d; D->want_feature_reports = want; }
+  HidDevice* dev = hid_dev_of(d); dev->want_feature_reports = want; }
 void hid_usb_set_class_vendor_request(uint8_t d, bool want) {
-  HIDCTL_D = d; D->class_vendor_request = want; }
+  HidDevice* dev = hid_dev_of(d); dev->class_vendor_request = want; }
 bool hid_usb_get_class_vendor_request(uint8_t d) {
-  HIDCTL_D = d; return D->class_vendor_request; }
+  HidDevice* dev = hid_dev_of(d); return dev->class_vendor_request; }
 
 // Send the wake-up packet again: {0xA0, 0x00, 0x00} on the OUT
 // endpoint. It goes out once when the device is opened, and can be sent
 // again from the web API.
 void hid_usb_send_wakeup(uint8_t d) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   static const uint8_t wakeup[3] = {0xA0, 0x00, 0x00};
-  if (!D->out_xfer) return;
-  hid_usb_send_out_endpoint(d, wakeup, sizeof(wakeup));
+  if (!dev->out_xfer) return;
+  hid_usb_queue_out(d, wakeup, sizeof(wakeup));
   HIDCTL_LOG("sent the wake-up packet A0 00 00");
 }
 
 // Claim or release the device's other interface.
 void hid_usb_set_other_interface(uint8_t d, bool claim) {
-  HIDCTL_D = d;
-  if (!D->handle) return;
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle) return;
   hid_claim_other = claim;
   if (!claim) {
-    if (D->other_claimed && D->other_iface != 0xFF) {
-      esp_err_t err = usb_host_interface_release(hid_client, D->handle, D->other_iface);
-      HIDCTL_LOG("released interface %u -> %s", D->other_iface, esp_err_to_name(err));
-      D->other_claimed = false;
-      D->other_iface = 0xFF;
+    if (dev->other_claimed && dev->other_iface != 0xFF) {
+      esp_err_t err = usb_host_interface_release(hid_client, dev->handle, dev->other_iface);
+      HIDCTL_LOG("released interface %u -> %s", dev->other_iface, esp_err_to_name(err));
+      dev->other_claimed = false;
+      dev->other_iface = 0xFF;
     }
     return;
   }
-  if (!D->other_claimed) hid_claim_other_interfaces(D->handle, D->iface);
+  if (!dev->other_claimed) hid_claim_other_interfaces(dev->handle, dev->iface);
 }
 
 uint8_t hid_usb_other_iface(uint8_t d) {
-  HIDCTL_D = d; return D->other_iface; }
-bool    hid_usb_other_claimed(uint8_t d) { HIDCTL_D = d; return D->other_claimed; }
+  HidDevice* dev = hid_dev_of(d); return dev->other_iface; }
+bool    hid_usb_other_claimed(uint8_t d) { HidDevice* dev = hid_dev_of(d); return dev->other_claimed; }
 
 // The F1's feature report, if the device answered the request for it.
 const uint8_t* hid_usb_feature_data(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->feature_len;
-  return D->feature_data;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->feature_len;
+  return dev->feature_data;
 }
 static void hid_out_transfer_cb(usb_transfer_t* xfer);
-static bool hid_out_send_next_piece(void);
-static bool hid_out_send_zlp(void);
+static bool hid_out_send_next(uint8_t d);
+static bool hid_out_send_next_piece(uint8_t d);
 static void hid_out_watchdog(void);
 static void hid_poll_device(void);
 static esp_err_t hid_open_and_configure(uint8_t dev_addr);
@@ -644,6 +671,95 @@ void hid_usb_poll(void) {
 static void hid_poll_device(void) {
   // A transfer that never finishes would block every later packet.
   hid_out_watchdog();
+
+  // The recovery, when a pipe has wedged. One step per pass: the flush's
+  // cancellation has to be delivered before the interface can be released,
+  // and the release has to have happened before the pipe can be claimed
+  // again.
+  if (D->out_recovery) {
+    switch (D->out_recovery) {
+      case 1: {   // halt: the pipe stops moving
+        esp_err_t err = usb_host_endpoint_halt(D->handle, D->out_ep);
+        HIDCTL_LOG("OUT endpoint (device %u): halt -> %s",
+                   (unsigned)HIDCTL_D, esp_err_to_name(err));
+        D->out_recovery = 2;
+        break;
+      }
+      case 2: {   // flush: the queued transfer is cancelled
+        esp_err_t err = usb_host_endpoint_flush(D->handle, D->out_ep);
+        HIDCTL_LOG("OUT endpoint (device %u): flush -> %s",
+                   (unsigned)HIDCTL_D, esp_err_to_name(err));
+        D->out_recovery = 3;
+        break;
+      }
+      case 3: {   // clear: the only thing that makes the pipe usable again
+        esp_err_t err = usb_host_endpoint_clear(D->handle, D->out_ep);
+        HIDCTL_LOG("OUT endpoint (device %u): clear -> %s",
+                   (unsigned)HIDCTL_D, esp_err_to_name(err));
+        if (err == ESP_OK) {
+          // The pipe is idle again. The transfers are re-pointed at it and
+          // the queue is left alone: the packets in it are still the right
+          // ones.
+          D->out_failed = false;
+          D->out_recovery = 0;
+          D->out_xfer->device_handle = D->handle;
+          D->out_xfer->bEndpointAddress = D->out_ep;
+          D->out_xfer->num_bytes = 0;
+          D->out_in_flight = false;
+          D->out_started_ms = 0;
+        } else {
+          // The pipe is still halted. The interface is taken and claimed
+          // again, which gives the device a new pipe.
+          D->out_recovery = 4;
+        }
+        break;
+      }
+      case 4: {   // reclaim: take the interface and claim it again
+        if (D->out_in_flight) break;    // the cancellation has not arrived yet
+        esp_err_t err = usb_host_interface_release(hid_client, D->handle, D->iface);
+        if (err == ESP_OK) {
+          err = usb_host_interface_claim(hid_client, D->handle, D->iface, 0);
+        }
+        HIDCTL_LOG("OUT endpoint (device %u): reclaim -> %s",
+                   (unsigned)HIDCTL_D, esp_err_to_name(err));
+        if (err == ESP_OK) {
+          D->out_failed = false;
+          D->out_recovery = 0;
+          D->out_xfer->device_handle = D->handle;
+          D->out_xfer->bEndpointAddress = D->out_ep;
+          D->in_xfer->device_handle = D->handle;
+          D->in_arm_pending = true;
+        } else {
+          // The interface cannot be taken. The device is closed and let
+          // go: it re-enumerates, and the connect path opens it again with
+          // fresh pipes.
+          HIDCTL_LOG("OUT endpoint (device %u): the interface cannot be "
+                     "taken, the device is reopened", (unsigned)HIDCTL_D);
+          D->out_recovery = 5;
+        }
+        break;
+      }
+      case 5: {   // reopen: close the device and let it come back
+        HIDCTL_LOG("OUT endpoint (device %u): the device is reopened",
+                   (unsigned)HIDCTL_D);
+        D->out_recovery = 0;
+        hid_close_device();
+        if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected(HIDCTL_D);
+        return;
+      }
+      default:
+        D->out_recovery = 0;
+        break;
+    }
+    return;
+  }
+
+  // The OUT pipe: the rest of a packet first, and then the next queued
+  // packet, when the pipe is free. This is the ONLY place a transfer for
+  // the OUT endpoint is submitted.
+  if (!D->out_failed) {
+    if (!hid_out_send_next_piece(HIDCTL_D)) hid_out_send_next(HIDCTL_D);
+  }
 
   // ONE control transfer at a time. The control pipe is a single pipe: a
   // second transfer started while the first is in flight confuses both
@@ -1150,6 +1266,8 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   // their LED data here rather than over the control pipe.
   D->out_ep = out_ep;
   D->out_mps = out_mps;
+  // The queue's slot size depends on the endpoint's packet size, so it is
+  // set once the endpoint is known.
   if (!D->in_xfer) {
     // The transfers this device needs. Without them the device is
     // claimed but can do nothing.
@@ -1157,6 +1275,26 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
       usb_host_device_close(hid_client, dev);
       D->used = false;
       return ESP_FAIL;
+    }
+  }
+  // The outgoing queue, in PSRAM: the internal heap is nearly full and
+  // the deck's packets are 1024 bytes each. The slot size is the device's
+  // packet size, and there are enough slots for several pictures to be
+  // waiting - which is what stops them going out one per pass of the
+  // main loop.
+  if (!D->out_q) {
+    const uint16_t stride = (uint16_t)(2 + (out_mps > HIDCTL_MAX_LED ? out_mps : HIDCTL_MAX_LED));
+    // The queue holds several seconds of reports, so a burst does not
+    // throw them away.
+    const uint8_t slots = 64;
+    D->out_q = (uint8_t*)heap_caps_aligned_alloc(16, (size_t)stride * slots,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (D->out_q) {
+      D->out_q_slots = slots;
+      D->out_q_stride = stride;
+      D->out_q_lock = xSemaphoreCreateMutex();
+    } else {
+      HIDCTL_LOG("open: the outgoing queue would not fit in PSRAM");
     }
   }
   if (out_ep && !D->out_xfer) {
@@ -1263,6 +1401,10 @@ static void hid_close_device(void) {
   usb_host_interface_release(hid_client, D->handle, D->iface);
   if (D->in_xfer) D->in_xfer->device_handle = nullptr;
   usb_host_device_close(hid_client, D->handle);
+  if (D->out_q_lock) { vSemaphoreDelete(D->out_q_lock); D->out_q_lock = nullptr; }
+  if (D->out_q) { free(D->out_q); D->out_q = nullptr; }
+  D->out_q_slots = 0;
+  D->out_q_count = 0;
   D->handle = nullptr;
   D->in_ep = 0;
   D->iface = 0;
@@ -1274,8 +1416,8 @@ static void hid_close_device(void) {
 }
 
 bool hid_usb_connected(uint8_t d) {
-  HIDCTL_D = d;
-  return D->handle != nullptr;
+  HidDevice* dev = hid_dev_of(d);
+  return dev->handle != nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -1295,7 +1437,7 @@ bool hid_usb_connected(uint8_t d) {
 // ---------------------------------------------------------------------------
 bool hid_usb_send_report(uint8_t d, uint8_t report_type, uint8_t report_id,
                          const uint8_t* data, uint16_t len) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   return hid_usb_send_setup(d, 0x21, 0x09, (uint16_t)(((report_type & 0x03) << 8) | report_id),
                             data, len);
 }
@@ -1306,8 +1448,8 @@ bool hid_usb_send_report(uint8_t d, uint8_t report_type, uint8_t report_id,
 // report-type field is not always what the HID spec would suggest.
 bool hid_usb_send_setup(uint8_t d, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
                         const uint8_t* data, uint16_t len) {
-  HIDCTL_D = d;
-  return hid_usb_send_setup_to(d, bmRequestType, bRequest, wValue, D->iface, data, len);
+  HidDevice* dev = hid_dev_of(d);
+  return hid_usb_send_setup_to(d, bmRequestType, bRequest, wValue, dev->iface, data, len);
 }
 
 // The same, but with an explicit interface index. NI's own driver sends its
@@ -1315,13 +1457,13 @@ bool hid_usb_send_setup(uint8_t d, uint8_t bmRequestType, uint8_t bRequest, uint
 // HID one it reads the inputs from.
 bool hid_usb_send_setup_to(uint8_t d, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
                            uint8_t wIndex, const uint8_t* data, uint16_t len) {
-  HIDCTL_D = d;
-  if (!D->handle || !D->ctrl_xfer || !data || len == 0) return false;
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle || !dev->ctrl_xfer || !data || len == 0) return false;
   if (len > HIDCTL_MAX_OUTPUT) return false;
 
   // One control transfer at a time.
-  if (D->ctrl_in_flight) {
-    D->ctrl_pending = true;
+  if (dev->ctrl_in_flight) {
+    dev->ctrl_pending = true;
     return false;
   }
 
@@ -1332,16 +1474,16 @@ bool hid_usb_send_setup_to(uint8_t d, uint8_t bmRequestType, uint8_t bRequest, u
   setup.wIndex        = wIndex;
   setup.wLength       = len;
 
-  memcpy(D->ctrl_xfer->data_buffer, &setup, sizeof(setup));
-  memcpy(D->ctrl_xfer->data_buffer + sizeof(setup), data, len);
-  D->ctrl_xfer->num_bytes = sizeof(setup) + len;
-  D->ctrl_xfer->device_handle = D->handle;
+  memcpy(dev->ctrl_xfer->data_buffer, &setup, sizeof(setup));
+  memcpy(dev->ctrl_xfer->data_buffer + sizeof(setup), data, len);
+  dev->ctrl_xfer->num_bytes = sizeof(setup) + len;
+  dev->ctrl_xfer->device_handle = dev->handle;
 
-  D->ctrl_in_flight = true;
-  D->ctrl_want_readback = (bmRequestType & 0x80) != 0;
-  esp_err_t err = usb_host_transfer_submit_control(hid_client, D->ctrl_xfer);
+  dev->ctrl_in_flight = true;
+  dev->ctrl_want_readback = (bmRequestType & 0x80) != 0;
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, dev->ctrl_xfer);
   if (err != ESP_OK) {
-    D->ctrl_in_flight = false;
+    dev->ctrl_in_flight = false;
     HIDCTL_LOG("control transfer submit failed: %s", esp_err_to_name(err));
     return false;
   }
@@ -1349,7 +1491,7 @@ bool hid_usb_send_setup_to(uint8_t d, uint8_t bmRequestType, uint8_t bRequest, u
 }
 
 bool hid_usb_send_output_report(uint8_t d, uint8_t report_id, const uint8_t* data, uint16_t len) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   return hid_usb_send_report(d, 0x02, report_id, data, len);
 }
 
@@ -1364,7 +1506,7 @@ bool hid_usb_send_output_report(uint8_t d, uint8_t report_id, const uint8_t* dat
 // flag would cost a full rebuild to change.
 
 void hid_usb_set_out_via_control(uint8_t d, bool on) {
-  HIDCTL_D = d; D->out_via_control = on; }
+  HidDevice* dev = hid_dev_of(d); dev->out_via_control = on; }
 
 // The packet's first byte is a report ID. A host that has no report IDs
 // (or one that strips it) sends the command from byte one, so the byte
@@ -1380,14 +1522,14 @@ void hid_usb_set_out_via_control(uint8_t d, bool on) {
 // asserts on one. A single pad byte is short as well.
 
 void hid_usb_set_out_shift(uint8_t d, bool on) {
-  HIDCTL_D = d; D->out_shift = on; }
+  HidDevice* dev = hid_dev_of(d); dev->out_shift = on; }
 bool hid_usb_get_out_shift(uint8_t d) {
-  HIDCTL_D = d; return D->out_shift; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_shift; }
 
 void hid_usb_set_out_drop_leading(uint8_t d, bool on) {
-  HIDCTL_D = d; D->out_drop_leading = on; }
+  HidDevice* dev = hid_dev_of(d); dev->out_drop_leading = on; }
 bool hid_usb_get_out_drop_leading(uint8_t d) {
-  HIDCTL_D = d; return D->out_drop_leading; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_drop_leading; }
 
 // Cap on how many bytes of a packet go out. The deck's output report is
 // 1024 bytes and its endpoint's maximum packet is 1024, so a 1025-byte
@@ -1396,9 +1538,9 @@ bool hid_usb_get_out_drop_leading(uint8_t d) {
 // only ever see 1024. The cap makes the same packet go out as one.
 
 void hid_usb_set_out_cap(uint8_t d, uint16_t n) {
-  HIDCTL_D = d; D->out_cap = n; }
+  HidDevice* dev = hid_dev_of(d); dev->out_cap = n; }
 uint16_t hid_usb_get_out_cap(uint8_t d) {
-  HIDCTL_D = d; return D->out_cap; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_cap; }
 
 // End the packet with a zero-length packet.
 //
@@ -1411,39 +1553,26 @@ uint16_t hid_usb_get_out_cap(uint8_t d) {
 // never comes.
 
 void hid_usb_set_out_zlp(uint8_t d, bool on) {
-  HIDCTL_D = d; D->out_zlp = on; }
+  HidDevice* dev = hid_dev_of(d); dev->out_zlp = on; }
 bool hid_usb_get_out_zlp(uint8_t d) {
-  HIDCTL_D = d; return D->out_zlp; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_zlp; }
 
-// Send the zero-length packet that ends a report.
-//
-// It goes from the main loop and not from the transfer callback: a
-// transfer submitted from inside the completion of another one is what
-// the USB stack here does not survive - the DWC2 raises an error
-// interrupt and the HAL asserts on it (usb_dwc_hal.c:502, the
-// channel-halted check).
-bool hid_usb_pump_out(void) {
-  // Every device that has one waiting: the zero-length packet belongs to
-  // the device whose report it ends.
-  bool sent = false;
-  for (uint8_t i = 0; i < HIDCTL_MAX_DEVICES; i++) {
-    HIDCTL_D = i;
-    if (!hid_dev[i].used) continue;
-    if (!D->out_zlp_pending || D->out_in_flight) continue;
-    D->out_zlp_pending = false;
-    if (hid_out_send_zlp()) sent = true;
-  }
-  return sent;
-}
+
 bool hid_usb_get_out_via_control(uint8_t d) {
-  HIDCTL_D = d; return D->out_via_control; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_via_control; }
 
-bool hid_usb_send_out_endpoint(uint8_t d, const uint8_t* data, uint16_t len) {
-  HIDCTL_D = d;
-  if (!D->handle || !D->out_xfer || !data || len == 0) { D->out_refused_no_device++; return false; }
+// Queue one packet for a device's interrupt OUT endpoint.
+//
+// This is the producer's half: it copies the bytes and returns. It is safe
+// from any task, and it never touches a transfer.
+bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle || !dev->out_xfer || !data || len == 0) { dev->out_refused_no_device++; return false; }
+  // The framing is the device's, and it is applied here, so the bytes in
+  // the queue are exactly the bytes that go on the wire.
   bool shifted = false;
-  if (D->out_drop_leading && len > 1) {
-    if (D->out_shift) {
+  if (dev->out_drop_leading && len > 1) {
+    if (dev->out_shift) {
       // The report moves to the front of the packet and the packet keeps
       // its length: the report is followed by one pad byte.
       shifted = true;
@@ -1451,72 +1580,173 @@ bool hid_usb_send_out_endpoint(uint8_t d, const uint8_t* data, uint16_t len) {
       data++; len--;
     }
   }
-  if (D->out_via_control) {
+  if (dev->out_via_control) {
     // Over the control pipe: the report ID goes in wValue and the data
     // has no ID in it.
     if (len < 2) return false;
     return hid_usb_send_output_report(d, data[0], data + 1, (uint16_t)(len - 1));
   }
-  if (D->out_cap && len > D->out_cap) len = D->out_cap;
-  if (len > HIDCTL_MAX_OUTPUT) { D->out_refused_too_long++; return false; }
-  if (D->out_in_flight) { D->out_refused_busy++; return false; }
-  // The last packet still needs its zero-length packet, and that has to go
-  // before this one or the device sees the reports out of order.
-  if (D->out_zlp_pending) { D->out_refused_busy++; return false; }
+  if (dev->out_cap && len > dev->out_cap) len = dev->out_cap;
+  if (len > HIDCTL_MAX_OUTPUT) { dev->out_refused_too_long++; return false; }
 
-  // The whole packet goes into the transfer's buffer and it is sent in
-  // pieces.
-  //
-  // The F1's LED report is 81 bytes on a 64-byte endpoint and it works,
-  // so a device accumulates its report over several packets and a short
-  // piece is fine. The deck's packet is 1025 bytes on a 1024-byte
-  // endpoint, and a piece that big is NOT delivered: the transfer
-  // completes with nothing in it. So the piece size is capped at what is
-  // known to work.
-  if (shifted) {
-    memcpy(D->out_xfer->data_buffer, data + 1, len - 1);
-    D->out_xfer->data_buffer[len - 1] = 0x00;
-  } else {
-    memcpy(D->out_xfer->data_buffer, data, len);
+  if (dev->out_q_lock) xSemaphoreTake(dev->out_q_lock, portMAX_DELAY);
+  bool queued = false;
+  if (len + 2 > dev->out_q_stride) {
+    // The packet does not fit the slot. It would be written past the end
+    // of it, which is how the board ended up crashing in a task that had
+    // nothing to do with the deck.
+    dev->out_refused_too_long++;
+    if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
+    HIDCTL_LOG("OUT endpoint (device %u): the packet is %u bytes and the "
+               "slot holds %u", (unsigned)d, (unsigned)len,
+               (unsigned)(dev->out_q_stride - 2));
+    return false;
   }
-  D->out_total = len;
-  D->out_sent = 0;
-  uint16_t piece = D->out_mps ? D->out_mps : 64;
-  D->out_xfer->num_bytes = (piece < len) ? piece : len;
-  D->out_xfer->device_handle = D->handle;
-  D->out_xfer->bEndpointAddress = D->out_ep;
+  if (dev->out_q && dev->out_q_count < dev->out_q_slots) {
+    uint8_t* slot = dev->out_q + (size_t)dev->out_q_head * dev->out_q_stride;
+    if (shifted) {
+      memcpy(slot + 2, data + 1, len - 1);
+      slot[2 + len - 1] = 0x00;
+    } else {
+      memcpy(slot + 2, data, len);
+    }
+    slot[0] = (uint8_t)(len & 0xFF);
+    slot[1] = (uint8_t)(len >> 8);
+    dev->out_q_head = (uint16_t)((dev->out_q_head + 1) % dev->out_q_slots);
+    dev->out_q_count++;
+    queued = true;
+    // A packet that ends exactly on the endpoint's packet size needs the
+    // zero-length packet after it, or the device cannot tell that it has
+    // the whole report. It goes into the queue as well, so the order on
+    // the wire is the order they were queued in.
+    if (dev->out_zlp && dev->out_mps && (len % dev->out_mps) == 0 &&
+        dev->out_q_count < dev->out_q_slots) {
+      uint8_t* z = dev->out_q + (size_t)dev->out_q_head * dev->out_q_stride;
+      z[0] = 0; z[1] = 0;
+      dev->out_q_head = (uint16_t)((dev->out_q_head + 1) % dev->out_q_slots);
+      dev->out_q_count++;
+    }
+  } else {
+    // The queue is full. The packet is dropped, and that is a lost frame:
+    // it is counted, because that is how it is seen from outside.
+    dev->out_refused_busy++;
+  }
+  if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
+  if (!queued) {
+    // The log is lossy and the console is read by a person: the first
+    // drop and then every fiftieth are said, not every one.
+    static uint16_t drops = 0;
+    if ((drops++ % 50) == 0) {
+      HIDCTL_LOG("OUT endpoint (device %u): the queue is full, a packet is "
+                 "dropped (%u so far)", (unsigned)d, (unsigned)drops);
+    }
+    return false;
+  }
+  return true;
+}
+
+// The sender's half: take the next queued packet and submit it.
+//
+// This runs in the task that owns the USB stack, and nowhere else. The
+// whole packet goes into one transfer - the controller splits it into the
+// endpoint's packets itself - so there is no second piece to send from
+// inside the completion callback, which is what the DWC2 HAL asserts on.
+static bool hid_out_send_next(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d);
+  if (dev->out_in_flight || !dev->out_xfer || !dev->out_q) return false;
+  uint16_t len = 0;
+  if (dev->out_q_lock) xSemaphoreTake(dev->out_q_lock, portMAX_DELAY);
+  if (dev->out_q_count) {
+    uint8_t* slot = dev->out_q + (size_t)dev->out_q_tail * dev->out_q_stride;
+    len = (uint16_t)(slot[0] | (slot[1] << 8));
+    // The copy is done under the lock: the slot is free once the count
+    // drops, and the producer may take it.
+    memcpy(dev->out_xfer->data_buffer, slot + 2, len);
+    dev->out_q_tail = (uint16_t)((dev->out_q_tail + 1) % dev->out_q_slots);
+    dev->out_q_count--;
+  }
+  if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
+  if (!len) return false;
+
+  // The packet goes out in pieces: the F1's 81-byte LED report on a
+  // 64-byte endpoint never completes as one transfer. The first piece
+  // goes now and the rest from the poll, one piece per pass.
+  dev->out_total = len;
+  dev->out_sent = 0;
+  const uint16_t piece = dev->out_mps ? dev->out_mps : 64;
+  dev->out_xfer->num_bytes = (piece < len) ? piece : len;
+  dev->out_xfer->device_handle = dev->handle;
+  dev->out_xfer->bEndpointAddress = dev->out_ep;
 
   // Keep the head of what went out, so it can be read over /json/ar when
   // something on the controller's display or its LEDs looks wrong.
   {
     uint16_t keep = len < HIDCTL_READBACK_BYTES ? len : HIDCTL_READBACK_BYTES;
-    // What actually goes on the wire, which is not always what was handed
-    // in: the report ID byte may be off it.
-    memcpy(D->last_out_report, D->out_xfer->data_buffer, keep);
-    D->last_out_len = (uint8_t)keep;
+    memcpy(dev->last_out_report, dev->out_xfer->data_buffer, keep);
+    dev->last_out_len = (uint8_t)keep;
   }
-  if (!D->out_first_len) {
-    uint16_t keep = len < sizeof(D->out_first) ? len : sizeof(D->out_first);
-    memcpy(D->out_first, D->out_xfer->data_buffer, keep);
-    D->out_first_len = (uint8_t)keep;
+  if (!dev->out_first_len) {
+    uint16_t keep = len < sizeof(dev->out_first) ? len : sizeof(dev->out_first);
+    memcpy(dev->out_first, dev->out_xfer->data_buffer, keep);
+    dev->out_first_len = (uint8_t)keep;
   }
 
-  D->out_in_flight = true;
-  esp_err_t err = usb_host_transfer_submit(D->out_xfer);
+  dev->out_in_flight = true;
+  // The deadline is armed HERE, on every submit. It used to be armed only
+  // for the second piece of a packet, so the first piece - and the deck's
+  // whole packet - could hang for ever with nothing watching it: the
+  // device went quiet and every later packet was refused as "busy", with
+  // no log line at all.
+  dev->out_started_ms = millis();
+  esp_err_t err = usb_host_transfer_submit(dev->out_xfer);
   if (err != ESP_OK) {
-    D->out_in_flight = false;
-    D->out_submit_error = (int8_t)err;
-    D->out_refused_submit++;
+    dev->out_in_flight = false;
+    dev->out_started_ms = 0;
+    dev->out_submit_error = (int8_t)err;
+    dev->out_refused_submit++;
     HIDCTL_LOG("OUT endpoint (device %u) submit failed: %s",
-               (unsigned)HIDCTL_D, esp_err_to_name(err));
+               (unsigned)d, esp_err_to_name(err));
     return false;
   }
-  D->out_submit_error = 0;
-  D->out_sent = D->out_xfer->num_bytes;
-  D->out_bytes += D->out_xfer->num_bytes;
-  // The packet has to be ended with a zero-length packet: see the note on
-  // D->out_zlp.
-  D->out_zlp_pending = D->out_zlp && (D->out_sent >= D->out_total);
+  dev->out_submit_error = 0;
+  dev->out_sent = dev->out_xfer->num_bytes;
+  dev->out_bytes += dev->out_xfer->num_bytes;
+  return true;
+}
+
+// The rest of a packet: the next piece, sent from the poll.
+//
+// It is not sent from the transfer's completion callback: a transfer
+// submitted from inside the completion of another one is what the USB
+// stack here does not survive - the DWC2 raises an error interrupt and
+// the HAL asserts on it.
+static bool hid_out_send_next_piece(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d);
+  if (dev->out_in_flight || !dev->out_xfer) return false;
+  if (dev->out_sent >= dev->out_total) return false;
+  const uint16_t left = (uint16_t)(dev->out_total - dev->out_sent);
+  const uint16_t piece = dev->out_mps ? dev->out_mps : 64;
+  dev->out_xfer->num_bytes = (piece < left) ? piece : left;
+  // The piece is already in the buffer; move it to the front.
+  memmove(dev->out_xfer->data_buffer, dev->out_xfer->data_buffer + dev->out_sent,
+          dev->out_xfer->num_bytes);
+  dev->out_xfer->device_handle = dev->handle;
+  dev->out_xfer->bEndpointAddress = dev->out_ep;
+  dev->out_sent += dev->out_xfer->num_bytes;
+  dev->out_in_flight = true;
+  dev->out_started_ms = millis();
+  esp_err_t err = usb_host_transfer_submit(dev->out_xfer);
+  if (err != ESP_OK) {
+    dev->out_in_flight = false;
+    dev->out_started_ms = 0;
+    dev->out_submit_error = (int8_t)err;
+    dev->out_refused_submit++;
+    HIDCTL_LOG("OUT endpoint (device %u) submit failed: %s",
+               (unsigned)d, esp_err_to_name(err));
+    return false;
+  }
+  dev->out_submit_error = 0;
+  dev->out_bytes += dev->out_xfer->num_bytes;
   return true;
 }
 
@@ -1527,153 +1757,112 @@ bool hid_usb_send_out_endpoint(uint8_t d, const uint8_t* data, uint16_t len) {
 // short one. A PC's HID stack ends the transfer with a zero-length
 // packet, and the capture of a host that drives the deck shows it: a
 // 1024-byte packet, then a zero-length one, then the next report.
-static bool hid_out_send_zlp(void) {
-  if (!D->out_xfer || !D->handle) return false;
-  D->out_xfer->num_bytes = 0;
-  D->out_xfer->device_handle = D->handle;
-  D->out_xfer->bEndpointAddress = D->out_ep;
-  D->out_in_flight = true;
-  D->out_started_ms = millis();
-  esp_err_t err = usb_host_transfer_submit(D->out_xfer);
-  if (err != ESP_OK) {
-    D->out_in_flight = false;
-    D->out_started_ms = 0;
-    D->out_submit_error = (int8_t)err;
-    HIDCTL_LOG("OUT endpoint: the zero-length packet was refused: %s",
-               esp_err_to_name(err));
-    return false;
-  }
-  return true;
-}
+
 
 // Send the next piece of a packet that goes out in pieces.
-static bool hid_out_send_next_piece(void) {  if (!D->out_xfer || D->out_sent >= D->out_total) {
-    D->out_total = 0;
-    D->out_sent = 0;
-    return false;
-  }
-  uint16_t piece = D->out_mps ? D->out_mps : 64;
-  uint16_t left = (uint16_t)(D->out_total - D->out_sent);
-  D->out_xfer->num_bytes = (piece < left) ? piece : left;
-  // The piece is already in the buffer; move it to the front.
-  memmove(D->out_xfer->data_buffer, D->out_xfer->data_buffer + D->out_sent,
-          D->out_xfer->num_bytes);
-  D->out_xfer->device_handle = D->handle;
-  D->out_xfer->bEndpointAddress = D->out_ep;
-  D->out_sent += D->out_xfer->num_bytes;
-  D->out_bytes += D->out_xfer->num_bytes;
-  D->out_zlp_pending = D->out_zlp && (D->out_sent >= D->out_total);
-  D->out_in_flight = true;
-  D->out_started_ms = millis();
-  esp_err_t err = usb_host_transfer_submit(D->out_xfer);
-  if (err != ESP_OK) {
-    D->out_in_flight = false;
-    HIDCTL_LOG("OUT endpoint (device %u) submit failed: %s",
-               (unsigned)HIDCTL_D, esp_err_to_name(err));
-    return false;
-  }
-  return true;
-}
+
 
 int8_t hid_usb_class_status(uint8_t d) {
-  HIDCTL_D = d; return D->class_status; }
+  HidDevice* dev = hid_dev_of(d); return dev->class_status; }
 
 // The answer to the last class request, if it brought one back.
 const uint8_t* hid_usb_class_data(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->class_data_len;
-  return D->class_data;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->class_data_len;
+  return dev->class_data;
 }
 
 // The stage of the class-request sequence: 0 = not started, 1 = the vendor
 // request due, 2 = SET_IDLE due, 3 = done.
 uint8_t hid_usb_class_stage(uint8_t d) {
-  HIDCTL_D = d; return D->class_stage; }
+  HidDevice* dev = hid_dev_of(d); return dev->class_stage; }
 
 // Ask for the class requests again - they can be sent by hand from the
 // web API, so they can be tried again without a rebuild.
 void hid_usb_request_class(uint8_t d) {
-  HIDCTL_D = d;
-  D->class_stage = 1;
-  D->class_wanted = true;
-  D->class_enabled = true;
-  D->class_data_len = 0;
+  HidDevice* dev = hid_dev_of(d);
+  dev->class_stage = 1;
+  dev->class_wanted = true;
+  dev->class_enabled = true;
+  dev->class_data_len = 0;
 }
 
 // Turn the class requests on or off. They are off by default: the F1
 // stalls them, and a stalled control endpoint is not cleared here.
 void hid_usb_set_class_requests(uint8_t d, bool want) {
-  HIDCTL_D = d;
-  D->class_enabled = want;
+  HidDevice* dev = hid_dev_of(d);
+  dev->class_enabled = want;
   if (want) {
     hid_usb_request_class(d);
   } else {
-    D->class_wanted = false;
-    D->class_stage = 0;
+    dev->class_wanted = false;
+    dev->class_stage = 0;
   }
 }
 
 // The configuration descriptor, exactly as the device sent it.
 const uint8_t* hid_usb_config_desc(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = (uint8_t)D->config_desc_len;
-  return D->config_desc;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = (uint8_t)dev->config_desc_len;
+  return dev->config_desc;
 }
 
 // The reports that came in, and the zero-length packets that followed
 // them.
 uint32_t hid_usb_report_count(uint8_t d) {
-  HIDCTL_D = d; return D->in_report_count; }
+  HidDevice* dev = hid_dev_of(d); return dev->in_report_count; }
 uint32_t hid_usb_out_count(uint8_t d) {
-  HIDCTL_D = d; return D->out_count; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_count; }
 // Why the last OUT packet did not go out: the counts say which door it
 // went out of.
 uint32_t hid_usb_out_refused(uint8_t d, uint8_t which) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   switch (which) {
-    case 0: return D->out_refused_no_device;
-    case 1: return D->out_refused_too_long;
-    case 2: return D->out_refused_busy;
-    case 3: return D->out_refused_submit;
+    case 0: return dev->out_refused_no_device;
+    case 1: return dev->out_refused_too_long;
+    case 2: return dev->out_refused_busy;
+    case 3: return dev->out_refused_submit;
     default: return 0;
   }
 }
 int8_t hid_usb_out_submit_error(uint8_t d) {
-  HIDCTL_D = d; return D->out_submit_error; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_submit_error; }
 uint32_t hid_usb_out_stuck(uint8_t d) {
-  HIDCTL_D = d; return D->out_stuck; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_stuck; }
 uint32_t hid_usb_ctrl_out_count(uint8_t d) {
-  HIDCTL_D = d; return D->ctrl_out_count; }
+  HidDevice* dev = hid_dev_of(d); return dev->ctrl_out_count; }
 const uint8_t* hid_usb_out_first(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->out_first_len;
-  return D->out_first;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->out_first_len;
+  return dev->out_first;
 }
 uint32_t hid_usb_out_bytes(uint8_t d) {
-  HIDCTL_D = d; return D->out_bytes; }
+  HidDevice* dev = hid_dev_of(d); return dev->out_bytes; }
 // 0 = unknown, 1 = full speed, 2 = high speed.
 uint8_t hid_usb_link_speed(uint8_t d) {
-  HIDCTL_D = d; return D->link_speed; }
+  HidDevice* dev = hid_dev_of(d); return dev->link_speed; }
 const uint8_t* hid_usb_report_desc(uint8_t d, uint16_t* len) {
-  HIDCTL_D = d;
+  HidDevice* dev = hid_dev_of(d);
   if (len) *len = hid_report_desc_len;
   return hid_report_desc;
 }
 // The head of the last packet that went out on the OUT endpoint.
 const uint8_t* hid_usb_last_out_head(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->last_out_len > 24 ? 24 : D->last_out_len;
-  return D->last_out_report;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->last_out_len > 24 ? 24 : dev->last_out_len;
+  return dev->last_out_report;
 }
 void hid_usb_out_watchdog(uint8_t d) {
-  HIDCTL_D = d; hid_out_watchdog(); }
+  HIDCTL_D = d;
+  hid_out_watchdog();
+}
 uint32_t hid_usb_zlp_count(uint8_t d) {
-  HIDCTL_D = d; return D->in_zlp_count; }
+  HidDevice* dev = hid_dev_of(d); return dev->in_zlp_count; }
 
 const uint8_t* hid_usb_last_out_report(uint8_t d, uint8_t* len) {
-  HIDCTL_D = d;
-  if (len) *len = D->last_out_len;
-  return D->last_out_report;
+  HidDevice* dev = hid_dev_of(d);
+  if (len) *len = dev->last_out_len;
+  return dev->last_out_report;
 }
 
 static void hid_out_transfer_cb(usb_transfer_t* xfer) {
@@ -1690,17 +1879,19 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
       HIDCTL_LOG("OUT endpoint (device %u) transfer status=%d, %d bytes",
                  (unsigned)HIDCTL_D, (int)xfer->status, (int)xfer->actual_num_bytes);
+      // The packet did not go out. The pipe may be wedged, and the recovery
+      // is run from the poll - one step per pass, because the flush's
+      // cancellation has to be delivered before the interface can be
+      // released.
+      D->out_failed = true;
     }
   }
   D->out_in_flight = false;
   D->out_started_ms = 0;
-  // More of the packet to go?
-  if (D->out_sent < D->out_total) {
-    hid_out_send_next_piece();
-    return;
-  }
-  // The packet is complete. If the device needs the transfer ended with a
-  // zero-length packet, it is due - the main loop sends it.
+  // NOTHING is submitted from here. A transfer submitted from inside the
+  // completion of another one is what the USB stack here does not survive:
+  // the DWC2 raises an error interrupt and the HAL asserts on it. The
+  // next piece, and the next packet, go out from the poll instead.
 }
 
 // A transfer that never finishes would leave the OUT pipe stuck for ever
@@ -1713,13 +1904,13 @@ static void hid_out_watchdog(void) {
   D->out_stuck++;
   HIDCTL_LOG("OUT endpoint (device %u): the transfer did not finish in %u ms",
              (unsigned)HIDCTL_D, (unsigned)HID_OUT_TIMEOUT_MS);
-  if (D->handle && D->out_xfer) {
-    usb_host_endpoint_halt(D->handle, D->out_ep);
-    usb_host_endpoint_flush(D->handle, D->out_ep);
-    usb_host_endpoint_clear(D->handle, D->out_ep);
-  }
-  D->out_in_flight = false;
-  D->out_started_ms = 0;
+  // The recovery is run from the poll, one step per pass. It used to be run
+  // from here, and it threw away the result of every call: a clear that
+  // failed left the pipe halted for ever, and every later submit then
+  // failed with ESP_ERR_INVALID_STATE, so the device was gone until it was
+  // unplugged.
+  D->out_failed = true;
+  D->out_recovery = 1;
 }
 
 static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
@@ -1818,9 +2009,9 @@ static bool hid_send_class_request_ex(uint8_t bmRequestType, uint8_t bRequest,
 // 0x0200 = configuration, 0x2200 = HID report descriptor.
 bool hid_usb_get_descriptor(uint8_t d, uint8_t bmRequestType, uint16_t wValue,
                             uint16_t wLength, uint8_t wIndex) {
-  HIDCTL_D = d;
-  if (!D->handle || !D->desc_xfer) return false;
-  if (D->desc_in_flight) return false;
+  HidDevice* dev = hid_dev_of(d);
+  if (!dev->handle || !dev->desc_xfer) return false;
+  if (dev->desc_in_flight) return false;
 
   usb_setup_packet_t setup = {};
   setup.bmRequestType = bmRequestType;   // Device-to-host, Standard, Device or Interface
@@ -1829,17 +2020,17 @@ bool hid_usb_get_descriptor(uint8_t d, uint8_t bmRequestType, uint16_t wValue,
   setup.wIndex        = wIndex;
   setup.wLength       = wLength;
 
-  memcpy(D->desc_xfer->data_buffer, &setup, sizeof(setup));
+  memcpy(dev->desc_xfer->data_buffer, &setup, sizeof(setup));
   // The transfer has to be big enough for the setup packet AND the data
   // stage the device is going to send back.
-  D->desc_xfer->num_bytes = sizeof(setup) + wLength;
-  D->desc_xfer->device_handle = D->handle;
-  D->desc_desc_wvalue = wValue;
+  dev->desc_xfer->num_bytes = sizeof(setup) + wLength;
+  dev->desc_xfer->device_handle = dev->handle;
+  dev->desc_desc_wvalue = wValue;
 
-  D->desc_in_flight = true;
-  esp_err_t err = usb_host_transfer_submit_control(hid_client, D->desc_xfer);
+  dev->desc_in_flight = true;
+  esp_err_t err = usb_host_transfer_submit_control(hid_client, dev->desc_xfer);
   if (err != ESP_OK) {
-    D->desc_in_flight = false;
+    dev->desc_in_flight = false;
     HIDCTL_LOG("GET_DESCRIPTOR(%04X) submit failed: %s", wValue, esp_err_to_name(err));
     return false;
   }

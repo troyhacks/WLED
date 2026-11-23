@@ -1560,7 +1560,11 @@ class HidctlUsermod : public Usermod {
     // WLED fires a state change often; the LEDs do not need to follow every
     // one of them. A blink is the exception - it has to be repainted fast
     // enough to show the rate it was asked for.
-    uint32_t minGap = blinkActive() ? 20 : 100;
+    // Twenty updates a second while something is blinking, ten otherwise.
+    // Faster than that is not visible - a blink is four hertz - and the
+    // LED report is two USB transfers each, so a faster paint fills the
+    // outgoing queue and the packets are dropped.
+    uint32_t minGap = blinkActive() ? 50 : 100;
     if (millis() - surfaces[s].last_paint < minGap) return;
     surfaces[s].last_paint = millis();
 
@@ -1764,7 +1768,7 @@ class HidctlUsermod : public Usermod {
       HidctlProfile& p = profiles[surfaces[s].profile];
       const uint8_t d = surfaces[s].device;
       if (led_out_endpoint) {
-        hid_usb_send_out_endpoint(d, surfaces[s].out, surfaces[s].out_len);
+        hid_usb_queue_out(d, surfaces[s].out, surfaces[s].out_len);
         continue;
       }
       // The report ID goes in wValue, not in the data.
@@ -2245,7 +2249,7 @@ class HidctlUsermod : public Usermod {
     }
     const uint8_t d = deckDevice();
     if (d == 0xFF) return false;         // there is no deck
-    bool ok = hid_usb_send_out_endpoint(d, built, Opendeck::WIRE_LEN);
+    bool ok = hid_usb_queue_out(d, built, Opendeck::WIRE_LEN);
     if (ok) opendeck_last_send_ms = millis();
     return ok;
   }
@@ -3513,8 +3517,11 @@ class HidctlUsermod : public Usermod {
     // The pictures are built on core 1, so the main loop is not held up
     // while one is drawn and encoded.
     if (!opendeck_build_task) {
+      // Priority 4, not 1: the USB task is now on this core at priority
+      // 5, and the builder must not be the bottom of the pile - the
+      // deck's picture cadence is what the builder is for.
       BaseType_t ok = xTaskCreatePinnedToCore(opendeckBuildTask, "hidctl_pic",
-                                              8192, this, 1, &opendeck_build_task, 1);
+                                              8192, this, 4, &opendeck_build_task, 1);
       if (ok != pdPASS) {
         opendeck_build_task = nullptr;
         USER_PRINTLN("[HIDCTL] the picture task would not start");
@@ -3549,10 +3556,6 @@ class HidctlUsermod : public Usermod {
     // The LED report goes out from here and nowhere else: this is the
     // task that owns the USB host stack.
     flushLedReport();
-    // The zero-length packet that ends a report goes out from here too:
-    // a transfer submitted from inside the completion of another one is
-    // what the USB stack here does not survive.
-    hid_usb_pump_out();
     // An OpenDeck-family deck: its session and its pictures are handled
     // here, because this is the task that owns the USB host stack.
     if (deckProfile() != 0xFF) {

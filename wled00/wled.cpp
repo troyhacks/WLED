@@ -450,7 +450,7 @@ static const char *TAG = "WLED";
           .create_backround_task = true,
           .task_priority = 1, // xtaskcreate TroyHacks for finding later.
           .stack_size = 4096,
-          .core_id = 0,
+          .core_id = 1,
           .callback = msc_event_cb,
       };
       ESP_ERROR_CHECK(msc_host_install(&msc_config));
@@ -2066,7 +2066,18 @@ void WLED::setup() {
     DEBUG_PRINTLN("Failed to create USB Host app_queue");
     return;
   }
-  xTaskCreatePinnedToCore(usb_task, "usb_task", 8192, NULL, 2, NULL, 0);
+  // The USB host task.
+  //
+  // It lives on core 1, not core 0. On core 0 it was one notch above the
+  // task that runs the usermods' loop ("Background", priority 1), so
+  // every USB event preempted the very task that paints the F1's pads
+  // and pushes the deck's pictures - and the pads froze while the
+  // buttons kept working.
+  //
+  // Its priority is 5, just under the AudioReactive's 6: the analysis and
+  // the beat detection must not be delayed by USB traffic, and the USB
+  // must not be delayed by the LED rendering.
+  xTaskCreatePinnedToCore(usb_task, "usb_task", 8192, NULL, 5, NULL, 1);
   DEBUG_PRINTLN("Setup complete. Waiting for USB Host events.");
   #endif
 
