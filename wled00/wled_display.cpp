@@ -49,6 +49,7 @@ static uint8_t         dispRotation  = 0;         // 0, 90, 180, 270
 static uint8_t         dispButtons   = 32;
 static uint8_t         dispButtonCols= 8;
 static uint8_t         dispEleBgr    = 0;         // the panel is told BGR
+static bool            dispCanRotate = false;     // only a panel's picture can be turned
 
 // The DSI bus and the panel on it (the bridge has its own, in wled_hdmi.cpp).
 static esp_lcd_dsi_bus_handle_t dispDsiBus  = NULL;
@@ -407,12 +408,15 @@ static bool dispComputeScale(int srcW, int srcH, const display_rect_t& dst, disp
 
   // The rotation: a quarter turn swaps the picture's width and its height.
   //
+  // Only a PANEL's picture can be turned.  A monitor behind the bridge is
+  // whatever it is - it is not the board's to turn.
+  //
   // The SOURCE is not transposed: the block is taken out of the source as
   // it is, scaled, and THEN turned.  So the source's width ends up in the
   // output's HEIGHT - and the room the source has to fill is swapped with
   // it.  (Getting this wrong is what makes the PPA say the block does not
   // fit in the picture.)
-  const bool quarter = (dispRotation == 90 || dispRotation == 270);
+  const bool quarter = dispCanRotate && (dispRotation == 90 || dispRotation == 270);
   const int roomW = quarter ? dst.h : dst.w;   // the room for the source's WIDTH
   const int roomH = quarter ? dst.w : dst.h;   // the room for the source's HEIGHT
 
@@ -462,7 +466,72 @@ static bool dispComputeScale(int srcW, int srcH, const display_rect_t& dst, disp
   g.outH       = outH;
   g.outX       = dst.x + (dst.w - outW) / 2;
   g.outY       = dst.y + (dst.h - outH) / 2;
+  // The source is always RGB888 by the time it reaches the PPA: the PPA
+  // cannot convert between colour formats, so a bus with a white channel
+  // is repacked before it gets here.
   return true;
+}
+
+// The bus's picture, packed as RGB888.
+//
+// The PPA cannot convert between colour formats: it scales in the format it
+// is given and writes the format it is told to write.  So a bus that holds
+// four bytes a pixel - red, green, blue and white - has to be repacked
+// here, because the white has nowhere to go on an RGB panel and the PPA
+// would rather assert than work it out.
+//
+// The repacking is a copy of the picture, so it is only done for a bus that
+// needs it, and the result is kept until the picture's size changes.
+static uint8_t* dispRgbBuffer = nullptr;
+static size_t  dispRgbBufferSize = 0;
+static uint32_t dispRgbBufferW = 0, dispRgbBufferH = 0;
+
+// The red, green and blue bytes of a pixel, in the bus's colour order.
+static void dispColourOrder(uint8_t order, uint8_t& r, uint8_t& g, uint8_t& b) {
+  switch (order) {
+    case COL_ORDER_RGB: r = 0; g = 1; b = 2; break;
+    case COL_ORDER_BRG: r = 1; g = 0; b = 2; break;
+    case COL_ORDER_GRB: r = 1; g = 2; b = 0; break;
+    case COL_ORDER_GBR: r = 2; g = 0; b = 1; break;
+    case COL_ORDER_RBG: r = 0; g = 2; b = 1; break;
+    case COL_ORDER_BGR: default: r = 2; g = 1; b = 0; break;
+  }
+}
+
+// The bus's picture as RGB888, ready for the PPA.
+static uint8_t* dispSourcePicture(Bus* bus, const uint8_t* busData, uint32_t w, uint32_t h, uint32_t bpp) {
+  if (bpp == 3) return (uint8_t*)busData;   // already RGB888
+
+  const size_t need = (size_t)w * h * 3;
+  if (dispRgbBufferSize < need || dispRgbBufferW != w || dispRgbBufferH != h) {
+    if (dispRgbBuffer) { free(dispRgbBuffer); dispRgbBuffer = nullptr; dispRgbBufferSize = 0; }
+    dispRgbBuffer = (uint8_t*)heap_caps_aligned_alloc(128, (need + 255) & ~(size_t)127,
+                              MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!dispRgbBuffer) {
+      USER_PRINTLN("Display: no room for the picture");
+      return nullptr;
+    }
+    dispRgbBufferSize = need;
+    dispRgbBufferW = w;
+    dispRgbBufferH = h;
+  }
+
+  uint8_t r, g, b;
+  // The bus's colour order - unless the bus remaps at the output, in which
+  // case its buffer is always red, green, blue whatever the segment asked
+  // for.  (That is what WLEDMM_REMAP_AT_OUTPUT means.)
+  #ifdef WLEDMM_REMAP_AT_OUTPUT
+  dispColourOrder(COL_ORDER_RGB, r, g, b);
+  #else
+  dispColourOrder(bus->getColorOrder(), r, g, b);
+  #endif
+  const uint8_t* s = busData;
+  uint8_t* d = dispRgbBuffer;
+  for (uint32_t i = 0; i < w * h; i++) {
+    d[0] = s[r]; d[1] = s[g]; d[2] = s[b];
+    d += 3; s += 4;
+  }
+  return dispRgbBuffer;
 }
 
 // The picture, scaled and centred, in one PPA pass.
@@ -529,6 +598,7 @@ static uint32_t dispBlitOk = 0, dispBlitFail = 0;
 // the screen when the buffers swap.
 static int dispBufParity = 0;
 static int dispLastOut[2][4] = {{-1,-1,-1,-1},{-1,-1,-1,-1}};   // x, y, w, h
+static float dispLastScale = 0;
 
 static void dispBlit(void) {
   uint8_t* back = display_framebuffer;
@@ -545,16 +615,30 @@ static void dispBlit(void) {
   uint8_t* busPixelData = bus ? bus->getPixelData() : nullptr;
 
   if (busPixelData) {
-    // The picture the bus really holds: the matrix can be taller than the
-    // LEDs fill, and the PPA refuses a picture that does not fit.
-    const uint16_t matW = Segment::maxWidth;
-    const uint16_t matH = Segment::maxHeight;
-    const ppa_bus_picture_t pic = ppaBusPicture(bus, matW, matW, matH);
+    // The picture the bus really holds.
+    //
+    // The matrix can be taller than the LEDs fill, and the bus holds four
+    // bytes a pixel when it has a white channel - so the picture's size is
+    // worked out here rather than taken from the shared helper, which
+    // assumes three.
+    const uint32_t len  = bus->getLength();
+    const uint32_t size = bus->getPixelDataSize();
+    const bool white    = bus->hasWhite();
+    const uint32_t bpp  = white ? 4 : 3;
+    uint32_t srcW = Segment::maxWidth ? Segment::maxWidth : 1;
+    uint32_t srcH = len ? len / srcW : 1;
+    if (!srcH) srcH = 1;
+    while (srcH > 1 && (uint64_t)srcW * srcH * bpp > size) srcH--;
+
     display_rect_t dst;
     dispPreviewRect(dst);
 
+    // The source, packed as RGB888 for the PPA.
+    uint8_t* src = dispSourcePicture(bus, busPixelData, srcW, srcH, bpp);
+    if (!src) { xSemaphoreGive(busMutex); return; }
+
     disp_scale_t g;
-    if (dispComputeScale(pic.w, pic.h, dst, g)) {
+    if (dispComputeScale((int)srcW, (int)srcH, dst, g)) {
       // The margins around the picture are black.  They only have to be
       // cleared when the picture moves or changes size - which is when
       // the matrix changes or the picture is turned, not every frame.
@@ -578,8 +662,9 @@ static void dispBlit(void) {
         dispLastOut[par][0] = g.outX; dispLastOut[par][1] = g.outY;
         dispLastOut[par][2] = g.outW; dispLastOut[par][3] = g.outH;
       }
+      dispLastScale = g.scale;
 
-      if (dispScalePicture(busPixelData, pic.w, pic.h, g)) {
+      if (dispScalePicture(src, (int)srcW, (int)srcH, g)) {
         dispBlitOk++;
         // The interface goes on top of the picture.
         dispDrawInterface();
@@ -960,8 +1045,11 @@ static bool dispBringUp(void) {
     dispHeight = hdmiBridgeHeight();
     dispName   = hdmiBridgeModeName(hdmiBridgeCurrentMode());
     dispEleBgr = 0;
+    // A monitor is what it is: its picture is not turned.
+    dispCanRotate = false;
   } else {
     dispEleBgr = dispPanel->ele_bgr;
+    dispCanRotate = (dispPanel->flags & DSI_FLAG_ROTATE) != 0;
     if (!dispDsiInit(*dispPanel)) {
       dispTearDown();
       return false;
@@ -1151,6 +1239,14 @@ void displayStatusJson(JsonObject& obj) {
   obj["ty"] = dispTouchY;
   obj["td"] = dispTouchDown;
   obj["th"] = (dispTouch != NULL);
+  // What the picture came out as: the scale, the size and where it landed.
+  // A picture that is not where it should be is a bug, and this is where
+  // it shows.
+  obj["sc"] = dispLastScale;
+  obj["ow"] = dispLastOut[0][2];
+  obj["oh"] = dispLastOut[0][3];
+  obj["ox"] = dispLastOut[0][0];
+  obj["oy"] = dispLastOut[0][1];
 }
 
 uint16_t displayWidth(void)  { return dispWidth; }

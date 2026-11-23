@@ -106,11 +106,14 @@ static bool shotEncoderGet(jpeg_encoder_handle_t& enc) {
 // works on MCU blocks, so the sides have to be a multiple of 8 (16 for the
 // chroma-subsampled modes).  Only the height can be trimmed: the rows are
 // contiguous, the columns are not.
+// The JPEG's own buffer comes from the SAME allocation as the picture: two
+// separate allocations can land on top of each other, and then the picture's
+// write-back puts the picture over the JPEG's header.
 static bool encodeShotPicture(uint8_t* in, uint16_t w, uint16_t h, uint8_t quality,
-                              uint8_t*& outBuf, size_t& outLen, uint16_t& outW, uint16_t& outH) {
-  outBuf = nullptr;
+                              uint8_t* outBuf, size_t outCap,
+                              size_t& outLen, uint16_t& outW, uint16_t& outH) {
   outLen = 0;
-  if (!in || !w || !h) return false;
+  if (!in || !w || !h || !outBuf) return false;
   if (w & 7) {                       // the width cannot be trimmed - give up
     USER_PRINTLN("screenshot: the width is not a multiple of 8");
     return false;
@@ -126,8 +129,6 @@ static bool encodeShotPicture(uint8_t* in, uint16_t w, uint16_t h, uint8_t quali
 
   // The JPEG itself: a tenth of the picture is plenty for a still, and a
   // 720p picture with noise can want more, so the buffer is generous.
-  const size_t outCap = (size_t)w * h + 65536;
-
   for (uint8_t attempt = 0; attempt < 3; attempt++) {
     const uint16_t hh = heights[attempt];
     if (!hh || hh > h) continue;
@@ -140,29 +141,26 @@ static bool encodeShotPicture(uint8_t* in, uint16_t w, uint16_t h, uint8_t quali
       cfg.sub_sample    = subs[s];
       cfg.image_quality = quality;
 
-      size_t outAlloc = 0;
-      uint8_t* out = allocShotBuffer(outCap);
-      if (!out) {
-        USER_PRINTLN("screenshot: no room for the JPEG");
-        return false;
-      }
+      uint8_t* out = outBuf;
 
       // The CPU filled the picture, the DMA reads it.
       shotCacheWriteback(in, (size_t)w * hh * 3);
+
+      // The CPU's copy of the JPEG's buffer is dropped BEFORE the encoder
+      // writes into it.  The encoder writes through the DMA, so a stale
+      // line that is written back afterwards lands on the JPEG's header -
+      // and the header is what the CPU reads first.
+      shotCacheInvalidate(out, outCap);
 
       uint32_t outSize = 0;
       const esp_err_t err = jpeg_encoder_process(enc, &cfg, in, (uint32_t)((size_t)w * hh * 3),
                                                   out, (uint32_t)outCap, &outSize);
       if (err == ESP_OK && outSize > 0) {
-        // The DMA wrote the JPEG, the CPU reads it.
-        shotCacheInvalidate(out, outSize);
-        outBuf = out;
         outLen = outSize;
         outW   = w;
         outH   = hh;
         return true;
       }
-      free(out);
       USER_PRINTF("screenshot: the encoder refused %ux%u, chroma %d (err %d)\n",
                   w, hh, (int)subs[s], (int)err);
     }
@@ -239,13 +237,14 @@ static bool grabHdmPicture(uint8_t* rgb, uint16_t w, uint16_t h) {
 // buffer lives in PSRAM, and the web server never copies it into the
 // internal heap.  When the response is deleted the buffer goes with it.
 class ShotJpegResponse : public AsyncAbstractResponse {
-  uint8_t* _buf;
+  uint8_t* _buf;      // the whole allocation - it is freed as one piece
   size_t   _len;
   size_t   _read;
+  size_t   _off;      // where the JPEG starts inside it
 
 public:
-  ShotJpegResponse(uint8_t* buf, size_t len)
-    : _buf(buf), _len(len), _read(0) {
+  ShotJpegResponse(uint8_t* buf, size_t len, size_t off)
+    : _buf(buf), _len(len), _read(0), _off(off) {
     _code = 200;
     _contentType = "image/jpeg";
     _contentLength = len;
@@ -264,11 +263,11 @@ public:
   size_t _fillBuffer(uint8_t* data, size_t len) override {
     const size_t left = _len - _read;
     if (left > len) {
-      memcpy(data, _buf + _read, len);
+      memcpy(data, _buf + _off + _read, len);
       _read += len;
       return len;
     }
-    memcpy(data, _buf + _read, left);
+    memcpy(data, _buf + _off + _read, left);
     _read += left;
     return left;
   }
@@ -301,12 +300,20 @@ AsyncWebServerResponse* wledScreenshotResponse(uint8_t source, uint16_t& outW, u
   }
 
   // The picture, in the encoder's input buffer - there is no second copy.
-  uint8_t* in = allocShotBuffer((size_t)w * h * 3);
+  //
+  // The JPEG's buffer comes out of the SAME allocation, right after the
+  // picture.  Two separate allocations can land on top of each other - and
+  // when they do, the picture's write-back lands on the JPEG's header and
+  // the JPEG comes out with the picture written over its first bytes.
+  const size_t picBytes = (size_t)w * h * 3;
+  const size_t jpegCap  = (size_t)w * h + 65536;
+  uint8_t* in = allocShotBuffer(picBytes + jpegCap + 128);
   if (!in) {
     USER_PRINTLN("screenshot: no room for the picture");
     shotLockGive();
     return nullptr;
   }
+  uint8_t* jpeg = in + ((picBytes + 127) & ~(size_t)127);
 
   bool ok = false;
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
@@ -320,14 +327,18 @@ AsyncWebServerResponse* wledScreenshotResponse(uint8_t source, uint16_t& outW, u
     return nullptr;
   }
 
-  uint8_t* jpeg = nullptr;
   size_t jpegLen = 0;
-  ok = encodeShotPicture(in, w, h, 90, jpeg, jpegLen, outW, outH);
-  free(in);
+  ok = encodeShotPicture(in, w, h, 90, jpeg, jpegCap, jpegLen, outW, outH);
   shotLockGive();
 
-  if (!ok) return nullptr;
-  return new ShotJpegResponse(jpeg, jpegLen);
+  if (!ok) {
+    free(in);
+    return nullptr;
+  }
+
+  // The JPEG has to outlive this function - the response sends it - so the
+  // whole allocation goes with it, and the response frees it.
+  return new ShotJpegResponse(in, jpegLen, jpeg - in);
 }
 
 #endif // WLED_HAS_SCREENSHOT
