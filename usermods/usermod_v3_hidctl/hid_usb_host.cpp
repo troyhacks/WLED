@@ -118,6 +118,10 @@ struct HidDevice {
   bool     out_flushed = false;
   // The last transfer did not go out.
   volatile bool out_failed = false;
+  // The OUT pipe is dead and the recovery could not bring it back: the
+  // packets are dropped instead of queued, so the queue does not fill
+  // with packets that will never go out.
+  bool out_broken = false;
 
   // The OUT transfer's state.
   volatile bool   out_in_flight = false;
@@ -701,6 +705,14 @@ static void hid_poll_device(void) {
         esp_err_t err = usb_host_endpoint_clear(D->handle, D->out_ep);
         HIDCTL_LOG("OUT endpoint (device %u): clear -> %s",
                    (unsigned)HIDCTL_D, esp_err_to_name(err));
+        if (err != ESP_OK) {
+          // The pipe is still halted. It cannot be revived by a clear, so
+          // the device's OUT is broken until it is unplugged - and the
+          // packets are dropped rather than queued.
+          HIDCTL_LOG("OUT endpoint (device %u): the pipe will not come back, "
+                     "the device has to be unplugged", (unsigned)HIDCTL_D);
+          D->out_broken = true;
+        }
         if (err == ESP_OK) {
           // The pipe is idle again. The transfers are re-pointed at it and
           // the queue is left alone: the packets in it are still the right
@@ -730,6 +742,7 @@ static void hid_poll_device(void) {
                      "the device needs to be unplugged", (unsigned)HIDCTL_D);
           D->out_recovery = 0;
           D->out_failed = false;
+          D->out_broken = true;
           break;
         }
         esp_err_t err = usb_host_interface_release(hid_client, D->handle, D->iface);
@@ -740,6 +753,7 @@ static void hid_poll_device(void) {
                    (unsigned)HIDCTL_D, esp_err_to_name(err));
         if (err == ESP_OK) {
           D->out_failed = false;
+          D->out_broken = false;
           D->out_recovery = 0;
           D->out_xfer->device_handle = D->handle;
           D->out_xfer->bEndpointAddress = D->out_ep;
@@ -773,6 +787,10 @@ static void hid_poll_device(void) {
         D->out_recovery = 0;
         break;
     }
+    // The ladder is over: the flag is cleared, so the sender tries again
+    // even if the pipe is still dead. A submit that is refused then says
+    // so, and the pipe is marked broken again.
+    D->out_failed = false;
     return;
   }
 
@@ -1442,6 +1460,11 @@ static void hid_close_device(void) {
   D->pid = 0;
   D->in_mps = 0;
   D->used = false;
+  // A device that has gone has no broken pipe: the next one to take this
+  // slot starts with a fresh one.
+  D->out_broken = false;
+  D->out_failed = false;
+  D->out_recovery = 0;
 }
 
 bool hid_usb_connected(uint8_t d) {
@@ -1617,6 +1640,13 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
   }
   if (dev->out_cap && len > dev->out_cap) len = dev->out_cap;
   if (len > HIDCTL_MAX_OUTPUT) { dev->out_refused_too_long++; return false; }
+  if (dev->out_broken) {
+    // The OUT pipe is dead and the recovery could not bring it back. The
+    // packet cannot go out, so it is dropped rather than queued: a queue
+    // full of packets that will never go out is not a queue.
+    dev->out_refused_busy++;
+    return false;
+  }
 
   if (dev->out_q_lock) xSemaphoreTake(dev->out_q_lock, portMAX_DELAY);
   bool queued = false;
@@ -1733,6 +1763,13 @@ static bool hid_out_send_next(uint8_t d) {
     dev->out_started_ms = 0;
     dev->out_submit_error = (int8_t)err;
     dev->out_refused_submit++;
+    if (err == ESP_ERR_INVALID_STATE) {
+      // The pipe is not in a state that can carry a transfer: it is dead
+      // and a clear alone will not bring it back. The recovery runs, and
+      // until it succeeds the packets are dropped rather than queued.
+      dev->out_failed = true;
+      dev->out_recovery = 1;
+    }
     HIDCTL_LOG("OUT endpoint (device %u) submit failed: %s",
                (unsigned)d, esp_err_to_name(err));
     return false;
@@ -1770,6 +1807,13 @@ static bool hid_out_send_next_piece(uint8_t d) {
     dev->out_started_ms = 0;
     dev->out_submit_error = (int8_t)err;
     dev->out_refused_submit++;
+    if (err == ESP_ERR_INVALID_STATE) {
+      // The pipe is not in a state that can carry a transfer: it is dead
+      // and a clear alone will not bring it back. The recovery runs, and
+      // until it succeeds the packets are dropped rather than queued.
+      dev->out_failed = true;
+      dev->out_recovery = 1;
+    }
     HIDCTL_LOG("OUT endpoint (device %u) submit failed: %s",
                (unsigned)d, esp_err_to_name(err));
     return false;
@@ -1856,6 +1900,17 @@ uint32_t hid_usb_out_refused(uint8_t d, uint8_t which) {
 }
 int8_t hid_usb_out_submit_error(uint8_t d) {
   HidDevice* dev = hid_dev_of(d); return dev->out_submit_error; }
+// The OUT pipe's state: whether the last transfer failed, whether the
+// pipe is dead, where the recovery has got to, and how many packets are
+// waiting.
+bool    hid_usb_out_failed(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d); return dev->out_failed; }
+bool    hid_usb_out_broken(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d); return dev->out_broken; }
+uint8_t hid_usb_out_recovery(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d); return dev->out_recovery; }
+uint16_t hid_usb_out_queued(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d); return dev->out_q_count; }
 uint32_t hid_usb_out_stuck(uint8_t d) {
   HidDevice* dev = hid_dev_of(d); return dev->out_stuck; }
 uint32_t hid_usb_ctrl_out_count(uint8_t d) {
@@ -1912,7 +1967,12 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
       // is run from the poll - one step per pass, because the flush's
       // cancellation has to be delivered before the interface can be
       // released.
-      D->out_failed = true;
+      //
+      // NOT while the recovery is running: the recovery's own flush
+      // cancels the queued transfer, and that cancellation arrives here.
+      // Setting the flag again would stop the sender for ever, because
+      // the ladder had already cleared it.
+      if (!D->out_recovery) D->out_failed = true;
     }
   }
   D->out_in_flight = false;
@@ -1931,8 +1991,10 @@ static void hid_out_watchdog(void) {
   if (!D->out_in_flight || !D->out_started_ms) return;
   if ((uint32_t)(millis() - D->out_started_ms) < HID_OUT_TIMEOUT_MS) return;
   D->out_stuck++;
-  HIDCTL_LOG("OUT endpoint (device %u): the transfer did not finish in %u ms",
-             (unsigned)HIDCTL_D, (unsigned)HID_OUT_TIMEOUT_MS);
+  HIDCTL_LOG("OUT endpoint (device %u): the transfer did not finish in %u ms "
+             "(piece %u of %u)", (unsigned)HIDCTL_D, (unsigned)HID_OUT_TIMEOUT_MS,
+             (unsigned)(D->out_sent ? D->out_sent : D->out_xfer->num_bytes),
+             (unsigned)D->out_total);
   // The recovery is run from the poll, one step per pass. It used to be run
   // from here, and it threw away the result of every call: a clear that
   // failed left the pipe halted for ever, and every later submit then

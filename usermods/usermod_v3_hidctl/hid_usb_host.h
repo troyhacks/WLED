@@ -131,7 +131,11 @@ uint32_t hid_usb_out_count(uint8_t d);
 uint32_t hid_usb_out_refused(uint8_t d, uint8_t which);   // 0 no device, 1 too long,
                                                 // 2 busy, 3 the host said no
 int8_t hid_usb_out_submit_error(uint8_t d);
-uint32_t hid_usb_out_stuck(uint8_t d);     // transfers that never finished
+uint32_t hid_usb_out_stuck(uint8_t d);
+bool    hid_usb_out_failed(uint8_t d);
+bool    hid_usb_out_broken(uint8_t d);
+uint8_t hid_usb_out_recovery(uint8_t d);
+uint16_t hid_usb_out_queued(uint8_t d);     // transfers that never finished
 uint32_t hid_usb_ctrl_out_count(uint8_t d);   // output reports over the control pipe
 uint32_t hid_usb_out_bytes(uint8_t d);    // how many bytes went on the OUT pipe
 uint8_t hid_usb_link_speed(uint8_t d);   // 0 unknown, 1 full speed, 2 high speed

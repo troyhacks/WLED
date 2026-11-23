@@ -4045,6 +4045,13 @@ class HidctlUsermod : public Usermod {
       d["in_reports"] = hid_usb_report_count(surfaces[i].device);
       d["out_sent"] = hid_usb_out_count(surfaces[i].device);
       d["out_bytes"] = hid_usb_out_bytes(surfaces[i].device);
+      // The OUT pipe's state, so a pipe that dies can be seen dying.
+      d["out_stuck"] = hid_usb_out_stuck(surfaces[i].device);
+      d["out_status"] = hid_usb_last_out_status(surfaces[i].device);
+      d["out_failed"] = hid_usb_out_failed(surfaces[i].device) ? 1 : 0;
+      d["out_broken"] = hid_usb_out_broken(surfaces[i].device) ? 1 : 0;
+      d["out_recovery"] = hid_usb_out_recovery(surfaces[i].device);
+      d["out_queued"] = hid_usb_out_queued(surfaces[i].device);
     }
     JsonArray pr = top.createNestedArray("probe");
     for (uint8_t i = 0; i < probe_result_count; i++) {
