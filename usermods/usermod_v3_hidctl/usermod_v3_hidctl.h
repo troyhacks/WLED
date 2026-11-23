@@ -3457,14 +3457,6 @@ class HidctlUsermod : public Usermod {
       sf.wheelSeen = true;
     }
 
-    // A heartbeat of the report's first bytes, so the wire can be watched.
-    // It is slow on purpose: the console is read by a person.
-    static uint32_t lastBeat = 0;
-    if (millis() - lastBeat > 10000) {
-      lastBeat = millis();
-      USER_PRINTF("[HIDCTL] report: %s\n", bytes_to_hex(data, 8));
-    }
-
     uint32_t pressed = now_buttons & ~was_buttons;
 
     if (pressed) {
@@ -3536,13 +3528,21 @@ class HidctlUsermod : public Usermod {
     // talking about.
     const uint8_t dev = focusDevice();
     // A heartbeat, so it is visible whether this loop is running at all.
+    // It is said when something CHANGES - a surface comes or goes, the deck
+    // appears - and then every half minute, so a console that is being
+    // read by a person is not interrupted for nothing.
     {
       static uint32_t lastBeat = 0;
-      if (millis() - lastBeat > 10000) {
+      static uint8_t lastSurfaces = 0xFF;
+      static uint8_t lastDeck = 0xFF;
+      const uint8_t deck = (deckProfile() != 0xFF) ? 1 : 0;
+      const bool changed = (surface_count != lastSurfaces) || (deck != lastDeck);
+      if (changed || (millis() - lastBeat > 30000)) {
         lastBeat = millis();
+        lastSurfaces = surface_count;
+        lastDeck = deck;
         USER_PRINTF("[HIDCTL] loop: surfaces=%u count=%u deck=%u pending=%u\n",
-                    surface_count, profile_count,
-                    (deckProfile() != 0xFF) ? 1 : 0,
+                    surface_count, profile_count, deck,
                     opendeck_pending_init ? 1 : 0);
       }
     }

@@ -112,6 +112,10 @@ struct HidDevice {
   // pass of the poll, because the flush's cancellation has to be
   // delivered before the interface can be released.
   uint8_t out_recovery = 0;       // 0 = none, 1 = halt, 2 = flush, ...
+  // The flush emptied the pipe's transfer list. Freeing an endpoint whose
+  // pipe still holds one aborts the firmware, so the interface is only
+  // taken when this is true.
+  bool     out_flushed = false;
   // The last transfer did not go out.
   volatile bool out_failed = false;
 
@@ -689,6 +693,7 @@ static void hid_poll_device(void) {
         esp_err_t err = usb_host_endpoint_flush(D->handle, D->out_ep);
         HIDCTL_LOG("OUT endpoint (device %u): flush -> %s",
                    (unsigned)HIDCTL_D, esp_err_to_name(err));
+        D->out_flushed = (err == ESP_OK);
         D->out_recovery = 3;
         break;
       }
@@ -701,6 +706,7 @@ static void hid_poll_device(void) {
           // the queue is left alone: the packets in it are still the right
           // ones.
           D->out_failed = false;
+          D->out_flushed = false;
           D->out_recovery = 0;
           D->out_xfer->device_handle = D->handle;
           D->out_xfer->bEndpointAddress = D->out_ep;
@@ -716,6 +722,16 @@ static void hid_poll_device(void) {
       }
       case 4: {   // reclaim: take the interface and claim it again
         if (D->out_in_flight) break;    // the cancellation has not arrived yet
+        if (!D->out_flushed) {
+          // The pipe may still hold a transfer, and freeing an endpoint
+          // that holds one aborts the firmware. The device is left alone
+          // and it has to be unplugged.
+          HIDCTL_LOG("OUT endpoint (device %u): the pipe was not emptied, "
+                     "the device needs to be unplugged", (unsigned)HIDCTL_D);
+          D->out_recovery = 0;
+          D->out_failed = false;
+          break;
+        }
         esp_err_t err = usb_host_interface_release(hid_client, D->handle, D->iface);
         if (err == ESP_OK) {
           err = usb_host_interface_claim(hid_client, D->handle, D->iface, 0);
@@ -740,9 +756,15 @@ static void hid_poll_device(void) {
         break;
       }
       case 5: {   // reopen: close the device and let it come back
+        if (D->ctrl_in_flight || D->desc_in_flight || D->class_in_flight) {
+          // The device cannot be closed while a control transfer is out:
+          // the IDF asserts on it. Try again on the next pass.
+          break;
+        }
         HIDCTL_LOG("OUT endpoint (device %u): the device is reopened",
                    (unsigned)HIDCTL_D);
         D->out_recovery = 0;
+        D->out_flushed = false;
         hid_close_device();
         if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected(HIDCTL_D);
         return;
@@ -1401,7 +1423,14 @@ static void hid_close_device(void) {
   usb_host_interface_release(hid_client, D->handle, D->iface);
   if (D->in_xfer) D->in_xfer->device_handle = nullptr;
   usb_host_device_close(hid_client, D->handle);
-  if (D->out_q_lock) { vSemaphoreDelete(D->out_q_lock); D->out_q_lock = nullptr; }
+  if (D->out_q_lock) {
+    // The lock is only deleted when it is free: deleting a mutex that is
+    // held is not allowed, and the producer may be holding it.
+    if (xSemaphoreTake(D->out_q_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+      vSemaphoreDelete(D->out_q_lock);
+    }
+    D->out_q_lock = nullptr;
+  }
   if (D->out_q) { free(D->out_q); D->out_q = nullptr; }
   D->out_q_slots = 0;
   D->out_q_count = 0;
