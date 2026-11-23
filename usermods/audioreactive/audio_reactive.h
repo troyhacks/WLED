@@ -14,6 +14,8 @@
 // The publish path: ONE lock and ONE published RTA frame, shared with the
 // sound simulator and with the effect that draws the analyser.
 #include "ar_publish.h"
+#include "audio_sync_mm.h"   // the MoonModules audio-sync format, beside v2
+#include "lwip/igmp.h"
 #include <AsyncUDP.h>
 // #include "esp_dsp.h"
 #include "dsps_biquad.h"
@@ -6180,7 +6182,7 @@ class AudioReactive : public Usermod {
       double AR_MajorPeak;   //  08 Bytes
     };
 
-    #define UDPSOUND_MAX_PACKET 96 // max packet size for audiosync, with a bit of "headroom"
+    #define UDPSOUND_MAX_PACKET 256 // max packet size for audiosync: v2 is 44 bytes, a MoonModules packet up to 239 (with the keys a key-tracking board sends)
 
     // set your config variables to their boot default value (this can also be done in readFromConfig() or a constructor if you prefer)
   #if defined(SR_ENABLE_DEFAULT) || defined(UM_AUDIOREACTIVE_ENABLE)
@@ -6200,6 +6202,24 @@ class AudioReactive : public Usermod {
 
     // const uint16_t delayMs = 10;
     uint16_t audioSyncPort = 11988;
+
+    // What a sending board sends: WLED's v2 packet (every WLED and WLED-MM
+    // device reads it), the MoonModules format (the 31 thirds and the beat
+    // too), or both. A receiving board reads either, whatever this says.
+    #define AUDIOSYNC_FORMAT_WLED 0
+    #define AUDIOSYNC_FORMAT_MOMO 1
+    #define AUDIOSYNC_FORMAT_BOTH 2
+    uint8_t  audioSyncFormat = AUDIOSYNC_FORMAT_WLED;
+
+    // The MoonModules format's state: this board's frame number when sending,
+    // and the last frame taken, the last thirds and the last beat when receiving.
+    uint16_t mmTxSeq = 0;
+    uint16_t mmRxSeq = 0;
+    bool     mmRxHaveSeq = false;
+    uint32_t mmRxThirdsMs = 0;      // when thirds last came: they count as live while they keep coming
+    uint32_t mmRxLastMs = 0;        // when a MoonModules packet last came: it outranks v2 while it keeps coming
+    MmSyncBeat mmRxBeat = {};       // the beat a sender decided
+    uint32_t mmRxBeatMs = 0;        // when it came
 
     // bool updateIsRunning = false;
 
@@ -6564,6 +6584,23 @@ class AudioReactive : public Usermod {
 
     // try to establish UDP sound sync connection
 
+    // Join or leave the MoonModules group on every interface.
+    bool mmGroupJoined = false;
+    void mmGroupMembership(bool join) {
+      if (join == mmGroupJoined) return;
+      ip4_addr_t mmGroup;
+      ip4_addr_set_u32(&mmGroup, (uint32_t)IPAddress(MM_SYNC_GROUP));   // both in network byte order
+#if defined(LOCK_TCPIP_CORE)
+      LOCK_TCPIP_CORE();
+#endif
+      if (join) igmp_joingroup(IP4_ADDR_ANY4, &mmGroup);
+      else      igmp_leavegroup(IP4_ADDR_ANY4, &mmGroup);
+#if defined(UNLOCK_TCPIP_CORE)
+      UNLOCK_TCPIP_CORE();
+#endif
+      mmGroupJoined = join;
+    }
+
     void connectUDPSoundSync(void) {
       static unsigned long last_connection_attempt = 0;
 
@@ -6571,12 +6608,17 @@ class AudioReactive : public Usermod {
       if (!(apActive || WLED_CONNECTED || interfacesInited)) {
         if (udpSyncConnected) {
           udpSyncConnected = false;
-          arUdp.close(); // AsyncUDP uses close(), not stop()
+          arUdp.close(); mmGroupMembership(false); // AsyncUDP uses close(), not stop()
           receivedFormat = 0;
         }
         return;
       }
-      if (udpSyncConnected) return;
+      if (udpSyncConnected) {
+        // The mode can change while the socket stays open: the MoonModules
+        // group follows it, joined while receiving and left otherwise.
+        mmGroupMembership((audioSyncEnabled & AUDIOSYNC_REC) != 0);
+        return;
+      }
       if (millis() - last_connection_attempt < 5000) return; // Retry every 5s
       if (updateIsRunning) return;
 
@@ -6587,7 +6629,7 @@ class AudioReactive : public Usermod {
     void connected() {
       if (udpSyncConnected) {   // clean-up: if open, close old UDP sync connection
         udpSyncConnected = false;
-        arUdp.close();         // <--- FIXED: changed from stop() to close()
+        arUdp.close(); mmGroupMembership(false);         // <--- FIXED: changed from stop() to close()
         receivedFormat = 0;
         DEBUGSR_PRINTLN(F("AR connected(): old UDP connection closed."));
       }
@@ -6598,6 +6640,12 @@ class AudioReactive : public Usermod {
         // <--- FIXED: changed from beginMulticast() to listenMulticast()
         if (arUdp.listenMulticast(multicastGroup, audioSyncPort)) {
           udpSyncConnected = true;
+          // The MoonModules format has its own group. Group membership is the
+          // network interface's, not the socket's, so joining it here lets this
+          // one socket receive both formats.
+          // Only a receiving board joins it: a board that only sends hears
+          // nothing more than it did before.
+          if (audioSyncEnabled & AUDIOSYNC_REC) mmGroupMembership(true);
 
           // Register the Async Callback
           arUdp.onPacket([this](AsyncUDPPacket packet) {
@@ -6737,9 +6785,103 @@ class AudioReactive : public Usermod {
 #endif
     }
 
+    // Send one sync datagram to a multicast group, naming the adapter first.
+    size_t sendSyncDatagram(const uint8_t* pbuf, size_t plen, IPAddress group) {
+      txCalls++;
+      txLastMs = millis();
+      size_t sent = 0;
+
+      // Name the adapter: a multicast group has no route, and the routeless
+      // send is the one that fails silently.
+      const tcpip_adapter_if_t ifc = arSyncAdapterIf();
+      txIf = (int)ifc;
+      if (ifc < TCPIP_ADAPTER_IF_MAX) {
+        sent = arUdp.writeTo(pbuf, plen, group, audioSyncPort, ifc);
+        if (sent) txOkIf++;
+      }
+      if (!sent) {
+        // Fall back to the routeless send, and remember how that went.
+        sent = arUdp.writeTo(pbuf, plen, group, audioSyncPort);
+        if (sent) txOkPlain++;
+      }
+      if (sent) {
+        txBytes += sent;
+      } else {
+        txFail++;
+        txLastErr = (int)arUdp.lastErr();
+        if (txFail == 1) {
+          DEBUGSR_PRINTLN(F("AR: UDP sound sync send FAILED."));
+          DEBUG_PRINTF("AR: UDP sound sync send error %d on adapter %d\n", txLastErr, txIf);
+        }
+      }
+      return sent;
+    }
+
+    // The MoonModules packet: the core, the 31 thirds and the beat this board
+    // decided. https://moonmodules.org/MoonLight/reference/audio-sync.html
+    void transmitMoonModules(bool peak, const uint8_t* bands) {
+      MmSyncFrame f;
+      memset(&f, 0, sizeof(f));
+      f.seq = mmTxSeq++;
+
+      f.hasCore = true;
+      MmSyncCore& c = f.core;
+      c.level         = (uint8_t)constrain(volumeRaw, 0.0f, 255.0f);
+      c.levelSmoothed = (uint8_t)constrain(volumeSmth, 0.0f, 255.0f);
+      c.gate          = 0;   // no gate measured here: a receiver reads sound from levelSmoothed
+      c.gateOpen      = 0;
+      c.onset         = peak ? (uint8_t)max(1, (int)c.level) : 0;   // the peak, at the level it came with
+      c.peakHz        = (uint16_t)constrain(AR_MajorPeak, 0.0f, 65535.0f);
+      c.peakMag       = (uint8_t)constrain(my_magnitude / 16.0f, 0.0f, 255.0f);   // v2's raw magnitude reaches about 4096
+      memcpy(c.bands, bands, 16);
+
+      // The 31 ISO 266 third-octave bands, 20 Hz up, while this board measures them.
+      uint8_t rta[NUM_RTA_CHANNELS];
+      if (arCopyRtaBands(rta)) {
+        f.thirdsCount = (uint8_t)min((int)NUM_RTA_CHANNELS, (int)MM_MAX_THIRDS);
+        memcpy(f.thirds, rta, f.thirdsCount);
+      }
+
+      // The beat: the board's one answer, a deck's, Ableton's or the estimator's.
+      const ArBeatSource b = arGetBeatSource();
+      if (b.live && b.bpm > 0.0f) {
+        MmSyncBeat& m = f.beat;
+        f.hasBeat      = true;
+        m.bpm100       = (uint16_t)constrain(b.bpm * 100.0f + 0.5f, 1.0f, 65535.0f);
+        m.beatCount    = (uint16_t)b.beatCount;
+        m.phase        = (uint8_t)constrain(b.beatProgress * 256.0f, 0.0f, 255.0f);
+        m.beatInBar    = b.beatInBar;
+        m.source       = b.sourceId <= AR_SRC_ABLETON ? b.sourceId   // the same numbers: 0 the estimator, 1 Pro DJ Link, 2 StageLinq, 3 Ableton Link
+                       : (b.sourceId == AR_SRC_NETWORK ? mmRxBeat.source : (uint8_t)MM_BEAT_TRACKER);   // a relayed beat keeps its own source
+        if (b.sourceId != AR_SRC_NONE) {
+          m.confidence = 255;          // a deck or Ableton is a master clock
+        } else {
+          ArTempoFrame tf;
+          m.confidence = arCopyTempo(&tf) ? (uint8_t)constrain(tf.quality * 255.0f, 0.0f, 255.0f) : 0;
+        }
+        m.beatInPhrase = b.beatInMeasure32;            // 1..32 on the 32-beat grid, 0 unknown
+        m.phraseBeats  = b.beatInMeasure32 ? 32 : 0;
+        m.flags        = (b.downbeatKnown ? MM_BEAT_DOWNBEAT_KNOWN : 0) | ((b.phraseFill || b.fakeFillOn) ? MM_BEAT_FILL : 0);
+      }
+
+      uint8_t pkt[MM_SYNC_MAX_BUILT];
+      const size_t n = mmSyncBuild(pkt, f);
+      sendSyncDatagram(pkt, n, IPAddress(MM_SYNC_GROUP));
+    }
+
     void transmitAudioData() {
       if (!udpSyncConnected) return; // We reuse the listener socket for sending
       static uint8_t frameCounter = 0;
+
+      // Copy the published bytes out in one go: the pointer is swapped by the
+      // publisher, so reading it band by band could straddle a swap.
+      uint8_t bands[NUM_GEQ_CHANNELS];
+      memcpy(bands, arBandBytes, sizeof(bands));
+      const bool peak = udpSamplePeak;
+      udpSamplePeak = false;
+
+      if (audioSyncFormat != AUDIOSYNC_FORMAT_WLED) transmitMoonModules(peak, bands);
+      if (audioSyncFormat == AUDIOSYNC_FORMAT_MOMO) return;
 
       audioSyncPacket transmitData;
       memset(reinterpret_cast<void*>(&transmitData), 0, sizeof(transmitData));
@@ -6747,19 +6889,12 @@ class AudioReactive : public Usermod {
       strncpy_P(transmitData.header, PSTR(UDP_SYNC_HEADER), 6);
       transmitData.sampleRaw = volumeRaw;
       transmitData.sampleSmth = volumeSmth;
-      transmitData.samplePeak = udpSamplePeak ? 1 : 0;
-      udpSamplePeak = false;
+      transmitData.samplePeak = peak ? 1 : 0;
       transmitData.frameCounter = frameCounter;
       transmitData.zeroCrossingCount = zeroCrossingCount;
 
-      // Copy the published bytes out in one go: the pointer is swapped by the
-      // publisher, so reading it band by band could straddle a swap.
-      {
-        uint8_t bands[NUM_GEQ_CHANNELS];
-        memcpy(bands, arBandBytes, sizeof(bands));
-        for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
-          transmitData.bandBytes[i] = bands[i];
-        }
+      for (int i = 0; i < NUM_GEQ_CHANNELS; i++) {
+        transmitData.bandBytes[i] = bands[i];
       }
 
       uint32_t pressure16bit = max(0.0f, soundPressure) * 256.0f;
@@ -6776,40 +6911,10 @@ class AudioReactive : public Usermod {
       //
       // The packet is the v2 format and stays the v2 format: 16 bands, 44
       // bytes, byte-identical to what every other WLED instance expects. The
-      // 31 RTA bands are NOT in here - they go out board-locally to the
-      // effects, and adding them to this packet is what broke the other
-      // instances.
-      IPAddress multicastGroup(239, 0, 0, 1);
-      const uint8_t* pbuf = reinterpret_cast<uint8_t*>(&transmitData);
-      const size_t   plen = sizeof(transmitData);
-
-      txCalls++;
-      txLastMs = millis();
-      size_t sent = 0;
-
-      // Name the adapter: a multicast group has no route, and the routeless
-      // send is the one that fails silently.
-      const tcpip_adapter_if_t ifc = arSyncAdapterIf();
-      txIf = (int)ifc;
-      if (ifc < TCPIP_ADAPTER_IF_MAX) {
-        sent = arUdp.writeTo(pbuf, plen, multicastGroup, audioSyncPort, ifc);
-        if (sent) txOkIf++;
-      }
-      if (!sent) {
-        // Fall back to the routeless send, and remember how that went.
-        sent = arUdp.writeTo(pbuf, plen, multicastGroup, audioSyncPort);
-        if (sent) txOkPlain++;
-      }
-      if (sent) {
-        txBytes += sent;
-      } else {
-        txFail++;
-        txLastErr = (int)arUdp.lastErr();
-        if (txFail == 1) {
-          DEBUGSR_PRINTLN(F("AR: UDP sound sync send FAILED."));
-          DEBUG_PRINTF("AR: UDP sound sync send error %d on adapter %d\n", txLastErr, txIf);
-        }
-      }
+      // 31 RTA bands are NOT in here - adding them to this packet is what
+      // broke the other instances. They travel in the MoonModules packet
+      // (format MoMo or both), on its own group.
+      sendSyncDatagram(reinterpret_cast<uint8_t*>(&transmitData), sizeof(transmitData), IPAddress(239, 0, 0, 1));
 
       frameCounter++;
     }
@@ -6884,6 +6989,52 @@ class AudioReactive : public Usermod {
         soundPressure = volumeSmth; // fallback
       }
 
+      return true;
+    }
+
+    // A MoonModules packet into the same values a v2 packet sets, and the
+    // thirds and the beat beside them.
+    bool decodeMoonModules(int packetSize, const uint8_t *packetBuf) {
+      MmSyncFrame f;
+      if (!mmSyncParse(packetBuf, (size_t)packetSize, f)) return false;
+      if (audioSyncSequence && !mmSyncSeqNew(f.seq, mmRxSeq, mmRxHaveSeq)) return false;   // late or doubled
+      mmRxSeq = f.seq;
+      mmRxHaveSeq = true;
+      mmRxLastMs = millis();
+
+      if (f.hasCore) {
+        volumeSmth = f.core.levelSmoothed;
+        volumeRaw  = f.core.level;
+#ifdef ARDUINO_ARCH_ESP32
+        sampleAvg  = volumeSmth;
+#endif
+        autoResetPeak();
+        if (!samplePeak) {
+          samplePeak = f.core.onset > 0;
+          if (samplePeak) timeOfPeak = millis();
+        }
+        arPublishRaw(f.core.bands);
+        my_magnitude = f.core.peakMag * 16.0f;   // back to v2's raw scale
+        AR_Magnitude = my_magnitude;
+        AR_MajorPeak = constrain((float)f.core.peakHz, 1.0f, NYQUIST_HZ);
+#ifdef ARDUINO_ARCH_ESP32
+        AR_MajPeakSmth = AR_MajPeakSmth + 0.42f * (AR_MajorPeak - AR_MajPeakSmth);
+#endif
+        agcSensitivity = 128.0f;
+        zeroCrossingCount = 0;
+        soundPressure = volumeSmth;
+      }
+      if (f.thirdsCount > 0) {   // the sender's thirds: the 31-band view keeps drawing on this board
+        uint8_t rta[NUM_RTA_CHANNELS] = {0};
+        memcpy(rta, f.thirds, min((int)f.thirdsCount, (int)NUM_RTA_CHANNELS));
+        arPublishRtaBands(rta);
+        mmRxThirdsMs = millis();
+      }
+      if (f.hasBeat) {   // another board's beat: a beat source here (AR_SRC_NETWORK), after the decks
+        mmRxBeat = f.beat;
+        mmRxBeatMs = millis();
+        arPublishNetworkBeat(f.beat.bpm100 / 100.0f, f.beat.beatInBar, f.beat.phase / 256.0f, f.beat.beatCount);
+      }
       return true;
     }
 
@@ -7035,12 +7186,19 @@ class AudioReactive : public Usermod {
       bool success = false;
       
       if (isValidUdpSyncVersion((const char *)incomingBuffer)) {
+          // A board sending both formats sends each frame twice: while its
+          // MoonModules packets keep coming, the v2 copy is skipped, so a peak
+          // counts once.
+          if (mmRxLastMs && (millis() - mmRxLastMs < 1000)) return false;
           receivedFormat = 2;
           success = decodeAudioData(incomingPacketSize, incomingBuffer);
       } else if (isValidUdpSyncVersion_v1((const char *)incomingBuffer)) {
           receivedFormat = 1;
           decodeAudioData_v1(incomingPacketSize, incomingBuffer);
           success = true;
+      } else if (mmSyncIsPacket(incomingBuffer, incomingPacketSize)) {
+          receivedFormat = 4;   // the MoonModules format
+          success = decodeMoonModules(incomingPacketSize, incomingBuffer);
       } else {
           receivedFormat = 0;
       }
@@ -7589,7 +7747,9 @@ class AudioReactive : public Usermod {
       // the network's sound, a realtime input, no input at all. The RTA view
       // is therefore offered exactly while this board is measuring it - and it
       // comes back by itself when the local analysis resumes.
-      arSetRtaLive(!disableSoundProcessing);
+      // Thirds a MoonModules sender keeps sending count as live too.
+      const bool rxThirds = (mmRxThirdsMs != 0) && (millis() - mmRxThirdsMs < AUDIOSYNC_IDLE_MS);
+      arSetRtaLive(!disableSoundProcessing || rxThirds);
 
       // The tempo is a LOCAL measurement for the same reason the thirty-one
       // bands are: it comes from this board's own analysis of its own input.
@@ -7710,7 +7870,7 @@ class AudioReactive : public Usermod {
           && ((millis() - last_UDPTime) > 25000)) {   // close connection after 25sec idle
         udpSyncConnected = false;
         receivedFormat = 0;
-        arUdp.close();
+        arUdp.close(); mmGroupMembership(false);
         volumeSmth =0.0f;
         volumeRaw =0;
         my_magnitude = 0.1; AR_Magnitude = 0.01; AR_MajorPeak = 2;
@@ -7854,7 +8014,7 @@ class AudioReactive : public Usermod {
       if (init && AR_Task) {
         if (udpSyncConnected) {    // close UDP sync connection (if open)
           udpSyncConnected = false;
-          arUdp.close();          // <--- FIXED: changed from stop() to close()
+          arUdp.close(); mmGroupMembership(false);          // <--- FIXED: changed from stop() to close()
           DEBUGSR_PRINTLN(F("AR onUpdateBegin(true): UDP connection closed."));
           receivedFormat = 0;
         }
@@ -8210,6 +8370,7 @@ class AudioReactive : public Usermod {
           if (bs.fromProLink) {
             srcName = (bs.sourceId == AR_SRC_STAGELINQ) ? "STAGE LINQ"
                    : (bs.sourceId == AR_SRC_ABLETON)   ? "ABLETON LINK"
+                   : (bs.sourceId == AR_SRC_NETWORK)   ? "NETWORK"
                                                       : "PRO LINK";
           } else if (bs.live) {
             srcName = "INTERNAL";
@@ -8697,7 +8858,17 @@ class AudioReactive : public Usermod {
         u["enabled"]   = (audioSyncEnabled != 0);
         u["mode"]      = mode;
         u["connected"] = udpSyncConnected;
-        u["format"]    = receivedFormat;
+        u["format"]    = receivedFormat;   // 0 none, 1 v1, 2 v2, 3 v2 with frame counter, 4 MoonModules
+        u["send_format"] = audioSyncFormat; // 0 WLED v2, 1 MoonModules, 2 both
+        if (mmRxBeatMs && (millis() - mmRxBeatMs < AUDIOSYNC_IDLE_MS)) {   // the beat a MoonModules sender decided
+          JsonObject rb = u.createNestedObject("rx_beat");
+          rb["bpm"]      = mmRxBeat.bpm100 / 100.0f;
+          rb["beat"]     = mmRxBeat.beatCount;
+          rb["bar"]      = mmRxBeat.beatInBar;
+          rb["source"]   = mmRxBeat.source;
+          rb["phrase"]   = mmRxBeat.beatInPhrase;
+          rb["fill"]     = (mmRxBeat.flags & MM_BEAT_FILL) ? 1 : 0;
+        }
         u["last_packet_ms_ago"] = last_UDPTime ? (long)(millis() - last_UDPTime) : -1L;
         // The transmit counters. "connected" only means the group is joined;
         // these say whether anything is actually going out.
@@ -8814,8 +8985,13 @@ class AudioReactive : public Usermod {
         if ((audioSyncEnabled == AUDIOSYNC_REC) || (!audioSyncIDLE && (audioSyncEnabled == AUDIOSYNC_REC_PLUS))){
           // UDP sound sync - receive mode
           if (udpSyncConnected) {
-            infoArr.add((millis() - last_UDPTime < AUDIOSYNC_IDLE_MS)
-                          ? F("UDP sync, receiving") : F("UDP sync, idle"));
+            if (millis() - last_UDPTime < AUDIOSYNC_IDLE_MS) {
+              // which format: a sender's MoonModules packets, or WLED's v2 or v1
+              infoArr.add(receivedFormat == 4 ? F("UDP sync, receiving MoMo")
+                        : receivedFormat == 1 ? F("UDP sync, receiving v1") : F("UDP sync, receiving v2"));
+            } else {
+              infoArr.add(F("UDP sync, idle"));
+            }
           } else {
             infoArr.add(F("UDP sync, no connection"));
           }
@@ -9812,6 +9988,7 @@ class AudioReactive : public Usermod {
       JsonObject sync = top.createNestedObject("sync");
       sync[F("port")] = audioSyncPort;
       sync[F("mode")] = audioSyncEnabled;
+      sync[F("format")] = audioSyncFormat;
       sync[F("check_sequence")] = audioSyncSequence ? 1 : 0;
     }
 
@@ -10216,6 +10393,8 @@ class AudioReactive : public Usermod {
 
       configComplete &= arGetNumber(top["sync"][F("port")], audioSyncPort);
       configComplete &= arGetNumber(top["sync"][F("mode")], audioSyncEnabled);
+      configComplete &= arGetNumber(top["sync"][F("format")], audioSyncFormat);
+      if (audioSyncFormat > AUDIOSYNC_FORMAT_BOTH) audioSyncFormat = AUDIOSYNC_FORMAT_WLED;
       // Same story as the limiter: "check_sequence" is a dropdown, so a
       // stored boolean has to be rewritten as a number.
       uint8_t seqRead = audioSyncSequence ? 1 : 0;
@@ -10617,6 +10796,11 @@ class AudioReactive : public Usermod {
 #ifdef ARDUINO_ARCH_ESP32
       oappend(SET_F("addOption(dd,'Receive or Local',6);"));  // AUDIOSYNC_REC_PLUS
 #endif
+      // format: what a sending board sends; a receiving board reads either
+      oappend(SET_F("dd=addDropdown(ux,'sync:format');"));
+      oappend(SET_F("addOption(dd,'WLED (v2)',0);"));          // AUDIOSYNC_FORMAT_WLED
+      oappend(SET_F("addOption(dd,'MoMo',1);"));               // AUDIOSYNC_FORMAT_MOMO: MoonModules
+      oappend(SET_F("addOption(dd,'both',2);"));               // AUDIOSYNC_FORMAT_BOTH
       // check_sequence: Receiver skips out-of-sequence packets when enabled
       oappend(SET_F("dd=addDropdown(ux,'sync:check_sequence');"));
       oappend(SET_F("addOption(dd,'Off',0);"));
