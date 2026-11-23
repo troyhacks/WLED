@@ -2,6 +2,7 @@ Import('env')
 import os
 import shutil
 import gzip
+import subprocess
 
 OUTPUT_DIR = "build_output{}".format(os.path.sep)
 
@@ -157,4 +158,31 @@ def bin_gzip(source, target, env):
         with gzip.open(gzip_file, "wb", compresslevel = 9) as f:
             shutil.copyfileobj(fp, f)
 
-env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", [bin_rename_copy, bin_gzip])
+def bin_factory(source, target, env):
+    # firmware.factory.bin: bootloader, partition table, boot_app0 and app merged into one image flashed at 0,
+    # so a web installer needs no per-chip offsets (newer pioarduino platforms write the same file themselves)
+    images = [(str(offset), env.subst(path)) for offset, path in env.get("FLASH_EXTRA_IMAGES", [])]
+    if not images:
+        return  # ESP8266: no extra images, the app is the whole flash
+    images.append((env.subst("$ESP32_APP_OFFSET") or "0x10000", str(target[0])))
+    missing = [path for _, path in images if not os.path.isfile(path)]
+    if missing:
+        print("No factory image, missing: {}".format(", ".join(missing)))
+        return
+    esptool = env.subst("$UPLOADER").strip('"')
+    if "esptool" not in os.path.basename(esptool):
+        print("No factory image: the uploader is not esptool")
+        return
+    factory_file = env.subst("$BUILD_DIR/${PROGNAME}.factory.bin")
+    cmd = [esptool, "--chip", env.BoardConfig().get("build.mcu"), "merge-bin", "-o", factory_file]
+    for offset, path in images:
+        cmd += [offset, path]
+    if subprocess.run(cmd).returncode != 0:
+        print("esptool merge-bin failed, no factory image")
+        return
+    release_name = _get_cpp_define_value(env, "WLED_RELEASE_NAME")
+    if release_name:  # beside the release bin bin_rename_copy wrote, so a tagged release carries it too
+        version = _get_cpp_define_value(env, "WLED_VERSION")
+        shutil.copy(factory_file, "{}release{}WLEDMM_{}_{}.factory.bin".format(OUTPUT_DIR, os.path.sep, version, release_name))
+
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", [bin_rename_copy, bin_gzip, bin_factory])
