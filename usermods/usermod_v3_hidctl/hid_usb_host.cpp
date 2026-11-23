@@ -614,15 +614,13 @@ void hid_usb_poll(void) {
                  hid_retry_addr);
       hid_retry_addr = 0;
       hid_retry_count = 0;
-      app_message_t m = {};
-      m.id = app_message_t::APP_HIDCTL_DEVICE_CONNECTED;
-      m.data.hidctl_device_info.device = HIDCTL_D;
-      m.data.hidctl_device_info.vid = D->vid;
-      m.data.hidctl_device_info.pid = D->pid;
-      strncpy(m.data.hidctl_device_info.name, "HID control surface",
-              sizeof(m.data.hidctl_device_info.name) - 1);
-      m.data.hidctl_device_info.name[sizeof(m.data.hidctl_device_info.name) - 1] = '\0';
-      if (app_queue) xQueueSend(app_queue, &m, 0);
+      HIDCTL_LOG("connect (retry): device %u, VID=0x%04X PID=0x%04X",
+                 (unsigned)HIDCTL_D, (unsigned)D->vid, (unsigned)D->pid);
+      const uint8_t dev = HIDCTL_D;
+      const uint16_t vid = D->vid;
+      const uint16_t pid = D->pid;
+      HIDCTL_D = dev;
+      if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceConnected(dev, vid, pid);
     }
   }
 
@@ -832,15 +830,19 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* /*
       return;
     }
     {
-      app_message_t m = {};
-      m.id = app_message_t::APP_HIDCTL_DEVICE_CONNECTED;
-      m.data.hidctl_device_info.device = HIDCTL_D;
-      m.data.hidctl_device_info.vid = D->vid;
-      m.data.hidctl_device_info.pid = D->pid;
-      strncpy(m.data.hidctl_device_info.name, "HID control surface",
-              sizeof(m.data.hidctl_device_info.name) - 1);
-      m.data.hidctl_device_info.name[sizeof(m.data.hidctl_device_info.name) - 1] = '\0';
-      if (app_queue) xQueueSend(app_queue, &m, 0);
+      HIDCTL_LOG("connect: device %u, VID=0x%04X PID=0x%04X",
+                 (unsigned)HIDCTL_D, (unsigned)D->vid, (unsigned)D->pid);
+      // The usermod is told here and now, and not through the app queue:
+      // the queue is five deep and the F1 fills it with reports fifty
+      // times a second, so a connect message can be dropped - and a
+      // control surface that is never told about is a control surface
+      // that does not work. This callback runs in the main loop's task,
+      // which is the task that owns the usermod.
+      const uint8_t dev = HIDCTL_D;
+      const uint16_t vid = D->vid;
+      const uint16_t pid = D->pid;
+      HIDCTL_D = dev;
+      if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceConnected(dev, vid, pid);
     }
   } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
     // Which device went away? The event carries its handle, and every
@@ -859,10 +861,10 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* /*
     HIDCTL_D = gone;
     HIDCTL_LOG("event: DEV_GONE (device %u)", (unsigned)gone);
     hid_close_device();
-    app_message_t m = {};
-    m.id = app_message_t::APP_HIDCTL_DEVICE_DISCONNECTED;
-    m.data.hidctl_device_info.device = gone;
-    if (app_queue) xQueueSend(app_queue, &m, 0);
+    // The usermod is told here and now, for the same reason as the
+    // connect: a message can be dropped, and a surface that is not told
+    // about stays on the bus for ever.
+    if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected(gone);
   }
 }
 

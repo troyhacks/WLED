@@ -832,8 +832,12 @@ void background_loop_nonblocking(void* pvParameters) {
 
     #ifdef SOC_USB_OTG_SUPPORTED
     app_message_t msg;
-    // Poll for messages without blocking
-    if (xQueueReceive(app_queue, &msg, 0)) {
+    // Poll for messages without blocking. More than one is taken when
+    // there is more than one: a control surface reports fifty times a
+    // second and the queue is five deep, so one message per pass is not
+    // enough to keep up - and the queue overflowing loses the reports.
+    for (uint8_t msg_no = 0; msg_no < 8; msg_no++) {
+      if (!xQueueReceive(app_queue, &msg, 0)) break;
       switch (msg.id) {
       case 1: {
         int slot;

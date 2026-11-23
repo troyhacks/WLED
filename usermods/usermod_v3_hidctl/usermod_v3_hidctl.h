@@ -935,7 +935,7 @@ class HidctlUsermod : public Usermod {
     loadProfiles();
     uint8_t idx = matchDevice(vid, pid);
     if (idx == 0xFF) {
-      USER_PRINTF("[HIDCTL] device 0x%04X:0x%04X — no profile wants it\n", vid, pid);
+      USER_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — no profile wants it\n", (unsigned)device, vid, pid);
       return;
     }
     // The surface for this device. A device that has been here before
