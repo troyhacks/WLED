@@ -110,6 +110,22 @@ The same limit applies to **any** device with a fat descriptor — a camera, a
 multi-interface composite device, some HID devices. It is a property of this build, not
 of the audio client.
 
+### The same ceiling appears in the HID client, and it is a separate one
+
+The HID control-surface client has two of its own, which raising the IDF's limit would
+**not** fix by itself:
+
+- `hid_usb_host.cpp` keeps the device's configuration descriptor in its own
+  **256-byte** buffer (`config_desc[256]`, filled at line 2197 and guarded, so a bigger
+  descriptor would be silently truncated rather than overflow).
+- Its descriptor requests go out with **wIndex = 0** — interface 0 only — and the
+  report descriptor is asked for with a 256-byte request.
+
+Both are client-side choices rather than the library's ceiling, so a fix that raises
+`CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE` has to raise these as well. The interface
+index matters for composite devices: a mouse on a second interface is not seen by the
+pointer code for the same reason the audio device is not seen at all.
+
 ### The three ways to raise it
 
 | | What it costs | What it risks |
