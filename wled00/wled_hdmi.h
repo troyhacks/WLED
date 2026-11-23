@@ -1,12 +1,16 @@
 #pragma once
-// HDMI display subsystem — Olimex ESP32-P4-PC via LT8912B bridge.
-// Public interface called from wled.cpp; internals are in wled_hdmi.cpp.
+// The HDMI bridge backend.
+//
+// The LT8912B takes the P4's MIPI-DSI and gives HDMI out to a monitor.
+// The display layer (wled_display.cpp) owns the picture; this owns the
+// bridge: its modes, the monitor's EDID, and its registers.
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
 
 // ── Parsed EDID data from the connected monitor. ─────────────────────────────
-// Populated by hdmi_edid_init() (called inside hdmi_setup() after link lock).
-// All fields are zero/empty if no monitor is connected or EDID read fails.
+// Populated by hdmi_edid_init() (called inside the bridge's init, after the
+// link is up).  All fields are zero/empty if no monitor is connected or the
+// EDID read fails.
 struct hdmi_edid_info_t {
   bool     present;            // true = valid EDID was read
   char     manufacturer[4];   // 3-letter JEDEC code e.g. "SAM"
@@ -31,11 +35,31 @@ struct hdmi_edid_info_t {
 };
 extern hdmi_edid_info_t hdmi_edid_info;
 
-void hdmi_setup();               // boot: init bridge and display
-void hdmi_print_mode_menu();     // print numbered mode list to Serial
-void hdmi_switch_mode(int mode); // runtime mode switch
-bool hdmi_bridge_present();      // is an LT8912B bridge on the I2C bus at all?
-#if defined(CONFIG_SOC_PPA_SUPPORTED)
-void hdmi_blit();                // loop: PPA scale-blit LED bus buffer → HDMI framebuffer
-#endif
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
+// Is there an LT8912B on the I2C bus at all?
+bool hdmiBridgePresent();
+
+// Is a monitor plugged into the bridge?
+bool hdmiBridgeLinkPresent();
+
+// The modes the bridge can drive.
+int         hdmiBridgeModeCount();
+const char* hdmiBridgeModeName(int mode);
+int         hdmiBridgeModeIndex(const char* name);   // -1 when there is no such mode
+int         hdmiBridgeCurrentMode();
+
+// The mode that is up: its size.
+uint16_t hdmiBridgeWidth();
+uint16_t hdmiBridgeHeight();
+
+// Bring the bridge up on a mode, and take it down again.
+bool hdmiBridgeInit(int mode);
+void hdmiBridgeDeinit();
+
+// The Art-Net output follows the link: this polls it.
+void hdmiBridgePollLink();
+
+// The console's mode menu.
+void hdmi_print_mode_menu();
+void hdmi_switch_mode(int mode);
+
+#endif // CONFIG_IDF_TARGET_ESP32P4

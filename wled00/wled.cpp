@@ -8,6 +8,8 @@ static const char *TAG = "WLED";
 #endif
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   #include "esp_ldo_regulator.h" // ESP32-P4 for higher GPIOS.
+  #include "wled_display.h"      // the display subsystem
+  #include "wled_hdmi.h"         // the HDMI bridge backend
   esp_ldo_channel_handle_t ldo2 = NULL;
   esp_ldo_channel_handle_t ldo3 = NULL;
   // ESP32-P4 Board Log
@@ -65,7 +67,6 @@ static const char *TAG = "WLED";
     #include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
     #include "../usermods/usermod_v3_hidctl/hid_usb_host.cpp"
   #endif
-
   #define MNT_PATH "/usb"     // Base mount path prefix, devices will be mounted as /usb0, /usb1, /usb2...
   #define MAX_MSC_DEVICES  CONFIG_FATFS_VOLUME_COUNT 
 
@@ -1036,9 +1037,9 @@ void WLED::loop() { // loopTask
     }
   }
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
-  hdmi_blit();
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE && CONFIG_SOC_PPA_SUPPORTED
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  displayLoop();
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
   if (millis() - debugTime > 29999) {
@@ -1878,14 +1879,14 @@ void WLED::setup() {
   // GPIO > 36 are not powered/configured for Arduino-ESP32 by default.
   // fix from https://esp32.com/viewtopic.php?t=45334 thanks to microfoundry
 
-  // WLEDMM: the HDMI bridge is optional hardware - some boards have one, some
-  // get one through the MIPI-DSI connector, some have neither.  Ask the bus
-  // once, here, because it decides who owns LDO channel 3: the bridge's
-  // display stack needs it at 2.5V for the MIPI DSI PHY, while a board
-  // without a bridge wants the 3.3V rail for the high GPIOs.
-  #if defined(WLEDMM_DISPLAY_MODE)
-  const bool hdmiChip = hdmi_bridge_present();
-  if (!hdmiChip) USER_PRINTLN("HDMI: no LT8912B bridge on the I2C bus - HDMI disabled");
+  // WLEDMM: the display is optional hardware - some boards have an LT8912B
+  // bridge, some have a MIPI-DSI panel, some have neither.  Ask the bus
+  // once, here, because it decides who owns LDO channel 3: the display's
+  // stack needs it at 2.5V for the MIPI DSI PHY, while a board
+  // without a display wants the 3.3V rail for the high GPIOs.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  const bool hdmiChip = displayNeedsLdo();
+  if (!hdmiChip) USER_PRINTLN("Display: nothing on the MIPI-DSI connector - the display stays off");
   #else
   const bool hdmiChip = false;
   #endif
@@ -2043,6 +2044,12 @@ void WLED::setup() {
   WLED_SET_AP_SSID(); // otherwise it is empty on first boot until config is saved
 
   DEBUG_PRINTLN(F("Reading config"));
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // The display's defaults have to be in place before the config is read:
+  // an old cfg.json has no "display" in it, and the defaults are what the
+  // display falls back to.
+  displaySetup();
+  #endif
   deserializeConfigFromFS();
   onload_loadedLedmap = loadedLedmap;
 
@@ -2196,9 +2203,9 @@ void WLED::setup() {
 
     strip.createLedmapBinaryCache();
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
-    hdmi_setup();
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    displayStart();
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
     xSemaphoreGive(busMutex);
 

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+	<title>Display Settings</title>
+	<script>
+		var d = document;
+		var loc = false, locip;
+		function gId(s) { return d.getElementById(s); }
+		function B() { window.open("/settings","_self"); }
+
+		function Save() {
+			d.Sf.submit();
+		}
+
+		// The settings script the server sends: it fills the form in, and
+		// it knows what the board's settings are - including the panels the
+		// board knows about, which go into the dropdown as they are built.
+		function loadJS(FILE_URL, async = true) {
+			let scE = d.createElement("script");
+			scE.setAttribute("src", FILE_URL);
+			scE.setAttribute("type", "text/javascript");
+			scE.setAttribute("async", async);
+			d.body.appendChild(scE);
+			scE.addEventListener("load", () => {
+				GetV();
+			});
+			scE.addEventListener("error", (ev) => {
+				console.log("Error on loading file", ev);
+				alert("Loading of configuration script failed.\nIncomplete page data!");
+			});
+		}
+		function S()
+		{
+			if (window.location.protocol == "file:") {
+				loc = true;
+				locip = localStorage.getItem('locIp');
+				if (!locip) {
+					locip = prompt("File Mode. Please enter WLED IP!");
+					localStorage.setItem('locIp', locip);
+				}
+			}
+			var url = (loc?`http://${locip}`:'') + '/settings/s.js?p=11';
+			loadJS(url, false);
+		}
+	</script>
+	<style>@import url("style.css");</style>
+</head>
+<body onload="S()">
+	<form id="form_s" name="Sf" method="post">
+		<div class="toprow">
+		<button type="button" onclick="B()">Back</button><button type="button" onclick="Save()">Save</button><br>
+		</div>
+
+		<h2>Display</h2>
+		<i>The board can drive a MIPI-DSI panel on its connector, or an LT8912B
+		bridge to a monitor. It works out which one is there by looking at the
+		I2C bus, but it cannot tell one DSI panel from another - they all look
+		the same from here - so the panel is named here.</i><br><br>
+
+		Panel: <select name="DP" id="DP"></select><br>
+		HDMI mode: <select name="DM" id="DM"></select><br>
+		<i>The HDMI mode only matters when a bridge is attached: it is the
+		size the monitor is driven at. The monitor's own EDID wins over it.</i><br><br>
+
+		What the screen shows: <select name="DV" id="DV">
+			<option value="0">Display only - the LED picture, the whole frame</option>
+			<option value="1">Show interface and display preview</option>
+		</select><br><br>
+
+		The picture's turn: <select name="DR" id="DR">
+			<option value="0">0&deg;</option>
+			<option value="90">90&deg;</option>
+			<option value="180">180&deg;</option>
+			<option value="270">270&deg;</option>
+		</select><br>
+		<i>Only a panel's picture can be turned - a monitor behind the bridge
+		is whatever it is.</i><br><br>
+
+		On-screen buttons: <input class="agi" type="number" name="DB" min="0" max="64" value="32"><br>
+		Columns: <input class="agi" type="number" name="DC" min="1" max="16" value="8"><br><br>
+
+		Panel reset pin: <input class="agi" type="number" name="DG" min="-1" max="48" value="-1"><br>
+		<i>-1 for none. The panel's own default is used when this is -1.</i><br>
+		Backlight pin: <input class="agi" type="number" name="DBL" min="-1" max="48" value="-1"><br>
+		<i>-1 for none.</i><br><br>
+
+		<div id="toast"></div>
+		<hr><button type="button" onclick="B()">Back</button><button type="button" onclick="Save()">Save</button>
+	</form>
+</body>
+</html>

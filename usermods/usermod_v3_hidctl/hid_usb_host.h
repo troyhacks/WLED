@@ -20,6 +20,17 @@
 
 #include "hidctl_types.h"
 
+// What KIND of HID device this is.
+//
+// A control surface is driven by a profile - its buttons and its knobs
+// are mapped to WLED's actions.  A mouse and a keyboard are not: they are
+// pointed at the screen, and the screen is not a USB device.  They are
+// recognised by the HID interface's own subclass and protocol, because a
+// boot mouse's report layout is the same for every mouse there is.
+#define HID_KIND_SURFACE  0   // a control surface: driven by a profile
+#define HID_KIND_POINTER  1   // a mouse: pointed at the screen
+#define HID_KIND_KEYBOARD 2   // a keyboard
+
 // Called once from usb_task, after the host stack is installed.
 void hid_usb_init(void);
 
@@ -160,6 +171,9 @@ bool hid_usb_set_in_pid(uint8_t d, uint8_t pid);
 bool hid_usb_read_firmware(uint8_t d);
 const uint8_t* hid_usb_out_first(uint8_t d, uint8_t* len);
 const uint8_t* hid_usb_report_desc(uint8_t d, uint16_t* len);
+// What KIND of device this is: HID_KIND_SURFACE (driven by a profile),
+// HID_KIND_POINTER (a mouse, pointed at the screen) or HID_KIND_KEYBOARD.
+uint8_t hid_usb_device_kind(uint8_t d);
 const uint8_t* hid_usb_last_out_head(uint8_t d, uint8_t* len);
 void hid_usb_out_watchdog(uint8_t d);
 uint32_t hid_usb_zlp_count(uint8_t d);

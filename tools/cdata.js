@@ -333,6 +333,12 @@ writeChunks(
       filter: "html-minify",
     },
     {
+      file: "settings_display.htm",
+      name: "PAGE_settings_display",
+      method: "gzip",
+      filter: "html-minify",
+    },
+    {
       file: "settings_pin.htm",
       name: "PAGE_settings_pin",
       method: "gzip",

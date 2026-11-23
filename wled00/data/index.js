@@ -2011,6 +2011,8 @@ function makeWS() {
 		// that light up with the beat cannot wait that long. It is NOT a
 		// state, so it must not go any further down this handler.
 		if (json.tempo) { tempoUpdate(json.tempo); return; }
+		// The DISPLAY stream: the same idea, for the display's own status.
+		if (json.display) { displayUpdate(json.display); return; }
 		clearTimeout(jsonTimeout);
 		jsonTimeout = null;
 		lastUpdate = new Date();
@@ -2047,6 +2049,8 @@ function makeWS() {
 		// loop can push it. The board answers with silence - this is a
 		// subscription, not a request.
 		ws.send(JSON.stringify({tempo:true}));
+		// And for the display's status, the same way.
+		ws.send(JSON.stringify({display:true}));
 	}
 }
 
@@ -2548,6 +2552,60 @@ function tempoTick(now)
 	tempoBoxFill(tempoBox, f);
 }
 requestAnimationFrame(tempoTick);
+
+// ── The display ─────────────────────────────────────────────────────────────
+//
+// The board pushes the display's status on its own stream, the same way the
+// beat has one: the state broadcast is on a 1.2 s cooldown, and the display
+// can change under the user's hand.
+//
+// The chip says what the output is - the panel's name, or the HDMI mode's
+// size - and is green when it is there and working, grey when it is not.
+// Clicking it shows or hides the on-screen interface.
+var dispStatus = {kind:'NONE', s:'', w:0, h:0, ok:false, iface:0, rot:0, rr:0};
+
+function displayUpdate(d)
+{
+	if (!d) return;
+	dispStatus = d;
+	var chip = gId('displayChip');
+	if (!chip) return;
+	chip.textContent = (d.s && d.s.length) ? d.s : 'NONE';
+	chip.className = d.ok ? 'on' : 'off';
+	chip.title = (d.kind === 'HDMI' ? 'HDMI ' : (d.kind === 'DSI' ? 'DSI panel ' : ''))
+		+ (d.w ? d.w + 'x' + d.h + ' ' : '') + '- click to show or hide the on-screen interface';
+	// The turn button only exists when the picture can be turned.
+	gId('displayRot').classList.toggle('hidden', !d.rr);
+}
+
+// The commands go out the same way the tempo's do: over the socket if it is
+// open, over HTTP if it is not. The board's answer is an acknowledgement,
+// and the display's own stream carries the state that changed.
+function displayCmd(cmd)
+{
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({display: cmd}));
+		return;
+	}
+	fetch((loc?`http://${locip}`:'') + '/json/si', {
+		method: "POST",
+		headers: {"Content-type": "application/json; charset=UTF-8"},
+		body: JSON.stringify({display: cmd})
+	}).then(r => r.json()).catch(() => showErrorToast());
+}
+
+// Show or hide the on-screen interface.
+function displayToggle()
+{
+	displayCmd({iface: dispStatus.iface ? 0 : 1});
+}
+
+// A quarter turn. Only a panel's picture can be turned - a monitor behind
+// the bridge is whatever it is.
+function displayRotate()
+{
+	displayCmd({rot: (dispStatus.rot + 90) % 360});
+}
 
 // The tempo commands.
 //

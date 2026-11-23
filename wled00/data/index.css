@@ -1929,3 +1929,75 @@ TD .checkmark, TD .radiomark {
 		--tp: 124px;
 	}
 }
+
+/* ── The display ───────────────────────────────────────────────────────────
+   The chip says what the display is: the panel's name, or the HDMI mode's
+   size. It is green when the output is there and working, grey when it is
+   not - and clicking it shows or hides the on-screen interface.
+   The turn button only appears when the picture can be turned. */
+#displaywrap {
+	float: right;
+	margin-top: var(--bmt);
+}
+
+#displaywrap .trow {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding-bottom: 2px;
+}
+
+#displayChip {
+	font-size: 10px;
+	letter-spacing: 0.5px;
+	border: 1px solid var(--c-4);
+	border-radius: 3px;
+	padding: 2px 5px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+#displayChip.on {
+	color: var(--c-g) !important;
+	border-color: var(--c-g);
+}
+
+#displayChip.off {
+	color: var(--c-6) !important;
+}
+
+/* The turn button, in the style of the tempo panel's buttons. */
+#displaywrap .tbtn {
+	width: auto;
+	background-color: transparent;
+	border: none;
+	margin: 0;
+	padding: 4px;
+	min-width: 0;
+	line-height: 0;
+	color: var(--c-c);
+	cursor: pointer;
+	border-radius: 4px;
+	transition: color 0.3s, background-color 0.3s;
+}
+
+#displaywrap .tbtn svg {
+	width: 18px;
+	height: 18px;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+#displaywrap .tbtn:hover {
+	background-color: var(--c-tbh);
+	color: var(--c-e);
+}
+
+/* Nothing to turn on a board with no panel: the button is not drawn at
+   all rather than drawn and greyed out. */
+#displaywrap .tbtn.hidden {
+	display: none;
+}

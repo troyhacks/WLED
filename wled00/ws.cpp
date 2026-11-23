@@ -1,4 +1,7 @@
 #include "wled.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "wled_display.h"
+#endif
 
 /*
  * WebSockets server for bidirectional communication
@@ -97,6 +100,82 @@ static void wsSendTempo(void) {
   }
 }
 
+/*
+ * The DISPLAY stream.
+ *
+ * The same idea as the tempo's, for the display's own status: which panel
+ * is there, whether it is working, whether the on-screen interface is
+ * showing, and how the picture is turned.
+ *
+ * It is much slower than the beat - the display does not change often - but
+ * it goes on its own stream, because the state broadcast is on a 1.2 s
+ * cooldown and a user who just picked a panel should not wait for it.
+ *
+ * It is OPT-IN, per client, exactly like the tempo's.
+ */
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#define WS_DISPLAY_INTERVAL_MS 250
+#define WS_DISPLAY_MAX_CLIENTS 4
+static uint32_t wsDisplayClients[WS_DISPLAY_MAX_CLIENTS] = {0};
+static unsigned long wsLastDisplayTime = 0;
+
+static void wsDisplayAddClient(uint32_t id) {
+  for (int i = 0; i < WS_DISPLAY_MAX_CLIENTS; i++) {
+    if (wsDisplayClients[i] == id) return;
+    if (wsDisplayClients[i] == 0) { wsDisplayClients[i] = id; return; }
+  }
+  wsDisplayClients[0] = id;
+}
+
+static void wsDisplayDelClient(uint32_t id) {
+  for (int i = 0; i < WS_DISPLAY_MAX_CLIENTS; i++)
+    if (wsDisplayClients[i] == id) wsDisplayClients[i] = 0;
+}
+
+static bool wsDisplayAnyClient(void) {
+  for (int i = 0; i < WS_DISPLAY_MAX_CLIENTS; i++)
+    if (wsDisplayClients[i]) return true;
+  return false;
+}
+
+static void wsSendDisplay(void) {
+  if (!wsDisplayAnyClient()) return;
+
+  display_status_t s;
+  displayGetStatus(s);
+
+  // The short name: the panel's first word ("EK79007"), or the size of the
+  // monitor behind the bridge.
+  char shortName[16] = "";
+  if (s.kind == DISPLAY_HDMI) {
+    snprintf(shortName, sizeof(shortName), "%ux%u", s.width, s.height);
+  } else if (s.name && s.name[0]) {
+    strlcpy(shortName, s.name, sizeof(shortName));
+    char* sp = strchr(shortName, ' ');
+    if (sp) *sp = '\0';
+  }
+
+  const char* kind = (s.kind == DISPLAY_HDMI) ? "HDMI"
+                   : (s.kind == DISPLAY_DSI)  ? "DSI" : "NONE";
+
+  char buf[192];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"display\":{\"kind\":\"%s\",\"s\":\"%s\",\"w\":%u,\"h\":%u,\"ok\":%u,"
+    "\"iface\":%u,\"rot\":%u,\"rr\":%u,\"buttons\":%u,\"cols\":%u}}",
+    kind, shortName, (unsigned)s.width, (unsigned)s.height, s.present ? 1 : 0,
+    s.interface_shown ? 1 : 0, (unsigned)s.rotation, s.can_rotate ? 1 : 0,
+    (unsigned)s.buttons, (unsigned)s.button_cols);
+  if (n < 1 || n >= (int)sizeof(buf)) return;
+
+  for (int i = 0; i < WS_DISPLAY_MAX_CLIENTS; i++) {
+    if (!wsDisplayClients[i]) continue;
+    AsyncWebSocketClient* wsc = ws.client(wsDisplayClients[i]);
+    if (!wsc || wsc->queueLength() > 0) continue;
+    wsc->text(buf);
+  }
+}
+#endif // CONFIG_IDF_TARGET_ESP32P4
+
 void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len)
 {
   if(type == WS_EVT_CONNECT){
@@ -108,6 +187,9 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
     //client disconnected
     if (client->id() == wsLiveClientId) wsLiveClientId = 0;
     wsTempoDelClient(client->id());
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    wsDisplayDelClient(client->id());
+    #endif
     DEBUG_PRINTLN(F("WS client disconnected."));
   } else if(type == WS_EVT_DATA){
     DEBUG_PRINTLN(F("WS event data."));
@@ -126,6 +208,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
 
         bool verboseResponse = false;
         bool tempoOnly = false;
+        bool displayOnly = false;
         if (!requestJSONBufferLock(11)) {
           client->text(F("{\"error\":3}")); // ERR_NOBUF
           return;
@@ -148,6 +231,15 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
           if (root["tempo"].as<bool>()) wsTempoAddClient(client->id());
           else                               wsTempoDelClient(client->id());
           tempoOnly = true;
+        } else if (root.containsKey("display") && root["display"].is<bool>()) {
+          // The display stream's subscription. The same idea - and the
+          // VALUE matters: an object under "display" is a command, not a
+          // subscription, and it goes on to the state.
+          #if defined(CONFIG_IDF_TARGET_ESP32P4)
+          if (root["display"].as<bool>()) wsDisplayAddClient(client->id());
+          else                            wsDisplayDelClient(client->id());
+          displayOnly = true;
+          #endif
         } else {
           verboseResponse = deserializeState(root);
         }
@@ -156,7 +248,7 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
         if (!interfaceUpdateCallMode) { // individual client response only needed if no WS broadcast soon
           if (verboseResponse) {
             sendDataWs(client);
-          } else if (!tempoOnly) {
+          } else if (!tempoOnly && !displayOnly) {
             // we have to send something back otherwise WS connection closes
             client->text(F("{\"success\":true}"));
           }
@@ -530,6 +622,15 @@ void handleWs()
     wsLastTempoTime = millis();
     wsSendTempo();
   }
+
+  // The DISPLAY stream is slower - the display does not change often - but
+  // it goes before the strip check for the same reason.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if ((millis() - wsLastDisplayTime) >= WS_DISPLAY_INTERVAL_MS) {
+    wsLastDisplayTime = millis();
+    wsSendDisplay();
+  }
+  #endif
 
   // if (!busses.canAllShow()) return;
   if (strip.isUpdating()) return;

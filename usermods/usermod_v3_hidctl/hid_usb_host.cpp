@@ -47,6 +47,7 @@ extern HidctlUsermod* hidctlUsermodPtr;
 //
 // The transfers carry the device in their context, so a callback always
 // knows which device it is about.
+
 struct HidDevice {
   bool     used = false;
   uint8_t  addr = 0;
@@ -59,6 +60,16 @@ struct HidDevice {
   uint16_t in_mps = 0;
   uint16_t out_mps = 0;
   uint8_t  link_speed = 0;        // 0 = unknown, 1 = full, 2 = high
+  // What KIND of device this is.  A control surface is driven by a
+  // profile; a mouse and a keyboard are not - they are pointed at the
+  // screen, and the screen is not a USB device.
+  uint8_t  hid_kind = HID_KIND_SURFACE;
+  // The interface's own subclass and protocol.  A boot mouse (subclass 1,
+  // protocol 2) and a boot keyboard (subclass 1, protocol 1) have a
+  // report layout everybody knows, which is how they are told apart from
+  // a control surface.
+  uint8_t  hid_sub = 0;
+  uint8_t  hid_proto = 0;
   // True for a device whose reports are always exactly one maximum packet
   // long: the OpenDeck-family decks. A shorter packet is then a
   // zero-length one, whatever the driver says its length is.
@@ -1191,17 +1202,19 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
     }
   }
 
-  // Does any profile want this device? If not, let it go.
+  // Does any profile want this device?  If not it MIGHT still be a mouse
+  // or a keyboard, which are pointed at the screen rather than driven by
+  // a profile - so the device is not let go yet.  The interface's own
+  // subclass and protocol say what it is, and that is read further down.
   uint8_t profile = 0xFF;
   if (hidctlUsermodPtr) profile = hidctlUsermodPtr->matchDevice(D->vid, D->pid);
   if (profile == 0xFF) {
-    HIDCTL_DEBUG("configure: VID=0x%04X PID=0x%04X — no profile wants it, releasing",
+    HIDCTL_DEBUG("configure: VID=0x%04X PID=0x%04X — no profile wants it",
                  D->vid, D->pid);
-    usb_host_device_close(hid_client, dev);
-    return ESP_FAIL;
+  } else {
+    HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — profile %u wants it",
+               D->vid, D->pid, profile);
   }
-  HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — profile %u wants it",
-             D->vid, D->pid, profile);
 
   // How the packets go on the wire is a property of the device, and it
   // has to be set before anything is sent.
@@ -1249,6 +1262,8 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   uint16_t in_mps = 0;
   uint8_t out_ep = 0;
   uint16_t out_mps = 0;
+  uint8_t hid_sub = 0;
+  uint8_t hid_proto = 0;
 
   for (uint8_t iface_num = 0; iface_num < 8; iface_num++) {
     int iface_off = 0;
@@ -1256,6 +1271,8 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
         usb_parse_interface_descriptor(cfg_desc, iface_num, 0, &iface_off);
     if (!iface) break;
     if (iface->bInterfaceClass != 0x03) continue;   // HID
+    hid_sub = iface->bInterfaceSubClass;
+    hid_proto = iface->bInterfaceProtocol;
     for (uint8_t ep_idx = 0; ep_idx < iface->bNumEndpoints; ep_idx++) {
       int ep_off = iface_off;
       const usb_ep_desc_t* ep = usb_parse_endpoint_descriptor_by_index(
@@ -1282,6 +1299,29 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
     usb_host_device_close(hid_client, dev);
     return ESP_FAIL;
   }
+
+  // No profile wants this device.  A BOOT mouse (subclass 1, protocol 2) or
+  // a BOOT keyboard (subclass 1, protocol 1) is still worth keeping: they
+  // are pointed at the screen, and their report layout is the same for
+  // every one of them, so they need no profile at all.  Anything else is
+  // somebody else's device - the deck, the MIDI controller - and is let go.
+  if (profile == 0xFF) {
+    if (hid_sub == 1 && hid_proto == 2) {
+      D->hid_kind = HID_KIND_POINTER;
+    } else if (hid_sub == 1 && hid_proto == 1) {
+      D->hid_kind = HID_KIND_KEYBOARD;
+    } else {
+      HIDCTL_DEBUG("configure: VID=0x%04X PID=0x%04X — nothing wants it, releasing",
+                   D->vid, D->pid);
+      usb_host_device_close(hid_client, dev);
+      return ESP_FAIL;
+    }
+    HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — a %s, kept for the screen",
+               D->vid, D->pid,
+               (D->hid_kind == HID_KIND_POINTER) ? "mouse" : "keyboard");
+  }
+  D->hid_sub = hid_sub;
+  D->hid_proto = hid_proto;
 
   err = usb_host_interface_claim(hid_client, dev, (uint8_t)claimed_iface, 0);
   if (err != ESP_OK) {
@@ -1929,6 +1969,12 @@ const uint8_t* hid_usb_report_desc(uint8_t d, uint16_t* len) {
   HidDevice* dev = hid_dev_of(d);
   if (len) *len = hid_report_desc_len;
   return hid_report_desc;
+}
+// What KIND of device this is: a surface (driven by a profile), a mouse
+// (pointed at the screen) or a keyboard.
+uint8_t hid_usb_device_kind(uint8_t d) {
+  HidDevice* dev = hid_dev_of(d);
+  return dev ? dev->hid_kind : HID_KIND_SURFACE;
 }
 // The head of the last packet that went out on the OUT endpoint.
 const uint8_t* hid_usb_last_out_head(uint8_t d, uint8_t* len) {

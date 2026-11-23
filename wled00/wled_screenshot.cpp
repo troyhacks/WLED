@@ -7,10 +7,8 @@
 #include <esp_cache.h>
 #include "driver/jpeg_encode.h"
 
-#if defined(WLEDMM_DISPLAY_MODE)
-// The HDMI mode's runtime size (wled_hdmi.cpp sets them when the panel comes up).
-extern uint16_t wledmm_display_w;
-extern uint16_t wledmm_display_h;
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "wled_display.h"
 #endif
 
 // ONE SCREENSHOT AT A TIME.
@@ -38,25 +36,41 @@ static void shotLockGive(void) {
 // about it: the DMA does not see the cache, so what the CPU wrote would
 // not be what the DMA reads.  The cache is synced here - the driver does
 // it for the buffers it allocates itself, but not for ours.
+//
+// The cache work wants whole lines: the address and the size have to be
+// multiples of the line, or it refuses and says so.  The P4's line is 128
+// bytes - the JPEG's length is whatever it happens to be.
+#define SHOT_CACHE_LINE 128
+
 static uint8_t* allocShotBuffer(size_t size) {
-  const size_t aligned = (size + 63) & ~(size_t)63;
-  uint8_t* p = (uint8_t*)heap_caps_aligned_alloc(64, aligned,
+  // A line of slack at the end: the cache work rounds the size up to whole
+  // cache lines, and it must not reach past the buffer.
+  const size_t aligned = (size + SHOT_CACHE_LINE * 2) & ~(size_t)(SHOT_CACHE_LINE - 1);
+  uint8_t* p = (uint8_t*)heap_caps_aligned_alloc(SHOT_CACHE_LINE, aligned,
                           MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-  if (!p) p = (uint8_t*)heap_caps_aligned_alloc(64, aligned,
+  if (!p) p = (uint8_t*)heap_caps_aligned_alloc(SHOT_CACHE_LINE, aligned,
                           MALLOC_CAP_DMA | MALLOC_CAP_8BIT);   // internal, if there is room
   return p;
 }
 
 // The CPU wrote the buffer, the DMA reads it: the cache goes to memory.
 static void shotCacheWriteback(void* addr, size_t size) {
-  esp_cache_msync(addr, size, ESP_CACHE_MSYNC_FLAG_DIR_C2M
+  const uintptr_t a = (uintptr_t)addr;
+  const uintptr_t aligned = a & ~(uintptr_t)(SHOT_CACHE_LINE - 1);
+  size_t bytes = (size_t)(a - aligned) + size;
+  bytes = (bytes + SHOT_CACHE_LINE - 1) & ~(size_t)(SHOT_CACHE_LINE - 1);
+  esp_cache_msync((void*)aligned, bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M
                                 | ESP_CACHE_MSYNC_FLAG_INVALIDATE
                                 | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
 }
 
 // The DMA wrote the buffer, the CPU reads it: the cache goes to the DMA.
 static void shotCacheInvalidate(void* addr, size_t size) {
-  esp_cache_msync(addr, size, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+  const uintptr_t a = (uintptr_t)addr;
+  const uintptr_t aligned = a & ~(uintptr_t)(SHOT_CACHE_LINE - 1);
+  size_t bytes = (size_t)(a - aligned) + size;
+  bytes = (bytes + SHOT_CACHE_LINE - 1) & ~(size_t)(SHOT_CACHE_LINE - 1);
+  esp_cache_msync((void*)aligned, bytes, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
 }
 
 // The encoder engine.  It is made once and kept: the decoder is done the
@@ -184,11 +198,12 @@ static bool grabBusPicture(uint8_t* rgb, uint16_t w, uint16_t h) {
   return true;
 }
 
-#if defined(WLEDMM_DISPLAY_MODE)
-// The HDMI framebuffer: what the monitor shows (the canvas, scaled up).
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+// The display's framebuffer: what the screen shows (the canvas, scaled up).
 //
-// The framebuffer is already in the encoder's order (the PPA swaps the
-// red and the blue when it writes there), so it is only copied.
+// The framebuffer is RGB - the first byte of a pixel is the red one - and
+// the encoder wants the opposite order, so the red and the blue are
+// swapped on the way in.
 static bool grabHdmPicture(uint8_t* rgb, uint16_t w, uint16_t h) {
   // The pointer is taken under the bus lock, so the blit cannot swap the
   // front and the back while the pointer is read.  The picture itself is
@@ -206,7 +221,14 @@ static bool grabHdmPicture(uint8_t* rgb, uint16_t w, uint16_t h) {
   // The PPA wrote the framebuffer, so the CPU's cache may still hold an
   // older copy of it.
   shotCacheInvalidate((void*)fb, size);
-  memcpy(rgb, fb, size);
+  uint8_t* p = rgb;
+  const uint8_t* s = fb;
+  for (size_t i = 0; i < size; i += 3) {
+    p[0] = s[2];   // blue first - the encoder's order
+    p[1] = s[1];
+    p[2] = s[0];
+    p += 3; s += 3;
+  }
   return true;
 }
 #endif
@@ -263,10 +285,10 @@ AsyncWebServerResponse* wledScreenshotResponse(uint8_t source, uint16_t& outW, u
 
   uint16_t w = 0;
   uint16_t h = 0;
-#if defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (source == WLED_SHOT_HDMI) {
-    w = wledmm_display_w;
-    h = wledmm_display_h;
+    w = displayWidth();
+    h = displayHeight();
   }
 #endif
   if (!w || !h) {
@@ -287,7 +309,7 @@ AsyncWebServerResponse* wledScreenshotResponse(uint8_t source, uint16_t& outW, u
   }
 
   bool ok = false;
-#if defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (source == WLED_SHOT_HDMI) ok = grabHdmPicture(in, w, h);
   else
 #endif

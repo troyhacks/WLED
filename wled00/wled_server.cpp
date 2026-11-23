@@ -740,7 +740,7 @@ void serveSettingsJS(AsyncWebServerRequest* request) {
 
   // 3. Logic Validation
   byte subPage = request->arg(F("p")).toInt();
-  if (subPage > 10) {
+  if (subPage > 11) {
     strcpy_P(buf, PSTR("alert('Page not implemented.');"));
     request->send(501, "application/javascript", buf);
     free(buf);
@@ -800,13 +800,14 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
     else if (url.indexOf("dmx")  > 0) subPage = 7;
     else if (url.indexOf("um")   > 0) subPage = 8;
     else if (url.indexOf("2D")   > 0) subPage = 10;
+    else if (url.indexOf("display") > 0) subPage = 11;
     else if (url.indexOf("lock") > 0) subPage = 251;
   }
   else if (url.indexOf("/update") >= 0) subPage = 9; // update page, for PIN check
   //else if (url.indexOf("/edit")   >= 0) subPage = 10;
   else subPage = 255; // welcome page
 
-  if (!correctPIN && strlen(settingsPIN) > 0 && (subPage > 0 && subPage < 11)) {
+  if (!correctPIN && strlen(settingsPIN) > 0 && (subPage > 0 && subPage < 12)) {
     originalSubPage = subPage;
     subPage = 252; // require PIN
   }
@@ -833,6 +834,7 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
       case 7: strcpy_P(s, PSTR("DMX")); break;
       case 8: strcpy_P(s, PSTR("Usermods")); break;
       case 10: strcpy_P(s, PSTR("2D")); break;
+      case 11: strcpy_P(s, PSTR("Display")); break;
       case 252: strcpy_P(s, correctPIN ? PSTR("PIN accepted") : PSTR("PIN rejected")); break;
     }
 
@@ -867,6 +869,9 @@ void serveSettings(AsyncWebServerRequest* request, bool post)
     case 9:   response = request->beginResponse_P(200, "text/html", PAGE_update,        PAGE_update_length);        break;
 #ifndef WLED_DISABLE_2D
     case 10:  response = request->beginResponse_P(200, "text/html", PAGE_settings_2D,   PAGE_settings_2D_length);   break;
+#endif
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    case 11:  response = request->beginResponse_P(200, "text/html", PAGE_settings_display, PAGE_settings_display_length); break;
 #endif
     case 251: {
       correctPIN = !strlen(settingsPIN); // lock if a pin is set

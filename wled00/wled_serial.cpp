@@ -1,5 +1,5 @@
 #include "wled.h"
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
 #include "wled_hdmi.h"
 #endif
 #ifdef ARDUINO_ARCH_ESP32
@@ -139,11 +139,11 @@ void handleSerial() {
 
   // if (Serial.available() > 1) { serial_drain(); return; } // I dunno, something was really giving me serial garbage.
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
   // HDMI mode switch: type 'm' to open interactive menu, then enter a number + Enter.
   // Only a board with a bridge has modes to switch - without one the 'm' is
   // left alone so it stays an ordinary command.
-  if (hdmi_bridge_present() && Serial.available() >= 1 && Serial.peek() == 'm') {
+  if (hdmiBridgePresent() && Serial.available() >= 1 && Serial.peek() == 'm') {
     Serial.read();  // consume 'm'
     // drain any trailing newline that arrived alongside the 'm'
     while (Serial.available() && (Serial.peek() == '\r' || Serial.peek() == '\n')) Serial.read();
@@ -162,7 +162,7 @@ void handleSerial() {
     else Serial.println("HDMI: no mode selected.");
     return;
   }
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
   unsigned long startTime = millis();
   while ((Serial.available() > 0) && (millis() - startTime < SERIAL_MAXTIME_MILLIS)) {

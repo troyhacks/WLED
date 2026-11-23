@@ -1,6 +1,8 @@
-// HDMI display subsystem — Olimex ESP32-P4-PC via LT8912B bridge (LT8912B chip).
-// All HDMI-specific code lives here; wled.cpp calls the public functions
-// declared in wled_hdmi.h: hdmi_setup(), hdmi_blit(), hdmi_print_mode_menu(), hdmi_switch_mode().
+// The HDMI bridge backend — the LT8912B from the P4's MIPI-DSI to a monitor.
+//
+// The picture is not drawn here: the display layer (wled_display.cpp) owns
+// that.  This owns the bridge - its modes, the monitor's EDID, and the
+// chip's registers.
 
 #include "wled.h"
 #include "wled_hdmi.h"
@@ -13,7 +15,7 @@
 #include "esp_lcd_lt8912b.h"
 #endif // CONFIG_IDF_TARGET_ESP32P4
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
 
 // ============================================================
 // Aspect ratio constants for HDMI AVI InfoFrame PB2
@@ -139,8 +141,8 @@ static bool hdmi_get_dpi_config(hdmi_mode_t mode, uint8_t dsi_lanes, hdmi_dpi_co
 }
 
 // Runtime display dimensions — set at init, replacing compile-time W/H defines
-uint16_t wledmm_display_w = 0;
-uint16_t wledmm_display_h = 0;
+static uint16_t wledmm_display_w = 0;
+static uint16_t wledmm_display_h = 0;
 
 // Dedicated IDF v5 I2C master bus for the LT8912B HDMI bridge.
 // Created once in hdmi_setup() and left alive for the app lifetime (same
@@ -185,7 +187,7 @@ static void lt8912b_write_reg(esp_lcd_panel_io_handle_t io, uint8_t reg, uint8_t
 // end of the cable".  The display stack is built whether or not a monitor
 // is there, so the Art-Net fallback has to follow the LINK, not the build.
 // ============================================================
-static bool hdmi_monitor_present() {
+bool hdmiBridgeLinkPresent() {
   if (!lt8912b_io_main) return false;
   uint8_t r_c1 = lt8912b_read_reg(lt8912b_io_main, 0xC1);
   return ((r_c1 >> 7) & 1) != 0;
@@ -402,7 +404,7 @@ static void hdmi_edid_init() {
 // Tear down the HDMI display stack (panel → I2C handles → DSI bus).
 // NULLs both FB pointers first so the blit loop stops and the swap can't resurrect a stale pointer.
 // ============================================================
-static void hdmi_display_deinit() {
+void hdmiBridgeDeinit() {
   // Take busMutex to wait for any in-progress blit (including draw_bitmap) to fully complete.
   // This ensures we know exactly when the last GDMA-backed vsync flip was issued.
   xSemaphoreTake(busMutex, pdMS_TO_TICKS(500));
@@ -590,7 +592,7 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
       // the rebuild happens once, and if the link still is not up the boot
       // continues without a display.
       USER_PRINTLN(" TIMEOUT — rebuilding the display stack to recover from cold-boot race");
-      hdmi_display_deinit();
+      hdmiBridgeDeinit();
       vTaskDelay(pdMS_TO_TICKS(100));
       hdmi_display_init_timing(timing, label, false);
       return;
@@ -608,7 +610,7 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   // This used to be latched on at the top of this function, which meant the
   // Art-Net fallback could never happen - a board with no monitor sat
   // silent forever.  It follows the link from here on.
-  busNetworkDummyMode = hdmi_monitor_present();
+  busNetworkDummyMode = hdmiBridgeLinkPresent();
   USER_PRINTF("HDMI: %s — Art-Net output %s\n",
       busNetworkDummyMode ? "monitor connected" : "no monitor (HPD=0)",
       busNetworkDummyMode ? "held back (HDMI display)" : "to the network");
@@ -638,6 +640,30 @@ static void hdmi_display_init(int mode) {
   hdmi_display_init_timing(timing, hdmi_mode_names[mode]);
   hdmi_current_mode = mode;
 }
+
+// The modes the bridge can drive.
+int hdmiBridgeModeCount() {
+  return (int)HDMI_MODE_COUNT;
+}
+
+const char* hdmiBridgeModeName(int mode) {
+  if (mode < 0 || mode >= (int)HDMI_MODE_COUNT) return "";
+  return hdmi_mode_names[mode];
+}
+
+int hdmiBridgeModeIndex(const char* name) {
+  if (!name || !name[0]) return -1;
+  for (int i = 0; i < (int)HDMI_MODE_COUNT; i++)
+    if (strcmp(hdmi_mode_names[i], name) == 0) return i;
+  return -1;
+}
+
+int hdmiBridgeCurrentMode() {
+  return hdmi_current_mode;
+}
+
+uint16_t hdmiBridgeWidth()  { return wledmm_display_w; }
+uint16_t hdmiBridgeHeight() { return wledmm_display_h; }
 
 // ============================================================
 // hdmi_edid_best_mode() — pick the best mode from HDMI_MODE_LIST based on EDID.
@@ -692,11 +718,6 @@ static int hdmi_edid_best_mode() {
 }
 
 // ============================================================
-// hdmi_setup() — boot-time init. Use 'm' in serial console to switch modes at runtime.
-// Call once from WLED::setup().
-// ============================================================
-
-// ============================================================
 // Is there an LT8912B bridge on the bus at all?
 //
 // The bridge is optional hardware: some boards have it soldered on, some get
@@ -708,7 +729,7 @@ static int hdmi_edid_best_mode() {
 // The bridge answers at 0x48 (main register space); 0x49/0x4A are the other
 // register spaces of the same chip and 0x50 is its DDC/EDID proxy.
 // ============================================================
-bool hdmi_bridge_present() {
+bool hdmiBridgePresent() {
   // The answer is asked once and kept: the bus handle lives on, and the
   // decision (who owns LDO channel 3, whether a display stack is built at
   // all) must not change halfway through the boot.
@@ -730,42 +751,32 @@ bool hdmi_bridge_present() {
   return answered == 1;
 }
 
-void hdmi_setup() {
-  // The bridge is optional: ask the bus before we take the DSI PHY rail or
-  // build the display stack.  Without a bridge there is nothing to drive the
-  // MIPI lanes, and the board has to carry on as a plain LED board.
-  if (!hdmi_bridge_present()) return;
+// ============================================================
+// hdmiBridgeInit() — bring the bridge up on a mode.
+//
+// The EDID is read once the link is up, and the monitor's own preferred
+// timing wins over the mode that was asked for: the monitor knows what it
+// is, and the board does not.
+// ============================================================
+bool hdmiBridgeInit(int mode) {
+  if (!hdmiBridgePresent()) return false;
+  if (mode < 0 || mode >= (int)HDMI_MODE_COUNT) return false;
 
-  // Power the MIPI DSI PHY first — chan_id=3 at 2.5V per ESP32-P4 datasheet.
-  // Acquired once on boot and left on for the app lifetime (the IDF blocks
-  // re-acquiring an adjustable channel that's already held, so mode switches
-  // can't take/release this).  wled.cpp's chan_id=3 acquire (3.3V for GPIO>36)
-  // is skipped when a bridge is present.
-  static bool ldo_acquired = false;
-  if (!ldo_acquired) {
-    esp_ldo_channel_config_t ldo_cfg = { .chan_id = 3, .voltage_mv = 2500 };
-    esp_ldo_channel_handle_t ldo = NULL;
-    if (esp_ldo_acquire_channel(&ldo_cfg, &ldo) == ESP_OK && ldo) {
-      ldo_acquired = true;
-      USER_PRINTLN("HDMI: MIPI DSI PHY powered (LDO chan 3 @ 2.5V)");
-    } else {
-      USER_PRINTLN("HDMI: failed to acquire MIPI DSI PHY LDO (chan 3) — continuing without explicit power");
-    }
+  Serial.printf("HDMI: starting mode %d: %s (type 'm' to switch)\n", mode, hdmi_mode_names[mode]);
+  hdmi_display_init(mode);
+  if (!panel_handle) return false;
+
+  // After the first init the EDID has been read - check if a better-matching mode exists.
+  const int best = hdmi_edid_best_mode();
+  if (best >= 0 && best != mode) {
+    Serial.printf("HDMI: EDID recommends mode %d: %s - switching\n", best, hdmi_mode_names[best]);
+    hdmiBridgeDeinit();
+    hdmi_display_init(best);
+  } else if (best == mode) {
+    Serial.printf("HDMI: EDID confirms default mode %d: %s\n", mode, hdmi_mode_names[mode]);
   }
-
-  int selected = (int)WLEDMM_DISPLAY_MODE;
-  Serial.printf("HDMI: starting mode %d: %s (type 'm' to switch)\n", selected, hdmi_mode_names[selected]);
-  hdmi_display_init(selected);
-
-  // After the first init the EDID has been read — check if a better-matching mode exists.
-  int best = hdmi_edid_best_mode();
-  if (best >= 0 && best != selected) {
-    Serial.printf("HDMI: EDID recommends mode %d: %s — switching\n", best, hdmi_mode_names[best]);
-    hdmi_switch_mode(best);
-  } else if (best == selected) {
-    Serial.printf("HDMI: EDID confirms default mode %d: %s\n", selected, hdmi_mode_names[selected]);
-  }
-  // best == -1: no EDID / no matching mode — stay on default
+  // best == -1: no EDID / no matching mode - stay on the one we picked
+  return panel_handle != NULL;
 }
 
 // ============================================================
@@ -788,111 +799,35 @@ void hdmi_switch_mode(int mode) {
   }
   // Without a bridge there is nothing to switch - building the stack would
   // take the ESP_ERROR_CHECK on the panel init down with it.
-  if (!hdmi_bridge_present()) {
+  if (!hdmiBridgePresent()) {
     Serial.println("HDMI: no LT8912B bridge on the I2C bus - nothing to switch.");
     return;
   }
   Serial.printf("HDMI: switching to %d: %s\n", mode, hdmi_mode_names[mode]);
-  hdmi_display_deinit();
+  hdmiBridgeDeinit();
   hdmi_display_init(mode);
 }
 
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
+#endif // CONFIG_IDF_TARGET_ESP32P4
 
 // ============================================================
-// hdmi_blit() — PPA scale-rotate-mirror: LED bus buffer → display framebuffer.
-// Call from WLED::loop() every frame.
+// hdmiBridgePollLink() — the Art-Net output follows the link.
+//
+// Unplugging the monitor starts the Art-Net output; plugging it back in
+// stops it again.  The picture is not drawn here - the display layer does
+// that - but this is the bridge's business, because the bridge is what
+// knows whether there is a monitor at the other end.
 // ============================================================
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
-void hdmi_blit() {
-  // ── Follow the link, not the build ──────────────────────────────────────
-  // Polled before the early-out below so it keeps running even when there
-  // is no framebuffer to blit into.  Unplugging the monitor starts the
-  // Art-Net output; plugging it back in stops it again.
+void hdmiBridgePollLink() {
   static uint32_t link_poll_ms = 0;
-  uint32_t link_t_ms = millis();
-  if (lt8912b_io_main && link_t_ms - link_poll_ms >= 5000) {
-    link_poll_ms = link_t_ms;
-    bool present = hdmi_monitor_present();
-    if (present != busNetworkDummyMode) {
-      USER_PRINTF("HDMI: monitor %s — Art-Net output %s\n",
-          present ? "connected" : "disconnected",
-          present ? "held back (HDMI display)" : "to the network");
-    }
-    busNetworkDummyMode = present;
+  const uint32_t link_t_ms = millis();
+  if (!lt8912b_io_main || link_t_ms - link_poll_ms < 5000) return;
+  link_poll_ms = link_t_ms;
+  const bool present = hdmiBridgeLinkPresent();
+  if (present != busNetworkDummyMode) {
+    USER_PRINTF("HDMI: monitor %s - Art-Net output %s\n",
+        present ? "connected" : "disconnected",
+        present ? "held back (HDMI display)" : "to the network");
   }
-
-  // Capture globals into locals immediately — deinit may NULL the globals at any time.
-  uint8_t* back_fb = display_framebuffer;
-  esp_lcd_panel_handle_t ph = panel_handle;
-  if (!back_fb || !ph) return;
-
-  static uint32_t last_blit_us = 0;
-  uint32_t now_us = esp_timer_get_time();
-  if (now_us - last_blit_us >= 16667) {  // ~60fps, match the panel refresh
-    if (xSemaphoreTake(busMutex, 0)) {
-      last_blit_us = now_us;  // stamp on success, so a contended attempt doesn't burn the window
-      Bus* bus = busses.getBus(0);
-      uint8_t* busPixelData = bus ? bus->getPixelData() : nullptr;
-      if (busPixelData) {
-        const int ledW = SEGMENT.maxWidth  ? SEGMENT.maxWidth  : WLEDMM_DISPLAY_W;
-        const int ledH = SEGMENT.maxHeight ? SEGMENT.maxHeight : WLEDMM_DISPLAY_H;
-        float scale  = min((float)WLEDMM_DISPLAY_W / ledW, (float)WLEDMM_DISPLAY_H / ledH);
-        int scaledW  = (int)(ledW * scale);
-        int scaledH  = (int)(ledH * scale);
-
-        if (scale > 0.0f && scale <= 16.0f && scaledW > 0 && scaledH > 0) {
-          static uint32_t blit_ok = 0, blit_fail = 0, blit_log_ms = 0;
-          const size_t fb_size = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
-
-          ppa_srm_oper_config_t srm_cfg = {};
-          srm_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
-          srm_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB888;
-          srm_cfg.in.buffer          = busPixelData;
-          srm_cfg.in.pic_w           = ledW;
-          srm_cfg.in.pic_h           = ledH;
-          srm_cfg.in.block_w         = ledW;
-          srm_cfg.in.block_h         = ledH;
-          srm_cfg.out.buffer         = back_fb;
-          srm_cfg.out.buffer_size    = fb_size;
-          srm_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
-          srm_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
-          srm_cfg.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledW) / 2;
-          srm_cfg.out.block_offset_y = (WLEDMM_DISPLAY_H - scaledH) / 2;
-          srm_cfg.scale_x            = scale;
-          srm_cfg.scale_y            = scale;
-          srm_cfg.rotation_angle     = PPA_SRM_ROTATION_ANGLE_0;
-          srm_cfg.rgb_swap           = true;
-          srm_cfg.byte_swap          = false;
-          srm_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
-
-          if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
-            blit_ok++;
-            // Present the back buffer at next vsync, then swap so next blit writes to the old front.
-            esp_lcd_panel_draw_bitmap(ph, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, back_fb);
-            uint8_t* tmp          = display_front_framebuffer;
-            display_front_framebuffer = back_fb;
-            display_framebuffer       = tmp;
-          } else {
-            blit_fail++;
-          }
-
-          // Diagnostic: every 5s — always log if HPD=0 (no monitor), silent when HPD=1
-          uint32_t now_ms = millis();
-          if (now_ms - blit_log_ms >= 5000) {
-            blit_log_ms = now_ms;
-            uint8_t r_c1 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xC1) : 0;
-            bool hpd = (r_c1 >> 7) & 1;
-            if (!hpd) {
-              USER_PRINTF("HDMI: no monitor connected (HPD=0) blit ok=%u fail=%u\n", blit_ok, blit_fail);
-            }
-            blit_ok = blit_fail = 0;
-          }
-        }
-      }
-      xSemaphoreGive(busMutex);
-    }
-  }
-
+  busNetworkDummyMode = present;
 }
-#endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE && CONFIG_SOC_PPA_SUPPORTED

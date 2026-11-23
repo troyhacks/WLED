@@ -407,6 +407,34 @@ WLED_GLOBAL bool update_screen_background _INIT(true);
 // WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
+
+// ── The display's settings ───────────────────────────────────────────────────
+// What the screen shows, and which panel it is on.  These live here and not
+// in the display layer so that cfg.cpp can read and write them without
+// knowing anything about panels.
+//
+// The panel's name is the name in the table (wled_display_panels.h); an
+// empty name means "work it out from the bus".  The HDMI mode's name is the
+// name of one of the bridge's modes - a bridge shows a monitor, and the
+// monitor has many sizes, so the mode is picked separately from the panel.
+#define DISPLAY_VIEW_ONLY       0   // the LED picture, the whole frame
+#define DISPLAY_VIEW_INTERFACE  1   // the on-screen interface, and the LED picture in it
+#define DISPLAY_ROT_0           0   // the picture's rotations, in degrees
+#define DISPLAY_ROT_90          90
+#define DISPLAY_ROT_180         180
+#define DISPLAY_ROT_270         270
+struct display_config_t {
+  char    panel[24];      // the panel's name; "" = work it out
+  char    hdmi_mode[24];  // the HDMI mode's name
+  uint8_t view;           // DISPLAY_VIEW_ONLY / DISPLAY_VIEW_INTERFACE
+  uint8_t rotation;       // 0, 90, 180 or 270
+  uint8_t auto_detect;    // 1 = let the board look at the bus
+  uint8_t buttons;        // the on-screen buttons
+  uint8_t button_cols;    // how many columns they are in
+  int8_t  reset_gpio;     // the panel's reset line, -1 = none
+  int8_t  backlight_gpio; // the panel's backlight, -1 = none
+};
+WLED_GLOBAL display_config_t displayConfig;
 #endif
 
 #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)

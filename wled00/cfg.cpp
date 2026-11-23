@@ -606,6 +606,22 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
     needsSave = !usermods.readFromConfig(usermods_settings);
   }
 
+  //WLEDMM the display: which panel, and what it shows
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  JsonObject display = doc[F("display")];
+  if (!display.isNull()) {
+    getStringFromJson(displayConfig.panel,     display[F("p")],   sizeof(displayConfig.panel));
+    getStringFromJson(displayConfig.hdmi_mode, display[F("m")],   sizeof(displayConfig.hdmi_mode));
+    displayConfig.view            = display[F("i")]   | displayConfig.view;
+    displayConfig.rotation        = display[F("r")]   | displayConfig.rotation;
+    displayConfig.auto_detect     = display[F("a")]   | displayConfig.auto_detect;
+    displayConfig.buttons         = display[F("b")]   | displayConfig.buttons;
+    displayConfig.button_cols     = display[F("c")]   | displayConfig.button_cols;
+    displayConfig.reset_gpio      = display[F("rst")] | displayConfig.reset_gpio;
+    displayConfig.backlight_gpio  = display[F("bl")]  | displayConfig.backlight_gpio;
+  }
+  #endif
+
   // suspendStripService = false; // WLEDMM release lock
 
   if (fromFS) return needsSave;
@@ -1037,6 +1053,20 @@ void serializeConfig() {
 
   JsonObject usermods_settings = doc.createNestedObject("um");
   usermods.addToConfig(usermods_settings);
+
+  //WLEDMM the display: which panel, and what it shows
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  JsonObject display = doc.createNestedObject(F("display"));
+  display[F("p")]   = displayConfig.panel;
+  display[F("m")]   = displayConfig.hdmi_mode;
+  display[F("i")]   = displayConfig.view;
+  display[F("r")]   = displayConfig.rotation;
+  display[F("a")]   = displayConfig.auto_detect;
+  display[F("b")]   = displayConfig.buttons;
+  display[F("c")]   = displayConfig.button_cols;
+  display[F("rst")] = displayConfig.reset_gpio;
+  display[F("bl")]  = displayConfig.backlight_gpio;
+  #endif
 
   //WLEDMM add USER_PRINT
   DEBUG_PRINTF("serializeConfig\n");

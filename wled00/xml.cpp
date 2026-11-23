@@ -1,5 +1,10 @@
 #include "wled.h"
 #include "wled_ethernet.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "wled_display.h"
+#include "wled_display_panels.h"
+#include "wled_hdmi.h"
+#endif
 #ifdef USERMOD_ARTNETMAP
 #include "../usermods/usermod_v2_artnetmap/usermod_v2_artnetmap.h"
 #endif
@@ -302,7 +307,7 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
   obuf = dest;
   olen = 0;
 
-  if (subPage <0 || subPage >10) return;
+  if (subPage <0 || subPage >11) return;
 
   if (subPage == 0)
   {
@@ -311,6 +316,9 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
   #endif
   #ifdef WLED_ENABLE_DMX // include only if DMX is enabled
     oappend(PSTR("gId('dmxbtn').style.display='';"));
+  #endif
+  #if defined(CONFIG_IDF_TARGET_ESP32P4) // the display is only on the P4
+    oappend(PSTR("gId('displaybtn').style.display='';"));
   #endif
   }
 
@@ -885,4 +893,42 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     oappend(SET_F("gId(\"somp\").remove(1);")); // remove 2D option from dropdown
     #endif
   }
+
+  //WLEDMM the display: the panels the board knows about, the HDMI modes,
+  //and the settings themselves.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (subPage == 11) // the display
+  {
+    // The dropdowns are built HERE, not in the page: the page and the board
+    // can then never disagree about what a panel is called, and the value
+    // that is set below has an option to land on.
+    oappend(SET_F("var dp=document.getElementById('DP');dp.innerHTML=\"\";"));
+    oappend(SET_F("var o=document.createElement('option');o.value=\"\";o.text=\"Auto - work it out from the bus\";dp.appendChild(o);"));
+    for (uint8_t i = 0; i < dsiPanelCount(); i++) {
+      oappend(SET_F("o=document.createElement('option');o.value=\""));
+      oappend(dsiPanelName(i));
+      oappend(SET_F("\";o.text=\""));
+      oappend(dsiPanelName(i));
+      oappend(SET_F("\";dp.appendChild(o);"));
+    }
+    oappend(SET_F("var dm=document.getElementById('DM');dm.innerHTML=\"\";"));
+    for (int i = 0; i < hdmiBridgeModeCount(); i++) {
+      oappend(SET_F("o=document.createElement('option');o.value=\""));
+      oappend(hdmiBridgeModeName(i));
+      oappend(SET_F("\";o.text=\""));
+      oappend(hdmiBridgeModeName(i));
+      oappend(SET_F("\";dm.appendChild(o);"));
+    }
+
+    // The settings.
+    sappends('s', SET_F("DP"), displayConfig.panel);
+    sappends('s', SET_F("DM"), displayConfig.hdmi_mode);
+    sappend('v', SET_F("DV"), displayConfig.view);
+    sappend('v', SET_F("DR"), displayConfig.rotation);
+    sappend('v', SET_F("DB"), displayConfig.buttons);
+    sappend('v', SET_F("DC"), displayConfig.button_cols);
+    sappend('v', SET_F("DG"), displayConfig.reset_gpio);
+    sappend('v', SET_F("DBL"), displayConfig.backlight_gpio);
+  }
+  #endif
 }

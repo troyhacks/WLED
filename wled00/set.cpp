@@ -2,6 +2,9 @@
 #include <Wire.h>
 
 #include "wled.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "wled_display.h"
+#endif
 
 /*
  * Receives client input
@@ -18,8 +21,8 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     return;
   }
 
-  //0: menu 1: wifi 2: leds 3: ui 4: sync 5: time 6: sec 7: DMX 8: usermods 9: N/A 10: 2D
-  if (subPage <1 || subPage >10 || !correctPIN) return;
+  //0: menu 1: wifi 2: leds 3: ui 4: sync 5: time 6: sec 7: DMX 8: usermods 9: update 10: 2D 11: display
+  if (subPage <1 || subPage >11 || !correctPIN) return;
 
   // WLEDMM: before changing bus, ledmap, strip or 2D settings, make sure our strip is _not_ servicing effects in parallel
   if ((subPage == 2) || (subPage == 3) || (subPage == 10)) {
@@ -788,6 +791,25 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
   if ((subPage == 2) || (subPage == 3) || (subPage == 10)) {
     // suspendStripService = false; // WLEDMM release lock
   }
+
+  //WLEDMM the display: which panel, and what it shows.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (subPage == 11)
+  {
+    const String panel = request->arg(F("DP"));
+    const String mode  = request->arg(F("DM"));
+    displaySetPanel(panel.c_str());
+    displaySetHdmiMode(mode.c_str());
+    displaySetView(request->arg(F("DV")).toInt() ? DISPLAY_VIEW_INTERFACE : DISPLAY_VIEW_ONLY);
+    displaySetRotation(request->arg(F("DR")).toInt());
+    displaySetButtons(request->arg(F("DB")).toInt(), request->arg(F("DC")).toInt());
+    displayConfig.reset_gpio     = request->arg(F("DG")).toInt();
+    displayConfig.backlight_gpio = request->arg(F("DBL")).toInt();
+    // The panel is torn down and brought up again off the hot path - the
+    // bridge waits for the monitor, and that can take seconds.
+    displayReconfigure();
+  }
+  #endif
 
   lastEditTime = millis();
   if (subPage != 2 && !doReboot) doSerializeConfig = true; //serializeConfig(); //do not save if factory reset or LED settings (which are saved after LED re-init)

@@ -53,7 +53,20 @@
 #include "hidctl_default_profile.h"
 #include "hid_usb_host.h"
 #include "hid_dwc_probe.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "../../wled00/wled_display.h"
+#endif
 #include <LovyanGFX.hpp>
+
+// How a mouse's movement becomes movement on the screen.
+//
+// The mouse counts in "mickeys" - a hundredth of an inch - and a pixel is
+// about a hundredth of an inch on a normal display, so a mouse at 1000
+// dots an inch moves about ten mickeys per pixel.  The mice that report
+// less are the ones that feel slow, and this is the knob for that.
+#define POINTER_MICKEYS_PER_PIXEL 8
+// How far the arrow keys move the pointer.
+#define POINTER_KEY_STEP_PIXELS   12
 // The OpenDeck-family protocol: the ASCII "CRT" commands and the input
 // report's message IDs. A port of `ambiso/mirajazz` (the crate the
 // OpenDeck plugin links against) and `ambiso/opendeck-akp05`.
@@ -113,6 +126,16 @@ class HidctlUsermod : public Usermod {
   // What the surfaces SHARE is the point of it: the page, the running
   // preset, the blinks and the picture cache are not per surface, so the
   // F1's encoder turns the page and the deck shows it.
+  //
+  // A MOUSE is not a surface. It has no profile and no page: it is
+  // pointed at the screen, and the screen is not a USB device. Its
+  // position lives here, in screen pixels.
+  int16_t pointer_x = 0;
+  int16_t pointer_y = 0;
+  bool    pointer_down = false;
+  bool    pointer_seen  = false;   // a mouse has been seen at all
+  uint8_t keyboard_last[6] = {0};  // the keys that were down last time
+
   struct HidSurface {
     bool     in_use    = false;  // a device is on it right now
     bool     bound     = false;  // it has been given a device
@@ -935,7 +958,16 @@ class HidctlUsermod : public Usermod {
     loadProfiles();
     uint8_t idx = matchDevice(vid, pid);
     if (idx == 0xFF) {
-      USER_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — no profile wants it\n", (unsigned)device, vid, pid);
+      // A mouse or a keyboard has no profile - it is pointed at the
+      // screen, not driven by WLED's actions - and the host layer has
+      // already recognised it as one.
+      const uint8_t kind = hid_usb_device_kind(device);
+      if (kind == HID_KIND_POINTER || kind == HID_KIND_KEYBOARD) {
+        USER_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — a %s, for the screen\n",
+                    (unsigned)device, vid, pid, (kind == HID_KIND_POINTER) ? "mouse" : "keyboard");
+      } else {
+        USER_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — no profile wants it\n", (unsigned)device, vid, pid);
+      }
       return;
     }
     // The surface for this device. A device that has been here before
@@ -1866,7 +1898,109 @@ class HidctlUsermod : public Usermod {
   // -------------------------------------------------------------------------
   //
   // Its input is one event per report, with the event in a message ID, and
-  // its output is the ASCII "CRT" command protocol.
+  // ── A mouse, pointed at the screen ───────────────────────────────────────
+  //
+  // The report is the boot mouse's: the buttons in the first byte, then
+  // the movement - X and then Y, both signed bytes - and then, if the
+  // mouse has a wheel, the wheel.  The movement is in "mickeys", which
+  // are not pixels: a mouse at 1000 dots an inch moves about ten of them
+  // for every pixel, and the mice that report less are worse at it.
+  //
+  // The click goes through the same hit test as a finger on the touch
+  // panel, so a button on the screen behaves the same either way.
+  void handlePointerReport(const uint8_t* data, uint16_t len) {
+    if (len < 3) return;
+    const int16_t dx = (int16_t)(int8_t)data[1];
+    const int16_t dy = (int16_t)(int8_t)data[2];
+    const uint8_t buttons = data[0];
+    const bool down = (buttons & 0x01) != 0;   // the left button
+
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    const int scrW = displayWidth();
+    const int scrH = displayHeight();
+    if (scrW <= 0 || scrH <= 0) return;        // no screen to point at
+
+    if (!pointer_seen) {
+      // The first movement: start in the middle of the screen, so the
+      // pointer is not stuck in the corner.
+      pointer_seen = true;
+      pointer_x = (int16_t)(scrW / 2);
+      pointer_y = (int16_t)(scrH / 2);
+      displayPointerMove(pointer_x, pointer_y);
+    }
+
+    if (dx || dy) {
+      pointer_x = (int16_t)(pointer_x + dx * POINTER_MICKEYS_PER_PIXEL);
+      pointer_y = (int16_t)(pointer_y + dy * POINTER_MICKEYS_PER_PIXEL);
+      if (pointer_x < 0) pointer_x = 0;
+      if (pointer_y < 0) pointer_y = 0;
+      if (pointer_x > scrW - 1) pointer_x = (int16_t)(scrW - 1);
+      if (pointer_y > scrH - 1) pointer_y = (int16_t)(scrH - 1);
+      displayPointerMove(pointer_x, pointer_y);
+    }
+    if (down != pointer_down) {
+      pointer_down = down;
+      displayPointerButton(down);
+    }
+    #else
+    (void)data; (void)len; (void)dx; (void)dy; (void)buttons; (void)down;
+    #endif
+  }
+
+  // ── A keyboard ───────────────────────────────────────────────────────────
+  //
+  // The boot keyboard's report: the modifiers in the first byte, then up
+  // to six key codes (0 = not pressed).  A screen needs very little of a
+  // keyboard: the arrows move the pointer and ENTER clicks, which is
+  // enough to work the on-screen buttons.
+  void handleKeyboardReport(const uint8_t* data, uint16_t len) {
+    if (len < 2) return;
+    const uint8_t keys[6] = {0x4C, 0x4D, 0x4B, 0x4F, 0x28, 0x00}; // left, down, up, right, enter, -
+    uint8_t now[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    for (uint8_t i = 0; i < 6 && (i + 1) < len; i++) now[i] = data[i + 1];
+
+    #if defined(CONFIG_IDF_TARGET_ESP32P4)
+    const int scrW = displayWidth();
+    const int scrH = displayHeight();
+    if (scrW <= 0 || scrH <= 0) return;
+    if (!pointer_seen) {
+      pointer_seen = true;
+      pointer_x = (int16_t)(scrW / 2);
+      pointer_y = (int16_t)(scrH / 2);
+      displayPointerMove(pointer_x, pointer_y);
+    }
+    const int step = POINTER_KEY_STEP_PIXELS;
+    for (uint8_t i = 0; i < 5; i++) {
+      // A rising edge: the key was not down and is now.
+      if (now[i] && now[i] != keyboard_last[i]) {
+        switch (i) {
+          case 0: pointer_x = (int16_t)(pointer_x - step); break;  // left
+          case 1: pointer_y = (int16_t)(pointer_y + step); break;  // down
+          case 2: pointer_y = (int16_t)(pointer_y - step); break;  // up
+          case 3: pointer_x = (int16_t)(pointer_x + step); break;  // right
+          case 4:                                          // enter: a click
+            if (!pointer_down) { pointer_down = true;  displayPointerButton(true); }
+            else              { pointer_down = false; displayPointerButton(false); }
+            break;
+        }
+        if (i < 4) {
+          if (pointer_x < 0) pointer_x = 0;
+          if (pointer_y < 0) pointer_y = 0;
+          if (pointer_x > scrW - 1) pointer_x = (int16_t)(scrW - 1);
+          if (pointer_y > scrH - 1) pointer_y = (int16_t)(scrH - 1);
+          displayPointerMove(pointer_x, pointer_y);
+        }
+      }
+      keyboard_last[i] = now[i];
+    }
+    #else
+    (void)keys;
+    #endif
+  }
+
+  // ── An OpenDeck-family deck ───────────────────────────────────────────────
+  //
+  // Its output is the ASCII "CRT" command protocol.
   //
   // The report is the raw USB packet, so it still carries the report ID
   // (0x00) in front. The reference reads it through hidraw, which strips
@@ -3359,6 +3493,20 @@ class HidctlUsermod : public Usermod {
   // Decode a raw report for the active profile and act on it.
   void handleIncomingReport(uint8_t device, const uint8_t* data, uint16_t len) {
     if (!enabled || !profiles) return;
+
+    // A mouse or a keyboard is not a control surface: it has no profile,
+    // and it is pointed at the screen rather than at WLED's actions.  It
+    // is handled here, before the surface lookup, because there is no
+    // surface for it.
+    if (hid_usb_device_kind(device) == HID_KIND_POINTER) {
+      handlePointerReport(data, len);
+      return;
+    }
+    if (hid_usb_device_kind(device) == HID_KIND_KEYBOARD) {
+      handleKeyboardReport(data, len);
+      return;
+    }
+
     // Which surface is this report from? The board has a hub, so more than
     // one device can be on it, and each of them has its own profile.
     const uint8_t s = surfaceForDevice(device);

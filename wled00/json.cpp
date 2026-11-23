@@ -1,6 +1,9 @@
 #include "wled.h"
 #include "ImageCacheManager.h"
 #include "event_log.h"  // WLEDMM v3: /json/eventlog endpoint
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "wled_display.h"
+#endif
 #if defined(SOC_USB_OTG_SUPPORTED)
 #include "esp_vfs_fat.h"
 #endif
@@ -521,6 +524,27 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
     }
   }
 
+  //WLEDMM the display: which panel, what it shows, and how it is turned.
+  //A subscription ({"display":true}) never reaches here - the websocket
+  //takes it before the state does.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  JsonVariant dispVar = root[F("display")];
+  if (dispVar.is<JsonObject>())
+  {
+    JsonObject disp = dispVar.as<JsonObject>();
+    bool changed = false;
+    if (disp.containsKey(F("panel"))) { displaySetPanel(disp[F("panel")] | ""); changed = true; }
+    if (disp.containsKey(F("mode")))  { displaySetHdmiMode(disp[F("mode")] | ""); changed = true; }
+    if (disp.containsKey(F("iface"))) { displaySetInterface(disp[F("iface")].as<bool>()); changed = true; }
+    if (disp.containsKey(F("rot")))   { displaySetRotation(disp[F("rot")] | 0); changed = true; }
+    if (disp.containsKey(F("buttons"))) {
+      displaySetButtons(disp[F("buttons")] | 32, disp[F("cols")] | 8);
+      changed = true;
+    }
+    if (changed) doSerializeConfig = true;   // the settings are kept
+  }
+  #endif
+
   int it = 0;
   JsonVariant segVar = root["seg"];
   if (segVar.is<JsonObject>())
@@ -953,6 +977,14 @@ void serializeInfo(JsonObject root)
     JsonObject matrix = leds.createNestedObject("matrix");
     matrix["w"] = Segment::maxWidth;
     matrix["h"] = Segment::maxHeight;
+  }
+  #endif
+
+  //WLEDMM the display: what is attached, and what it is showing.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  {
+    JsonObject display = root.createNestedObject(F("display"));
+    displayStatusJson(display);
   }
   #endif
 
