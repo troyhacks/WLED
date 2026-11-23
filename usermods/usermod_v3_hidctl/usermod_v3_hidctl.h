@@ -3129,19 +3129,18 @@ class HidctlUsermod : public Usermod {
     // A copy of the last picture, so it can be looked at: the deck's
     // screens are the only place it shows up otherwise.
     //
-    // Every tenth one. The filesystem here is on the SD card, and writing
-    // a few kilobytes to it ten times a second is most of the time a
-    // picture takes to make.
-    {
-      static uint16_t previewCount = 0;
-      if ((previewCount++ % 10) == 0) {
-        File f = WLED_FS.open("/hidctl-preview.jpg", "w");
-        if (f) {
-          f.write(jpeg, jpeg_len);
-          f.close();
-        }
-      }
-    }
+    // OFF. The filesystem here is on the SD card, and a write to it blocks
+    // everything behind it - and a picture is made ten times a second.
+    // Uncomment it when the picture is wanted and the board can afford
+    // to stop for a moment.
+    //
+    // {
+    //   File f = WLED_FS.open("/hidctl-preview.jpg", "w");
+    //   if (f) {
+    //     f.write(jpeg, jpeg_len);
+    //     f.close();
+    //   }
+    // }
     const uint32_t t_prev = millis();
 
     // Where the time went, once a second. The console is read by a
