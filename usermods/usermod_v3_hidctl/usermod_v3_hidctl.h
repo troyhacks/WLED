@@ -101,15 +101,122 @@ class HidctlUsermod : public Usermod {
   HidctlProfile* profiles = nullptr;
   uint8_t        profile_count = 0;
 
-  // The profile currently bound to the connected device (index into
-  // `profiles`), or 0xFF.
-  uint8_t active_profile = 0xFF;
+  // -------------------------------------------------------------------------
+  // The connected surfaces
+  // -------------------------------------------------------------------------
+  //
+  // The board has a hub, so more than one control surface can be on it at
+  // once: the deck on one port and the F1 on another, or the F1 plugged
+  // into the deck's own hub. Each of them is a surface: the device it is
+  // on, the profile it is bound to, and the state that belongs to it.
+  //
+  // What the surfaces SHARE is the point of it: the page, the running
+  // preset, the blinks and the picture cache are not per surface, so the
+  // F1's encoder turns the page and the deck shows it.
+  struct HidSurface {
+    bool     in_use    = false;  // a device is on it right now
+    bool     bound     = false;  // it has been given a device
+    uint8_t  device    = 0;      // the host layer's device
+    uint8_t  profile   = 0xFF;   // the profile it is bound to
+    bool     opendeck  = false;  // it speaks the deck's command protocol
+    // Its own output buffer. The F1's LED report is 81 bytes, and it
+    // belongs to the F1: two surfaces must not share one.
+    uint8_t  out[HIDCTL_MAX_LED] = {};
+    uint16_t out_len     = 0;
+    bool     out_pending = false;
+    // The decoded state of THIS device.
+    //
+    //   control_value      the raw value that arrived
+    //   control_taken      the control has crossed its parameter's value
+    //   control_applied    the raw value last driven into WLED - the
+    //                      baseline the deadband is measured against
+    //   control_mapped     the 0..255 value that produced, so an unchanged
+    //                      result is not driven again
+    //   control_pending    a newer value is waiting for the throttle
+    //   control_has_applied the baseline is meaningful
+    //   control_waited     the takeover wait has already been said once
+    //   control_applied_ms when it was last driven
+    //   control_log_ms     when it was last written to the console
+    uint16_t control_value[HIDCTL_MAX_CONTROLS] = {0};
+    uint8_t  control_taken[HIDCTL_MAX_CONTROLS]  = {0};
+    uint16_t control_applied[HIDCTL_MAX_CONTROLS]     = {0};
+    uint8_t  control_mapped[HIDCTL_MAX_CONTROLS]      = {0};
+    bool     control_has_applied[HIDCTL_MAX_CONTROLS] = {false};
+    bool     control_pending[HIDCTL_MAX_CONTROLS]      = {false};
+    bool     control_waited[HIDCTL_MAX_CONTROLS]       = {false};
+    uint32_t control_applied_ms[HIDCTL_MAX_CONTROLS]   = {0};
+    uint32_t control_log_ms[HIDCTL_MAX_CONTROLS]      = {0};
+    uint32_t buttons = 0;
+    uint32_t modifier_mask = 0;
+    // The page this device is on. The page is as many slots as the device
+    // has screens, so the F1's pages are sixteen presets and the deck's are
+    // ten - and each device browses its own pages.
+    uint8_t  page = 1;
+    // When the page was last shown on the display, and until when.
+    uint32_t show_page_until = 0;
+    // The wheel's position belongs to the connection: a device that is
+    // unplugged and plugged back in starts again from nothing.
+    uint8_t  wheelLast = 0;
+    bool     wheelSeen = false;
+    // When it was last painted, so the paint can be throttled per surface.
+    uint32_t last_paint = 0;
+  };
+  static constexpr uint8_t HIDCTL_MAX_SURFACES = 4;
+  HidSurface surfaces[HIDCTL_MAX_SURFACES] = {};
+  uint8_t surface_count = 0;
+  // The surface the console and the web page talk about: the one that was
+  // touched last.
+  uint8_t focus_surface = 0xFF;
+  // The surface whose report is being handled. It is what "the profile"
+  // means while a report is being read.
+  uint8_t cur_surface = 0xFF;
 
-  // Decoded state of the connected device.
-  uint16_t control_value[HIDCTL_MAX_CONTROLS] = {0};
-  uint8_t  control_taken[HIDCTL_MAX_CONTROLS]  = {0};
-  uint32_t buttons = 0;
-  uint32_t modifier_mask = 0;
+  // The surface on a device, or 0xFF.
+  uint8_t surfaceForDevice(uint8_t device) const {
+    for (uint8_t i = 0; i < surface_count; i++) {
+      if (surfaces[i].in_use && surfaces[i].device == device) return i;
+    }
+    return 0xFF;
+  }
+
+  // The profile of the surface being handled.
+  uint8_t activeProfile() const {
+    if (cur_surface < surface_count && surfaces[cur_surface].in_use)
+      return surfaces[cur_surface].profile;
+    return 0xFF;
+  }
+
+  // The profile of the surface the console talks about.
+  uint8_t focusProfile() const {
+    if (focus_surface < surface_count && surfaces[focus_surface].in_use)
+      return surfaces[focus_surface].profile;
+    return 0xFF;
+  }
+
+  // The device the console talks about.
+  uint8_t focusDevice() const {
+    if (focus_surface < surface_count && surfaces[focus_surface].in_use)
+      return surfaces[focus_surface].device;
+    return 0;
+  }
+
+  // The deck: the surface that shows the pictures. There is one deck's
+  // worth of machinery - the picture cache and the build task - so it
+  // belongs to the first deck that is connected.
+  uint8_t deckSurface() const {
+    for (uint8_t i = 0; i < surface_count; i++) {
+      if (surfaces[i].in_use && surfaces[i].opendeck) return i;
+    }
+    return 0xFF;
+  }
+  uint8_t deckProfile() const {
+    const uint8_t s = deckSurface();
+    return (s == 0xFF) ? 0xFF : surfaces[s].profile;
+  }
+  uint8_t deckDevice() const {
+    const uint8_t s = deckSurface();
+    return (s == 0xFF) ? 0xFF : surfaces[s].device;
+  }
 
   // -------------------------------------------------------------------------
   // The continuous controls, and how often they are allowed to drive WLED
@@ -128,13 +235,8 @@ class HidctlUsermod : public Usermod {
   //   control_waited      the takeover wait has already been said once
   //   control_applied_ms  when it was last driven
   //   control_log_ms      when it was last written to the console
-  uint16_t control_applied[HIDCTL_MAX_CONTROLS]     = {0};
-  uint8_t  control_mapped[HIDCTL_MAX_CONTROLS]      = {0};
-  bool     control_has_applied[HIDCTL_MAX_CONTROLS] = {false};
-  bool     control_pending[HIDCTL_MAX_CONTROLS]      = {false};
-  bool     control_waited[HIDCTL_MAX_CONTROLS]       = {false};
-  uint32_t control_applied_ms[HIDCTL_MAX_CONTROLS]   = {0};
-  uint32_t control_log_ms[HIDCTL_MAX_CONTROLS]      = {0};
+  // ...and the rest of them are in the surface as well: each device has
+  // its own controls, and they must not be counted against each other.
 
   // A change smaller than this many raw counts is not a movement. A 12-bit
   // knob jitters by one or two counts, so four takes that out.
@@ -150,17 +252,18 @@ class HidctlUsermod : public Usermod {
 
   // Forget everything the controls were: the first report after a connect
   // drives them all again.
-  void resetControls() {
+  void resetControls(uint8_t s) {
+    HidSurface& sf = surfaces[s];
     for (uint8_t i = 0; i < HIDCTL_MAX_CONTROLS; i++) {
-      control_value[i] = 0xFFFF;   // force the next report to apply
-      control_taken[i] = 0;
-      control_applied[i] = 0;
-      control_mapped[i] = 0;
-      control_has_applied[i] = false;
-      control_pending[i] = false;
-      control_waited[i] = false;
-      control_applied_ms[i] = 0;
-      control_log_ms[i] = 0;
+      sf.control_value[i] = 0xFFFF;   // force the next report to apply
+      sf.control_taken[i] = 0;
+      sf.control_applied[i] = 0;
+      sf.control_mapped[i] = 0;
+      sf.control_has_applied[i] = false;
+      sf.control_pending[i] = false;
+      sf.control_waited[i] = false;
+      sf.control_applied_ms[i] = 0;
+      sf.control_log_ms[i] = 0;
     }
   }
 
@@ -242,40 +345,44 @@ class HidctlUsermod : public Usermod {
   // F1's pads, ten for the CN003's keys.
   static constexpr uint8_t PAGE_SIZE = 16;
 
-  // How many slots a page holds, for the device that is plugged in.
-  uint8_t pageSize() const {
-    if (active_profile >= profile_count || !profiles) return PAGE_SIZE;
-    const HidctlProfile& p = profiles[active_profile];
+  // How many slots a page holds, for a profile.
+  //
+  // A page is as many slots as the device has screens, so the two devices
+  // have different page sizes: the F1's pads are sixteen and the CN003's
+  // keys are ten. The profile says which.
+  uint8_t pageSize(uint8_t profile) const {
+    if (profile >= profile_count || !profiles) return PAGE_SIZE;
+    const HidctlProfile& p = profiles[profile];
     if (p.page_size) return p.page_size;
     // A deck's pages are as many slots as it has keys with screens.
     if (p.opendeck && p.od_keys) return p.od_keys;
     return PAGE_SIZE;
   }
 
-  uint8_t  page = 1;          // the page the pads are addressing
   uint8_t  wheelLast = 0;     // the encoder's last position
   bool     wheelSeen = false;
-  uint32_t showPageUntil = 0; // the page is on the display until then
   uint32_t showWheelUntil = 0; // the encoder's position is on the display until then
 
-  // The last page a preset can live on. The pages are not limited to the
-  // presets that happen to be saved: the user browses ahead of them and
-  // saves there.
-  uint8_t lastPage() const {
-    const uint8_t size = pageSize();
+  // The last page a preset can live on, for a profile. The pages are not
+  // limited to the presets that happen to be saved: the user browses
+  // ahead of them and saves there.
+  uint8_t lastPage(uint8_t profile) const {
+    const uint8_t size = pageSize(profile);
     return (uint8_t)((250 + size - 1) / size);
   }
 
-  // The page the current preset is in.
-  uint8_t pageOfPreset(uint16_t preset) const {
+  // The page the current preset is in, for a profile.
+  uint8_t pageOfPreset(uint16_t preset, uint8_t profile) const {
     if (preset < 1) preset = 1;
-    return (uint8_t)(((preset - 1) / pageSize()) + 1);
+    return (uint8_t)(((preset - 1) / pageSize(profile)) + 1);
   }
 
-  // The offset the pads are shifted by: page one is the first slots of
-  // the page, page two the next ones, and so on.
-  uint16_t pageOffset() const {
-    return (uint16_t)((page - 1) * pageSize());
+  // The offset a device's pads are shifted by: page one is the first slots
+  // of the page, page two the next ones, and so on. It is the device's own
+  // page and its own page size.
+  uint16_t pageOffset(uint8_t s) const {
+    if (s >= surface_count || !surfaces[s].in_use) return 0;
+    return (uint16_t)((surfaces[s].page - 1) * pageSize(surfaces[s].profile));
   }
 
   // Move a page forward (1) or back (-1).
@@ -287,15 +394,17 @@ class HidctlUsermod : public Usermod {
   // only when it is changed from outside the controller - and then the
   // page jumps to the preset (onEvent's PresetApplied), not the other way
   // round.
-  void turnPage(int direction) {
-    const uint8_t last = lastPage();
-    int want = (int)page + direction;
+  void turnPage(uint8_t s, int direction) {
+    if (s >= surface_count || !surfaces[s].in_use) return;
+    const uint8_t profile = surfaces[s].profile;
+    const uint8_t last = lastPage(profile);
+    int want = (int)surfaces[s].page + direction;
     if (want < 1) want = 1;
     if (want > last) want = last;
-    if (want == (int)page) return;
-    page = (uint8_t)want;
-    showPageUntil = millis() + 1500;
-    USER_PRINTF("[HIDCTL] page %u\n", page);
+    if (want == (int)surfaces[s].page) return;
+    surfaces[s].page = (uint8_t)want;
+    surfaces[s].show_page_until = millis() + 1500;
+    USER_PRINTF("[HIDCTL] page %u\n", surfaces[s].page);
     // The page is on the display for a moment, and the pads move to the
     // new page's slots whether or not a preset is saved on them.
     paint();
@@ -304,8 +413,9 @@ class HidctlUsermod : public Usermod {
   }
 
   // Show the page on the display for a moment.
-  void showPageBriefly() {
-    showPageUntil = millis() + 1500;
+  void showPageBriefly(uint8_t s) {
+    if (s >= surface_count) return;
+    surfaces[s].show_page_until = millis() + 1500;
   }
 
   // The LED demo: a chase of brightnesses, a rainbow over the pads and a
@@ -353,9 +463,10 @@ class HidctlUsermod : public Usermod {
   //
   // So the LED report is BUILT wherever it is convenient and SENT by
   // loop(), and the runtime commands that touch USB are carried there too.
-  uint8_t led_report[HIDCTL_MAX_OUTPUT] = {};
-  uint16_t led_report_len = 0;
-  bool led_report_pending = false;
+  // The deck's command buffer. Every command is built here and padded to
+  // the wire length, and it belongs to the deck: the plain HID surfaces
+  // have their own report buffers.
+  uint8_t opendeck_buf[HIDCTL_MAX_OUTPUT] = {};
   bool cmd_wakeup = false;        // send the wake-up packet
   int8_t cmd_other_iface = -1;    // 0 = release the other interface, 1 = claim
 
@@ -805,7 +916,8 @@ class HidctlUsermod : public Usermod {
   }
 
   const char* profileName() const {
-    if (active_profile < profile_count) return profiles[active_profile].name;
+    const uint8_t profile = focusProfile();
+    if (profile < profile_count) return profiles[profile].name;
     return "";
   }
 
@@ -816,10 +928,8 @@ class HidctlUsermod : public Usermod {
     return idx < profile_count && profiles[idx].opendeck;
   }
 
-  void setActiveProfile(uint8_t idx) { active_profile = idx; }
-
   // The USB host client found a device. Bind the first profile that wants it.
-  void onDeviceConnected(uint16_t vid, uint16_t pid) {
+  void onDeviceConnected(uint8_t device, uint16_t vid, uint16_t pid) {
     // Re-read the profiles: one may have been edited while the controller
     // was unplugged, and this is the moment it comes back.
     loadProfiles();
@@ -828,19 +938,47 @@ class HidctlUsermod : public Usermod {
       USER_PRINTF("[HIDCTL] device 0x%04X:0x%04X — no profile wants it\n", vid, pid);
       return;
     }
-    active_profile = idx;
-    resetControls();
-    buttons = 0;
+    // The surface for this device. A device that has been here before
+    // keeps the surface it had - the host layer gave it the same device
+    // index it had last time - and a new one takes a free surface.
+    uint8_t s = 0xFF;
+    for (uint8_t i = 0; i < HIDCTL_MAX_SURFACES; i++) {
+      if (surfaces[i].bound && surfaces[i].device == device) { s = i; break; }
+    }
+    if (s == 0xFF) {
+      for (uint8_t i = 0; i < HIDCTL_MAX_SURFACES; i++) {
+        if (!surfaces[i].bound) { s = i; break; }
+      }
+      if (s == 0xFF) {
+        USER_PRINTF("[HIDCTL] no room for another surface\n");
+        return;
+      }
+      surfaces[s].bound = true;
+      surfaces[s].device = device;
+    }
+    surfaces[s].in_use = true;
+    // The surfaces are numbered from zero and the count is how many of
+    // them have ever been taken: a surface that is freed keeps its place
+    // so the device that had it finds it again.
+    if (s >= surface_count) surface_count = (uint8_t)(s + 1);
+    surfaces[s].profile  = idx;
+    surfaces[s].opendeck = profiles[idx].opendeck;
+    focus_surface = s;
+    resetControls(s);
+    surfaces[s].buttons = 0;
     // The wheel's position belongs to the connection: forget the old one so
     // the first report after a reconnect is not read as a turn.
-    wheelSeen = false;
-    wheelLast = 0;
+    surfaces[s].wheelSeen = false;
+    surfaces[s].wheelLast = 0;
     // How many slots a page holds belongs to the device, so the page the
     // running preset is on has to be worked out again now that the
     // profile is known: the deck's pages are ten slots and the F1's are
     // sixteen.
-    if (tracked_active_preset) page = pageOfPreset(tracked_active_preset);
-    USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
+    if (tracked_active_preset) {
+      surfaces[s].page = pageOfPreset(tracked_active_preset, surfaces[s].profile);
+    }
+    USER_PRINTF("[HIDCTL] %s connected (device %u)\n", profiles[idx].name,
+                (unsigned)device);
     // An OpenDeck-family deck needs its session opened: DIS resets the
     // display, LIG sets the backlight, and CONNECT keeps the session
     // alive. Its keys are LCDs, so they are given pictures. The work
@@ -855,9 +993,9 @@ class HidctlUsermod : public Usermod {
       //   - the report is 1024 bytes and it is sent as it is: no
       //     terminator. The zero-length packet in a Windows capture is
       //     the Windows HID stack flushing its report.
-      hid_usb_set_out_drop_leading(true);
-      hid_usb_set_out_shift(false);
-      hid_usb_set_out_zlp(false);
+      hid_usb_set_out_drop_leading(device, true);
+      hid_usb_set_out_shift(device, false);
+      hid_usb_set_out_zlp(device, false);
       opendeck_pending_init = true;
       opendeck_pending_paint = true;
     }
@@ -870,15 +1008,24 @@ class HidctlUsermod : public Usermod {
     paint();
   }
 
-  void onDeviceDisconnected() {
-    if (active_profile != 0xFF) {
-      USER_PRINTF("[HIDCTL] %s disconnected\n", profiles[active_profile].name);
+  void onDeviceDisconnected(uint8_t device) {
+    const uint8_t s = surfaceForDevice(device);
+    if (s == 0xFF) return;
+    const bool was_deck = surfaces[s].opendeck;
+    if (surfaces[s].profile < profile_count) {
+      USER_PRINTF("[HIDCTL] %s disconnected (device %u)\n",
+                  profiles[surfaces[s].profile].name, (unsigned)device);
     }
-    active_profile = 0xFF;
-    buttons = 0;
+    surfaces[s].in_use = false;
+    surfaces[s].profile = 0xFF;
+    surfaces[s].opendeck = false;
+    surfaces[s].out_pending = false;
+    surfaces[s].buttons = 0;
+    if (focus_surface == s) focus_surface = 0xFF;
+    if (cur_surface == s) cur_surface = 0xFF;
     // The next device that appears gets a session of its own, with its
     // own "DIS".
-    opendeck_session_open = false;
+    if (was_deck) opendeck_session_open = false;
   }
 
   // -------------------------------------------------------------------------
@@ -937,7 +1084,7 @@ class HidctlUsermod : public Usermod {
     }
     if (!strcmp(action, "showpage")) {
       // Show the page on the display for a moment.
-      showPageBriefly();
+      showPageBriefly(cur_surface);
       return;
     }
 
@@ -1060,9 +1207,9 @@ class HidctlUsermod : public Usermod {
       USER_PRINTF("[HIDCTL] controller brightness %u\n", ctrl_bri);
       // On a deck the controller's own brightness is the backlight, which
       // is the "LIG" command. The same floor applies.
-      if (active_profile < profile_count && profiles && profiles[active_profile].opendeck) {
-        Opendeck::lig(led_report, (uint8_t)((uint16_t)ctrl_bri * 100 / 255));
-        opendeckSend(led_report);
+      if (deckProfile() != 0xFF) {
+        Opendeck::lig(opendeck_buf, (uint8_t)((uint16_t)ctrl_bri * 100 / 255));
+        opendeckSend(opendeck_buf);
       }
       paint();
       return;
@@ -1214,11 +1361,13 @@ class HidctlUsermod : public Usermod {
     return -1;
   }
 
-  // Is a button with this name currently held?
-  bool buttonHeld(const HidctlProfile& p, const char* name) {
+  // Is a button with this name currently held? The buttons are the
+  // surface's own: two devices have two sets of them.
+  bool buttonHeld(uint8_t s, const HidctlProfile& p, const char* name) {
+    if (s >= surface_count) return false;
     for (uint8_t i = 0; i < p.button_count; i++) {
       if (!strcmp(p.buttons[i].name, name)) {
-        return (buttons & (1UL << p.buttons[i].index)) != 0;
+        return (surfaces[s].buttons & (1UL << p.buttons[i].index)) != 0;
       }
     }
     return false;
@@ -1379,21 +1528,43 @@ class HidctlUsermod : public Usermod {
     music_slot = queryAutoPlaylistMusicSlot();
   }
 
+  // Paint every surface that wants to be painted. They are painted one
+  // after the other, each with its own profile and its own report.
   void paint() {
-    if (!profiles || active_profile >= profile_count) return;
-    HidctlProfile& p = profiles[active_profile];
-    if (!p.output.present) return;
+    if (!profiles) return;
     if (!paint_enabled) return;
+    for (uint8_t s = 0; s < surface_count; s++) {
+      if (!surfaces[s].in_use) continue;
+      paintSurface(s);
+    }
+  }
+
+  // Paint one surface: its own profile, its own report, its own buffer.
+  void paintSurface(uint8_t s) {
+    if (!profiles || surfaces[s].profile >= profile_count) return;
+    HidctlProfile& p = profiles[surfaces[s].profile];
+    if (!p.output.present) return;
+    if (p.output.length > HIDCTL_MAX_LED) {
+      // The report does not fit the buffer. It is said once: the profile is
+      // at fault here, not the device.
+      static bool said = false;
+      if (!said) {
+        said = true;
+        USER_PRINTF("[HIDCTL] %s: the output report is %u bytes, and it can "
+                    "only take %u\n", p.name, (unsigned)p.output.length,
+                    (unsigned)HIDCTL_MAX_LED);
+      }
+      return;
+    }
 
     // WLED fires a state change often; the LEDs do not need to follow every
     // one of them. A blink is the exception - it has to be repainted fast
     // enough to show the rate it was asked for.
-    static uint32_t lastPaint = 0;
     uint32_t minGap = blinkActive() ? 20 : 100;
-    if (millis() - lastPaint < minGap) return;
-    lastPaint = millis();
+    if (millis() - surfaces[s].last_paint < minGap) return;
+    surfaces[s].last_paint = millis();
 
-    uint8_t report[HIDCTL_MAX_OUTPUT];
+    uint8_t report[HIDCTL_MAX_LED];
     memset(report, 0, sizeof(report));
     report[0] = p.output.report_id;
 
@@ -1406,15 +1577,15 @@ class HidctlUsermod : public Usermod {
     // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
                    ? tracked_active_preset : 0;
-    if (millis() < showPageUntil) {
+    if (millis() < surfaces[s].show_page_until) {
       // The encoder turned the page: show the page. That is what the
       // encoder is for, so it is what the display shows.
-      if (page < 10) {
+      if (surfaces[s].page < 10) {
         // "P" and the page's number on the right-hand digit.
         showLetter(report, p, 'P');
         if (p.output.display.present && p.output.display.digit_count >= 2) {
           uint16_t base = p.output.display.digit_offset[1];
-          uint8_t mask = digitMask(page);
+          uint8_t mask = digitMask(surfaces[s].page);
           for (uint8_t s = 0; s < p.output.display.segments_per_digit; s++) {
             int canon = segmentIndexByName(p.output.display.segment_names[s]);
             bool on = (canon >= 0) && ((mask >> canon) & 1);
@@ -1425,7 +1596,7 @@ class HidctlUsermod : public Usermod {
         // Ten and over: there is no room for the letter as well, so the
         // two digits are the page number itself. There is no decimal
         // point to mark it with - the F1's profile does not set one.
-        showNumber(report, p, page);
+        showNumber(report, p, surfaces[s].page);
       }
     } else if (millis() < showWheelUntil) {
       // The encoder moved but the page did not (it is at the first or the
@@ -1468,7 +1639,7 @@ class HidctlUsermod : public Usermod {
       for (uint8_t i = 0; i < p.output.light_count; i++) {
         const char* nm = p.output.lights[i].name;
         if (strncmp(nm, "pad", 3)) continue;
-        int slot = atoi(nm + 3) + (int)pageOffset();
+        int slot = atoi(nm + 3) + (int)pageOffset(s);
         if (slot < 1 || slot > 250) continue;
         if (slot == playlist_parent) {
           blinkSet(nm, 1.0f, 1000, true);          // the parent: a slow pulse
@@ -1480,7 +1651,7 @@ class HidctlUsermod : public Usermod {
 
     if (demoActive) {
       paintDemo(report, p);
-      sendLedReport(p, report);
+      sendLedReport(s, p, report);
       return;
     }
 
@@ -1498,7 +1669,7 @@ class HidctlUsermod : public Usermod {
         //   a saved playlist           magenta (red when it is a one-shot)
         //   the music playlist         yellow
         // The pads address the current page, so the colours do too.
-        int slot = atoi(nm + 3) + (int)pageOffset();
+        int slot = atoi(nm + 3) + (int)pageOffset(s);
         if (slot >= 1 && slot <= 250) {
           const bool is_music = (music_slot > 0 && slot == (int)music_slot);
           const bool is_playlist = presetIsPlaylist((uint8_t)slot);
@@ -1523,7 +1694,7 @@ class HidctlUsermod : public Usermod {
         if (n >= 1 && n <= 4 && n == currentBeat) {
           r = g = b = 0x7F;
         }
-      } else if (buttonHeld(p, nm)) {
+      } else if (buttonHeld(s, p, nm)) {
         // Any other button lights while it is held.
         r = g = b = 0x7F;
       }
@@ -1557,7 +1728,7 @@ class HidctlUsermod : public Usermod {
       }
     }
 
-    sendLedReport(p, report);
+    sendLedReport(s, p, report);
   }
 
   // Send the LED report to the device.
@@ -1575,27 +1746,33 @@ class HidctlUsermod : public Usermod {
   // host stack belongs to the main loop's task, and this can be called
   // from an event handler (the publisher's task), from the core's state
   // change callback, or from the web API.
-  void sendLedReport(const HidctlProfile& p, const uint8_t* report) {
+  void sendLedReport(uint8_t s, const HidctlProfile& p, const uint8_t* report) {
     uint16_t len = p.output.length;
-    if (len > HIDCTL_MAX_OUTPUT) len = HIDCTL_MAX_OUTPUT;
-    memcpy(led_report, report, len);
-    led_report_len = len;
-    led_report_pending = true;
+    if (len > HIDCTL_MAX_LED) len = HIDCTL_MAX_LED;
+    memcpy(surfaces[s].out, report, len);
+    surfaces[s].out_len = len;
+    surfaces[s].out_pending = true;
   }
 
   // Send the queued LED report. Only the main loop calls this.
   void flushLedReport() {
-    if (!led_report_pending) return;
-    led_report_pending = false;
-    if (!profiles || active_profile >= profile_count) return;
-    HidctlProfile& p = profiles[active_profile];
-    if (led_out_endpoint) {
-      hid_usb_send_out_endpoint(led_report, led_report_len);
-      return;
+    if (!profiles) return;
+    for (uint8_t s = 0; s < surface_count; s++) {
+      if (!surfaces[s].in_use || !surfaces[s].out_pending) continue;
+      surfaces[s].out_pending = false;
+      if (surfaces[s].profile >= profile_count) continue;
+      HidctlProfile& p = profiles[surfaces[s].profile];
+      const uint8_t d = surfaces[s].device;
+      if (led_out_endpoint) {
+        hid_usb_send_out_endpoint(d, surfaces[s].out, surfaces[s].out_len);
+        continue;
+      }
+      // The report ID goes in wValue, not in the data.
+      if (surfaces[s].out_len > 1) {
+        hid_usb_send_output_report(d, p.output.report_id, surfaces[s].out + 1,
+                                   (uint16_t)(surfaces[s].out_len - 1));
+      }
     }
-    // The report ID goes in wValue, not in the data.
-    hid_usb_send_output_report(p.output.report_id, led_report + 1,
-                                (uint16_t)(led_report_len - 1));
   }
 
   // -------------------------------------------------------------------------
@@ -1607,21 +1784,25 @@ class HidctlUsermod : public Usermod {
   // of a sweep is applied even if the controller stops reporting when it
   // is left alone.
   void flushPendingControls() {
-    if (!profiles || active_profile >= profile_count) return;
-    HidctlProfile& p = profiles[active_profile];
+    if (!profiles) return;
     const uint32_t now = millis();
-    for (uint8_t i = 0; i < p.control_count; i++) {
-      if (!control_pending[i]) continue;
-      if (control_has_applied[i] &&
-          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) continue;
-      applyControl(p, i, control_value[i], now);
-      control_pending[i] = false;
+    for (uint8_t s = 0; s < surface_count; s++) {
+      if (!surfaces[s].in_use || surfaces[s].profile >= profile_count) continue;
+      HidctlProfile& p = profiles[surfaces[s].profile];
+      for (uint8_t i = 0; i < p.control_count; i++) {
+        if (!surfaces[s].control_pending[i]) continue;
+        if (surfaces[s].control_has_applied[i] &&
+            (now - surfaces[s].control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) continue;
+        applyControl(s, p, i, surfaces[s].control_value[i], now);
+        surfaces[s].control_pending[i] = false;
+      }
     }
   }
 
   // Drive one control into WLED. The soft takeover, the "did the result
   // actually change" test and the throttle all happen here.
-  void applyControl(HidctlProfile& p, uint8_t idx, uint16_t raw, uint32_t now) {
+  void applyControl(uint8_t s, HidctlProfile& p, uint8_t idx, uint16_t raw, uint32_t now) {
+    HidSurface& sf = surfaces[s];
     HidctlControl& ctl = p.controls[idx];
     uint32_t full = (ctl.bits >= 16) ? 0xFFFFu : ((1u << ctl.bits) - 1);
     uint8_t value = (uint8_t)((uint32_t)raw * 255u / full);
@@ -1629,13 +1810,13 @@ class HidctlUsermod : public Usermod {
     // A modifier turns the control into something else: SHIFT + knob4 is
     // the controller's own brightness, not the palette.
     const char* act = ctl.action;
-    if (ctl.mod_action[0] && (buttons & modifier_mask) != 0) act = ctl.mod_action;
+    if (ctl.mod_action[0] && (sf.buttons & sf.modifier_mask) != 0) act = ctl.mod_action;
     if (!act[0]) return;
 
     // Soft takeover: the control has to cross the parameter's current
     // value before it starts driving it, so a knob that sits somewhere
     // else does not yank the value when it is first touched.
-    if (!control_taken[idx]) {
+    if (!sf.control_taken[idx]) {
       int cur = currentValueOf(act);
       if (cur >= 0) {
         int curRaw = (int)((uint32_t)cur * full / 255u);
@@ -1644,33 +1825,33 @@ class HidctlUsermod : public Usermod {
         int wiggle = (int)(full / 255u * 8u) + 1;   // ~8/255 of the range
         if (delta > wiggle) {
           // Say it once, not once a report.
-          if (!control_waited[idx]) {
+          if (!sf.control_waited[idx]) {
             USER_PRINTF("[HIDCTL] %s: waiting for takeover (raw %u, target %u)\n",
                         ctl.name, raw, (unsigned)cur);
-            control_waited[idx] = true;
+            sf.control_waited[idx] = true;
           }
           return;    // not driven: the baseline stays where it was
         }
       }
-      control_taken[idx] = 1;
-      control_waited[idx] = false;
+      sf.control_taken[idx] = 1;
+      sf.control_waited[idx] = false;
     }
 
     // The result did not change, so there is nothing to drive. The baseline
     // still follows the knob, so its resting point is known.
-    if (control_has_applied[idx] && value == control_mapped[idx]) {
-      control_applied[idx] = raw;
-      control_applied_ms[idx] = now;
+    if (sf.control_has_applied[idx] && value == sf.control_mapped[idx]) {
+      sf.control_applied[idx] = raw;
+      sf.control_applied_ms[idx] = now;
       return;
     }
-    control_mapped[idx] = value;
-    control_applied[idx] = raw;
-    control_applied_ms[idx] = now;
-    control_has_applied[idx] = true;
+    sf.control_mapped[idx] = value;
+    sf.control_applied[idx] = raw;
+    sf.control_applied_ms[idx] = now;
+    sf.control_has_applied[idx] = true;
 
     if (!act[0]) return;
-    if (now - control_log_ms[idx] >= CONTROL_LOG_INTERVAL_MS) {
-      control_log_ms[idx] = now;
+    if (now - sf.control_log_ms[idx] >= CONTROL_LOG_INTERVAL_MS) {
+      sf.control_log_ms[idx] = now;
       USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act, value);
     }
     runAction(act, value);
@@ -1768,7 +1949,7 @@ class HidctlUsermod : public Usermod {
         if (!strcmp(act, "page")) {
           // The encoder browses the pages of slots. It must not change
           // the preset itself - that is the keys' job.
-          turnPage(ev.delta);
+          turnPage(deckSurface(), ev.delta);
           break;
         }
         // A twist is plus or minus one, so the value it drives is the one
@@ -1805,7 +1986,7 @@ class HidctlUsermod : public Usermod {
   // the slots from pageOffset()+1 up. The buffer is the caller's.
   const char* withPageOffset(const char* act, char* buf, size_t buflen) {
     if (!strncmp(act, "preset", 6) && isdigit(act[6])) {
-      uint16_t slot = (uint16_t)(atoi(act + 6) + pageOffset());
+      uint16_t slot = (uint16_t)(atoi(act + 6) + pageOffset(cur_surface));
       snprintf(buf, buflen, "preset%u", slot);
       return buf;
     }
@@ -1814,8 +1995,9 @@ class HidctlUsermod : public Usermod {
 
   // The profile's button with that index, or null.
   const HidctlButton* buttonByIndex(uint8_t index) {
-    if (active_profile >= profile_count || !profiles) return nullptr;
-    HidctlProfile& p = profiles[active_profile];
+    const uint8_t profile = activeProfile();
+    if (profile >= profile_count || !profiles) return nullptr;
+    HidctlProfile& p = profiles[profile];
     for (uint8_t i = 0; i < p.button_count; i++) {
       if (p.buttons[i].index == index) return &p.buttons[i];
     }
@@ -1863,9 +2045,9 @@ class HidctlUsermod : public Usermod {
   // Send the next queued command, if the pipe is free.
   bool opendeckFlushCmd() {
     if (opendeck_cmd_pos >= opendeck_cmd_count) return false;
-    memset(led_report, 0, Opendeck::WIRE_LEN);
-    memcpy(led_report, opendeck_cmd[opendeck_cmd_pos], opendeck_cmd_len[opendeck_cmd_pos]);
-    if (!opendeckSend(led_report)) return false;
+    memset(opendeck_buf, 0, Opendeck::WIRE_LEN);
+    memcpy(opendeck_buf, opendeck_cmd[opendeck_cmd_pos], opendeck_cmd_len[opendeck_cmd_pos]);
+    if (!opendeckSend(opendeck_buf)) return false;
     opendeck_cmd_pos++;
     if (opendeck_cmd_pos >= opendeck_cmd_count) {
       opendeck_cmd_count = 0;
@@ -1893,14 +2075,14 @@ class HidctlUsermod : public Usermod {
     opendeckClearCache();
     // The builders put the command at the front of the buffer and pad it;
     // only the first bytes matter here, so that is what is queued.
-    Opendeck::dis(led_report);
-    opendeckQueue(led_report, 9);
-    Opendeck::lig(led_report, 50);
-    opendeckQueue(led_report, 12);
-    Opendeck::cle(led_report, Opendeck::CLEAR_ALL);
-    opendeckQueue(led_report, 13);
-    Opendeck::stp(led_report);
-    opendeckQueue(led_report, 9);
+    Opendeck::dis(opendeck_buf);
+    opendeckQueue(opendeck_buf, 9);
+    Opendeck::lig(opendeck_buf, 50);
+    opendeckQueue(opendeck_buf, 12);
+    Opendeck::cle(opendeck_buf, Opendeck::CLEAR_ALL);
+    opendeckQueue(opendeck_buf, 13);
+    Opendeck::stp(opendeck_buf);
+    opendeckQueue(opendeck_buf, 9);
     opendeck_last_keepalive = millis();
   }
 
@@ -1911,8 +2093,8 @@ class HidctlUsermod : public Usermod {
   void opendeckKeepalive() {
     if (millis() - opendeck_last_keepalive < 9000) return;
     opendeck_last_keepalive = millis();
-    Opendeck::connect(led_report);
-    opendeckQueue(led_report, 13);
+    Opendeck::connect(opendeck_buf);
+    opendeckQueue(opendeck_buf, 13);
   }
 
   uint32_t opendeck_last_keepalive = 0;
@@ -1927,7 +2109,7 @@ class HidctlUsermod : public Usermod {
   // every turn of an encoder would put a second of pictures between the
   // turn and the display.
   void repaintDeck(bool stripOnly = false) {
-    if (active_profile >= profile_count || !profiles || !profiles[active_profile].opendeck) return;
+    if (deckProfile() == 0xFF) return;
     if (stripOnly) opendeck_pending_strip = true;
     else opendeck_pending_paint = true;
   }
@@ -2061,7 +2243,9 @@ class HidctlUsermod : public Usermod {
         (uint32_t)(millis() - opendeck_last_send_ms) < opendeck_out_gap) {
       return false;                       // not yet: try again next pass
     }
-    bool ok = hid_usb_send_out_endpoint(built, Opendeck::WIRE_LEN);
+    const uint8_t d = deckDevice();
+    if (d == 0xFF) return false;         // there is no deck
+    bool ok = hid_usb_send_out_endpoint(d, built, Opendeck::WIRE_LEN);
     if (ok) opendeck_last_send_ms = millis();
     return ok;
   }
@@ -2182,9 +2366,10 @@ class HidctlUsermod : public Usermod {
   // second of pictures between the turn of an encoder and the display.
   void opendeckBuildQueue(bool withKeys = true) {
     opendeck_queue_count = 0;
+    const uint8_t deck_profile = deckProfile();
     const uint8_t keys =
-        (active_profile < profile_count && profiles[active_profile].od_keys)
-            ? profiles[active_profile].od_keys : OPENDECK_KEYS;
+        (deck_profile < profile_count && profiles[deck_profile].od_keys)
+            ? profiles[deck_profile].od_keys : OPENDECK_KEYS;
     for (uint8_t i = 0; withKeys && i < keys && i < OPENDECK_KEYS; i++) {
       if (opendeck_queue_count >= OPENDECK_PICS) break;
       const uint8_t slot = opendeckSlotFor(i);
@@ -2193,7 +2378,7 @@ class HidctlUsermod : public Usermod {
       // this key's place in the CURRENT PAGE. Using the key's own number
       // instead would mean the active preset could never be highlighted
       // when it lives past the first ten.
-      const int slot_no = (int)pageOffset() + (int)i + 1;
+      const int slot_no = (int)pageOffset(deckSurface()) + (int)i + 1;
       uint8_t r = 0, g = 0, b = 0;
       const bool is_music = (music_slot > 0 && slot_no == (int)music_slot);
       const bool is_playlist = getCachedPresetExists((uint8_t)slot_no)
@@ -2260,8 +2445,8 @@ class HidctlUsermod : public Usermod {
     //
     // The one-picture command is still there for a deck that takes it,
     // and the profile says which: "bgpic" in the opendeck object.
-    const bool bgpic = (active_profile < profile_count && profiles)
-                       && profiles[active_profile].od_strip_bgpic;
+    const bool bgpic = (deck_profile < profile_count && profiles)
+                       && profiles[deck_profile].od_strip_bgpic;
     {
       for (uint8_t i = 0; i < OPENDECK_ZONES; i++) {
         if (opendeck_queue_count >= OPENDECK_PICS) break;
@@ -2281,10 +2466,10 @@ class HidctlUsermod : public Usermod {
         // can show, and the value that action is at. The strip is the
         // deck's readout and each of its tiles belongs to one of the
         // encoders below it, so the tile says what that encoder DOES.
-        if (active_profile < profile_count && profiles &&
-            i < profiles[active_profile].od_encoders &&
-            profiles[active_profile].encoders[i].action[0]) {
-          const HidctlEncoder& enc = profiles[active_profile].encoders[i];
+        if (deck_profile < profile_count && profiles &&
+            i < profiles[deck_profile].od_encoders &&
+            profiles[deck_profile].encoders[i].action[0]) {
+          const HidctlEncoder& enc = profiles[deck_profile].encoders[i];
           if (enc.cycler) {
             // The encoder drives one of the effect's controls, and the
             // effect names it. An effect that names its controls but
@@ -2315,7 +2500,7 @@ class HidctlUsermod : public Usermod {
             const char* act = enc.action;
             opendeckActionLabel(act, pic.label, sizeof(pic.label));
             if (!strcmp(act, "page")) {
-              pic.value = page;
+              pic.value = surfaces[deckSurface() < surface_count ? deckSurface() : 0].page;
               pic.has_value = true;
             } else {
               const int cur = currentValueOf(act);
@@ -2483,8 +2668,9 @@ class HidctlUsermod : public Usermod {
   // that was touched.
   void opendeckCycleControl(uint8_t button_index) {
     if (button_index < OPENDECK_ZONE_FIRST) return;
-    if (active_profile >= profile_count || !profiles) return;
-    HidctlProfile& p = profiles[active_profile];
+    const uint8_t profile = deckProfile();
+    if (profile >= profile_count || !profiles) return;
+    HidctlProfile& p = profiles[profile];
     const uint8_t enc_index = (uint8_t)(button_index - OPENDECK_ZONE_FIRST);
     if (enc_index >= (p.od_encoders ? p.od_encoders : 4)) return;
     HidctlEncoder& enc = p.encoders[enc_index];
@@ -2757,10 +2943,12 @@ class HidctlUsermod : public Usermod {
     opendeckSprite.fillScreen(0x0000);
     // The page number takes the whole strip for a moment, the way the
     // F1's two-digit display does when it is asked to show the page.
-    if (showPageUntil > millis()) {
-      opendeck_page_until = showPageUntil;
+    const uint8_t deck = deckSurface();
+    if (deck < surface_count && surfaces[deck].show_page_until > millis()) {
+      opendeck_page_until = surfaces[deck].show_page_until;
       char pagetext[8];
-      snprintf(pagetext, sizeof(pagetext), "%u", page);
+      snprintf(pagetext, sizeof(pagetext), "%u",
+               surfaces[deck < surface_count ? deck : 0].page);
       opendeckSpriteTile(0, 0, w, h, pagetext, 0, 0, 0);
       opendeckSpriteToBuffer(buf, w, h);
       size_t jpeg_len = 0;
@@ -2788,13 +2976,14 @@ class HidctlUsermod : public Usermod {
       char label[20] = "";
       uint16_t value = 0;
       bool has_value = false;
-      if (active_profile < profile_count && profiles &&
-          i < profiles[active_profile].od_encoders &&
-          profiles[active_profile].encoders[i].action[0]) {
-        const char* act = profiles[active_profile].encoders[i].action;
+      const uint8_t deck_profile = deckProfile();
+      if (deck_profile < profile_count && profiles &&
+          i < profiles[deck_profile].od_encoders &&
+          profiles[deck_profile].encoders[i].action[0]) {
+        const char* act = profiles[deck_profile].encoders[i].action;
         opendeckActionLabel(act, label, sizeof(label));
         if (!strcmp(act, "page")) {
-          value = page;
+          value = surfaces[deckSurface() < surface_count ? deckSurface() : 0].page;
           has_value = true;
         } else {
           const int cur = currentValueOf(act);
@@ -3022,8 +3211,8 @@ class HidctlUsermod : public Usermod {
     if (opendeck_queue_pos >= opendeck_queue_count) {
       // The last picture is away: commit the batch. Without it nothing
       // appears on the keys.
-      Opendeck::stp(led_report);
-      if (opendeckSend(led_report)) {
+      Opendeck::stp(opendeck_buf);
+      if (opendeckSend(opendeck_buf)) {
         opendeck_painting = false;
         USER_PRINTF("[HIDCTL] deck: %u pictures are away\n", opendeck_queue_count);
       }
@@ -3070,11 +3259,11 @@ class HidctlUsermod : public Usermod {
       }
       if (pic.slot == 0) {
         // The wide strip: one picture across all of it.
-        Opendeck::bgpic(led_report, jpeg_len, 0, 0, pic.w, pic.h);
+        Opendeck::bgpic(opendeck_buf, jpeg_len, 0, 0, pic.w, pic.h);
       } else {
-        Opendeck::bat(led_report, (uint8_t)(pic.slot - 1), jpeg_len);
+        Opendeck::bat(opendeck_buf, (uint8_t)(pic.slot - 1), jpeg_len);
       }
-      if (!opendeckSend(led_report)) return;    // the pipe is busy: try again
+      if (!opendeckSend(opendeck_buf)) return;    // the pipe is busy: try again
       USER_PRINTF("[HIDCTL] deck: picture for slot %u (%ux%u, %u bytes)\n",
                   pic.slot, pic.w, pic.h, jpeg_len);
       opendeck_chunk_off = 0;
@@ -3086,9 +3275,9 @@ class HidctlUsermod : public Usermod {
     if (opendeck_chunk_off < jpeg_len) {
       uint16_t n = (uint16_t)(jpeg_len - opendeck_chunk_off);
       if (n > Opendeck::PACKET_SIZE) n = Opendeck::PACKET_SIZE;
-      memset(led_report, 0, Opendeck::WIRE_LEN);
-      memcpy(led_report + 1, jpeg + opendeck_chunk_off, n);
-      if (!opendeckSend(led_report)) return;    // the pipe is busy: try again
+      memset(opendeck_buf, 0, Opendeck::WIRE_LEN);
+      memcpy(opendeck_buf + 1, jpeg + opendeck_chunk_off, n);
+      if (!opendeckSend(opendeck_buf)) return;    // the pipe is busy: try again
       opendeck_chunk_off += n;
       return;
     }
@@ -3111,8 +3300,9 @@ class HidctlUsermod : public Usermod {
   // playing blinks fast - the same pattern the MIDI usermod uses and the
   // F1's pads follow.
   void opendeckChaser() {
-    if (active_profile >= profile_count || !profiles) return;
-    HidctlProfile& p = profiles[active_profile];
+    const uint8_t profile = deckProfile();
+    if (profile >= profile_count || !profiles) return;
+    HidctlProfile& p = profiles[profile];
     if (!p.opendeck) return;
     const bool playlist_active = (currentPlaylist >= 0);
     const int parent = playlist_active ? (int)currentPlaylist : 0;
@@ -3120,7 +3310,7 @@ class HidctlUsermod : public Usermod {
     for (uint8_t i = 0; i < p.button_count; i++) {
       const HidctlButton& b = p.buttons[i];
       if (b.index >= 10 || !b.name[0]) continue;    // only the keys with screens
-      const int slot = (int)pageOffset() + (int)b.index + 1;
+      const int slot = (int)pageOffset(deckSurface()) + (int)b.index + 1;
       if (slot < 1 || slot > 250) continue;
       if (slot == parent) {
         blinkSet(b.name, 1.0f, 1000, true);        // the parent: a slow pulse
@@ -3136,9 +3326,17 @@ class HidctlUsermod : public Usermod {
 #endif
 
   // Decode a raw report for the active profile and act on it.
-  void handleIncomingReport(const uint8_t* data, uint16_t len) {
-    if (!enabled || active_profile >= profile_count || !profiles) return;
-    HidctlProfile& p = profiles[active_profile];
+  void handleIncomingReport(uint8_t device, const uint8_t* data, uint16_t len) {
+    if (!enabled || !profiles) return;
+    // Which surface is this report from? The board has a hub, so more than
+    // one device can be on it, and each of them has its own profile.
+    const uint8_t s = surfaceForDevice(device);
+    if (s == 0xFF) return;
+    cur_surface = s;
+    focus_surface = s;
+    if (surfaces[s].profile >= profile_count) return;
+    HidSurface& sf = surfaces[s];
+    HidctlProfile& p = profiles[sf.profile];
 
     // Record what arrived, whatever it is: a report the profile does not
     // expect is still a report, and a short one is still a report.
@@ -3182,15 +3380,15 @@ class HidctlUsermod : public Usermod {
         if (set) now_buttons |= (1UL << (bi * 8 + bit));
       }
     }
-    uint32_t was_buttons = buttons;
-    buttons = now_buttons;
+    uint32_t was_buttons = sf.buttons;
+    sf.buttons = now_buttons;
 
     // Modifiers are buttons whose action is only meaningful while held.
-    modifier_mask = 0;
+    sf.modifier_mask = 0;
     for (uint8_t i = 0; i < p.button_count; i++) {
-      if (p.buttons[i].modifier) modifier_mask |= (1UL << p.buttons[i].index);
+      if (p.buttons[i].modifier) sf.modifier_mask |= (1UL << p.buttons[i].index);
     }
-    bool mod_held = (now_buttons & modifier_mask) != 0;
+    bool mod_held = (now_buttons & sf.modifier_mask) != 0;
 
     // --- continuous controls ------------------------------------------------
     // A value that arrived while the throttle was closed goes first: it is
@@ -3206,33 +3404,33 @@ class HidctlUsermod : public Usermod {
         raw |= (uint16_t)((uint16_t)data[ctl.offset + b] << (8 * b));   // little endian
       }
       if (ctl.bits < 16) raw &= (uint16_t)((1u << ctl.bits) - 1);
-      if (control_has_applied[i] && raw == control_value[i]) continue;  // no change at all
-      control_value[i] = raw;
+      if (sf.control_has_applied[i] && raw == sf.control_value[i]) continue;  // no change at all
+      sf.control_value[i] = raw;
 
       // A step or two of jitter is not a movement. While the change stays
       // inside the deadband the baseline stays pinned where it was, so a
       // slow drift still adds up to a movement - it is measured against
       // the last value that passed the deadband, not against the last
       // value seen.
-      if (control_has_applied[i]) {
-        int d = (int)raw - (int)control_applied[i];
+      if (sf.control_has_applied[i]) {
+        int d = (int)raw - (int)sf.control_applied[i];
         if (d < 0) d = -d;
         if (d < CONTROL_DEADBAND) {
-          control_pending[i] = false;
+          sf.control_pending[i] = false;
           continue;
         }
       }
 
       // Too soon after the last one. The next report carries a newer
       // value, and that is the one worth driving.
-      if (control_has_applied[i] &&
-          (now - control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) {
-        control_pending[i] = true;
+      if (sf.control_has_applied[i] &&
+          (now - sf.control_applied_ms[i]) < CONTROL_APPLY_INTERVAL_MS) {
+        sf.control_pending[i] = true;
         continue;
       }
 
-      applyControl(p, i, raw, now);
-      control_pending[i] = false;
+      applyControl(s, p, i, raw, now);
+      sf.control_pending[i] = false;
     }
 
     // --- the encoder -------------------------------------------------------
@@ -3240,19 +3438,19 @@ class HidctlUsermod : public Usermod {
     // way it turned. One step is one page.
     if (p.wheel_present && len > p.wheel_offset) {
       uint8_t pos = data[p.wheel_offset];
-      if (wheelSeen) {
-        int8_t delta = (int8_t)(pos - wheelLast);   // the counter wraps
+      if (sf.wheelSeen) {
+        int8_t delta = (int8_t)(pos - sf.wheelLast);   // the counter wraps
         if (delta != 0) {
           USER_PRINTF("[HIDCTL] wheel %u -> %u (delta %d)\n",
-                      wheelLast, pos, (int)delta);
+                      sf.wheelLast, pos, (int)delta);
           showWheelUntil = millis() + 1000;   // show it on the display
-          turnPage(delta);
+          turnPage(s, delta);
         }
       } else {
         USER_PRINTF("[HIDCTL] wheel first value %u\n", pos);
       }
-      wheelLast = pos;
-      wheelSeen = true;
+      sf.wheelLast = pos;
+      sf.wheelSeen = true;
     }
 
     // A heartbeat of the report's first bytes, so the wire can be watched.
@@ -3327,15 +3525,17 @@ class HidctlUsermod : public Usermod {
   }
 
   void loop() override {
+    // Which device the commands are about: the surface the console is
+    // talking about.
+    const uint8_t dev = focusDevice();
     // A heartbeat, so it is visible whether this loop is running at all.
     {
       static uint32_t lastBeat = 0;
       if (millis() - lastBeat > 10000) {
         lastBeat = millis();
-        USER_PRINTF("[HIDCTL] loop: active=%u count=%u opendeck=%u pending=%u\n",
-                    active_profile, profile_count,
-                    (active_profile < profile_count && profiles)
-                        ? (profiles[active_profile].opendeck ? 1 : 0) : 0,
+        USER_PRINTF("[HIDCTL] loop: surfaces=%u count=%u deck=%u pending=%u\n",
+                    surface_count, profile_count,
+                    (deckProfile() != 0xFF) ? 1 : 0,
                     opendeck_pending_init ? 1 : 0);
       }
     }
@@ -3355,7 +3555,7 @@ class HidctlUsermod : public Usermod {
     hid_usb_pump_out();
     // An OpenDeck-family deck: its session and its pictures are handled
     // here, because this is the task that owns the USB host stack.
-    if (active_profile < profile_count && profiles[active_profile].opendeck) {
+    if (deckProfile() != 0xFF) {
       // The chaser sets the blinks, and a blink on a deck is in the
       // PICTURE, so the pictures have to go out again at the blink's rate.
       opendeckChaser();
@@ -3398,12 +3598,12 @@ class HidctlUsermod : public Usermod {
     // Commands from the web API that touch the USB.
     if (cmd_wakeup) {
       cmd_wakeup = false;
-      hid_usb_send_wakeup();
+      hid_usb_send_wakeup(dev);
     }
     if (cmd_other_iface >= 0) {
       int8_t claim = cmd_other_iface;
       cmd_other_iface = -1;
-      hid_usb_set_other_interface(claim != 0);
+      hid_usb_set_other_interface(dev, claim != 0);
     }
   }
 
@@ -3431,10 +3631,16 @@ class HidctlUsermod : public Usermod {
       uint8_t slot = ev.payload.presetApplied.preset;
       if (slot >= 1) {
         tracked_active_preset = slot;
-        // The pads address the page the active preset is on.
-        page = pageOfPreset(slot);
+        // The pads address the page the active preset is on. Every device
+        // finds the preset on ITS page: the page sizes differ, so the page
+        // numbers do too.
+        for (uint8_t s = 0; s < surface_count; s++) {
+          if (!surfaces[s].in_use) continue;
+          surfaces[s].page = pageOfPreset(slot, surfaces[s].profile);
+        }
         USER_PRINTF("[HIDCTL] preset %u -> page %u (cached=%u playlist=%u music=%u)\n",
-                    slot, page, getCachedPresetExists(slot) ? 1 : 0,
+                    slot, surfaces[focus_surface < surface_count ? focus_surface : 0].page,
+                    getCachedPresetExists(slot) ? 1 : 0,
                     (presetCache != nullptr && presetCache[slot].isPlaylist) ? 1 : 0,
                     music_slot);
         paint();
@@ -3443,33 +3649,12 @@ class HidctlUsermod : public Usermod {
       return;
     }
     if (ev.type == wled::EventType::UsbDeviceChanged) {
-      bool was = active_profile != 0xFF;
-      if (ev.payload.usbDevice.connected) {
-        uint8_t idx = matchDevice(ev.payload.usbDevice.vid, ev.payload.usbDevice.pid);
-        if (idx != 0xFF) {
-          active_profile = idx;
-          resetControls();
-          buttons = 0;
-          // The wheel's position belongs to the connection: forget the old
-          // one so the first report after a reconnect is not read as a turn.
-          wheelSeen = false;
-          wheelLast = 0;
-          USER_PRINTF("[HIDCTL] %s connected\n", profiles[idx].name);
-          // An OpenDeck-family deck needs its session opened: DIS resets
-          // the display, LIG sets the backlight, and CONNECT keeps the
-          // session alive. Its keys are LCDs, so they are given pictures.
-          if (profiles[idx].opendeck) {
-            opendeck_pending_init = true;
-            opendeck_pending_paint = true;
-          }
-        }
-      } else {
-        active_profile = 0xFF;
-      }
-      if (was != (active_profile != 0xFF)) {
-        USER_PRINTF("[HIDCTL] control surface %s\n",
-                    active_profile != 0xFF ? "connected" : "disconnected");
-      }
+      // The USB host's own message is the authority on which device is
+      // connected: it says which device, and this event does not - it is
+      // published by the MIDI host, which sees every device on the bus.
+      // So the event is only news; the surfaces are bound elsewhere.
+      USER_PRINTF("[HIDCTL] a device on the bus changed (connected=%u)\n",
+                  ev.payload.usbDevice.connected ? 1 : 0);
     }
   }
 
@@ -3485,27 +3670,30 @@ class HidctlUsermod : public Usermod {
   void readFromJsonState(JsonObject& obj) override {
     JsonObject h = obj[FPSTR(_name)];
     if (h.isNull()) return;
+    // Which device the commands are about: the surface the console is
+    // talking about.
+    const uint8_t dev = focusDevice();
     bool demo = h["demo"] | false;
     setDemo(demo);
     if (h.containsKey("paint")) paint_enabled = h["paint"] | true;
     // Send the output report over the control pipe (SET_REPORT) instead
     // of the interrupt OUT endpoint. Some devices only take it that way.
-    if (h.containsKey("ctrlout")) hid_usb_set_out_via_control(h["ctrlout"] | false);
+    if (h.containsKey("ctrlout")) hid_usb_set_out_via_control(dev, h["ctrlout"] | false);
     // Send the packet without its leading report-ID byte.
-    if (h.containsKey("nolead")) hid_usb_set_out_drop_leading(h["nolead"] | false);
+    if (h.containsKey("nolead")) hid_usb_set_out_drop_leading(dev, h["nolead"] | false);
     // End the packet with a zero-length packet. A device whose report is
     // exactly the size of its endpoint's maximum packet needs it.
-    if (h.containsKey("zlp")) hid_usb_set_out_zlp(h["zlp"] | false);
+    if (h.containsKey("zlp")) hid_usb_set_out_zlp(dev, h["zlp"] | false);
     // Move the report to the front of the packet and keep the packet's
     // length, so a pad byte ends the transfer.
-    if (h.containsKey("shift")) hid_usb_set_out_shift(h["shift"] | false);
+    if (h.containsKey("shift")) hid_usb_set_out_shift(dev, h["shift"] | false);
     // Cap how many bytes of the packet go out. The deck's report is 1024
     // bytes and its endpoint's maximum packet is 1024, so the 1025-byte
     // packet goes out as 1024 and then a short packet of one byte. A
     // Windows HID stack drops that trailing byte, so the device may only
     // ever see 1024 - and a short packet in the middle of a stream may
     // throw its parser out.
-    if (h.containsKey("outcap")) hid_usb_set_out_cap((uint16_t)(h["outcap"] | 0));
+    if (h.containsKey("outcap")) hid_usb_set_out_cap(dev, (uint16_t)(h["outcap"] | 0));
     // The gap between two packets to the deck, in ms. A PC's HID stack
     // leaves 20 ms between them and the deck may need the room.
     if (h.containsKey("outgap")) opendeck_out_gap = (uint32_t)(h["outgap"] | 0);
@@ -3524,27 +3712,27 @@ class HidctlUsermod : public Usermod {
     }
     // How many bytes the interrupt IN transfer asks for, and a forced
     // re-arm of the IN pipe. Both are diagnostics for the deck's input.
-    if (h.containsKey("inlen")) hid_usb_set_in_xfer_len((uint16_t)(h["inlen"] | 0));
-    if (h["inreset"]) hid_usb_reset_in_pipe();
+    if (h.containsKey("inlen")) hid_usb_set_in_xfer_len(dev, (uint16_t)(h["inlen"] | 0));
+    if (h["inreset"]) hid_usb_reset_in_pipe(dev);
     // The SET_IDLE rate, in ms. Zero is what a PC asks for: the device
     // reports only when its state changes. A rate makes it report
     // whether or not anything happens, which is how a device nobody is
     // touching is told apart from one whose input path is broken.
-    if (h.containsKey("idle")) hid_usb_set_idle_rate((uint16_t)(h["idle"] | 0));
+    if (h.containsKey("idle")) hid_usb_set_idle_rate(dev, (uint16_t)(h["idle"] | 0));
     // The SET_IDLE rate in the low byte of wValue instead of the high
     // one. The specification says the high byte, but this device is not
     // a conformant HID stack.
-    if (h.containsKey("idlelow")) hid_usb_set_idle_rate_low_byte(h["idlelow"] | false);
+    if (h.containsKey("idlelow")) hid_usb_set_idle_rate_low_byte(dev, h["idlelow"] | false);
     // The data toggle of the interrupt IN channel. The driver only
     // writes it for control pipes, so a pipe that has never transferred
     // keeps whatever the channel had - and a device whose toggle is out
     // of step ignores every token.
     if (h.containsKey("pid")) {
-      bool ok = hid_usb_set_in_pid((uint8_t)(h["pid"] | 0));
+      bool ok = hid_usb_set_in_pid(dev, (uint8_t)(h["pid"] | 0));
       USER_PRINTF("[HIDCTL] the IN channel's data toggle: %s\n", ok ? "set" : "no channel");
     }
     // Ask the device for its firmware, the way the reference does.
-    if (h["fwver"]) hid_usb_read_firmware();
+    if (h["fwver"]) hid_usb_read_firmware(dev);
     // Put the LED report on the control pipe instead of the interrupt OUT
     // endpoint. The F1 takes it on the OUT endpoint, so this is a
     // diagnostic.
@@ -3560,7 +3748,7 @@ class HidctlUsermod : public Usermod {
       uint32_t ms = h["ms"] | 1000;
       blink(what, rate, ms);
     }
-    if (h.containsKey("classreq")) hid_usb_set_class_requests(h["classreq"] | false);
+    if (h.containsKey("classreq")) hid_usb_set_class_requests(dev, h["classreq"] | false);
     // Claim or release the device's other interface. A PC's HID stack
     // leaves the F1's second interface alone; we claimed it on a hunch.
     // The web API runs in the async_tcp task and the USB stack belongs to
@@ -3569,13 +3757,17 @@ class HidctlUsermod : public Usermod {
     // Send the wake-up packet again - also carried to the main loop.
     if (h["a0"]) cmd_wakeup = true;
     // Ask for the feature reports (a PC's HID stack does not).
-    if (h.containsKey("featrep")) hid_usb_set_feature_reports(h["featrep"] | true);
+    if (h.containsKey("featrep")) hid_usb_set_feature_reports(dev, h["featrep"] | true);
     if (h.containsKey("page")) {
       int pg = h["page"] | 0;
-      if (pg >= 1 && pg <= (int)lastPage()) {
-        page = (uint8_t)pg;
-        showPageUntil = millis() + 1500;
+      // The page of the device the console is talking about.
+      const uint8_t s = (focus_surface < surface_count) ? focus_surface : 0;
+      if (s < surface_count && pg >= 1 && pg <= (int)lastPage(surfaces[s].profile)) {
+        surfaces[s].page = (uint8_t)pg;
+        surfaces[s].show_page_until = millis() + 1500;
         paint();
+        // A deck's screens show the page's slots, so they change with it.
+        repaintDeck();
       }
     }
   }
@@ -3586,7 +3778,7 @@ class HidctlUsermod : public Usermod {
     JsonObject user = obj["u"];
     if (user.isNull()) user = obj.createNestedObject("u");
     JsonArray infoArr = user.createNestedArray(FPSTR(_name));
-    if (active_profile != 0xFF) {
+    if (focusProfile() != 0xFF) {
       infoArr.add(profileName());
       char buf[32];
       snprintf(buf, sizeof(buf), "%u profiles", profile_count);
@@ -3598,10 +3790,14 @@ class HidctlUsermod : public Usermod {
 
   void addToJsonAr(JsonObject& obj) override {
     JsonObject top = obj.createNestedObject(FPSTR(_name));
-    top["connected"] = (active_profile != 0xFF);
+    // Which device the readings are about: the surface the console is
+    // talking about.
+    const uint8_t dev = focusDevice();
+    top["connected"] = (focusProfile() != 0xFF);
+    top["surfaces"] = surface_count;
     top["device"] = profileName();
     top["profiles_loaded"] = profile_count;
-    top["buttons"] = buttons;
+    top["buttons"] = surfaces[focus_surface < surface_count ? focus_surface : 0].buttons;
     // How many of the first 64 preset slots the core's cache knows about -
     // the pads are coloured from it.
     uint8_t cached = 0;
@@ -3611,13 +3807,13 @@ class HidctlUsermod : public Usermod {
     top["presets_cached"] = cached;
     top["music_slot"] = music_slot;
     top["demo"] = demoActive;
-    top["class_status"] = hid_usb_class_status();
-    top["class_stage"] = hid_usb_class_stage();
-    top["other_iface"] = hid_usb_other_iface();
-    top["other_claimed"] = hid_usb_other_claimed();
+    top["class_status"] = hid_usb_class_status(dev);
+    top["class_stage"] = hid_usb_class_stage(dev);
+    top["other_iface"] = hid_usb_other_iface(dev);
+    top["other_claimed"] = hid_usb_other_claimed(dev);
     {
       uint8_t fl = 0;
-      const uint8_t* fd = hid_usb_feature_data(&fl);
+      const uint8_t* fd = hid_usb_feature_data(dev, &fl);
       if (fl) {
         char hex[2 * 72 + 1];
         int hl = 0;
@@ -3630,7 +3826,7 @@ class HidctlUsermod : public Usermod {
     }
     {
       uint8_t cl = 0;
-      const uint8_t* cd = hid_usb_class_data(&cl);
+      const uint8_t* cd = hid_usb_class_data(dev, &cl);
       if (cl) {
         char hex[2 * 8 + 1];
         int hl = 0;
@@ -3648,24 +3844,24 @@ class HidctlUsermod : public Usermod {
     top["wheel_max"] = wheel_max;
     top["wheel_moved"] = wheel_moved;
     // The reports that came in, and the zero-length packets after them.
-    top["reports_in"] = hid_usb_report_count();
-    top["zlps"] = hid_usb_zlp_count();
-    top["out_sent"] = hid_usb_out_count();
-    top["out_status"] = hid_usb_last_out_status();
-    top["out_no_device"] = hid_usb_out_refused(0);
-    top["out_too_long"] = hid_usb_out_refused(1);
-    top["out_busy"] = hid_usb_out_refused(2);
-    top["out_submit_err"] = hid_usb_out_refused(3);
-    top["out_submit_code"] = hid_usb_out_submit_error();
-    top["out_stuck"] = hid_usb_out_stuck();
-    top["ctrl_out"] = hid_usb_ctrl_out_count();
-    top["out_bytes"] = hid_usb_out_bytes();
-    top["out_via_control"] = hid_usb_get_out_via_control() ? 1 : 0;
-    top["out_drop_leading"] = hid_usb_get_out_drop_leading() ? 1 : 0;
-    top["out_zlp"] = hid_usb_get_out_zlp() ? 1 : 0;
-    top["in_xfer_len"] = hid_usb_get_in_xfer_len();
-    top["idle_rate"] = hid_usb_get_idle_rate();
-    top["idle_low"] = hid_usb_get_idle_rate_low_byte() ? 1 : 0;
+    top["reports_in"] = hid_usb_report_count(dev);
+    top["zlps"] = hid_usb_zlp_count(dev);
+    top["out_sent"] = hid_usb_out_count(dev);
+    top["out_status"] = hid_usb_last_out_status(dev);
+    top["out_no_device"] = hid_usb_out_refused(dev, 0);
+    top["out_too_long"] = hid_usb_out_refused(dev, 1);
+    top["out_busy"] = hid_usb_out_refused(dev, 2);
+    top["out_submit_err"] = hid_usb_out_refused(dev, 3);
+    top["out_submit_code"] = hid_usb_out_submit_error(dev);
+    top["out_stuck"] = hid_usb_out_stuck(dev);
+    top["ctrl_out"] = hid_usb_ctrl_out_count(dev);
+    top["out_bytes"] = hid_usb_out_bytes(dev);
+    top["out_via_control"] = hid_usb_get_out_via_control(dev) ? 1 : 0;
+    top["out_drop_leading"] = hid_usb_get_out_drop_leading(dev) ? 1 : 0;
+    top["out_zlp"] = hid_usb_get_out_zlp(dev) ? 1 : 0;
+    top["in_xfer_len"] = hid_usb_get_in_xfer_len(dev);
+    top["idle_rate"] = hid_usb_get_idle_rate(dev);
+    top["idle_low"] = hid_usb_get_idle_rate_low_byte(dev) ? 1 : 0;
     // The DWC2's own registers: whether the deck's IN channel is polled
     // at all, and what the controller thinks of it.
     {
@@ -3708,13 +3904,13 @@ class HidctlUsermod : public Usermod {
         }
       }
     }
-    top["out_shift"] = hid_usb_get_out_shift() ? 1 : 0;
-    top["out_cap"] = hid_usb_get_out_cap();
+    top["out_shift"] = hid_usb_get_out_shift(dev) ? 1 : 0;
+    top["out_cap"] = hid_usb_get_out_cap(dev);
     top["out_gap"] = opendeck_out_gap;
-    top["link_speed"] = hid_usb_link_speed();
+    top["link_speed"] = hid_usb_link_speed(dev);
     {
       uint8_t fl = 0;
-      const uint8_t* fb = hid_usb_out_first(&fl);
+      const uint8_t* fb = hid_usb_out_first(dev, &fl);
       char fhex[2 * 32 + 1];
       int fhl = 0;
       for (uint8_t i = 0; i < fl && fhl < (int)sizeof(fhex) - 3; i++) {
@@ -3727,7 +3923,7 @@ class HidctlUsermod : public Usermod {
       // packet that went out: between them they say what the device
       // expects and what we sent it.
       uint16_t dl = 0;
-      const uint8_t* dd = hid_usb_report_desc(&dl);
+      const uint8_t* dd = hid_usb_report_desc(dev, &dl);
       char hex[2 * 256 + 1];
       int hl = 0;
       for (uint16_t i = 0; i < dl && hl < (int)sizeof(hex) - 3; i++) {
@@ -3735,7 +3931,7 @@ class HidctlUsermod : public Usermod {
       }
       top["report_desc"] = hex;
       uint8_t ol = 0;
-      const uint8_t* oh = hid_usb_last_out_head(&ol);
+      const uint8_t* oh = hid_usb_last_out_head(dev, &ol);
       char ohex[2 * 24 + 1];
       int ohl = 0;
       for (uint8_t i = 0; i < ol && ohl < (int)sizeof(ohex) - 3; i++) {
@@ -3759,20 +3955,21 @@ class HidctlUsermod : public Usermod {
       }
       o["bytes"] = hex;
     }
-    top["page"] = page;
-    top["page_count"] = lastPage();
+    top["page"] = surfaces[focus_surface < surface_count ? focus_surface : 0].page;
+    top["page_count"] = lastPage(focusProfile());
     // The deck's encoders: what each one drives, what its tile on the
     // strip says, and what it is at. The label is the effect's own name
     // for the control, so it changes with the effect.
-    if (active_profile < profile_count && profiles && profiles[active_profile].opendeck) {
+    const uint8_t deck_profile = deckProfile();
+    if (deck_profile < profile_count && profiles && profiles[deck_profile].opendeck) {
       JsonArray encs = top.createNestedArray("encoders");
-      const uint8_t count = profiles[active_profile].od_encoders;
+      const uint8_t count = profiles[deck_profile].od_encoders;
       for (uint8_t i = 0; i < count && i < HIDCTL_MAX_ENCODERS; i++) {
-        const char* act = profiles[active_profile].encoders[i].action;
+        const char* act = profiles[deck_profile].encoders[i].action;
         char label[20] = "";
         opendeckActionLabel(act, label, sizeof(label));
         JsonObject e = encs.createNestedObject();
-        e["name"] = profiles[active_profile].encoders[i].name;
+        e["name"] = profiles[deck_profile].encoders[i].name;
         e["action"] = act;
         e["label"] = label;
         e["value"] = currentValueOf(act);
@@ -3781,10 +3978,10 @@ class HidctlUsermod : public Usermod {
     // The preset that is active, tracked across the core's wiping of
     // currentPreset - this is the one the green pad shows.
     top["active_preset"] = tracked_active_preset;
-    top["report_status"] = hid_usb_last_report_status();
-    top["reports_ok"] = hid_usb_reports_ok();
+    top["report_status"] = hid_usb_last_report_status(dev);
+    top["reports_ok"] = hid_usb_reports_ok(dev);
     uint8_t rb_len = 0;
-    const uint8_t* rb = hid_usb_readback(&rb_len);
+    const uint8_t* rb = hid_usb_readback(dev, &rb_len);
     if (rb_len) {
       char hex[2 * HIDCTL_READBACK_BYTES + 1];
       int hl = 0;
@@ -3794,13 +3991,30 @@ class HidctlUsermod : public Usermod {
       top["readback"] = hex;
     }
     uint8_t out_len = 0;
-    const uint8_t* out = hid_usb_last_out_report(&out_len);    if (out_len) {
+    const uint8_t* out = hid_usb_last_out_report(dev, &out_len);    if (out_len) {
       char hex[2 * HIDCTL_READBACK_BYTES + 1];
       int hl = 0;
       for (uint8_t i = 0; i < out_len && hl < (int)sizeof(hex) - 3; i++) {
         hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", out[i]);
       }
       top["led_report"] = hex;
+    }
+    // Every surface on the bus: which device it is on, which profile it
+    // uses, the page it is on, and what has gone in and out of it.
+    JsonArray devs = top.createNestedArray("devices");
+    for (uint8_t i = 0; i < surface_count; i++) {
+      if (!surfaces[i].in_use) continue;
+      JsonObject d = devs.createNestedObject();
+      d["device"] = surfaces[i].device;
+      d["profile"] = (surfaces[i].profile < profile_count)
+                       ? profiles[surfaces[i].profile].name : "";
+      d["deck"] = surfaces[i].opendeck;
+      d["page"] = surfaces[i].page;
+      d["page_count"] = lastPage(surfaces[i].profile);
+      d["buttons"] = surfaces[i].buttons;
+      d["in_reports"] = hid_usb_report_count(surfaces[i].device);
+      d["out_sent"] = hid_usb_out_count(surfaces[i].device);
+      d["out_bytes"] = hid_usb_out_bytes(surfaces[i].device);
     }
     JsonArray pr = top.createNestedArray("probe");
     for (uint8_t i = 0; i < probe_result_count; i++) {
@@ -3814,11 +4028,11 @@ class HidctlUsermod : public Usermod {
     // the packets that came in between. This is the data to crunch.
     top["log_reports"] = hid_usb_log_reports();
     top["log_zlps"] = hid_usb_log_zlps();
-    top["in_errors"] = hid_usb_in_errors();
+    top["in_errors"] = hid_usb_in_errors(dev);
     {
       uint8_t sc = 0;
       uint16_t* lens = nullptr;
-      const uint8_t* sts = hid_usb_in_statuses(&sc, &lens);
+      const uint8_t* sts = hid_usb_in_statuses(dev, &sc, &lens);
       JsonArray sa = top.createNestedArray("in_completions");
       for (uint8_t i = 0; i < sc; i++) {
         JsonObject o = sa.createNestedObject();
@@ -3848,7 +4062,7 @@ class HidctlUsermod : public Usermod {
     // authority on the device's layout - the parse above can only be as
     // good as the walk it does.
     uint8_t cfg_len = 0;
-    const uint8_t* cfg = hid_usb_config_desc(&cfg_len);
+    const uint8_t* cfg = hid_usb_config_desc(dev, &cfg_len);
     if (cfg_len) {
       char hex[2 * HIDCTL_READBACK_BYTES + 1];
       int hl = 0;
@@ -3861,7 +4075,7 @@ class HidctlUsermod : public Usermod {
     }
     // What the device says it has: every interface and its endpoints.
     uint8_t ifcount = 0;
-    const HidctlIfaceInfo* ifs = hid_usb_interfaces(&ifcount);
+    const HidctlIfaceInfo* ifs = hid_usb_interfaces(dev, &ifcount);
     JsonArray ia = top.createNestedArray("interfaces");
     for (uint8_t i = 0; i < ifcount; i++) {
       JsonObject o = ia.createNestedObject();
@@ -3895,11 +4109,13 @@ class HidctlUsermod : public Usermod {
       }
       o["ep_mps"] = mps;
     }
-    if (active_profile < profile_count) {
-      HidctlProfile& p = profiles[active_profile];
+    const uint8_t profile = focusProfile();
+    if (profile < profile_count) {
+      HidctlProfile& p = profiles[profile];
       JsonObject vals = top.createNestedObject("values");
+      const uint8_t s = (focus_surface < surface_count) ? focus_surface : 0;
       for (uint8_t i = 0; i < p.control_count; i++) {
-        vals[p.controls[i].name] = control_value[i];
+        vals[p.controls[i].name] = surfaces[s].control_value[i];
       }
     }
   }

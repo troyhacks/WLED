@@ -36,6 +36,14 @@
 #define HIDCTL_MAX_SEGMENTS        8
 #define HIDCTL_MAX_DIGITS          4
 #define HIDCTL_MAX_OUTPUT       1025
+// The LED report of a plain HID surface. The F1's is 81 bytes and it
+// belongs to the F1: two surfaces must not share one buffer. The decks'
+// packets are 1025 bytes and go through the deck's own buffer.
+#define HIDCTL_MAX_LED          128
+// The LED report of a plain HID surface. The F1's is 81 bytes and it
+// belongs to the F1: two surfaces must not share one buffer. The decks'
+// packets are 1025 bytes and go through the deck's own buffer.
+#define HIDCTL_MAX_LED          128
 #define HIDCTL_MAX_IFACES          4
 #define HIDCTL_MAX_IFACE_EPS       4
 #define HIDCTL_READBACK_BYTES     96

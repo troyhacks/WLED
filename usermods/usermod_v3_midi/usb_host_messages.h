@@ -77,10 +77,12 @@ typedef struct {
     // The raw HID input report, straight from the device. What it means is
     // decided by the profile (see usermod_v3_hidctl).
     struct {
+      uint8_t  device;      // which device on the bus the report came from
       uint16_t len;
       uint8_t  data[HIDCTL_MAX_REPORT];
     } hidctl;
     struct {
+      uint8_t  device;      // the device on the bus
       uint16_t vid;
       uint16_t pid;
       char     name[24];

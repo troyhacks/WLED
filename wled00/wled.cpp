@@ -944,7 +944,8 @@ void background_loop_nonblocking(void* pvParameters) {
       #ifdef USERMOD_HIDCTL_USB
       case app_message_t::APP_HIDCTL_PACKET: {
         if (hidctlUsermodPtr) {
-          hidctlUsermodPtr->handleIncomingReport(msg.data.hidctl.data,
+          hidctlUsermodPtr->handleIncomingReport(msg.data.hidctl.device,
+                                                 msg.data.hidctl.data,
                                                  msg.data.hidctl.len);
         }
         break;
@@ -954,13 +955,16 @@ void background_loop_nonblocking(void* pvParameters) {
       #ifdef USERMOD_HIDCTL_USB
       case app_message_t::APP_HIDCTL_DEVICE_CONNECTED: {
         if (hidctlUsermodPtr) {
-          hidctlUsermodPtr->onDeviceConnected(msg.data.hidctl_device_info.vid,
+          hidctlUsermodPtr->onDeviceConnected(msg.data.hidctl_device_info.device,
+                                              msg.data.hidctl_device_info.vid,
                                               msg.data.hidctl_device_info.pid);
         }
         break;
       }
       case app_message_t::APP_HIDCTL_DEVICE_DISCONNECTED: {
-        if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected();
+        if (hidctlUsermodPtr) {
+          hidctlUsermodPtr->onDeviceDisconnected(msg.data.hidctl_device_info.device);
+        }
         break;
       }
       #endif
