@@ -584,12 +584,13 @@ bool arGetSourceBeat(ArSourceBeat* d) {
   // Another board's beat, received over the network: after the decks and
   // Ableton, so a deck this board hears itself wins. Between packets the phase
   // runs on at the received tempo.
-  {
-    const uint32_t at  = arNetBeatAtMs;
+  // A board that never received a beat compares one zero here and goes on.
+  const uint32_t at = arNetBeatAtMs;
+  if (at != 0u) {
     const uint32_t now = arNetNowMs();
     const float    bpm = arNetBeatBpm;
     const uint8_t  bar = arNetBeatInBar;
-    if (at != 0u && (now - at) < AR_NET_BEAT_STALE_MS && bpm > 0.0f) {
+    if ((now - at) < AR_NET_BEAT_STALE_MS && bpm > 0.0f) {
       const float    beats = arNetBeatProgress + (float)(now - at) * bpm / 60000.0f;
       const uint32_t whole = (uint32_t)beats;
       d->bpm          = bpm;
