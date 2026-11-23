@@ -2908,6 +2908,7 @@ static const char* arCodecName(uint8_t type) {
     case 16:  return PSTR("ES7243 (esp_codec_dev)");
     case 17:  return PSTR("ES7243E (esp_codec_dev)");
     case 18:  return PSTR("CJC8910 (esp_codec_dev)");
+    case 20:  return PSTR("USB audio");
     case 254: return PSTR("None - network receive only");
     default:  return PSTR("Unknown");
   }
@@ -7582,6 +7583,23 @@ class AudioReactive : public Usermod {
         #endif  // CONFIG_CODEC_CJC8910_SUPPORT
         #endif  // ESP_IDF >= 4.4
 
+        #if defined(USERMOD_USBAUDIO_USB) && defined(SOC_USB_OTG_SUPPORTED)
+        case 20:
+          // A USB audio device. The USB Host client does the work: it claims
+          // the isochronous capture endpoint of whichever device turns up and
+          // streams it into a ring buffer. This source only reads that ring.
+          //
+          // There is no pin to allocate and no codec to initialise, so the
+          // initialise() call below is a formality - but it is what sets the
+          // source's "ready" flag, so it is made.
+          DEBUGSR_PRINTLN(F("AR: USB audio device."));
+          audioSource = new USBHostAudioSource(SAMPLE_RATE, BLOCK_SIZE);
+          if (audioSource) audioSource->initialize(I2S_GPIO_UNUSED, I2S_GPIO_UNUSED,
+                                                    I2S_GPIO_UNUSED, I2S_GPIO_UNUSED,
+                                                    i2sBitsPerSample, i2sUseRightSlot, i2sMaster);
+          break;
+        #endif  // USERMOD_USBAUDIO_USB
+
           case 255: // falls through
           case 254: // dummy "network receive only" driver
             // audioSource is already null: it was freed before the switch.
@@ -8146,12 +8164,46 @@ class AudioReactive : public Usermod {
         } else if ((audioSyncEnabled & AUDIOSYNC_REC) && udpLive) {
           ar["source"] = "udp";
         } else if (localOk) {
-          ar["source"] = (dmType == 51) ? "legacy i2s pdm" : "i2s";
+          // A USB source says so. It is not an I2S device and calling it
+          // one would send the reader looking for a codec that is not there.
+          if (dmType == 20) {
+            ar["source"] = "usb";
+          } else {
+            ar["source"] = (dmType == 51) ? "legacy i2s pdm" : "i2s";
+          }
         } else {
           ar["source"] = "none";
         }
       }
       ar["codec"]     = arCodecName(dmType);
+      // The "codec" key is taken over by a nested object further down (the
+      // second write to a key wins in ArduinoJson), so the NAME is published
+      // under its own key as well. Otherwise a reader of /json/ar could not
+      // tell an ES8311 from a USB device.
+      ar["codec_name"] = arCodecName(dmType);
+#if defined(USERMOD_USBAUDIO_USB) && defined(SOC_USB_OTG_SUPPORTED)
+      // The USB source's own numbers. The skipped-packet count is the one
+      // that matters: it is the number of isochronous packets the
+      // controller could not service in time, and every one of them is a
+      // piece of audio that was lost on the way in.
+      //
+      // These are published whether or not the USB source is the one being
+      // analysed: the client runs either way, and "a device is attached but
+      // the source is the ES8311" is a thing worth being able to see.
+      {
+        uint32_t uacSkipped = 0, uacOver = 0, uacUnder = 0, uacUrbs = 0;
+        uac_usb_get_stats(&uacSkipped, &uacOver, &uacUnder, &uacUrbs);
+        JsonObject u = ar.createNestedObject("usb");
+        u["connected"]      = uac_usb_connected();
+        u["rate"]           = uac_usb_sample_rate();
+        u["channels"]       = uac_usb_channels();
+        u["bits"]           = uac_usb_bits_per_sample();
+        u["skipped_packets"] = uacSkipped;
+        u["overruns"]       = uacOver;   // samples dropped: the ring was full
+        u["underruns"]      = uacUnder;  // frames padded with silence
+        u["urbs"]           = uacUrbs;   // isochronous transfers completed
+      }
+#endif
       ar["input_level"] = (int)inputLevel;
       {
         float post = (float)inputLevel / 128.0f;

@@ -67,6 +67,15 @@ static const char *TAG = "WLED";
     #include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
     #include "../usermods/usermod_v3_hidctl/hid_usb_host.cpp"
   #endif
+
+  #ifdef USERMOD_USBAUDIO_USB
+    // And again: the USB audio client claims the isochronous capture
+    // endpoint of an audio device and streams it into a ring buffer, which
+    // the AudioReactive usermod reads. The samples do NOT go through the app
+    // queue - it is five deep and the audio is 48000 samples a second.
+    #include "../usermods/usermod_v3_usbaudio/usbaudio_usb_host.cpp"
+  #endif
+
   #define MNT_PATH "/usb"     // Base mount path prefix, devices will be mounted as /usb0, /usb1, /usb2...
   #define MAX_MSC_DEVICES  CONFIG_FATFS_VOLUME_COUNT 
 
@@ -468,6 +477,10 @@ static const char *TAG = "WLED";
       hid_usb_init();
       #endif
 
+      #ifdef USERMOD_USBAUDIO_USB
+      uac_usb_init();
+      #endif
+
       bool has_clients = true;
       while (true) {
           uint32_t event_flags;
@@ -483,6 +496,10 @@ static const char *TAG = "WLED";
 
           #ifdef USERMOD_HIDCTL_USB
           hid_usb_poll();
+          #endif
+
+          #ifdef USERMOD_USBAUDIO_USB
+          uac_usb_poll();
           #endif
 
           // Release devices once all clients has deregistered

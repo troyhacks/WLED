@@ -2888,3 +2888,22 @@ class SPH0654 : public I2SSource {
       I2SSource::initialize(i2swsPin, i2ssdPin, i2sckPin, mclkPin, bitsPerSample, useRightSlot, i2sMaster);
     }
 };
+
+/* USB audio device
+
+   A USB audio device (a microphone, or the capture side of an audio
+   interface) as the source for the analysis.
+
+   The USB half is a USB Host client of its own - see
+   usermods/usermod_v3_usbaudio/ - and it hands the samples over through a
+   ring buffer. The class below is the thin end of that: it exists so the
+   analysis can select the source the same way it selects a codec, with a
+   case in the switch(dmType) in audio_reactive.h.
+
+   Nothing about the analysis changes: the samples arrive at the rate the
+   device streams them, and everything downstream works on samples without
+   knowing where they came from.
+*/
+#if defined(USERMOD_USBAUDIO_USB) && defined(SOC_USB_OTG_SUPPORTED)
+  #include "../usermod_v3_usbaudio/usbaudio_source.h"
+#endif
