@@ -3043,6 +3043,7 @@ class HidctlUsermod : public Usermod {
   // order (blue first) and turned 180 degrees, because that is how the
   // device reads it.
   bool opendeckEncodeKey(uint8_t index, uint8_t** jpeg_out, uint16_t* len_out) {
+    const uint32_t t0 = millis();
     const OpendeckPic& pic = opendeck_pics[index];
     const uint16_t w = pic.w, h = pic.h;
     const size_t pic_len = (size_t)w * h * 3;
@@ -3092,6 +3093,8 @@ class HidctlUsermod : public Usermod {
     // The device reads its pictures upside down, so the picture is turned
     // 180 degrees: the rows and the columns both go.
     //
+    const uint32_t t_draw = millis();
+
     // The turn has to be done a pair of rows at a time. Done row by row
     // in place, the second half of the picture is read from rows that have
     // already been written, and the picture comes out with its top half
@@ -3115,18 +3118,43 @@ class HidctlUsermod : public Usermod {
       }
     }
 
+    const uint32_t t_rot = millis();
+
     size_t jpeg_len = 0;
     const bool ok = opendeckEncodeJpeg(buf, w, h, jpeg, pic_len + 32768, jpeg_len);
+    const uint32_t t_enc = millis();
     free(buf);
     if (!ok) { free(jpeg); return false; }
 
     // A copy of the last picture, so it can be looked at: the deck's
     // screens are the only place it shows up otherwise.
+    //
+    // Every tenth one. The filesystem here is on the SD card, and writing
+    // a few kilobytes to it ten times a second is most of the time a
+    // picture takes to make.
     {
-      File f = WLED_FS.open("/hidctl-preview.jpg", "w");
-      if (f) {
-        f.write(jpeg, jpeg_len);
-        f.close();
+      static uint16_t previewCount = 0;
+      if ((previewCount++ % 10) == 0) {
+        File f = WLED_FS.open("/hidctl-preview.jpg", "w");
+        if (f) {
+          f.write(jpeg, jpeg_len);
+          f.close();
+        }
+      }
+    }
+    const uint32_t t_prev = millis();
+
+    // Where the time went, once a second. The console is read by a
+    // person, so it is not said for every picture.
+    {
+      static uint32_t lastSaid = 0;
+      if (t_prev - lastSaid > 1000) {
+        lastSaid = t_prev;
+        USER_PRINTF("[HIDCTL] deck: a picture took %u ms (draw %u, rotate %u, "
+                    "encode %u, preview %u)\n",
+                    (unsigned)(t_prev - t0),
+                    (unsigned)(t_draw - t0), (unsigned)(t_rot - t_draw),
+                    (unsigned)(t_enc - t_rot), (unsigned)(t_prev - t_enc));
       }
     }
 
@@ -3818,7 +3846,7 @@ class HidctlUsermod : public Usermod {
       uint8_t fl = 0;
       const uint8_t* fd = hid_usb_feature_data(dev, &fl);
       if (fl) {
-        char hex[2 * 72 + 1];
+        char hex[2 * 72 + 1] = {0};
         int hl = 0;
         for (uint8_t i = 0; i < fl && hl < (int)sizeof(hex) - 3; i++) {
           hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", fd[i]);
@@ -3831,7 +3859,7 @@ class HidctlUsermod : public Usermod {
       uint8_t cl = 0;
       const uint8_t* cd = hid_usb_class_data(dev, &cl);
       if (cl) {
-        char hex[2 * 8 + 1];
+        char hex[2 * 8 + 1] = {0};
         int hl = 0;
         for (uint8_t i = 0; i < cl && hl < (int)sizeof(hex) - 3; i++) {
           hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", cd[i]);
@@ -3927,7 +3955,7 @@ class HidctlUsermod : public Usermod {
       // expects and what we sent it.
       uint16_t dl = 0;
       const uint8_t* dd = hid_usb_report_desc(dev, &dl);
-      char hex[2 * 256 + 1];
+      char hex[2 * 256 + 1] = {0};
       int hl = 0;
       for (uint16_t i = 0; i < dl && hl < (int)sizeof(hex) - 3; i++) {
         hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", dd[i]);
@@ -3935,7 +3963,7 @@ class HidctlUsermod : public Usermod {
       top["report_desc"] = hex;
       uint8_t ol = 0;
       const uint8_t* oh = hid_usb_last_out_head(dev, &ol);
-      char ohex[2 * 24 + 1];
+      char ohex[2 * 24 + 1] = {0};
       int ohl = 0;
       for (uint8_t i = 0; i < ol && ohl < (int)sizeof(ohex) - 3; i++) {
         ohl += snprintf(ohex + ohl, sizeof(ohex) - ohl, "%02X", oh[i]);
@@ -3950,7 +3978,7 @@ class HidctlUsermod : public Usermod {
       o["id"] = seen[i].id;
       o["len"] = seen[i].len;
       o["count"] = seen[i].count;
-      char hex[2 * HIDCTL_SEEN_BYTES + 1];
+      char hex[2 * HIDCTL_SEEN_BYTES + 1] = {0};
       int hl = 0;
       hex[0] = '\0';
       for (uint8_t k = 0; k < seen[i].len && k < HIDCTL_SEEN_BYTES && hl < (int)sizeof(hex) - 3; k++) {
@@ -3986,7 +4014,7 @@ class HidctlUsermod : public Usermod {
     uint8_t rb_len = 0;
     const uint8_t* rb = hid_usb_readback(dev, &rb_len);
     if (rb_len) {
-      char hex[2 * HIDCTL_READBACK_BYTES + 1];
+      char hex[2 * HIDCTL_READBACK_BYTES + 1] = {0};
       int hl = 0;
       for (uint8_t i = 0; i < rb_len && hl < (int)sizeof(hex) - 3; i++) {
         hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", rb[i]);
@@ -3995,7 +4023,7 @@ class HidctlUsermod : public Usermod {
     }
     uint8_t out_len = 0;
     const uint8_t* out = hid_usb_last_out_report(dev, &out_len);    if (out_len) {
-      char hex[2 * HIDCTL_READBACK_BYTES + 1];
+      char hex[2 * HIDCTL_READBACK_BYTES + 1] = {0};
       int hl = 0;
       for (uint8_t i = 0; i < out_len && hl < (int)sizeof(hex) - 3; i++) {
         hl += snprintf(hex + hl, sizeof(hex) - hl, "%02X", out[i]);
@@ -4051,7 +4079,7 @@ class HidctlUsermod : public Usermod {
         if (!ep) continue;
         const HidLogEntry& e = *ep;
         JsonObject o = la.createNestedObject();
-        char hex[2 * HIDCTL_MAX_REPORT + 1];
+        char hex[2 * HIDCTL_MAX_REPORT + 1] = {0};
         int hl = 0;
         hex[0] = '\0';
         for (uint8_t k = 0; k < e.len && hl < (int)sizeof(hex) - 3; k++) {
@@ -4067,7 +4095,7 @@ class HidctlUsermod : public Usermod {
     uint8_t cfg_len = 0;
     const uint8_t* cfg = hid_usb_config_desc(dev, &cfg_len);
     if (cfg_len) {
-      char hex[2 * HIDCTL_READBACK_BYTES + 1];
+      char hex[2 * HIDCTL_READBACK_BYTES + 1] = {0};
       int hl = 0;
       hex[0] = '\0';
       for (uint8_t i = 0; i < cfg_len && hl < (int)sizeof(hex) - 3; i++) {
