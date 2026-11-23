@@ -2420,6 +2420,7 @@ function tempoUpdate(t)
 	if (sid === 1) srcName = "PRO LINK";
 	else if (sid === 2) srcName = "STAGE LINQ";
 	else if (sid === 3) srcName = "ABLETON LINK";
+	else if (sid === 4) srcName = "NETWORK";   // another board's beat, over MoonModules sync
 	var boxes = document.getElementsByClassName('tbox');
 	var cur = live ? Math.min(3, Math.max(0, (t.beat|0) - 1)) : -1;
 	tempoBox = cur;
