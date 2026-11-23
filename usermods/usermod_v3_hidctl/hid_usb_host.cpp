@@ -93,15 +93,42 @@ static uint8_t hid_feature_len = 0;
 // from the one before are kept - the wheel and the knobs sit still most of
 // the time - and each entry says how many packets came in between.
 static constexpr uint8_t HIDCTL_LOG_ENTRIES = 48;
-static HidLogEntry hid_log[HIDCTL_LOG_ENTRIES];
+//
+// The log lives in PSRAM, not in the internal SRAM.
+//
+// Forty-eight reports of 1024 bytes is 49 KB, and on this board that is
+// not a rounding error: the internal SRAM is where the USB host's own
+// allocations come from, and the log sat right below the heap's high
+// start, so every byte of it was a byte the USB stack could not have.
+// With the deck plugged in, the host could not even allocate the
+// interrupt endpoint for the second device ("EP Alloc error:
+// ESP_ERR_NO_MEM") and the deck was never claimed.
+//
+// The log is written by the transfer callback (the USB task's context,
+// not an ISR) and read by the web server, so PSRAM is safe for it: only
+// a DMA engine needs the cache told about it.
+static HidLogEntry* hid_log = nullptr;
+static uint8_t*  hid_log_last = nullptr;
 static uint8_t  hid_log_count = 0;
 static uint8_t  hid_log_next = 0;
 static uint16_t hid_log_skipped = 0;
-static uint8_t  hid_log_last[HIDCTL_MAX_REPORT];
 static uint8_t  hid_log_last_len = 0;
 static bool     hid_log_have_last = false;
 static uint32_t hid_log_reports = 0;
 static uint32_t hid_log_zlps = 0;
+
+// The log's memory. It is taken once, at init, and never freed.
+static void hid_log_alloc(void) {
+  if (hid_log) return;
+  const size_t entries = (size_t)HIDCTL_LOG_ENTRIES * sizeof(HidLogEntry);
+  hid_log = (HidLogEntry*)heap_caps_malloc(entries, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  hid_log_last = (uint8_t*)heap_caps_malloc(HIDCTL_MAX_REPORT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!hid_log || !hid_log_last) {
+    HIDCTL_LOG("init: no room in PSRAM for the wire log");
+    if (hid_log) { free(hid_log); hid_log = nullptr; }
+    if (hid_log_last) { free(hid_log_last); hid_log_last = nullptr; }
+  }
+}
 
 // Record a report that came in, or a zero-length packet.
 static void hid_log_event(const uint8_t* data, uint16_t len, bool zero_length) {
@@ -112,11 +139,12 @@ static void hid_log_event(const uint8_t* data, uint16_t len, bool zero_length) {
   }
   hid_log_reports++;
   uint8_t n = (len > HIDCTL_MAX_REPORT) ? HIDCTL_MAX_REPORT : (uint8_t)len;
-  if (hid_log_have_last && n == hid_log_last_len &&
+  if (hid_log_have_last && n == hid_log_last_len && hid_log_last &&
       memcmp(data, hid_log_last, n) == 0) {
     hid_log_skipped++;
     return;                       // the same report again
   }
+  if (!hid_log) return;
   HidLogEntry* e = &hid_log[hid_log_next];
   e->skipped = hid_log_skipped;
   e->len = n;
@@ -139,7 +167,7 @@ static uint8_t  hid_in_status_next = 0;
 static volatile uint32_t hid_in_error_count = 0;
 
 const HidLogEntry* hid_usb_log(uint8_t index) {
-  if (index >= hid_log_count) return nullptr;
+  if (!hid_log || index >= hid_log_count) return nullptr;
   return &hid_log[(hid_log_next + HIDCTL_LOG_ENTRIES - hid_log_count + index) % HIDCTL_LOG_ENTRIES];
 }
 uint8_t hid_usb_log_count(void) { return hid_log_count; }
@@ -240,6 +268,11 @@ static volatile int8_t   hid_out_submit_error = 0;
 static volatile uint32_t hid_out_stuck = 0;      // a transfer that never finished
 static volatile uint32_t hid_out_started_ms = 0; // when the one in flight went
 static volatile bool hid_in_resubmit_needed = false;
+// A device that appeared while another client was holding it.
+static uint8_t hid_retry_addr = 0;
+static uint32_t hid_retry_at = 0;
+static bool hid_open_blocked = false;    // it was held, not a real fault
+static uint8_t hid_retry_count = 0;
 static volatile bool hid_in_error_recovery_needed = false;
 static volatile uint8_t hid_link_speed = 0;    // 0 = unknown, 1 = full, 2 = high
 // True for a device whose reports are always exactly one maximum packet
@@ -404,6 +437,12 @@ static void      hid_close_device(void);
 void hid_usb_init(void) {
   if (hid_client) return;
 
+  // The wire log, in PSRAM. It has to be taken before anything is
+  // recorded, and before the USB host's own allocations: the log used to
+  // sit in the internal heap, right below where the heap's high start
+  // was, and every byte of it was a byte the USB stack could not have.
+  hid_log_alloc();
+
   usb_host_client_config_t cfg = {};
   cfg.is_synchronous = false;
   cfg.max_num_event_msg = 5;
@@ -470,6 +509,28 @@ void hid_usb_poll(void) {
   if (!hid_client) return;
 
   usb_host_client_handle_events(hid_client, 0);
+
+  // A device that was held by another client when it appeared: try again.
+  // Only that case - a device that opens and then fails to be claimed is
+  // a real fault, and trying it again only leaks channels.
+  if (hid_retry_addr && hid_retry_count < 20 && millis() - hid_retry_at > 500) {
+    hid_retry_at = millis();
+    hid_retry_count++;
+    if (hid_open_and_configure(hid_retry_addr) == ESP_OK) {
+      HIDCTL_LOG("event: the device at addr %u was released - claimed",
+                 hid_retry_addr);
+      hid_retry_addr = 0;
+      hid_retry_count = 0;
+      app_message_t m = {};
+      m.id = app_message_t::APP_HIDCTL_DEVICE_CONNECTED;
+      m.data.hidctl_device_info.vid = hid_vendor;
+      m.data.hidctl_device_info.pid = hid_product;
+      strncpy(m.data.hidctl_device_info.name, "HID control surface",
+              sizeof(m.data.hidctl_device_info.name) - 1);
+      m.data.hidctl_device_info.name[sizeof(m.data.hidctl_device_info.name) - 1] = ' ';
+      if (app_queue) xQueueSend(app_queue, &m, 0);
+    }
+  }
 
   // A transfer that never finishes would block every later packet.
   hid_out_watchdog();
@@ -642,7 +703,23 @@ static void hid_client_event_cb(const usb_host_client_event_msg_t* msg, void* /*
 
   if (msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
     HIDCTL_LOG("event: NEW_DEV addr=%d", msg->new_dev.address);
-    if (hid_open_and_configure(msg->new_dev.address) == ESP_OK) {
+    if (hid_open_and_configure(msg->new_dev.address) != ESP_OK) {
+      if (hid_open_blocked) {
+        // Another client (the MSC one opens every device to see if it is a
+        // mass storage) still has it. Remember it and try again from the
+        // main loop.
+        HIDCTL_LOG("event: NEW_DEV addr=%d is held by another client - will retry",
+                   msg->new_dev.address);
+        hid_retry_addr = msg->new_dev.address;
+        hid_retry_at = millis();
+        hid_retry_count = 0;
+      } else {
+        HIDCTL_LOG("event: NEW_DEV addr=%d would not open - giving up",
+                   msg->new_dev.address);
+      }
+      return;
+    }
+    {
       app_message_t m = {};
       m.id = app_message_t::APP_HIDCTL_DEVICE_CONNECTED;
       m.data.hidctl_device_info.vid = hid_vendor;
@@ -783,8 +860,12 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   if (err != ESP_OK) {
     HIDCTL_DEBUG("configure: device_open(addr=%d) failed: %s (owned elsewhere?)",
                  dev_addr, esp_err_to_name(err));
+    // Another client has it. That is worth trying again: the other client
+    // releases it when it finds the device is not for it.
+    hid_open_blocked = true;
     return err;
   }
+  hid_open_blocked = false;
 
   const usb_device_desc_t* dev_desc = nullptr;
   err = usb_host_get_device_descriptor(dev, &dev_desc);
