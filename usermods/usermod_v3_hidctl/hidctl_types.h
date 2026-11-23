@@ -59,6 +59,14 @@ struct HidctlEncoder {
   char     action[HIDCTL_MAX_ACTION];       // what a twist drives
   char     push_action[HIDCTL_MAX_ACTION];   // what the push does
   uint8_t  value;                           // the last value it drove
+  bool     touched;                         // it has been turned at least once
+  // Which of the effect's controls the encoder drives: the five sliders
+  // and the three check boxes. It stays where it is when the effect
+  // changes.
+  uint8_t  ctrl;
+  // True when the encoder cycles through the effect's controls instead of
+  // holding on to one.
+  bool     cycler;
 };
 
 // One button: a bit of the button bitmap.
@@ -143,8 +151,13 @@ struct HidctlProfile {
   uint8_t  od_encoders;
   uint8_t  od_strip_slot;   // the BAT slot for one picture across the
                               // whole strip; 0 = the strip is four zones
-  // True when the wide touch strip is ONE screen: a single picture
-  // across all of it, cut into a tile per encoder. The reference calls
-  // that a "BGPIC".
-  bool     od_strip_one;
+  // True when the wide touch strip is driven by ONE picture across all
+  // of it - the reference's "BGPIC". The CN003 is not one of the devices
+  // that takes it: its strip is four zone pictures, and the deck puts
+  // them side by side on its one screen. With only the one-picture
+  // command the strip stayed black.
+  bool     od_strip_bgpic;
+  // How many slots a page holds. Zero means "as many as the device has
+  // screens": sixteen for the F1's pads, ten for the CN003's keys.
+  uint8_t  page_size;
 };

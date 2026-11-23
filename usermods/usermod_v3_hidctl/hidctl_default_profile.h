@@ -35,6 +35,20 @@
 //               twisted: the low bit of the ID is the direction
 //
 // The touch strip's four zones are the same 0x40..0x43 messages.
+//
+// The encoders: the first one pages the presets, the fourth drives the
+// global brightness, and the second and the third drive the effect's own
+// controls - a touch on the strip above them picks which one, and a
+// press on one of them turns a check box on and off. The wide strip
+// shows what each of them does.
+//
+// The page is ten slots - one for each of the keys with a screen - so
+// the pages and the keys agree.
+//
+// The wide touch strip is driven by four zone pictures, one per encoder,
+// which the deck puts side by side on its one screen. The one-picture
+// command across the whole strip ("bgpic") is the reference's other way
+// and this deck does not take it: its strip stayed black.
 static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
   "name": "Soomfon CN003",
   "vid": "0x1500",
@@ -42,12 +56,13 @@ static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
   "kind": "opendeck",
   "report_id": 0,
   "report_len": 512,
-  "opendeck": { "keys": 10, "encoders": 4, "strip_one": true },
+  "page_size": 10,
+  "opendeck": { "keys": 10, "encoders": 4, "bgpic": false },
   "encoders": [
     { "name": "enc1", "action": "page", "push_action": "showpage" },
-    { "name": "enc2", "action": "page", "push_action": "ctrlbri" },
-    { "name": "enc3", "action": "page", "push_action": "" },
-    { "name": "enc4", "action": "page", "push_action": "" }
+    { "name": "enc2", "action": "effectSpeed", "push_action": "ctrlbri" },
+    { "name": "enc3", "action": "effectIntensity", "push_action": "" },
+    { "name": "enc4", "action": "bri", "push_action": "" }
   ],
   "button_map": [
     { "index": 0,  "name": "key1",  "action": "preset1" },
@@ -62,8 +77,8 @@ static const char HIDCTL_CN003_PROFILE_JSON[] = R"JSON({
     { "index": 9,  "name": "key10", "action": "preset10" },
     { "index": 11, "name": "zone1", "action": "nextpreset" },
     { "index": 12, "name": "zone2", "action": "prevpreset" },
-    { "index": 13, "name": "zone3", "action": "nextfx" },
-    { "index": 14, "name": "zone4", "action": "prevfx" },
+    { "index": 13, "name": "zone3", "action": "nextctrl" },
+    { "index": 14, "name": "zone4", "action": "nextctrl" },
     { "index": 15, "name": "zone5", "action": "blackout" }
   ]
 })JSON";

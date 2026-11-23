@@ -187,8 +187,11 @@ class Deck:
                       WIRE_LEN)
         self.stp()
 
-    def image(self, slot, jpeg):
-        """BAT, the image in 1024-byte chunks, then STP."""
+    def image(self, slot, jpeg, commit=True):
+        """BAT, the image in 1024-byte chunks, then STP.
+
+        With commit=False the STP is left out, so a batch of images can be
+        committed with one STP at the end."""
         self.send(hdr(b'BAT', bytes([0x00, 0x00,
                                      (len(jpeg) >> 8) & 0xFF, len(jpeg) & 0xFF,
                                      slot])))
@@ -196,7 +199,8 @@ class Deck:
             chunk = jpeg[off:off + PACKET_SIZE]
             self.send(bytes([0x00]) + chunk + bytes(WIRE_LEN - 1 - len(chunk)),
                       WIRE_LEN)
-        self.stp()
+        if commit:
+            self.stp()
 
     # -- the input --------------------------------------------------------
 
