@@ -41,10 +41,14 @@
 //
 // Action vocabulary (see runAction()):
 //   parameters  bri, effectSpeed, effectIntensity, effectPalette,
-//               effectCustom1, effectCustom2, seg0bri .. seg7bri
+//               effectCustom1, effectCustom2, effectCustom3, seg0bri .. seg7bri
 //   verbs       power, blackout, full, nextfx, prevfx, nextpal, prevpal,
 //               nextpreset, prevpreset, toggleFreeze, seg0 .. seg7
 //   presets     preset1 .. preset64, savepreset1 .. savepreset64
+//
+// A parameter's value is given on the controls' own 0..255 scale. The
+// effect's fifth slider is the exception the other way: it is five bits
+// (0..31), so it is mapped across that range - see actionMax().
 
 #pragma once
 
@@ -1029,6 +1033,40 @@ class HidctlUsermod : public Usermod {
   }
 
   // -------------------------------------------------------------------------
+  // the ranges of the parameters
+  // -------------------------------------------------------------------------
+  //
+  // The controls work in a domain of their own: the whole byte, 0..255,
+  // whatever the parameter behind them really is. A knob's travel is
+  // mapped onto that byte, and the action turns it into the parameter.
+  //
+  // The effect's FIFTH slider is the odd one out. WLED keeps custom3 in
+  // five bits: the JSON API constrains it to 0..31, and the effects that
+  // use it say so in their data string ("custom3_0-31"). A control on it
+  // therefore has to be mapped ACROSS that range, not clamped to it -
+  // clamping puts the whole of the knob's travel into the first 32 of its
+  // 256 steps, and the last 224 do nothing at all.
+  static constexpr uint16_t CUSTOM3_MAX = 31;
+
+  // The largest value the parameter an action names can take.
+  static uint16_t actionMax(const char* action) {
+    if (!strcmp(action, "effectCustom3")) return CUSTOM3_MAX;
+    return 255;
+  }
+
+  // A value in the control's 0..255 domain, into the parameter's own
+  // range, and back again. The parameter's range is max+1 steps wide and
+  // the domain's is 256, so the two are the same width apart.
+  static uint8_t valueToParam(uint8_t value, uint16_t max) {
+    if (max >= 255) return value;
+    return (uint8_t)((uint32_t)value * (max + 1u) / 256u);
+  }
+  static uint8_t valueToDomain(uint8_t value, uint16_t max) {
+    if (max >= 255) return value;
+    return (uint8_t)((uint32_t)value * 256u / (max + 1u));
+  }
+
+  // -------------------------------------------------------------------------
   // action dispatch
   // -------------------------------------------------------------------------
   void runAction(const char* action, uint8_t value) {
@@ -1113,8 +1151,10 @@ class HidctlUsermod : public Usermod {
     }
     if (!strcmp(action, "effectCustom3")) {
       // The fifth slider: the effect's own, and it is only five bits.
+      // The value comes in on the controls' 0..255 scale, so it is mapped
+      // across the five bits - not clamped into them.
       Segment& seg = strip.getMainSegment();
-      seg.custom3 = (uint8_t)(value > 31 ? 31 : value);
+      seg.custom3 = valueToParam(value, CUSTOM3_MAX);
       applyValuesToSelectedSegs();
       colorUpdated(CALL_MODE_BUTTON);
       stateUpdated(CALL_MODE_BUTTON);
@@ -1823,15 +1863,23 @@ class HidctlUsermod : public Usermod {
     if (!sf.control_taken[idx]) {
       int cur = currentValueOf(act);
       if (cur >= 0) {
-        int curRaw = (int)((uint32_t)cur * full / 255u);
+        // The parameter's value is in its own units, so it is mapped into
+        // the controls' domain first. The fifth slider is five bits, and
+        // without this its value would be read as a fraction of the
+        // knob's travel - the knob would have to sit at the bottom of its
+        // range before it was allowed to take over.
+        const uint8_t curDom = valueToDomain((uint8_t)cur, actionMax(act));
+        int curRaw = (int)((uint32_t)curDom * full / 255u);
         int delta = (int)raw - curRaw;
         if (delta < 0) delta = -delta;
         int wiggle = (int)(full / 255u * 8u) + 1;   // ~8/255 of the range
         if (delta > wiggle) {
-          // Say it once, not once a report.
+          // Say it once, not once a report. The target is where the knob
+          // has to be: a position on the knob, not a value of the
+          // parameter, so the person reading it knows which way to turn.
           if (!sf.control_waited[idx]) {
             USER_PRINTF("[HIDCTL] %s: waiting for takeover (raw %u, target %u)\n",
-                        ctl.name, raw, (unsigned)cur);
+                        ctl.name, raw, (unsigned)curRaw);
             sf.control_waited[idx] = true;
           }
           return;    // not driven: the baseline stays where it was
@@ -1856,7 +1904,11 @@ class HidctlUsermod : public Usermod {
     if (!act[0]) return;
     if (now - sf.control_log_ms[idx] >= CONTROL_LOG_INTERVAL_MS) {
       sf.control_log_ms[idx] = now;
-      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act, value);
+      // The value the parameter is put at, not the one on the controls'
+      // scale: the fifth slider is five bits, and it would say 124 where
+      // the parameter holds 15.
+      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act,
+                  (unsigned)valueToParam(value, actionMax(act)));
     }
     runAction(act, value);
   }
@@ -1966,17 +2018,18 @@ class HidctlUsermod : public Usermod {
         // The value is the control's OWN value, moved by one, read every
         // time. Two encoders on the same control then stay in step: one
         // of them moves it and the other picks it up where it is.
+        const uint16_t amax = actionMax(act);
         const int cur = currentValueOf(act);
         int v = (cur >= 0 ? cur : (int)enc.value) + ev.delta;
         if (v < 0) v = 0;
-        if (v > 255) v = 255;
+        if (v > (int)amax) v = (int)amax;
         enc.value = (uint8_t)v;
         USER_PRINTF("[HIDCTL] %s twist -> %s = %u\n", enc.name, act, v);
         // The parameter moved: the strip shows what it is at, and the
         // keys do not change. The state change that follows is told, so
         // it does not send the ten keys again.
         opendeck_strip_change = true;
-        runAction(act, v);
+        runAction(act, valueToDomain((uint8_t)v, amax));
         opendeck_strip_change = false;
         break;
       }
