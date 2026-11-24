@@ -20,8 +20,20 @@ SPIClass::~SPIClass()
     end();
 }
 
-void SPIClass::begin()
+void SPIClass::begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss)
 {
+    if (sck >= 0) {
+        _sck = sck;
+    }
+    if (miso >= 0) {
+        _miso = miso;
+    }
+    if (mosi >= 0) {
+        _mosi = mosi;
+    }
+    if (ss >= 0) {
+        _ss = ss;
+    }
     if (_begun) {
         return;
     }
@@ -51,15 +63,6 @@ void SPIClass::begin()
         _handle = handle;
         _begun = true;
     }
-}
-
-void SPIClass::begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss)
-{
-    _sck = sck;
-    _miso = miso;
-    _mosi = mosi;
-    _ss = ss;
-    begin();
 }
 
 void SPIClass::end()
@@ -158,6 +161,11 @@ size_t SPIClass::write(const uint8_t *buffer, size_t size)
 int SPIClass::available()
 {
     return 0;
+}
+
+size_t SPIClass::writeBytes(const uint8_t *buffer, size_t size)
+{
+    return write(buffer, size);
 }
 
 int SPIClass::read()

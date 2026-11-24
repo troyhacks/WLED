@@ -13,6 +13,31 @@
 #define MSBFIRST 1
 #define LSBFIRST 0
 
+// The SPI bus numbers and modes, the way the Arduino core has them.
+#define FSPI 0  // the SPI 2 bus
+#define HSPI 1  // the SPI 3 bus
+#define VSPI HSPI
+
+#define SPI_MODE0 0
+#define SPI_MODE1 1
+#define SPI_MODE2 2
+#define SPI_MODE3 3
+
+#define SPI_SS0         0
+#define SPI_SS1         1
+#define SPI_SS2         2
+#define SPI_SS_MASK_ALL 0x7
+
+#define SPI_CLOCK_DIV2   0x00101001  // 8 MHz
+#define SPI_CLOCK_DIV4   0x00241001  // 4 MHz
+#define SPI_CLOCK_DIV8   0x004c1001  // 2 MHz
+#define SPI_CLOCK_DIV16  0x009c1001  // 1 MHz
+#define SPI_CLOCK_DIV32  0x013c1001  // 500 kHz
+#define SPI_CLOCK_DIV64  0x027c1001  // 250 kHz
+#define SPI_CLOCK_DIV128 0x04fc1001  // 125 kHz
+
+#define SPI_HAS_TRANSACTION 1
+
 class SPISettings {
 public:
     SPISettings(uint32_t clock, uint8_t bitOrder, uint8_t dataMode) {
@@ -37,8 +62,7 @@ public:
     SPIClass(int8_t sck = -1, int8_t miso = -1, int8_t mosi = -1, int8_t ss = -1);
     ~SPIClass() override;
 
-    void begin();
-    void begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss);
+    void begin(int8_t sck = -1, int8_t miso = -1, int8_t mosi = -1, int8_t ss = -1);
     void end();
     void beginTransaction(SPISettings settings);
     void endTransaction();
@@ -50,6 +74,7 @@ public:
 
     size_t write(uint8_t c) override;
     size_t write(const uint8_t *buffer, size_t size) override;
+    size_t writeBytes(const uint8_t *buffer, size_t size);
     int available() override;
     int read() override;
     int peek() override;

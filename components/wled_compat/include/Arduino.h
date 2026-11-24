@@ -39,6 +39,9 @@
 // WLED includes it from inside an extern "C" block.
 #include "esp32-hal.h"
 
+// The board's pin names: TX, RX, SDA, SCL, SS, MOSI, MISO, SCK and A0..A13.
+#include "pins_arduino.h"
+
 // The environment macros the Arduino libraries branch on.  The Arduino core is
 // gone, but AsyncTCP only pulls in IPAddress.h under `#ifdef ARDUINO` and
 // ESPAsyncWebServer only recognises the ESP32 under `#ifdef ESP32`, so the
@@ -113,6 +116,11 @@ using std::round;
 #define LED_BUILTIN 0
 #endif
 
+// The clock, the way the Arduino core has it.
+#ifndef F_CPU
+#define F_CPU (CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U)
+#endif
+
 // --- GPIO ------------------------------------------------------------------
 void pinMode(uint8_t pin, uint8_t mode);
 void digitalWrite(uint8_t pin, uint8_t val);
@@ -158,6 +166,15 @@ void randomSeed(unsigned long seed);
 #endif
 #ifndef RAD_TO_DEG
 #define RAD_TO_DEG 57.295779513082320876798154814105
+#endif
+#ifndef PI
+#define PI 3.1415926535897932384626433832795
+#endif
+#ifndef HALF_PI
+#define HALF_PI 1.5707963267948966192313216916398
+#endif
+#ifndef TWO_PI
+#define TWO_PI 6.283185307179586476925286766559
 #endif
 #ifndef radians
 #define radians(deg) ((deg) * DEG_TO_RAD)

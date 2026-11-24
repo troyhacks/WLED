@@ -27,8 +27,8 @@
 #endif
 
 // The Arduino core does not name the P4's analog pins A0..A7 - the analog
-// pins are ordinary GPIOs there - and naming them would break any code that
-// uses A8 as an identifier.
+// pins are ordinary GPIOs there.  The names are in pins_arduino.h, as static
+// constants rather than macros, the way the core has them.
 
 #ifndef digitalPinIsValid
 #define digitalPinIsValid(pin) GPIO_IS_VALID_GPIO(pin)
