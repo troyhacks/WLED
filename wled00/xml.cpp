@@ -1,7 +1,7 @@
 #include "wled.h"
 #include "wled_ethernet.h"
 #ifdef USERMOD_ARTNETMAP
-#include "../usermods/usermod_v2_artnetmap/usermod_v2_artnetmap.h"
+#include "../usermods/usermod_v3_artnetmap/usermod_v3_artnetmap.h"
 #endif
 /*
  * Sending XML status files to client

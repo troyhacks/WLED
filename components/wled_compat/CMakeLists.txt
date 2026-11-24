@@ -18,10 +18,12 @@ idf_component_register(
         "vendor/Stream.cpp"
         "vendor/StreamString.cpp"
         "vendor/IPAddress.cpp"
+        "vendor/AsyncUDP.cpp"
         "src/arduino_time.cpp"
         "src/arduino_gpio.cpp"
         "src/arduino_pwm.cpp"
         "src/arduino_adc.cpp"
+        "src/arduino_pins.cpp"
         "src/arduino_random.cpp"
         "src/arduino_serial.cpp"
         "src/arduino_wire.cpp"
@@ -31,7 +33,10 @@ idf_component_register(
         "src/arduino_eth.cpp"
         "src/arduino_mdns.cpp"
         "src/arduino_misc.cpp"
+        "libb64/cencode.c"
+        "libb64/cdecode.c"
     INCLUDE_DIRS
+        "."
         "include"
         "vendor"
     REQUIRES
@@ -43,17 +48,15 @@ idf_component_register(
         lwip
         freertos
         vfs
-        esp_littlefs
+        joltwallet__littlefs
         nvs_flash
     PRIV_REQUIRES
-        driver
         esp_driver_gpio
         esp_driver_ledc
-        esp_driver_adc
         esp_driver_uart
         esp_driver_usb_serial_jtag
         esp_driver_i2c
         esp_driver_spi
-        mdns
+        espressif__mdns
         esp_adc
 )

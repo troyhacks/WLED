@@ -19,12 +19,17 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <algorithm>
+#include <cmath>
 
 #include "esp_attr.h"
 #include "esp_system.h"
+#include "esp_idf_version.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "soc/soc_caps.h"
+#include "soc/soc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -53,6 +58,11 @@
 // does too (cores/esp32/pgmspace.h).
 #include <pgmspace.h>
 
+// The basic types come first: the Arduino classes below use them.
+typedef uint8_t byte;
+typedef bool boolean;
+typedef unsigned int word;
+
 // The String class, Print and Stream.
 #include "WString.h"
 #include "Print.h"
@@ -61,9 +71,14 @@
 #include "WCharacter.h"
 #include "IPAddress.h"
 
-typedef uint8_t byte;
-typedef bool boolean;
-typedef unsigned int word;
+// The maths helpers come from the standard library, the way the Arduino core
+// does it: a macro named min or max collides with <algorithm>.
+using std::abs;
+using std::isinf;
+using std::isnan;
+using std::max;
+using std::min;
+using std::round;
 
 #define HIGH 0x1
 #define LOW  0x0
@@ -110,35 +125,16 @@ long random(long howsmall, long howbig);
 void randomSeed(unsigned long seed);
 
 // --- maths -----------------------------------------------------------------
-#ifndef ARDUINO_MIN
-#define ARDUINO_MIN(a, b) ((a) < (b) ? (a) : (b))
-#endif
-#ifndef ARDUINO_MAX
-#define ARDUINO_MAX(a, b) ((a) > (b) ? (a) : (b))
-#endif
-#ifndef min
-#define min(a, b) ARDUINO_MIN(a, b)
-#endif
-#ifndef max
-#define max(a, b) ARDUINO_MAX(a, b)
-#endif
+// The Arduino core cannot define max() and min() as macros - they collide
+// with the C++ standard library - so it brings the standard ones in instead.
+// Same here.
+#define _min(a, b) ((a) < (b) ? (a) : (b))
+#define _max(a, b) ((a) > (b) ? (a) : (b))
 #ifndef constrain
 #define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
 #endif
 #ifndef sq
 #define sq(x) ((x) * (x))
-#endif
-#ifndef abs
-#define abs(x) ((x) > 0 ? (x) : -(x))
-#endif
-#ifndef round
-#define round(x) ((x) >= 0 ? (long)((x) + 0.5) : (long)((x) - 0.5))
-#endif
-#ifndef floor
-#define floor(x) ((long)(x))
-#endif
-#ifndef ceil
-#define ceil(x) (((x) > 0) ? ((long)(x) + 1) : (long)(x))
 #endif
 long map(long x, long in_min, long in_max, long out_min, long out_max);
 #define bitRead(value, bit) (((value) >> (bit)) & 0x01)
@@ -156,6 +152,22 @@ void attachInterrupt(uint8_t pin, arduino_isr_handler_t handler, int mode);
 void detachInterrupt(uint8_t pin);
 void interrupts();
 void noInterrupts();
+
+// --- the pin mapping helpers -----------------------------------------------
+// The Arduino core has these in esp32-hal-gpio.c; WLED's pin manager and the
+// Arduino libraries ask for them.
+int8_t digitalPinToAnalogChannel(uint8_t pin);
+int8_t analogChannelToDigitalPin(uint8_t channel);
+int8_t digitalPinToTouchChannel(uint8_t pin);
+uint8_t digitalPinToPort(uint8_t pin);
+uint32_t digitalPinToBitMask(uint8_t pin);
+uint8_t digitalPinToInterrupt(uint8_t pin);
+const char *digitalPinToPinName(uint8_t pin);
+
+// The Arduino core's task creator, which picks the core.
+BaseType_t xTaskCreateUniversal(TaskFunction_t function, const char *name, uint32_t stackDepth,
+                                 void *parameters, UBaseType_t priority, TaskHandle_t *handle,
+                                 BaseType_t core);
 
 // --- the chip --------------------------------------------------------------
 // The Arduino core's "ESP" object.  WLED asks it for the heap, the PSRAM, the
@@ -188,3 +200,7 @@ public:
     uint32_t getFreeSketchSpace();
 };
 extern EspClass ESP;
+
+// The serial classes, and the "Serial" name.  This comes last, because the
+// serial classes are built on the String and the Print above.
+#include "HardwareSerial.h"

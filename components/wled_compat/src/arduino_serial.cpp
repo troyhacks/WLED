@@ -38,9 +38,9 @@ void HardwareSerial::begin(uint32_t baud, uint32_t config, int8_t rxPin, int8_t 
 
     uart_config_t uartCfg = {};
     uartCfg.baud_rate = baud;
-    uartCfg.data_bits = UART_DATA_8_BITS;
-    uartCfg.stop_bits = UART_STOP_BITS_1;
-    uartCfg.parity = UART_PARITY_DISABLE;
+    uartCfg.data_bits = (uart_word_length_t)(config & UART_DATA_BITS_MASK);
+    uartCfg.stop_bits = (uart_stop_bits_t)((config & UART_STOP_BITS_MASK) >> UART_STOP_BITS_POS);
+    uartCfg.parity = (uart_parity_t)((config & UART_PARITY_MASK) >> UART_PARITY_POS);
     uartCfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     uartCfg.source_clk = UART_SCLK_DEFAULT;
 
@@ -151,12 +151,16 @@ void HardwareSerial::setTxBufferSize(size_t size)
     _txBufferSize = size;
 }
 
-size_t HardwareSerial::availableForWrite()
+int HardwareSerial::availableForWrite()
 {
     if (!_started) {
         return 0;
     }
-    return uart_tx_ringbuffer_available(_uartNum);
+    size_t free = 0;
+    if (uart_get_tx_buffer_free_size(_uartNum, &free) != ESP_OK) {
+        return 0;
+    }
+    return (int)free;
 }
 
 void HardwareSerial::setDebugOutput(bool en)

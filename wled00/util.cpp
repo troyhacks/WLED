@@ -8,7 +8,30 @@
 #if defined(WLED_SHARED_I2C)
 /* The board's I2C buses - one per pin pair, installed on demand, never
    deleted. See the comment on global_i2c_bus_handle in wled.h for why there
-   must not be two buses on the same pins. */
+   must not be two buses on the same pins.
+
+   Under the pure IDF build the registry lives in the Arduino compatibility
+   layer, because Wire has to join the same bus: two buses on the same pins
+   take the GPIO routing away from each other, and the loser NACKs for ever.
+   Under the Arduino build there is no compatibility layer, so the registry
+   is here instead - and the Arduino's Wire has its own bus, which is why
+   audioreactive_I2C releases it before taking the pins over. */
+#if defined(WLED_BUILD_IDF)
+i2c_master_bus_handle_t globalI2cBusEnsure(int8_t sda, int8_t scl) {
+  i2c_master_bus_handle_t bus = wledI2cBusEnsure(sda, scl);
+  if (bus && global_i2c_bus_handle == nullptr) {  // the first bus is the primary one
+    global_i2c_bus_handle = bus;
+    global_i2c_sda = sda;
+    global_i2c_scl = scl;
+    global_i2c_port = wledI2cBusPort(bus);
+  }
+  return bus;
+}
+
+i2c_port_t globalI2cBusPort(i2c_master_bus_handle_t bus) {
+  return wledI2cBusPort(bus);
+}
+#else
 #define WLED_I2C_MAX_BUSES 3
 struct WledI2cBus {
   int8_t sda;
@@ -88,6 +111,7 @@ i2c_port_t globalI2cBusPort(i2c_master_bus_handle_t bus) {
   }
   return global_i2c_port;
 }
+#endif // WLED_BUILD_IDF
 #endif // WLED_SHARED_I2C
 
 void scanI2C() {

@@ -184,7 +184,7 @@
 #define USERMOD_ID_ANIMARTRIX            93     //Usermod "usermod_v2_animartrix.h"
 #define USERMOD_ID_AUTOPLAYLIST          94     //Usermod "usermod_v2_auto_playlist.h"
 #define USERMOD_ID_PIONEER_PROLINK       95     //Usermod "usermod_v2_pioneer_prolink.h"
-#define USERMOD_ID_ARTNETMAP             95     //Usermod "usermod_v2_artnetmap.h"
+#define USERMOD_ID_ARTNETMAP             95     //Usermod "usermod_v3_artnetmap.h"
 #define USERMOD_ID_MIDI_USB              96     //Usermod "usermod_v3_midi.h" — USB-MIDI control surface (ESP32-P4)
 #define USERMOD_ID_C5REMOTE              97     //Usermod "usermod_v3_c5remote.h" — the ESP32-C5 remote (panel, IO expander, IMU)
 #define USERMOD_ID_HIDCTL               98     //Usermod "usermod_v3_hidctl.h" — generic USB HID control surface (ESP32-P4)

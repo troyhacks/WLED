@@ -15,13 +15,31 @@
 #include "Print.h"
 #include "Stream.h"
 
-// The serial configuration constants the Arduino core defines.
-#define SERIAL_8N1 0x800001c
-#define SERIAL_8N2 0x800001d
-#define SERIAL_8E1 0x800001a
-#define SERIAL_8E2 0x800001b
-#define SERIAL_8O1 0x800001e
-#define SERIAL_8O2 0x800001f
+extern "C" {
+#include "driver/uart.h"
+}
+
+// The serial configuration constants, the way the IDF spells them - the
+// Arduino core's values are the same bits in a different order.
+#define SERIAL_8N1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_DISABLE)
+#define SERIAL_8N2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_DISABLE)
+#define SERIAL_8E1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_EVEN)
+#define SERIAL_8E2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_EVEN)
+#define SERIAL_8O1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_ODD)
+#define SERIAL_8O2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_ODD)
+
+// UART0's pins are fixed by the bootloader.  The Arduino core has the table
+// for every SoC; here is the P4's.
+#ifndef SOC_RX0
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#define SOC_RX0 (gpio_num_t)38
+#endif
+#endif
+#ifndef SOC_TX0
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#define SOC_TX0 (gpio_num_t)37
+#endif
+#endif
 
 class HardwareSerial : public Stream {
 public:
@@ -42,7 +60,7 @@ public:
 
     void setRxBufferSize(size_t size);
     void setTxBufferSize(size_t size);
-    size_t availableForWrite();
+    int availableForWrite() override;
     void setDebugOutput(bool en);
     operator bool() const { return _started; }
 
@@ -57,37 +75,9 @@ private:
     bool _hasPeeked = false;
 };
 
-// The USB-Serial-JTAG peripheral, which is a packet pipe and not a UART: there
-// is no baud rate, and the buffers are fixed by the driver.
-class HWCDC : public Stream {
-public:
-    void begin();
-    void end();
-
-    size_t write(uint8_t c) override;
-    size_t write(const uint8_t *buffer, size_t size) override;
-    int available() override;
-    int read() override;
-    int peek() override;
-    void flush() override;
-
-    void setRxBufferSize(size_t size);
-    void setTxBufferSize(size_t size);
-    void setTxTimeoutMs(uint32_t timeout);
-    void setDebugOutput(bool en);
-    operator bool() const { return _started; }
-
-private:
-    bool _started = false;
-    uint32_t _txTimeoutMs = 0;
-    bool _debugOutput = false;
-    // The peripheral hands us whole packets, so the bytes wait here until the
-    // application takes them.
-    static constexpr size_t RX_BUFFER_SIZE = 1024;
-    uint8_t _rxBuffer[RX_BUFFER_SIZE];
-    size_t _rxHead = 0;
-    size_t _rxTail = 0;
-};
+// The USB-Serial-JTAG peripheral lives in its own header, the way the
+// Arduino core has it.
+#include "HWCDC.h"
 
 #if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
 extern HardwareSerial Serial0;

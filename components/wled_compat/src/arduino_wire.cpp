@@ -109,21 +109,23 @@ i2c_port_t wledI2cBusPort(i2c_master_bus_handle_t bus)
 
 TwoWire Wire;
 
-void TwoWire::begin(int8_t sda, int8_t scl, uint32_t frequency)
+bool TwoWire::begin(int sda, int scl, uint32_t frequency)
 {
     if (sda >= 0 && scl >= 0) {
-        setPins(sda, scl);
+        if (!setPins(sda, scl)) {
+            return false;
+        }
     }
     if (frequency) {
         setClock(frequency);
     }
-    ensureBus();
+    return ensureBus();
 }
 
-void TwoWire::begin(uint8_t address)
+bool TwoWire::begin(uint8_t address)
 {
     _address = address;
-    ensureBus();
+    return ensureBus();
 }
 
 void TwoWire::end()
@@ -137,16 +139,18 @@ void TwoWire::end()
     _bus = nullptr;
 }
 
-void TwoWire::setClock(uint32_t frequency)
+bool TwoWire::setClock(uint32_t frequency)
 {
     _frequency = frequency;
+    return true;
 }
 
-void TwoWire::setPins(int8_t sda, int8_t scl, bool pullup)
+bool TwoWire::setPins(int sda, int scl, bool pullup)
 {
     (void)pullup;
     _bus = wledI2cBusEnsure(sda, scl);
     _dev = nullptr;
+    return _bus != nullptr;
 }
 
 void TwoWire::setTimeOut(uint16_t timeout)
@@ -207,7 +211,12 @@ uint8_t TwoWire::endTransmission(bool sendStop)
     return 0;
 }
 
-uint8_t TwoWire::requestFrom(uint8_t address, size_t size, bool sendStop)
+uint8_t TwoWire::endTransmission()
+{
+    return endTransmission(true);
+}
+
+size_t TwoWire::requestFrom(uint8_t address, size_t size, bool sendStop)
 {
     (void)sendStop;
     if (size > sizeof(_rxBuffer)) {
@@ -230,10 +239,10 @@ uint8_t TwoWire::requestFrom(uint8_t address, size_t size, bool sendStop)
         return 0;
     }
     _rxLength = size;
-    return (uint8_t)size;
+    return size;
 }
 
-uint8_t TwoWire::requestFrom(uint8_t address, size_t size)
+size_t TwoWire::requestFrom(uint8_t address, size_t size)
 {
     return requestFrom(address, size, true);
 }

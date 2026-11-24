@@ -6,13 +6,13 @@
 # then compiles the result with SCons.
 #
 # Layout
-#   main/                   the ESP-IDF main component (app_main)
-#   wled00/                 the WLED application component (the C++ sources)
+#   wled00/                 the WLED application component - the app_main() is
+#                           here, because PlatformIO's src_dir points at it
 #   components/wled_compat/ the Arduino API compatibility layer (IDF backed)
 #
-# PlatformIO adds `main` (its `src_dir` for the IDF envs) to
-# EXTRA_COMPONENT_DIRS on the CMake command line.  We keep whatever it gave us
-# and add `wled00`, so the same root file works for both drivers.
+# PlatformIO adds wled00 (its src_dir) to EXTRA_COMPONENT_DIRS on the CMake
+# command line.  We keep whatever it gave us and add wled00 ourselves, so the
+# same root file works for both drivers.
 
 cmake_minimum_required(VERSION 3.16.0)
 
@@ -24,7 +24,7 @@ else()
     set(WLED_EXTRA_COMPONENT_DIRS "")
 endif()
 list(APPEND WLED_EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/wled00")
-list(REMOVE_ITEM WLED_EXTRA_COMPONENT_DIRS "")
+list(REMOVE_DUPLICATES WLED_EXTRA_COMPONENT_DIRS)
 set(EXTRA_COMPONENT_DIRS "${WLED_EXTRA_COMPONENT_DIRS}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

@@ -79,14 +79,19 @@ The layout:
 
 ```
 CMakeLists.txt              the IDF project root
-main/                       the IDF main component - app_main()
-wled00/                     the WLED application component
+wled00/                     the WLED application component - and the app
+                            component, so app_main() lives here
 components/wled_compat/     the Arduino API layer, backed by IDF
 sdkconfig.defaults          the IDF configuration
 partitions.csv              the partition table
-idf_component.yml           the managed components
+wled00/idf_component.yml    the managed components
 platformio/idf/esp32p4.ini  the IDF environments
 ```
+
+`wled00` is the app component because PlatformIO's `src_dir` is a project-wide
+option, and it already points at `wled00` for the Arduino build.  The builder
+adds `src_dir` to `EXTRA_COMPONENT_DIRS` and expects the app component to be
+there; a separate `main/` directory would collide with it.
 
 ### The Arduino API layer
 
@@ -97,9 +102,13 @@ on top of IDF drivers:
 | Arduino | IDF |
 | --- | --- |
 | `String`, `Print`, `Stream`, `IPAddress` | the ESP32 Arduino core's own files, vendored (they are portable C++ with no HAL in them) |
+| `AsyncUDP` | the Arduino core's own file, vendored (it is already lwIP) |
+| `libb64` | the Arduino core's own copy, vendored - the web server's basic auth needs it |
+| `esp32-hal.h` | a shim: the Arduino API layer plus the P4's ADC channel map |
 | `PROGMEM`, `PSTR`, `pgm_read_byte`, `F()` | identity - on the P4 the flash is memory mapped, exactly as on the Arduino core |
 | `millis`, `micros`, `delay` | `esp_timer` and the FreeRTOS tick |
 | `pinMode`, `digitalWrite`, `digitalRead` | `driver/gpio.h` |
+| `digitalPinToAnalogChannel` and the rest | the P4's own table: ADC1 is GPIO 16..23, ADC2 is GPIO 49..54 |
 | `analogWrite` | `driver/ledc.h` |
 | `analogRead` | `driver/adc_oneshot.h` with the calibration curve |
 | `Serial`, `Serial0` | `driver/uart.h` |
@@ -110,6 +119,7 @@ on top of IDF drivers:
 | `WiFiUDP` | lwIP sockets |
 | `MDNS` | the `mdns` component |
 | `EEPROM` | NVS, in the "eeprom" namespace, where the Arduino core keeps it |
+| `xTaskCreateUniversal` | `xTaskCreatePinnedToCore` |
 
 Two things are worth calling out:
 

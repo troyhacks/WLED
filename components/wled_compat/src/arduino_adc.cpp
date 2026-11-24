@@ -16,43 +16,46 @@ extern "C" {
 
 namespace {
 
-adc_oneshot_unit_handle_t s_unit = nullptr;
+adc_oneshot_unit_handle_t s_unit1 = nullptr;
+adc_oneshot_unit_handle_t s_unit2 = nullptr;
 bool s_caliReady = false;
 adc_cali_handle_t s_cali = nullptr;
 
-int channelForPin(uint8_t pin)
-{
-    // The P4 maps the ADC channels onto the GPIO numbers the same way the
-    // Arduino core does: the ADC1 channels are the even GPIO numbers below 32
-    // on the older parts, but on the P4 the mapping is in soc_adc_periph.h.
-    switch (pin) {
-    case 23: return 0;   // ADC1_CH0
-    case 24: return 1;   // ADC1_CH1
-    case 25: return 2;   // ADC1_CH2
-    case 26: return 3;   // ADC1_CH3
-    case 27: return 4;   // ADC1_CH4
-    case 28: return 5;   // ADC1_CH5
-    case 29: return 6;   // ADC1_CH6
-    case 30: return 7;   // ADC1_CH7
-    case 31: return 8;   // ADC1_CH8
-    case 32: return 9;   // ADC1_CH9
-    case 33: return 10;  // ADC1_CH10
-    default: return -1;
-    }
-}
+// ADC1 has eight channels, ADC2 six, and the Arduino core numbers them
+// across the two units.
+constexpr int8_t ADC1_CHANNELS = 8;
 
-bool ensureUnit()
+bool ensureUnit(int8_t channel, adc_oneshot_unit_handle_t *unit)
 {
-    if (s_unit) {
+    if (channel < ADC1_CHANNELS) {
+        if (!s_unit1) {
+            adc_oneshot_unit_init_cfg_t unitCfg = {};
+            unitCfg.unit_id = ADC_UNIT_1;
+            if (adc_oneshot_new_unit(&unitCfg, &s_unit1) != ESP_OK) {
+                s_unit1 = nullptr;
+                return false;
+            }
+        }
+        *unit = s_unit1;
         return true;
     }
-    adc_oneshot_unit_init_cfg_t unitCfg = {};
-    unitCfg.unit_id = ADC_UNIT_1;
-    if (adc_oneshot_new_unit(&unitCfg, &s_unit) != ESP_OK) {
-        s_unit = nullptr;
-        return false;
+    if (!s_unit2) {
+        adc_oneshot_unit_init_cfg_t unitCfg = {};
+        unitCfg.unit_id = ADC_UNIT_2;
+        if (adc_oneshot_new_unit(&unitCfg, &s_unit2) != ESP_OK) {
+            s_unit2 = nullptr;
+            return false;
+        }
     }
+    *unit = s_unit2;
+    return true;
+}
 
+bool ensureCalibration()
+{
+    if (s_caliReady) {
+        return true;
+    }
     adc_cali_curve_fitting_config_t caliCfg = {};
     caliCfg.unit_id = ADC_UNIT_1;
     caliCfg.chan = ADC_CHANNEL_0;
@@ -61,30 +64,38 @@ bool ensureUnit()
     if (adc_cali_create_scheme_curve_fitting(&caliCfg, &s_cali) == ESP_OK) {
         s_caliReady = true;
     }
-    return true;
+    return s_caliReady;
 }
 
 } // namespace
 
 int analogRead(uint8_t pin)
 {
-    int channel = channelForPin(pin);
-    if (channel < 0 || !ensureUnit()) {
+    int8_t channel = digitalPinToAnalogChannel(pin);
+    if (channel < 0) {
         return 0;
     }
+    adc_oneshot_unit_handle_t unit = nullptr;
+    if (!ensureUnit(channel, &unit)) {
+        return 0;
+    }
+
+    adc_channel_t adcChannel = (channel < ADC1_CHANNELS)
+                                   ? static_cast<adc_channel_t>(channel)
+                                   : static_cast<adc_channel_t>(channel - ADC1_CHANNELS);
 
     adc_oneshot_chan_cfg_t chanCfg = {};
     chanCfg.atten = ADC_ATTEN_DB_12;
     chanCfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-    if (adc_oneshot_config_channel(s_unit, static_cast<adc_channel_t>(channel), &chanCfg) != ESP_OK) {
+    if (adc_oneshot_config_channel(unit, adcChannel, &chanCfg) != ESP_OK) {
         return 0;
     }
 
     int raw = 0;
-    if (adc_oneshot_read(s_unit, static_cast<adc_channel_t>(channel), &raw) != ESP_OK) {
+    if (adc_oneshot_read(unit, adcChannel, &raw) != ESP_OK) {
         return 0;
     }
-    if (!s_caliReady) {
+    if (!ensureCalibration()) {
         return raw;
     }
     int value = 0;

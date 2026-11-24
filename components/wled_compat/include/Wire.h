@@ -24,20 +24,23 @@ i2c_port_t wledI2cBusPort(i2c_master_bus_handle_t bus);
 
 class TwoWire : public Stream {
 public:
-    void begin(int8_t sda = -1, int8_t scl = -1, uint32_t frequency = 0);
-    void begin(uint8_t address);
+    // The signatures match the ESP32 Arduino core's TwoWire exactly: begin()
+    // and setPins() report whether the bus came up, and WLED checks them.
+    bool begin(int sda = -1, int scl = -1, uint32_t frequency = 0);
+    bool begin(uint8_t address);
     void end();
-    void setClock(uint32_t frequency);
-    void setPins(int8_t sda, int8_t scl, bool pullup = true);
+    bool setClock(uint32_t frequency);
+    bool setPins(int sda, int scl, bool pullup = true);
     void setTimeOut(uint16_t timeout);
 
     void beginTransmission(uint8_t address);
     size_t write(uint8_t data);
     size_t write(const uint8_t *data, size_t length);
     uint8_t endTransmission(bool sendStop = true);
+    uint8_t endTransmission();
 
-    uint8_t requestFrom(uint8_t address, size_t size, bool sendStop = true);
-    uint8_t requestFrom(uint8_t address, size_t size);
+    size_t requestFrom(uint8_t address, size_t size, bool sendStop = true);
+    size_t requestFrom(uint8_t address, size_t size);
 
     int available() override;
     int read() override;

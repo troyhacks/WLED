@@ -9,6 +9,11 @@
 // on core 0 on the P4 (wled00/wled00.ino, "Core 0 Migrator"), and the
 // network/TCP-IP stack runs on core 1 (CONFIG_LWIP_TCPIP_TASK_AFFINITY=1).
 // Keeping the two apart is what makes the P4's frame times predictable.
+//
+// The Arduino build compiles this file too, so the whole thing is behind
+// WLED_BUILD_IDF - which only the ESP-IDF component sets.
+
+#if defined(WLED_BUILD_IDF)
 
 #include <stdio.h>
 
@@ -46,9 +51,8 @@ extern "C" void app_main(void)
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
-    ESP_LOGI(TAG, "cores=%d rev=%d features=%s psram=%d flash=%d",
+    ESP_LOGI(TAG, "cores=%d rev=%d psram=%d ram=%d",
              chip.cores, chip.revision,
-             chip.features & CHIP_FEATURE_EMB_FLASH ? "flash" : "none",
              (int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
              (int)heap_caps_get_total_size(MALLOC_CAP_INTERNAL));
 
@@ -61,3 +65,6 @@ extern "C" void app_main(void)
     }
     ESP_LOGI(TAG, "WLED task created on core 0");
 }
+
+#endif // WLED_BUILD_IDF
+

@@ -298,7 +298,7 @@ size_t FS::totalBytes()
 {
     size_t total = 0;
     size_t used = 0;
-    if (esp_littlefs_info(FS_BASE_PATH, &total, &used) != ESP_OK) {
+    if (esp_littlefs_info(FS_PARTITION_LABEL, &total, &used) != ESP_OK) {
         return 0;
     }
     return total;
@@ -308,7 +308,7 @@ size_t FS::usedBytes()
 {
     size_t total = 0;
     size_t used = 0;
-    if (esp_littlefs_info(FS_BASE_PATH, &total, &used) != ESP_OK) {
+    if (esp_littlefs_info(FS_PARTITION_LABEL, &total, &used) != ESP_OK) {
         return 0;
     }
     return used;

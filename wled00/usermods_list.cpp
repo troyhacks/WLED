@@ -251,7 +251,7 @@ HidctlUsermod* hidctlUsermodPtr = nullptr;
 #include "../usermods/usermod_v3_auto_playlist/usermod_v3_auto_playlist.h"
 #endif
 #ifdef USERMOD_ARTNETMAP
-#include "../usermods/usermod_v2_artnetmap/usermod_v2_artnetmap.h"
+#include "../usermods/usermod_v3_artnetmap/usermod_v3_artnetmap.h"
 #endif
 
 void registerUsermods()
