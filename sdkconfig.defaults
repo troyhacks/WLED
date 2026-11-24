@@ -1,0 +1,79 @@
+# WLED-MM-P4 - ESP-IDF configuration for the pure IDF build.
+#
+# These values were taken from the Arduino core's own P4 sdkconfig
+# (framework-arduinoespressif32-libs/esp32p4/sdkconfig) so the pure IDF build
+# lands on the same silicon settings the Arduino build uses today, plus the
+# overrides that WLED's platformio.ini passes as -D CONFIG_* build flags.
+#
+# Arduino-only options (CONFIG_ARDUINO_RUNNING_CORE, CONFIG_ARDUINO_EVENT_*,
+# CONFIG_OTA_VERSION_FORCE_SLAVEFW) are gone: there is no Arduino core any more.
+
+CONFIG_IDF_TARGET="esp32p4"
+
+# --- flash -----------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_BEFORE_RESET=y
+CONFIG_ESPTOOLPY_AFTER_RESET="hard_reset"
+
+# --- partitions ------------------------------------------------------------
+# Byte-identical to tools/WLED_ESP32_8MB_1500KB_FS.csv so the Arduino build and
+# the IDF build can share a device.  The filesystem partition keeps the label
+# "spiffs" on purpose: the label is what LittleFS mounts by, and changing it
+# would orphan the data on every deployed board.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+
+# --- PSRAM -----------------------------------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# --- CPU / task model ------------------------------------------------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_ESP32P4_REV_MIN_1=y
+CONFIG_FREERTOS_HZ=1000
+# The Arduino build ran the WLED main loop on a 12000 byte task pinned to core 0
+# (see wled00/wled00.ino, "Core 0 Migrator").  The IDF build does the same with
+# its own task; this only sizes the IDF main task.
+CONFIG_MAIN_TASK_STACK_SIZE=4096
+# The Arduino build forced the TCP/IP task onto core 1 (platformio.ini:
+# -D CONFIG_LWIP_TCPIP_TASK_AFFINITY=1 / ..._CPU1=1).
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=n
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x1
+
+# --- Ethernet (the P4 has no Wi-Fi radio; the C6 coprocessor is esp-hosted) --
+CONFIG_ETH_USE_ESP32_EMAC=y
+CONFIG_ETH_USE_SPI_ETHERNET=y
+
+# --- compiler --------------------------------------------------------------
+# The Arduino build used -Ofast -fno-exceptions -fno-rtti -DNDEBUG.
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS=n
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_WARN_WRITE_STRINGS=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+CONFIG_COMPILER_WARN_UNINITIALIZED_AUTOS=y
+CONFIG_COMPILER_DISABLE_GCC12_WARNINGS=y
+
+# --- logging / watchdog ----------------------------------------------------
+# CORE_DEBUG_LEVEL=0 in the Arduino build; IDF level 1 is ERROR.
+CONFIG_LOG_DEFAULT_LEVEL=1
+CONFIG_LOG_MAXIMUM_LEVEL=3
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# --- USB -------------------------------------------------------------------
+# ARDUINO_USB_MODE=1: the console writes to USB-Serial-JTAG *and* to UART0.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

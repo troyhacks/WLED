@@ -1,0 +1,72 @@
+// SPI.h - the Arduino SPI class, over ESP-IDF's spi_master driver.
+//
+// The P4's displays do not use SPI - the HDMI bridge and the MIPI-DSI panels
+// have their own drivers - but the Arduino libraries and a few usermods
+// still expect the class to be there.
+
+#pragma once
+
+#include "Arduino.h"
+#include "Print.h"
+#include "Stream.h"
+
+#define MSBFIRST 1
+#define LSBFIRST 0
+
+class SPISettings {
+public:
+    SPISettings(uint32_t clock, uint8_t bitOrder, uint8_t dataMode) {
+        _clock = clock;
+        _bitOrder = bitOrder;
+        _dataMode = dataMode;
+    }
+    SPISettings() : _clock(4000000), _bitOrder(MSBFIRST), _dataMode(0) {}
+
+    uint32_t clock() const { return _clock; }
+    uint8_t bitOrder() const { return _bitOrder; }
+    uint8_t dataMode() const { return _dataMode; }
+
+private:
+    uint32_t _clock;
+    uint8_t _bitOrder;
+    uint8_t _dataMode;
+};
+
+class SPIClass : public Stream {
+public:
+    SPIClass(int8_t sck = -1, int8_t miso = -1, int8_t mosi = -1, int8_t ss = -1);
+    ~SPIClass() override;
+
+    void begin();
+    void begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss);
+    void end();
+    void beginTransaction(SPISettings settings);
+    void endTransaction();
+
+    uint8_t transfer(uint8_t data);
+    void transfer(void *buffer, size_t size);
+    uint8_t transfer(uint8_t data, uint8_t sendBits);
+    uint8_t transfer(const uint8_t *data, size_t size);
+
+    size_t write(uint8_t c) override;
+    size_t write(const uint8_t *buffer, size_t size) override;
+    int available() override;
+    int read() override;
+    int peek() override;
+    void flush() override;
+
+    void setFrequency(uint32_t clock);
+    void setBitOrder(uint8_t bitOrder);
+    void setDataMode(uint8_t dataMode);
+    void setClock(int32_t clock) { setFrequency((uint32_t)clock); }
+
+private:
+    int8_t _sck, _miso, _mosi, _ss;
+    bool _begun = false;
+    uint32_t _clock = 4000000;
+    uint8_t _bitOrder = MSBFIRST;
+    uint8_t _dataMode = 0;
+    void * _handle = nullptr;
+};
+
+extern SPIClass SPI;
