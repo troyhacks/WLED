@@ -163,6 +163,28 @@ uint8_t digitalPinToPort(uint8_t pin);
 uint32_t digitalPinToBitMask(uint8_t pin);
 uint8_t digitalPinToInterrupt(uint8_t pin);
 const char *digitalPinToPinName(uint8_t pin);
+bool digitalPinHasPWM(uint8_t pin);
+
+// UART0's pins are fixed by the bootloader.  The Arduino core has the table
+// for every SoC; here is the P4's.
+#ifndef SOC_RX0
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#define SOC_RX0 (gpio_num_t)38
+#endif
+#endif
+#ifndef SOC_TX0
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#define SOC_TX0 (gpio_num_t)37
+#endif
+#endif
+
+// The names of UART0's pins, the way the Arduino core has them.
+#ifndef RX
+#define RX SOC_RX0
+#endif
+#ifndef TX
+#define TX SOC_TX0
+#endif
 
 // The Arduino core's task creator, which picks the core.
 BaseType_t xTaskCreateUniversal(TaskFunction_t function, const char *name, uint32_t stackDepth,

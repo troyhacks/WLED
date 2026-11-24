@@ -54,6 +54,19 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x1
 CONFIG_ETH_USE_ESP32_EMAC=y
 CONFIG_ETH_USE_SPI_ETHERNET=y
 
+# --- filesystem ------------------------------------------------------------
+# The Arduino core's LittleFS library is guarded by CONFIG_LITTLEFS_PAGE_SIZE,
+# so the page size has to be there for the class to exist at all.  These are
+# the values the Arduino build uses.
+CONFIG_LITTLEFS_PAGE_SIZE=256
+CONFIG_LITTLEFS_MAX_PARTITIONS=3
+CONFIG_LITTLEFS_READ_SIZE=128
+CONFIG_LITTLEFS_WRITE_SIZE=128
+CONFIG_LITTLEFS_LOOKAHEAD_SIZE=128
+CONFIG_LITTLEFS_CACHE_SIZE=512
+CONFIG_LITTLEFS_BLOCK_CYCLES=512
+CONFIG_LITTLEFS_USE_MTIME=y
+
 # --- compiler --------------------------------------------------------------
 # The Arduino build used -Ofast -fno-exceptions -fno-rtti -DNDEBUG.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n

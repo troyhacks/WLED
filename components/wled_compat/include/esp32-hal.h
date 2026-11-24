@@ -15,6 +15,13 @@
 
 #include "Arduino.h"
 #include "driver/gpio.h"
+#include "soc/soc_caps.h"
+#include "soc/soc.h"
+
+// The Arduino core's marker for a function that has to live in IRAM.
+#ifndef ARDUINO_ISR_ATTR
+#define ARDUINO_ISR_ATTR IRAM_ATTR
+#endif
 
 #ifndef SOC_ADC_PERIPH_NUM
 #define SOC_ADC_PERIPH_NUM 2

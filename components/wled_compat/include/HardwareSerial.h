@@ -28,18 +28,8 @@ extern "C" {
 #define SERIAL_8O1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_ODD)
 #define SERIAL_8O2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_ODD)
 
-// UART0's pins are fixed by the bootloader.  The Arduino core has the table
-// for every SoC; here is the P4's.
-#ifndef SOC_RX0
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-#define SOC_RX0 (gpio_num_t)38
-#endif
-#endif
-#ifndef SOC_TX0
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-#define SOC_TX0 (gpio_num_t)37
-#endif
-#endif
+// UART0's pins (SOC_RX0 and SOC_TX0) are in Arduino.h, because the RX and TX
+// names come from there too.
 
 class HardwareSerial : public Stream {
 public:

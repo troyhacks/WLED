@@ -9,7 +9,9 @@
 #include "IPAddress.h"
 #include "Stream.h"
 
-#include <netinet/in.h>
+extern "C" {
+#include "lwip/sockets.h"
+}
 
 class WiFiUDP : public Stream {
 public:

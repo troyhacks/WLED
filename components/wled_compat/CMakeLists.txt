@@ -19,6 +19,9 @@ idf_component_register(
         "vendor/StreamString.cpp"
         "vendor/IPAddress.cpp"
         "vendor/AsyncUDP.cpp"
+        "vendor/fs/FS.cpp"
+        "vendor/fs/vfs_api.cpp"
+        "vendor/fs/LittleFS.cpp"
         "src/arduino_time.cpp"
         "src/arduino_gpio.cpp"
         "src/arduino_pwm.cpp"
@@ -28,7 +31,6 @@ idf_component_register(
         "src/arduino_serial.cpp"
         "src/arduino_wire.cpp"
         "src/arduino_spi.cpp"
-        "src/arduino_fs.cpp"
         "src/arduino_udp.cpp"
         "src/arduino_eth.cpp"
         "src/arduino_mdns.cpp"
@@ -39,6 +41,7 @@ idf_component_register(
         "."
         "include"
         "vendor"
+        "vendor/fs"
     REQUIRES
         esp_timer
         esp_system

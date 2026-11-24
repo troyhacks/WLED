@@ -87,6 +87,13 @@ const char *digitalPinToPinName(uint8_t pin)
     return name;
 }
 
+bool digitalPinHasPWM(uint8_t pin)
+{
+    // Every GPIO on the P4 can be driven by the LEDC peripheral, so every
+    // valid pin has PWM.
+    return pin < SOC_GPIO_OUT_RANGE_MAX;
+}
+
 // xTaskCreateUniversal - the Arduino core's task creator, which picks the
 // core and puts the task on the stack the core asked for.
 BaseType_t xTaskCreateUniversal(TaskFunction_t function, const char *name, uint32_t stackDepth,

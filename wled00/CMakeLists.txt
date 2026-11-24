@@ -106,6 +106,7 @@ idf_component_register(
         espressif__esp-dsp
         espressif__esp_lcd_lt8912b
         espressif__esp_h264
+        mbedtls
 )
 
 # The Arduino build has no such thing, so the sources that have to behave
