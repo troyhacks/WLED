@@ -27,6 +27,16 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="tools/WLED_ESP32_8MB_1500KB_FS.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
 CONFIG_PARTITION_TABLE_MD5=y
 
+# --- the watchdog -----------------------------------------------------------
+# The task watchdog's idle check on the second core is off, the way the
+# Arduino build has it.  WLED's enableWatchdog() reconfigures the watchdog to
+# watch both cores, and the AudioReactive's analysis task lives on the second
+# core - so with the check on, the board resets itself.
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+CONFIG_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_TASK_WDT_TIMEOUT_S=5
+
 # --- the bootloader ---------------------------------------------------------
 # The bootloader is compiled for size, and it logs at error level only, and it
 # does not validate the image in deep sleep.  These are the settings the
