@@ -37,6 +37,8 @@ BUILD.md
 # for the managed components.  Both are per-environment and are regenerated.
 sdkconfig.*
 !sdkconfig.defaults
+# The per-environment defaults are ours, not the generated config
+!sdkconfig.*.defaults
 dependencies.lock
 
 # the AudioReactive simulation's data: the audio cache, the ODF cache and

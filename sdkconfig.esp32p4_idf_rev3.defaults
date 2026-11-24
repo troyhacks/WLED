@@ -1,0 +1,52 @@
+# The ESP32-P4 rev 3 - Espressif's own settings for this chip.
+#
+# The base is Espressif's defconfig for the rev-3 P4
+# (esp32-arduino-lib-builder, configs/defconfig.esp32p4 - the one without
+# the "_es" suffix, which is the older "ES pre rev.300" chip), plus the
+# revision switch itself.
+#
+# The P4 changed its SRAM map in rev 3, and ESP-IDF's support for the two is
+# mutually exclusive: the shared sdkconfig.defaults selects the older layout,
+# and this file selects the newer one.  The IDF's minimum revision for the
+# newer layout is 3.1; the chip is a 3.2.
+#
+# This file is picked up by pio-scripts/env_sdkconfig.py, which puts it after
+# the shared defaults, so that what is here wins.
+
+# CONFIG_ESP32P4_SELECTS_REV_LESS_V3 is not set
+# CONFIG_ESP32P4_REV_MIN_1 is not set
+CONFIG_ESP32P4_REV_MIN_301=y
+
+# The 200 MHz PSRAM (the display's framebuffers live there) and the USB
+# host's enumeration filter are behind this.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# The hosted coprocessor
+CONFIG_ESP_HOSTED_USE_MEMPOOL=n
+
+# lwIP: the buffers the WLED-MM build uses
+CONFIG_LWIP_TCP_SACK_OUT=y
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# The USB host
+CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=3000
+
+# The display: the ISRs stay safe while the flash writes
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
+CONFIG_ANA_CMPR_ISR_HANDLER_IN_IRAM=y
+CONFIG_ANA_CMPR_OBJ_CACHE_SAFE=y
+
+# The WiFi driver (the C6 coprocessor carries it)
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=10
+CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=32
+CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
+CONFIG_WIFI_RMT_TX_BA_WIN=32
+CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
+CONFIG_WIFI_RMT_RX_BA_WIN=16
