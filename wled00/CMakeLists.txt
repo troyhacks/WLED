@@ -102,6 +102,7 @@ idf_component_register(
         esp_driver_parlio
         esp_driver_ppa
         esp_driver_jpeg
+        esp_psram
         espressif__esp_hosted
         espressif__esp_codec_dev
         espressif__esp-dsp

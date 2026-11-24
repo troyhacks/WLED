@@ -23,6 +23,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
+#include "esp_psram.h"
+#include "esp_private/esp_psram_extram.h"
 
 #include "wled.h"
 
@@ -48,6 +50,32 @@ static void wled_loop_task(void *arg)
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "WLED-MM-P4 - pure ESP-IDF build");
+
+    // The PSRAM.
+    //
+    // On the older chip the bootloader brings it up and the IDF adds it to
+    // the heap by itself.  On the rev 3 neither happens: Espressif's own
+    // configuration for that chip turns the boot-time initialisation off
+    // (CONFIG_SPIRAM_BOOT_INIT), and the IDF only adds the PSRAM to the
+    // heap when that is on - so without this the application runs with the
+    // internal memory alone.  The AudioReactive's history buffer does not
+    // fit, and the display's framebuffers have nowhere to go.
+    //
+    // The Arduino core does the same thing (cores/esp32/esp32-hal-psram.c,
+    // psramInit() and psramAddToHeap()).
+    if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
+        if (esp_psram_init() == ESP_OK) {
+            if (esp_psram_extram_add_to_heap_allocator() == ESP_OK) {
+                heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
+                ESP_LOGI(TAG, "PSRAM: %d bytes",
+                         (int)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+            } else {
+                ESP_LOGE(TAG, "PSRAM could not be added to the heap");
+            }
+        } else {
+            ESP_LOGE(TAG, "PSRAM init failed");
+        }
+    }
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
