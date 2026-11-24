@@ -58,15 +58,8 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-// The Arduino core's dtostrf(): a double as a fixed point string.
-char *dtostrf(double value, signed int width, unsigned int prec, char *buffer)
-{
-    if (!buffer) {
-        return buffer;
-    }
-    snprintf(buffer, (size_t)(width > 0 ? width : 1), "%.*f", (int)prec, value);
-    return buffer;
-}
+// The Arduino core's dtostrf() is the platform layer's now - the String class
+// needs it, and the String class is over there.
 
 // --- the chip ---------------------------------------------------------------
 

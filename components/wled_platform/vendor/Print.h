@@ -23,6 +23,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <stdarg.h>
+#include <string.h>
 
 #include "WString.h"
 #include "Printable.h"

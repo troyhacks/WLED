@@ -22,7 +22,11 @@
 #define FS_H
 
 #include <memory>
-#include <Arduino.h>
+#include <time.h>
+
+#include "Stream.h"
+#include "WString.h"
+#include "arduino_types.h"
 
 namespace fs {
 

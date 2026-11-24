@@ -22,7 +22,7 @@
  findMulti/findUntil routines written by Jim Leonard/Xuth
  */
 
-#include "Arduino.h"
+#include "arduino_clock.h"
 #include "Stream.h"
 
 #define PARSE_TIMEOUT 1000  // default number of milli-seconds to wait

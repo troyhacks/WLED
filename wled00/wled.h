@@ -88,6 +88,15 @@
 #undef WLEDMM_PROTECT_SERVICE // prevents crashes when effects are drawing while asyncWebServer tries to modify segments at the same time
 
 // Library inclusions.
+//
+// The platform layer first: the clock, the IP address class, the filesystem
+// and the portable String/Print/Stream.  Arduino.h re-exports them for the
+// third-party libraries, but WLED's own code names them where they live.
+#if defined(WLED_BUILD_IDF)
+  #include <arduino_clock.h>   // the IDF build's own clock header
+#endif
+#include <IPAddress.h>
+#include <FS.h>
 #include <Arduino.h>
 #ifdef ESP8266
   #include <ESP8266WiFi.h>

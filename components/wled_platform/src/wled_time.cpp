@@ -1,14 +1,16 @@
-// arduino_time.cpp - the Arduino clock, over ESP-IDF's esp_timer.
+// wled_time.cpp - the Arduino clock, over ESP-IDF's esp_timer.
 //
 // millis() and micros() come straight from the timer; delay() parks the task
 // in the FreeRTOS idle queue, which is what the Arduino core does too.
 
-#include "Arduino.h"
+#include "arduino_clock.h"
 
 extern "C" {
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
 }
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 unsigned long millis()
 {

@@ -76,6 +76,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         wled_compat
+        wled_platform
         esp_netif
         esp_eth
         esp_event

@@ -94,10 +94,9 @@
 // does too (cores/esp32/pgmspace.h).
 #include <pgmspace.h>
 
-// The basic types come first: the Arduino classes below use them.
-typedef uint8_t byte;
-typedef bool boolean;
-typedef unsigned int word;
+// The basic types come first: the Arduino classes below use them.  They are
+// the platform layer's now - one definition, shared.
+#include "arduino_types.h"
 
 // The Arduino core's bit value macro.
 #ifndef _BV
@@ -110,13 +109,18 @@ uint16_t makeWord(uint16_t w);
 uint16_t makeWord(uint8_t h, uint8_t l);
 #define word(...) makeWord(__VA_ARGS__)
 
-// The String class, Print and Stream.
+// The String class, Print and Stream.  These are the platform layer's - they
+// are portable C++ with no hardware in them.
 #include "WString.h"
 #include "Print.h"
 #include "Stream.h"
 #include "Printable.h"
 #include "WCharacter.h"
 #include "IPAddress.h"
+
+// The core's own number to string, for the floating point.  Newlib has it,
+// but the core spells it with its own header.
+#include <stdlib_noniso.h>
 
 // The maths helpers come from the standard library, the way the Arduino core
 // does it: a macro named min or max collides with <algorithm>.
@@ -159,8 +163,7 @@ using std::round;
 #endif
 
 // The core's own number to string, for the floating point.  Newlib has it,
-// but the core spells it with its own header.
-char *dtostrf(double value, signed int width, unsigned int prec, char *buffer);
+// but the core spells it with its own header - see stdlib_noniso.h above.
 
 // --- GPIO ------------------------------------------------------------------
 void pinMode(uint8_t pin, uint8_t mode);
@@ -181,11 +184,9 @@ bool ledcAttachPin(uint8_t pin, uint8_t channel);
 void ledcDetachPin(uint8_t pin);
 
 // --- the clock -------------------------------------------------------------
-unsigned long millis();
-unsigned long micros();
-void delay(unsigned long ms);
-void delayMicroseconds(unsigned int us);
-void yield();
+// The clock is the platform layer's - ESP-IDF's esp_timer under the names
+// the core uses.
+#include "arduino_clock.h"
 
 // --- random ----------------------------------------------------------------
 long random(long howbig);

@@ -1,9 +1,11 @@
 // arduino_stdlib.cpp - the Arduino core's number conversions.
 //
 // The core has them in cores/esp32/stdlib_noniso.c.  Here they are over
-// snprintf(), which newlib has.
+// snprintf(), which newlib has.  dtostrf() is here too: the core has it in
+// the same place, and the String class needs it.
 
-#include "Arduino.h"
+#include <stdio.h>
+
 #include "stdlib_noniso.h"
 
 extern "C" {
@@ -67,6 +69,16 @@ char *ultoa(unsigned long value, char *s, int radix)
 char *ulltoa(unsigned long long value, char *s, int radix)
 {
     return convert((long long)value, s, radix, false);
+}
+
+// The Arduino core's dtostrf(): a double as a fixed point string.
+char *dtostrf(double value, signed int width, unsigned int prec, char *buffer)
+{
+    if (!buffer) {
+        return buffer;
+    }
+    snprintf(buffer, (size_t)(width > 0 ? width : 1), "%.*f", (int)prec, value);
+    return buffer;
 }
 
 } // extern "C"

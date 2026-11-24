@@ -8,6 +8,8 @@
 # Layout
 #   wled00/                 the WLED application component - the app_main() is
 #                           here, because PlatformIO's src_dir points at it
+#   components/wled_platform/ the platform layer: the clock, the IP address
+#                           class, the filesystem, the portable C++ classes
 #   components/wled_compat/ the Arduino API compatibility layer (IDF backed)
 #
 # PlatformIO adds wled00 (its src_dir) to EXTRA_COMPONENT_DIRS on the CMake

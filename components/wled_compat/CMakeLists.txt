@@ -3,29 +3,24 @@
 ## There is no Arduino core in this firmware.  This component provides the
 ## Arduino API that the WLED sources and the Arduino libraries use:
 ##
-##   vendor/   the String / Print / Stream / IPAddress classes, taken from the
-##             ESP32 Arduino core (see LICENSE-NOTICE.md for the provenance)
+##   vendor/   the AsyncUDP and ESPmDNS classes, taken from the ESP32
+##             Arduino core (see LICENSE-NOTICE.md for the provenance)
 ##   include/  the headers the Arduino core used to ship
 ##   src/      the implementation, on top of the ESP-IDF drivers
+##
+## What is here is the hardware: the GPIO, LEDC, ADC, UART, I2C, SPI, Ethernet
+## and USB-Serial-JTAG names, and the console's Arduino.h.  The parts of the
+## Arduino API that are not about hardware - the clock, the IP address class,
+## the filesystem, String/Print/Stream - are the platform layer's
+## (components/wled_platform).
 ##
 ## The names and the semantics match the Arduino core, so nothing above this
 ## component has to change.
 
 idf_component_register(
     SRCS
-        "vendor/WString.cpp"
-        "vendor/Print.cpp"
-        "vendor/Stream.cpp"
-        "vendor/StreamString.cpp"
-        "vendor/IPAddress.cpp"
         "vendor/AsyncUDP.cpp"
         "vendor/ESPmDNS.cpp"
-        "vendor/MD5Builder.cpp"
-        "vendor/HEXBuilder.cpp"
-        "vendor/fs/FS.cpp"
-        "vendor/fs/vfs_api.cpp"
-        "vendor/fs/LittleFS.cpp"
-        "src/arduino_time.cpp"
         "src/arduino_gpio.cpp"
         "src/arduino_pwm.cpp"
         "src/arduino_adc.cpp"
@@ -41,15 +36,12 @@ idf_component_register(
         "src/arduino_tcp.cpp"
         "src/arduino_update.cpp"
         "src/arduino_cpu.cpp"
-        "src/arduino_stdlib.cpp"
-        "libb64/cencode.c"
-        "libb64/cdecode.c"
     INCLUDE_DIRS
         "."
         "include"
         "vendor"
-        "vendor/fs"
     REQUIRES
+        wled_platform
         esp_timer
         esp_system
         esp_netif

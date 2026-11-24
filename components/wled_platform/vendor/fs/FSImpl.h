@@ -22,6 +22,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
+
+#include "FS.h"
 
 namespace fs {
 

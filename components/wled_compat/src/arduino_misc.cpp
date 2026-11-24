@@ -172,23 +172,5 @@ bool EEPROMClass::commit()
 }
 
 // --- the core's log helpers -------------------------------------------------
-
-const char *pathToFileName(const char *path)
-{
-    if (!path) {
-        return "";
-    }
-    const char *slash = strrchr(path, '/');
-    const char *backslash = strrchr(path, '\\');
-    if (backslash > slash) {
-        slash = backslash;
-    }
-    return slash ? slash + 1 : path;
-}
-
-// The core's watchdog switches for the second core.  The P4's watchdog is
-// looked after by WLED itself, so these do nothing.
-void enableCore0WDT() {}
-bool disableCore0WDT() { return true; }
-void enableCore1WDT() {}
-bool disableCore1WDT() { return true; }
+// These are the platform layer's now - the filesystem needs them, and the
+// filesystem is over there.

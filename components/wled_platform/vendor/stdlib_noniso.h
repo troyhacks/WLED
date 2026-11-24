@@ -36,6 +36,9 @@ char *ultoa(unsigned long value, char *s, int radix);
 #ifndef ulltoa
 char *ulltoa(unsigned long long value, char *s, int radix);
 #endif
+#ifndef dtostrf
+char *dtostrf(double value, signed int width, unsigned int prec, char *buffer);
+#endif
 
 #ifdef __cplusplus
 }

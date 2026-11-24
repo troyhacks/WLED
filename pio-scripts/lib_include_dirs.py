@@ -31,6 +31,19 @@ for path in sorted(glob.glob(os.path.join(libdeps_dir, "*", "src"))):
     if os.path.isdir(path):
         include_dirs.append(path)
 
+# The platform layer's include directories.  The libraries need them too -
+# ESPAsyncWebServer includes <FS.h>, <LittleFS.h>, <IPAddress.h>, <Print.h>
+# and <libb64/cencode.h> - and they are compiled by PlatformIO, not by CMake.
+# The IDF builder puts the application's own include directories on the
+# libraries' compile line as well, but that set comes out of CMake's codemodel,
+# which is only regenerated when CMakeLists.txt changes.  Listing them here
+# makes the libraries' include path independent of that timing.
+for sub in ("", "include", "vendor", os.path.join("vendor", "fs")):
+    path = os.path.join(project_dir, "components", "wled_platform", sub) if sub else \
+        os.path.join(project_dir, "components", "wled_platform")
+    if os.path.isdir(path):
+        include_dirs.append(path)
+
 if include_dirs:
     env.AppendUnique(CCFLAGS=[("-I", d) for d in include_dirs])
     print("Added %d library include directories" % len(include_dirs))
