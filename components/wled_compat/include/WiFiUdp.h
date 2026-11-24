@@ -24,6 +24,7 @@ public:
     int parsePacket();
     int available();
     int read();
+    int read(unsigned char *buffer, size_t len);
     int peek();
     void flush();
     size_t write(uint8_t c) override;

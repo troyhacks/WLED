@@ -138,3 +138,9 @@ void ps_free(void *ptr)
 {
     heap_caps_free(ptr);
 }
+
+// Is there PSRAM on this board?  The Arduino core asks the bootloader.
+bool psramFound()
+{
+    return heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
+}

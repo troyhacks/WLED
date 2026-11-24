@@ -146,6 +146,18 @@ int WiFiUDP::read()
     return (int)_rxBuffer[_rxIndex++];
 }
 
+int WiFiUDP::read(unsigned char *buffer, size_t len)
+{
+    if (!buffer || !len) {
+        return 0;
+    }
+    size_t available = _rxLength - _rxIndex;
+    size_t n = len < available ? len : available;
+    memcpy(buffer, _rxBuffer + _rxIndex, n);
+    _rxIndex += n;
+    return (int)n;
+}
+
 int WiFiUDP::peek()
 {
     if (_rxIndex >= _rxLength) {

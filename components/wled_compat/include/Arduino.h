@@ -243,6 +243,13 @@ void *ps_calloc(size_t size, size_t count);
 void *ps_realloc(void *ptr, size_t size);
 void ps_free(void *ptr);
 
+// Is there PSRAM on this board?
+bool psramFound();
+
+// Start listening for the network events and hand them to the application's
+// WiFiEvent(), the way the Arduino core did.
+void wledNetworkEventsBegin();
+
 // --- the chip --------------------------------------------------------------
 // The Arduino core's "ESP" object.  WLED asks it for the heap, the PSRAM, the
 // chip revision and the flash size.

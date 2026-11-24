@@ -35,6 +35,7 @@ idf_component_register(
         "src/arduino_eth.cpp"
         "src/arduino_mdns.cpp"
         "src/arduino_misc.cpp"
+        "src/arduino_events.cpp"
         "libb64/cencode.c"
         "libb64/cdecode.c"
     INCLUDE_DIRS

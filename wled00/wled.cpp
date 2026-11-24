@@ -1628,6 +1628,14 @@ void WLED::setup() {
       ESP_ERROR_CHECK(esp_event_loop_create_default());
       #endif
 
+      #if defined(WLED_BUILD_IDF)
+      // The Arduino core ran the network events through its own event system
+      // and called WLED's WiFiEvent().  The compatibility layer does that
+      // now: it listens for the Ethernet and IP events and hands them over
+      // in the Arduino's own spelling.
+      wledNetworkEventsBegin();
+      #endif
+
       // Create default Ethernet interface
       // esp_netif_inherent_config_t my_eth_base = _g_esp_netif_inherent_eth_config;
       // my_eth_base.route_prio = 200;

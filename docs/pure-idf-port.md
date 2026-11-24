@@ -152,12 +152,14 @@ The second removes `AsyncTCP` - a library that speaks raw BSD sockets - from
 the build, and it is the one MoonLight's own history points at.  But
 `PsychicHttp` is *not* free of the Arduino API either: it includes
 `Arduino.h`, `FS.h`, `Print.h` and `MD5Builder.h`.  So switching servers does
-not remove the compatibility layer; it adds an API mismatch on top of it.
+not remove the compatibility layer; it adds an API mismatch on top of it, and
+it means rewriting the web server, the XML API, the JSON API and the live
+view all at once.
 
-The plan therefore keeps `ESPAsyncWebServer` first and treats the
-`esp_http_server` port as the follow-on, once the port is stable.  When it
-happens, the shape to follow is MoonLight's: an IDF-native core behind an
-Arduino-flavoured API, so that WLED's call sites do not move.
+So this port keeps `ESPAsyncWebServer` - the "shim the WLED one" half of the
+choice - and treats the `esp_http_server` port as the follow-on, once this one
+is stable.  When it happens, the shape to follow is MoonLight's: an IDF-native
+core behind an Arduino-flavoured API, so that WLED's call sites do not move.
 
 ## sdkconfig
 
@@ -190,6 +192,18 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   `#ifdef ARDUINO`, and `ESPAsyncWebServer` only recognises the ESP32 under
   `#ifdef ESP32`.  The Arduino core is gone, but the macros still decide which
   code path those libraries take, so they are defined explicitly.
+* **`esp32-hal.h` has to stay C.**  `wled00/pin_manager.h` includes it from
+  inside an `extern "C"` block.  The Arduino core's version is a C header;
+  ours has to be too, or the standard library's templates come out with C
+  linkage and every `std::list` in the web server goes missing with them.
+* **The project directory is on the include line.**  A stray file in the
+  repository root can shadow a standard header - an empty file called `list`
+  was picked up by `#include <list>` and took the web server's `std::list`
+  with it.
+* **The partition table comes from the board.**  The ESP-IDF builder reads
+  `build.partitions` from the board JSON, not `board_build.partitions` from
+  the environment.  The stock P4 board would have used IDF's one-megabyte
+  single-app table, so there is a board of our own now.
 * **The console.**  The Arduino core and the IDF both want the
   USB-Serial-JTAG peripheral, and two drivers on one peripheral fight over the
   same FIFOs.  WLED's console already handles this by uninstalling the IDF

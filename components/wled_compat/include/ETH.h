@@ -17,6 +17,7 @@
 
 extern "C" {
 #include "esp_eth.h"
+#include "esp_eth_mac_esp.h"
 #include "esp_netif.h"
 #include "sdkconfig.h"
 }
@@ -30,6 +31,8 @@ typedef enum {
     ETH_CLOCK_GPIO16_OUT,
     ETH_CLOCK_GPIO17_OUT
 } eth_clock_mode_t;
+#elif defined(CONFIG_IDF_TARGET_ESP32P4)
+typedef emac_rmii_clock_mode_t eth_clock_mode_t;
 #endif
 
 // The PHY, the way the Arduino core has it.
