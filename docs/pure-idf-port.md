@@ -243,6 +243,17 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   sdkconfig, so a configuration change does not regenerate them.  When the
   P4's layout changes, the generated `memory.ld` has to be deleted (and the
   build cache entry with it) or the old layout is linked in.
+* **The watchdog watches both cores.**  WLED's `enableWatchdog()`
+  reconfigures the task watchdog to watch the idle task on every core.  The
+  AudioReactive's analysis task lives on the second core, so the watchdog's
+  idle check on that core has to be off - which is how the Arduino build has
+  it.  With the check on, the board resets itself every half minute.
+* **The USB console's buffer.**  The console's own ring buffer holds the
+  USB-Serial-JTAG packets between two reads, and its head has to move.  If it
+  does not, the count of the bytes waiting comes out as the whole buffer, the
+  console reads stale bytes, and a stray `t` among them runs the
+  AudioReactive's self-test over and over.
+
 
 
 ## Verifying
