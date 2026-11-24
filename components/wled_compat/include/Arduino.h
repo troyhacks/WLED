@@ -21,6 +21,8 @@
 #include <math.h>
 #include <algorithm>
 #include <cmath>
+#include <list>
+#include <vector>
 
 #include "esp_attr.h"
 #include "esp_system.h"
@@ -32,6 +34,10 @@
 #include "soc/soc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+// The Arduino core's HAL header, for ARDUINO_ISR_ATTR.  It is C, because
+// WLED includes it from inside an extern "C" block.
+#include "esp32-hal.h"
 
 // The environment macros the Arduino libraries branch on.  The Arduino core is
 // gone, but AsyncTCP only pulls in IPAddress.h under `#ifdef ARDUINO` and
@@ -62,6 +68,12 @@
 typedef uint8_t byte;
 typedef bool boolean;
 typedef unsigned int word;
+
+// The Arduino core's word(): makeWord() with one or two bytes.  The macro
+// wins over the typedef above, exactly as in the core.
+uint16_t makeWord(uint16_t w);
+uint16_t makeWord(uint8_t h, uint8_t l);
+#define word(...) makeWord(__VA_ARGS__)
 
 // The String class, Print and Stream.
 #include "WString.h"
@@ -112,6 +124,11 @@ void analogWriteFrequency(uint8_t pin, uint32_t freq);
 void analogWriteResolution(uint8_t pin, uint8_t bits);
 void analogReadResolution(uint8_t pin, uint8_t bits);
 
+// The Arduino core's LEDC calls.  ledcWrite() takes a pin, like the core's.
+bool ledcAttachChannel(uint8_t pin, uint32_t freq, uint8_t resolution, uint8_t channel);
+bool ledcWrite(uint8_t pin, uint32_t duty);
+bool ledcWriteChannel(uint8_t channel, uint32_t duty);
+
 // --- the clock -------------------------------------------------------------
 unsigned long millis();
 unsigned long micros();
@@ -135,6 +152,18 @@ void randomSeed(unsigned long seed);
 #endif
 #ifndef sq
 #define sq(x) ((x) * (x))
+#endif
+#ifndef DEG_TO_RAD
+#define DEG_TO_RAD 0.017453292519943295769236907684886
+#endif
+#ifndef RAD_TO_DEG
+#define RAD_TO_DEG 57.295779513082320876798154814105
+#endif
+#ifndef radians
+#define radians(deg) ((deg) * DEG_TO_RAD)
+#endif
+#ifndef degrees
+#define degrees(rad) ((rad) * RAD_TO_DEG)
 #endif
 long map(long x, long in_min, long in_max, long out_min, long out_max);
 #define bitRead(value, bit) (((value) >> (bit)) & 0x01)
@@ -190,6 +219,12 @@ bool digitalPinHasPWM(uint8_t pin);
 BaseType_t xTaskCreateUniversal(TaskFunction_t function, const char *name, uint32_t stackDepth,
                                  void *parameters, UBaseType_t priority, TaskHandle_t *handle,
                                  BaseType_t core);
+
+// The Arduino core's PSRAM allocators.
+void *ps_malloc(size_t size);
+void *ps_calloc(size_t size, size_t count);
+void *ps_realloc(void *ptr, size_t size);
+void ps_free(void *ptr);
 
 // --- the chip --------------------------------------------------------------
 // The Arduino core's "ESP" object.  WLED asks it for the heap, the PSRAM, the

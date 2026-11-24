@@ -105,3 +105,36 @@ BaseType_t xTaskCreateUniversal(TaskFunction_t function, const char *name, uint3
     }
     return xTaskCreatePinnedToCore(function, name, stackDepth, parameters, priority, handle, core);
 }
+
+// The Arduino core's makeWord().
+uint16_t makeWord(uint16_t w)
+{
+    return w;
+}
+
+uint16_t makeWord(uint8_t h, uint8_t l)
+{
+    return (uint16_t)((h << 8) | l);
+}
+
+// The Arduino core's PSRAM allocators: ordinary heap calls, but out of the
+// PSRAM instead of the internal RAM.
+void *ps_malloc(size_t size)
+{
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+}
+
+void *ps_calloc(size_t size, size_t count)
+{
+    return heap_caps_calloc(size, count, MALLOC_CAP_SPIRAM);
+}
+
+void *ps_realloc(void *ptr, size_t size)
+{
+    return heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM);
+}
+
+void ps_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}

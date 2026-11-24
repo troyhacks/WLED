@@ -62,6 +62,67 @@ PwmPin *claimPin(uint8_t pin, uint32_t freq, uint8_t resolution)
 
 } // namespace
 
+// The Arduino core's LEDC calls.  ledcWrite() takes a pin there, and so it
+// does here.
+bool ledcAttachChannel(uint8_t pin, uint32_t freq, uint8_t resolution, uint8_t channel)
+{
+    (void)channel;
+    PwmPin *p = claimPin(pin, freq, resolution);
+    if (!p) {
+        return false;
+    }
+    p->freq = freq;
+    p->resolution = resolution;
+
+    ledc_timer_config_t timerCfg = {};
+    timerCfg.speed_mode = LEDC_LOW_SPEED_MODE;
+    timerCfg.duty_resolution = LEDC_TIMER_8_BIT;
+    timerCfg.timer_num = p->timer;
+    timerCfg.freq_hz = p->freq;
+    timerCfg.clk_cfg = LEDC_AUTO_CLK;
+
+    ledc_channel_config_t channelCfg = {};
+    channelCfg.gpio_num = pin;
+    channelCfg.speed_mode = LEDC_LOW_SPEED_MODE;
+    channelCfg.channel = p->channel;
+    channelCfg.timer_sel = p->timer;
+    channelCfg.duty = 0;
+    channelCfg.hpoint = 0;
+
+    if (ledc_timer_config(&timerCfg) != ESP_OK) {
+        return false;
+    }
+    return ledc_channel_config(&channelCfg) == ESP_OK;
+}
+
+bool ledcWrite(uint8_t pin, uint32_t duty)
+{
+    PwmPin *p = findPin(pin);
+    if (!p) {
+        p = claimPin(pin, 5000, 8);
+        if (!p) {
+            return false;
+        }
+    }
+    uint32_t maxDuty = (1UL << p->resolution) - 1;
+    if (duty > maxDuty) {
+        duty = maxDuty;
+    }
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, p->channel, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, p->channel);
+    return true;
+}
+
+bool ledcWriteChannel(uint8_t channel, uint32_t duty)
+{
+    for (auto &slot : s_pins) {
+        if (slot.used && slot.channel == channel) {
+            return ledcWrite(slot.pin, duty);
+        }
+    }
+    return false;
+}
+
 void analogWriteResolution(uint8_t pin, uint8_t bits)
 {
     PwmPin *p = findPin(pin);

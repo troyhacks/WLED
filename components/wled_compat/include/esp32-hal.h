@@ -2,7 +2,10 @@
 //
 // FastLED, and WLED's own pin manager, include it.  What it used to carry -
 // the GPIO helpers, the pin functions and the timers - is in the Arduino API
-// layer now, so this brings that in.
+// layer now.
+//
+// This header is included from inside an extern "C" block (wled00/pin_manager.h
+// does that), so it must stay C: no C++ headers, no Arduino.h.
 //
 // The P4's ADC channels are listed here as well, because the Arduino core got
 // them from a table that ESP-IDF does not have:
@@ -13,7 +16,7 @@
 
 #pragma once
 
-#include "Arduino.h"
+#include "esp_attr.h"
 #include "driver/gpio.h"
 #include "soc/soc_caps.h"
 #include "soc/soc.h"
@@ -23,30 +26,9 @@
 #define ARDUINO_ISR_ATTR IRAM_ATTR
 #endif
 
-#ifndef SOC_ADC_PERIPH_NUM
-#define SOC_ADC_PERIPH_NUM 2
-#endif
-#ifndef SOC_ADC_MAX_CHANNEL_NUM
-#define SOC_ADC_MAX_CHANNEL_NUM 8
-#endif
-
-// The Arduino core's own names for the analog pins.  The P4 has no A0..A7
-// pins as such - the analog pins are ordinary GPIOs - but the names have to
-// exist for the code that uses them.
-#define A0 16
-#define A1 17
-#define A2 18
-#define A3 19
-#define A4 20
-#define A5 21
-#define A6 22
-#define A7 23
-#define A8 49
-#define A9 50
-#define A10 51
-#define A11 52
-#define A12 53
-#define A13 54
+// The Arduino core does not name the P4's analog pins A0..A7 - the analog
+// pins are ordinary GPIOs there - and naming them would break any code that
+// uses A8 as an identifier.
 
 #ifndef digitalPinIsValid
 #define digitalPinIsValid(pin) GPIO_IS_VALID_GPIO(pin)
