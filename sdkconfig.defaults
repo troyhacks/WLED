@@ -135,3 +135,14 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 # between the bootloader and the partition table.
 CONFIG_ESP_CONSOLE_UART=y
 CONFIG_ESP_CONSOLE_UART_NUM=0
+
+# --- the USB host ----------------------------------------------------------
+# The Arduino build has these, the IDF build did not: the external hub
+# support was off, so anything behind a hub was invisible to the host - the
+# F1 was plugged in and simply never appeared ("External Hubs support
+# disabled, Hub device was not initialized").
+#
+# The FIFO bias stays as the IDF has it ("Balanced") - WLED's own USB host
+# code requires it, and says so (wled.cpp).
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y

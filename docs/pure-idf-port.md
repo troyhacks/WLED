@@ -81,7 +81,10 @@ The layout:
 CMakeLists.txt              the IDF project root
 wled00/                     the WLED application component - and the app
                             component, so app_main() lives here
-components/wled_compat/     the Arduino API layer, backed by IDF
+components/wled_platform/   the platform layer: the clock, the IP address
+                            class, the filesystem, and the portable C++ the
+                            Arduino API is made of
+components/wled_compat/     the Arduino API layer: the hardware names
 sdkconfig.defaults          the IDF configuration
 partitions.csv              the partition table
 wled00/idf_component.yml    the managed components
@@ -93,20 +96,40 @@ option, and it already points at `wled00` for the Arduino build.  The builder
 adds `src_dir` to `EXTRA_COMPONENT_DIRS` and expects the app component to be
 there; a separate `main/` directory would collide with it.
 
-### The Arduino API layer
+### The platform layer and the Arduino API layer
 
-`components/wled_compat` provides the Arduino API that the WLED sources and
-the Arduino libraries use, with the same header names and the same semantics,
-on top of IDF drivers:
+The Arduino API is in two components, because half of it is not about hardware
+at all:
+
+* **`components/wled_platform`** - the clock, `IPAddress`, the filesystem, and
+  the portable C++ classes the Arduino core is made of (`String`, `Print`,
+  `Stream`).  They are portable: no HAL, no peripheral, nothing but ESP-IDF
+  underneath.  WLED's own code includes them by name.
+* **`components/wled_compat`** - the hardware names: `Arduino.h`, the GPIO,
+  LEDC, ADC, UART, I2C, SPI, Ethernet and USB-Serial-JTAG drivers, `Wire`,
+  `SPI`, `ETH`, `Update`, and the console's `HardwareSerial`/`HWCDC`.  This is
+  what the four third-party Arduino libraries need, and it is what will go
+  when they are replaced.
+
+The split follows the dependency, not the naming: `fs::File` derives from
+`Stream` and `IPAddress` derives from `Printable`, so the filesystem and the IP
+class cannot leave the Arduino layer without the portable classes coming with
+them.  What cannot cross the other way is anything that touches a peripheral.
+
+`Arduino.h` re-exports the platform's headers, so the libraries that expect
+the core's API find it exactly where they expect it - and WLED's own code can
+name the platform's headers directly, which is what it does.
+
+The Arduino | IDF table:
 
 | Arduino | IDF |
 | --- | --- |
-| `String`, `Print`, `Stream`, `IPAddress`, `FS` | the ESP32 Arduino core's own files, vendored (they are portable C++ with no HAL in them) |
+| `String`, `Print`, `Stream`, `IPAddress`, `FS` | the ESP32 Arduino core's own files, vendored (they are portable C++ with no HAL in them) - **the platform layer's** |
 | `AsyncUDP` | the Arduino core's own file, vendored (it is already lwIP) |
 | `libb64` | the Arduino core's own copy, vendored - the web server's basic auth needs it |
 | `esp32-hal.h` | a shim, and it has to stay C - WLED includes it from inside an `extern "C"` block |
 | `PROGMEM`, `PSTR`, `pgm_read_byte`, `F()` | identity - on the P4 the flash is memory mapped, exactly as on the Arduino core |
-| `millis`, `micros`, `delay` | `esp_timer` and the FreeRTOS tick |
+| `millis`, `micros`, `delay` | `esp_timer` and the FreeRTOS tick - **the platform layer's** |
 | `pinMode`, `digitalWrite`, `digitalRead` | `driver/gpio.h` |
 | `digitalPinToAnalogChannel` and the rest | the P4's own table: ADC1 is GPIO 16..23, ADC2 is GPIO 49..54 |
 | `analogWrite` | `driver/ledc.h` |
@@ -115,7 +138,7 @@ on top of IDF drivers:
 | `HWCDC` | `driver/usb_serial_jtag.h` |
 | `Wire` | `driver/i2c_master.h` |
 | `SPI` | `driver/spi_master.h` |
-| `LittleFS`, `FS`, `File` | `esp_vfs_littlefs` |
+| `LittleFS`, `FS`, `File` | `esp_vfs_littlefs` - **the platform layer's** |
 | `WiFiUDP` | lwIP sockets |
 | `NetworkClient` | lwIP sockets |
 | `MDNS` | the `mdns` component |
@@ -243,6 +266,14 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   sdkconfig, so a configuration change does not regenerate them.  When the
   P4's layout changes, the generated `memory.ld` has to be deleted (and the
   build cache entry with it) or the old layout is linked in.
+* **A component's `CMakeLists.txt` does not trigger a CMake re-run.**  The
+  espidf builder re-runs CMake only when the *project's* `CMakeLists.txt`
+  files change - a component's is not watched.  So adding a component, or
+  changing what one is made of, leaves the codemodel stale and the build goes
+  on looking for the sources where they used to be ("Source ... not found,
+  needed by target").  `pio-scripts/touch_cmake.py` touches the app
+  component's `CMakeLists.txt` when a component's is newer than the CMake
+  cache, which is the condition the builder checks for.
 * **The watchdog watches both cores.**  WLED's `enableWatchdog()`
   reconfigures the task watchdog to watch the idle task on every core.  The
   AudioReactive's analysis task lives on the second core, so the watchdog's
@@ -253,6 +284,15 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   does not, the count of the bytes waiting comes out as the whole buffer, the
   console reads stale bytes, and a stray `t` among them runs the
   AudioReactive's self-test over and over.
+* **The USB host's hub support.**  The Arduino build has
+  `CONFIG_USB_HOST_HUBS_SUPPORTED=y`; the IDF build did not, and the option
+  is off by default.  Without it the host does not initialise a hub
+  ("External Hubs support disabled, Hub device was not initialized"), so
+  everything behind the hub is invisible - the F1 was plugged in, the hub
+  enumerated as an unknown device, and the F1 never appeared at all.  The
+  FIFO bias is the other way round: the Arduino build uses "Periodic OUT",
+  but WLED's own USB host code insists on "Balanced" and says so
+  (`wled.cpp`).
 * **`uart_set_pin()` takes the transmit pin first.**  The IDF's order is
   `uart_set_pin(uart, tx, rx, rts, cts)`, and the Arduino core's `begin()`
   takes them the other way round (`rx, tx`).  Passing the compatibility
