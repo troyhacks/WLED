@@ -305,7 +305,9 @@ void handleSerial() {
       // (impulse response and sine response) and compares both with the
       // analytic model. Uses synthetic signals only - the live path is not
       // disturbed.
+#if !defined(WLED_BUILD_IDF)
       audioReactiveSelfTest();
+#endif
     } else if (next == 'g') {
       // Plot the 31-band RTA view (1/3-octave ISO 266, integrated power).
       // This is the scale a hardware analyser uses, so the two can be

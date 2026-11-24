@@ -227,17 +227,19 @@ int HWCDC::available()
         return 0;
     }
     // The driver hands out whole packets, so whatever is left over from the
-    // last read stays in this class's own buffer.
-    size_t free = RX_BUFFER_SIZE - 1;
+    // last read stays in this class's own ring buffer.
     size_t used = (_rxHead - _rxTail) & (RX_BUFFER_SIZE - 1);
-    if (used < free) {
+    size_t free = (RX_BUFFER_SIZE - 1) - used;
+    if (free) {
         uint8_t chunk[64];
-        int got = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), 0);
+        size_t room = free < sizeof(chunk) ? free : sizeof(chunk);
+        int got = usb_serial_jtag_read_bytes(chunk, room, 0);
         if (got > 0) {
-            for (int i = 0; i < got && used < free; i++) {
-                _rxBuffer[(_rxHead + used) & (RX_BUFFER_SIZE - 1)] = chunk[i];
-                used++;
+            for (int i = 0; i < got; i++) {
+                _rxBuffer[(_rxHead + i) & (RX_BUFFER_SIZE - 1)] = chunk[i];
             }
+            _rxHead = (_rxHead + (size_t)got) & (RX_BUFFER_SIZE - 1);
+            used = (_rxHead - _rxTail) & (RX_BUFFER_SIZE - 1);
         }
     }
     return (int)used;
