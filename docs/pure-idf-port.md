@@ -253,6 +253,18 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   does not, the count of the bytes waiting comes out as the whole buffer, the
   console reads stale bytes, and a stray `t` among them runs the
   AudioReactive's self-test over and over.
+* **`uart_set_pin()` takes the transmit pin first.**  The IDF's order is
+  `uart_set_pin(uart, tx, rx, rts, cts)`, and the Arduino core's `begin()`
+  takes them the other way round (`rx, tx`).  Passing the compatibility
+  layer's arguments straight through swapped them - and on the P4 that is not
+  a mistake the UART can absorb.  UART0's pins are fixed by the IOMUX, so the
+  swap left GPIO 37 driving the UART's transmit line *and* routing that same
+  pad back into its receive line: **the chip read back everything it
+  printed.**  The console then executed its own log as commands - every line
+  that began with a command letter became one - which is how "RTA trim band
+  1 ..." became a reboot and "the display is in the fixed window ..." became
+  a window command.  The Arduino core routes the pins itself and never calls
+  `uart_set_pin()` at all, so it never had the chance to get this wrong.
 
 
 

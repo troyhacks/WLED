@@ -62,7 +62,13 @@ void HardwareSerial::begin(uint32_t baud, uint32_t config, int8_t rxPin, int8_t 
     }
     uart_param_config(_uartNum, &uartCfg);
     if (rxPin >= 0 || txPin >= 0) {
-        uart_set_pin(_uartNum, rxPin, txPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        // The IDF's order is tx first, then rx.  The other way round the UART
+        // drives its own receive pin: the chip then reads back everything it
+        // prints, and the console executes its own log as commands.
+        esp_err_t err = uart_set_pin(_uartNum, txPin, rxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        if (err != ESP_OK) {
+            log_e("uart_set_pin(%d, tx=%d, rx=%d) failed: %s", _uartNum, txPin, rxPin, esp_err_to_name(err));
+        }
     }
     if (invert) {
         uart_set_line_inverse(_uartNum, true);
