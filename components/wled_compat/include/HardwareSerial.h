@@ -19,14 +19,13 @@ extern "C" {
 #include "driver/uart.h"
 }
 
-// The serial configuration constants, the way the IDF spells them - the
-// Arduino core's values are the same bits in a different order.
-#define SERIAL_8N1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_DISABLE)
-#define SERIAL_8N2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_DISABLE)
-#define SERIAL_8E1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_EVEN)
-#define SERIAL_8E2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_EVEN)
-#define SERIAL_8O1 (UART_DATA_8_BITS | UART_STOP_BITS_1 | UART_PARITY_ODD)
-#define SERIAL_8O2 (UART_DATA_8_BITS | UART_STOP_BITS_2 | UART_PARITY_ODD)
+// The serial configuration constants, with the Arduino core's values.
+#define SERIAL_8N1 0x800001c
+#define SERIAL_8N2 0x800001d
+#define SERIAL_8E1 0x800001a
+#define SERIAL_8E2 0x800001b
+#define SERIAL_8O1 0x800001e
+#define SERIAL_8O2 0x800001f
 
 // UART0's pins (SOC_RX0 and SOC_TX0) are in Arduino.h, because the RX and TX
 // names come from there too.
@@ -55,7 +54,8 @@ public:
     operator bool() const { return _started; }
 
 private:
-    int _uartNum = -1;
+    uart_port_t _uartNum = UART_NUM_0;
+    bool _hasPort = false;
     bool _started = false;
     bool _debugOutput = false;
     size_t _rxBufferSize = 1024;

@@ -49,8 +49,8 @@ PwmPin *claimPin(uint8_t pin, uint32_t freq, uint8_t resolution)
         if (!slot.used) {
             slot.used = true;
             slot.pin = pin;
-            slot.channel = static_cast<ledc_channel_t>(s_nextChannel % (SOC_LEDC_MAX_CHANNEL));
-            slot.timer = static_cast<ledc_timer_t>((s_nextChannel / (SOC_LEDC_MAX_CHANNEL)) % SOC_LEDC_TIMER_MAX);
+            slot.channel = static_cast<ledc_channel_t>(s_nextChannel % (SOC_LEDC_CHANNEL_NUM));
+            slot.timer = static_cast<ledc_timer_t>((s_nextChannel / (SOC_LEDC_CHANNEL_NUM)) % SOC_LEDC_TIMER_NUM);
             slot.freq = freq;
             slot.resolution = resolution;
             s_nextChannel++;
@@ -63,7 +63,10 @@ PwmPin *claimPin(uint8_t pin, uint32_t freq, uint8_t resolution)
 } // namespace
 
 // The Arduino core's LEDC calls.  ledcWrite() takes a pin there, and so it
-// does here.
+// does here.  They are declared in esp32-hal-ledc.h, which is a C header, so
+// they have C linkage here too.
+extern "C" {
+
 bool ledcAttachChannel(uint8_t pin, uint32_t freq, uint8_t resolution, uint8_t channel)
 {
     (void)channel;
@@ -122,6 +125,77 @@ bool ledcWriteChannel(uint8_t channel, uint32_t duty)
     }
     return false;
 }
+
+bool ledcAttach(uint8_t pin, uint32_t freq, uint8_t resolution)
+{
+    // Attach the pin to a free channel.
+    for (uint8_t channel = 0; channel < SOC_LEDC_CHANNEL_NUM; channel++) {
+        bool taken = false;
+        for (auto &slot : s_pins) {
+            if (slot.used && slot.channel == channel) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken) {
+            return ledcAttachPin(pin, channel);
+        }
+    }
+    return false;
+}
+
+} // extern "C"
+
+// The older, channel-based spelling.  The Arduino core dropped it in 3.x, but
+// WLED's PWM bus still uses it.
+bool ledcSetup(uint8_t channel, uint32_t freq, uint8_t resolution)
+{
+    if (channel >= SOC_LEDC_CHANNEL_NUM) {
+        return false;
+    }
+    ledc_timer_config_t timerCfg = {};
+    timerCfg.speed_mode = LEDC_LOW_SPEED_MODE;
+    timerCfg.duty_resolution = LEDC_TIMER_8_BIT;
+    timerCfg.timer_num = static_cast<ledc_timer_t>(channel / SOC_LEDC_CHANNEL_NUM);
+    timerCfg.freq_hz = freq;
+    timerCfg.clk_cfg = LEDC_AUTO_CLK;
+    return ledc_timer_config(&timerCfg) == ESP_OK;
+}
+
+bool ledcAttachPin(uint8_t pin, uint8_t channel)
+{
+    if (channel >= SOC_LEDC_CHANNEL_NUM) {
+        return false;
+    }
+    PwmPin *p = claimPin(pin, 5000, 8);
+    if (!p) {
+        return false;
+    }
+    p->channel = static_cast<ledc_channel_t>(channel);
+
+    ledc_channel_config_t channelCfg = {};
+    channelCfg.gpio_num = pin;
+    channelCfg.speed_mode = LEDC_LOW_SPEED_MODE;
+    channelCfg.channel = p->channel;
+    channelCfg.timer_sel = p->timer;
+    channelCfg.duty = 0;
+    channelCfg.hpoint = 0;
+    return ledc_channel_config(&channelCfg) == ESP_OK;
+}
+
+void ledcDetachPin(uint8_t pin)
+{
+    for (auto &slot : s_pins) {
+        if (slot.used && slot.pin == pin) {
+            ledc_stop(LEDC_LOW_SPEED_MODE, slot.channel, 0);
+            slot.used = false;
+            slot.pin = -1;
+            return;
+        }
+    }
+}
+
+
 
 void analogWriteResolution(uint8_t pin, uint8_t bits)
 {

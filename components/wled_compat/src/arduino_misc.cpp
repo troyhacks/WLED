@@ -10,6 +10,7 @@
 // in the same place.
 
 #include "Arduino.h"
+#include <string.h>
 #include "DNSServer.h"
 #include "ArduinoOTA.h"
 #include "EEPROM.h"
@@ -24,33 +25,82 @@ static const char *TAG = "wled_eeprom";
 
 // --- DNSServer --------------------------------------------------------------
 
-bool DNSServer::start(uint16_t port)
+// The DNS server answers the captive portal's name requests.  On the P4 there
+// is no access point - the board runs Ethernet only - so there is nothing to
+// answer for.
+
+bool DNSServer::start()
 {
-    (void)port;
     return false;
 }
 
-void DNSServer::stop()
+bool DNSServer::start(uint16_t port, const String &domainName, const IPAddress &resolvedIP)
 {
+    (void)port;
+    (void)domainName;
+    (void)resolvedIP;
+    return false;
 }
 
-void DNSServer::processNextRequest()
-{
-}
+void DNSServer::stop() {}
+void DNSServer::processNextRequest() {}
+void DNSServer::setErrorReplyCode(const DNSReplyCode &) {}
 
 // --- ArduinoOTA -------------------------------------------------------------
 
 ArduinoOTAClass ArduinoOTA;
 
-void ArduinoOTAClass::setHostname(const char *) {}
-void ArduinoOTAClass::setPassword(const char *) {}
-void ArduinoOTAClass::setPort(uint16_t) {}
-void ArduinoOTAClass::setTimeout(uint32_t) {}
-void ArduinoOTAClass::setAuthentication(const char *, const char *) {}
-void ArduinoOTAClass::begin() {}
+ArduinoOTAClass &ArduinoOTAClass::setPort(uint16_t port)
+{
+    _port = port;
+    return *this;
+}
+
+ArduinoOTAClass &ArduinoOTAClass::setHostname(const char *hostname)
+{
+    _hostname = hostname ? hostname : "";
+    return *this;
+}
+
+String ArduinoOTAClass::getHostname()
+{
+    return _hostname;
+}
+
+ArduinoOTAClass &ArduinoOTAClass::setPassword(const char *password)
+{
+    _password = password ? password : "";
+    return *this;
+}
+
+ArduinoOTAClass &ArduinoOTAClass::setPasswordHash(const char *passwordHash)
+{
+    _password = passwordHash ? passwordHash : "";
+    return *this;
+}
+
+ArduinoOTAClass &ArduinoOTAClass::setAuthentication(const char *, const char *password)
+{
+    _password = password ? password : "";
+    return *this;
+}
+
+void ArduinoOTAClass::setTimeout(int) {}
+void ArduinoOTAClass::setMd5Hash(const char *) {}
+
+void ArduinoOTAClass::begin()
+{
+    // The P4 does not serve an OTA over the network: the firmware goes over
+    // esp-hosted to the C6, and the web UI has its own path through Update.
+}
+
 void ArduinoOTAClass::end() {}
 void ArduinoOTAClass::handle() {}
-bool ArduinoOTAClass::getCommandHandler(void *) { return false; }
+
+void ArduinoOTAClass::onStart(std::function<void(void)> callback) { _onStart = callback; }
+void ArduinoOTAClass::onEnd(std::function<void(void)> callback) { _onEnd = callback; }
+void ArduinoOTAClass::onProgress(std::function<void(unsigned int, unsigned int)> callback) { _onProgress = callback; }
+void ArduinoOTAClass::onError(std::function<void(ota_error_t)> callback) { _onError = callback; }
 
 // --- EEPROM -----------------------------------------------------------------
 
@@ -120,3 +170,25 @@ bool EEPROMClass::commit()
     s_dirty = false;
     return err == ESP_OK;
 }
+
+// --- the core's log helpers -------------------------------------------------
+
+const char *pathToFileName(const char *path)
+{
+    if (!path) {
+        return "";
+    }
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    if (backslash > slash) {
+        slash = backslash;
+    }
+    return slash ? slash + 1 : path;
+}
+
+// The core's watchdog switches for the second core.  The P4's watchdog is
+// looked after by WLED itself, so these do nothing.
+void enableCore0WDT() {}
+bool disableCore0WDT() { return true; }
+void enableCore1WDT() {}
+bool disableCore1WDT() { return true; }

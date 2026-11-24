@@ -39,3 +39,6 @@ dependencies:
 
   # The software H.264 decoder, for the HDMI path.
   espressif/esp_h264: "1.0.4"
+
+  # The USB mass storage host, for the memory card over USB.
+  espressif/usb_host_msc: "1.1.4"

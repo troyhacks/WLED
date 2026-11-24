@@ -32,12 +32,39 @@
 #include "esp_log.h"
 #include "soc/soc_caps.h"
 #include "soc/soc.h"
+#include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 // The Arduino core's HAL header, for ARDUINO_ISR_ATTR.  It is C, because
 // WLED includes it from inside an extern "C" block.
 #include "esp32-hal.h"
+
+// The core's LEDC and SPI interfaces.  Both are C headers, so the functions
+// they declare have C linkage.
+#include "esp32-hal-ledc.h"
+#include "esp32-hal-spi.h"
+
+// The core's version macros, which the libraries compare against.
+#include "esp_arduino_version.h"
+
+// The core's logging macros, on ESP-IDF's logger.
+#include "arduino_log.h"
+
+// The core's Kconfig options, which its own libraries use.  There is no
+// Arduino core here to configure them, so they are the core's defaults.
+#ifndef CONFIG_ARDUINO_UDP_TASK_STACK_SIZE
+#define CONFIG_ARDUINO_UDP_TASK_STACK_SIZE 4096
+#endif
+#ifndef CONFIG_ARDUINO_UDP_TASK_PRIORITY
+#define CONFIG_ARDUINO_UDP_TASK_PRIORITY 3
+#endif
+#ifndef CONFIG_ARDUINO_UDP_RUNNING_CORE
+#define CONFIG_ARDUINO_UDP_RUNNING_CORE 0
+#endif
+#ifndef CONFIG_MDNS_TASK_PRIORITY
+#define CONFIG_MDNS_TASK_PRIORITY 3
+#endif
 
 // The board's pin names: TX, RX, SDA, SCL, SS, MOSI, MISO, SCK and A0..A13.
 #include "pins_arduino.h"
@@ -71,6 +98,11 @@
 typedef uint8_t byte;
 typedef bool boolean;
 typedef unsigned int word;
+
+// The Arduino core's bit value macro.
+#ifndef _BV
+#define _BV(b) (1UL << (b))
+#endif
 
 // The Arduino core's word(): makeWord() with one or two bytes.  The macro
 // wins over the typedef above, exactly as in the core.
@@ -121,6 +153,15 @@ using std::round;
 #define F_CPU (CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U)
 #endif
 
+// The number of pins, the way the Arduino core has it.
+#ifndef NUM_DIGITAL_PINS
+#define NUM_DIGITAL_PINS SOC_GPIO_PIN_COUNT
+#endif
+
+// The core's own number to string, for the floating point.  Newlib has it,
+// but the core spells it with its own header.
+char *dtostrf(double value, signed int width, unsigned int prec, char *buffer);
+
 // --- GPIO ------------------------------------------------------------------
 void pinMode(uint8_t pin, uint8_t mode);
 void digitalWrite(uint8_t pin, uint8_t val);
@@ -132,10 +173,12 @@ void analogWriteFrequency(uint8_t pin, uint32_t freq);
 void analogWriteResolution(uint8_t pin, uint8_t bits);
 void analogReadResolution(uint8_t pin, uint8_t bits);
 
-// The Arduino core's LEDC calls.  ledcWrite() takes a pin, like the core's.
-bool ledcAttachChannel(uint8_t pin, uint32_t freq, uint8_t resolution, uint8_t channel);
-bool ledcWrite(uint8_t pin, uint32_t duty);
-bool ledcWriteChannel(uint8_t channel, uint32_t duty);
+// The Arduino core's LEDC calls are declared in esp32-hal-ledc.h, which is a
+// C header - so they have C linkage.  These three are the older, channel-based
+// spelling that WLED's PWM bus still uses; the core dropped them in 3.x.
+bool ledcSetup(uint8_t channel, uint32_t freq, uint8_t resolution);
+bool ledcAttachPin(uint8_t pin, uint8_t channel);
+void ledcDetachPin(uint8_t pin);
 
 // --- the clock -------------------------------------------------------------
 unsigned long millis();
@@ -204,6 +247,7 @@ void noInterrupts();
 // Arduino libraries ask for them.
 int8_t digitalPinToAnalogChannel(uint8_t pin);
 int8_t analogChannelToDigitalPin(uint8_t channel);
+uint8_t analogInputToDigitalPin(uint8_t pin);
 int8_t digitalPinToTouchChannel(uint8_t pin);
 uint8_t digitalPinToPort(uint8_t pin);
 uint32_t digitalPinToBitMask(uint8_t pin);
@@ -279,6 +323,11 @@ public:
     uint8_t getResetReason();
     void *getResetInfoPtr();
     uint32_t getFreeSketchSpace();
+
+    // The partition helpers the core's Update library uses.
+    bool partitionEraseRange(const esp_partition_t *partition, size_t offset, size_t size);
+    bool partitionWrite(const esp_partition_t *partition, size_t offset, const uint32_t *data, size_t size);
+    bool partitionRead(const esp_partition_t *partition, size_t offset, uint32_t *data, size_t size);
 };
 extern EspClass ESP;
 

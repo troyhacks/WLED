@@ -23,3 +23,11 @@
 #ifndef log_v
 #define log_v(...) ESP_LOGV("fs", __VA_ARGS__)
 #endif
+
+// The core's log helpers: the file name out of a path, and the watchdog
+// switches for the second core.
+const char *pathToFileName(const char *path);
+void enableCore0WDT();
+bool disableCore0WDT();
+void enableCore1WDT();
+bool disableCore1WDT();

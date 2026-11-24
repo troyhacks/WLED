@@ -14,6 +14,9 @@ extern "C" {
 #include "esp_event.h"
 }
 
+// From arduino_events.cpp: whether the Ethernet link is up.
+bool wledEthernetLinkUp();
+
 ETHClass ETH;
 
 namespace {
@@ -26,9 +29,9 @@ esp_netif_t *ethNetif()
     return esp_netif_get_handle_from_ifkey(ETH_NETIF_KEY);
 }
 
-IPAddress ipFromInfo(const esp_netif_ip_info_t &info)
+IPAddress ipFromAddr(const esp_ip4_addr_t &addr)
 {
-    return IPAddress(info.ip.addr);
+    return IPAddress(addr.addr);
 }
 
 } // namespace
@@ -41,6 +44,32 @@ bool ETHClass::config(const char *hostname)
         return setHostname(hostname);
     }
     return true;
+}
+
+bool ETHClass::config(IPAddress localIp, IPAddress gateway, IPAddress subnet,
+                      IPAddress dns1, IPAddress dns2, IPAddress dns3)
+{
+    (void)dns1;
+    (void)dns2;
+    (void)dns3;
+    esp_netif_t *netif = ethNetif();
+    if (!netif) {
+        return false;
+    }
+    if ((uint32_t)localIp == 0 || (uint32_t)localIp == 0xffffffffUL) {
+        // "No static address" - that is INADDR_NONE, and it means the DHCP
+        // client should have the address.  Make sure it is running.
+        esp_netif_dhcpc_start(netif);
+        return true;
+    }
+    // A static address has to be set before the DHCP client runs, or the
+    // client would overwrite it.
+    esp_netif_dhcpc_stop(netif);
+    esp_netif_ip_info_t info = {};
+    info.ip.addr = (uint32_t)localIp;
+    info.gw.addr = (uint32_t)gateway;
+    info.netmask.addr = (uint32_t)subnet;
+    return esp_netif_set_ip_info(netif, &info) == ESP_OK;
 }
 
 bool ETHClass::setHostname(const char *hostname)
@@ -62,7 +91,7 @@ IPAddress ETHClass::localIP()
     if (esp_netif_get_ip_info(netif, &info) != ESP_OK) {
         return IPAddress();
     }
-    return ipFromInfo(info);
+    return ipFromAddr(info.ip);
 }
 
 IPAddress ETHClass::subnetMask()
@@ -75,7 +104,7 @@ IPAddress ETHClass::subnetMask()
     if (esp_netif_get_ip_info(netif, &info) != ESP_OK) {
         return IPAddress();
     }
-    return ipFromInfo(info.netmask);
+    return ipFromAddr(info.netmask);
 }
 
 IPAddress ETHClass::gatewayIP()
@@ -88,7 +117,7 @@ IPAddress ETHClass::gatewayIP()
     if (esp_netif_get_ip_info(netif, &info) != ESP_OK) {
         return IPAddress();
     }
-    return ipFromInfo(info.gw);
+    return ipFromAddr(info.gw);
 }
 
 uint8_t ETHClass::macAddress(uint8_t *mac)
@@ -106,7 +135,7 @@ bool ETHClass::linkUp()
     if (!netif) {
         return false;
     }
-    return esp_netif_is_running(netif);
+    return wledEthernetLinkUp();
 }
 
 // --- the WiFi stub ----------------------------------------------------------

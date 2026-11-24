@@ -16,16 +16,26 @@ extern "C" {
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_eth.h"
+#include "esp_eth_com.h"
 #include "esp_log.h"
 }
 
 static const char *TAG = "wled_events";
 
+// Whether the Ethernet link is up.  The Arduino core's ETH.linkUp() answered
+// this from the driver; here the event handler keeps it.
+static bool s_linkUp = false;
+
+bool wledEthernetLinkUp()
+{
+    return s_linkUp;
+}
+
 // The application's event handler.  The Arduino core calls a function with
 // this name; WLED has one.  It is weak, so a build without one still links.
 extern void WiFiEvent(arduino_event_id_t event) __attribute__((weak));
 
-static void IRAM_ATTR ethEventHandler(void *arg, esp_event_base_t *base, int32_t id, void *data)
+static void IRAM_ATTR ethEventHandler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     (void)base;
@@ -33,17 +43,19 @@ static void IRAM_ATTR ethEventHandler(void *arg, esp_event_base_t *base, int32_t
 
     arduino_event_id_t event = ARDUINO_EVENT_NONE;
     switch (id) {
-    case ESP_EVENT_ETH_START:
+    case ETHERNET_EVENT_START:
         event = ARDUINO_EVENT_ETH_START;
         break;
-    case ESP_EVENT_ETH_STOP:
+    case ETHERNET_EVENT_STOP:
         event = ARDUINO_EVENT_ETH_STOP;
         break;
-    case ESP_EVENT_ETH_CONNECTED:
+    case ETHERNET_EVENT_CONNECTED:
         event = ARDUINO_EVENT_ETH_CONNECTED;
+        s_linkUp = true;
         break;
-    case ESP_EVENT_ETH_DISCONNECTED:
+    case ETHERNET_EVENT_DISCONNECTED:
         event = ARDUINO_EVENT_ETH_DISCONNECTED;
+        s_linkUp = false;
         break;
     default:
         return;
@@ -54,7 +66,7 @@ static void IRAM_ATTR ethEventHandler(void *arg, esp_event_base_t *base, int32_t
     }
 }
 
-static void IRAM_ATTR ipEventHandler(void *arg, esp_event_base_t *base, int32_t id, void *data)
+static void IRAM_ATTR ipEventHandler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     (void)base;
@@ -85,7 +97,7 @@ void wledNetworkEventsBegin()
     started = true;
 
     esp_event_loop_create_default();
-    esp_event_handler_register(ESP_EVENT_ETH_EVENTS, ESP_EVENT_ANY_ID, ethEventHandler, nullptr);
+    esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, ethEventHandler, nullptr);
     esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, ipEventHandler, nullptr);
     esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP, ipEventHandler, nullptr);
 }

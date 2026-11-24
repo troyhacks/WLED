@@ -14,6 +14,7 @@
 
 #include "Arduino.h"
 #include "IPAddress.h"
+#include "WiFiEvent.h"
 
 extern "C" {
 #include "esp_eth.h"
@@ -78,6 +79,9 @@ typedef enum {
 class ETHClass {
 public:
     bool config(const char *hostname = nullptr);
+    bool config(IPAddress localIp, IPAddress gateway, IPAddress subnet,
+                IPAddress dns1 = IPAddress(8, 8, 8, 8), IPAddress dns2 = IPAddress(8, 8, 8, 8),
+                IPAddress dns3 = IPAddress(8, 8, 8, 8));
     bool setHostname(const char *hostname);
     IPAddress localIP();
     IPAddress subnetMask();

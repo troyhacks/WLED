@@ -165,6 +165,21 @@ def bin_factory(source, target, env):
     if not images:
         return  # ESP8266: no extra images, the app is the whole flash
     images.append((env.subst("$ESP32_APP_OFFSET") or "0x10000", str(target[0])))
+    # Under ESP-IDF the partition table can be in the list twice: once from the
+    # IDF builder and once from PlatformIO, because the board names the table.
+    # They are the same table, so only the first one goes into the image.
+    seen_offsets = set()
+    unique_images = []
+    for offset, path in images:
+        try:
+            key = int(offset, 0)
+        except (TypeError, ValueError):
+            key = offset
+        if key in seen_offsets:
+            continue
+        seen_offsets.add(key)
+        unique_images.append((offset, path))
+    images = unique_images
     missing = [path for _, path in images if not os.path.isfile(path)]
     if missing:
         print("No factory image, missing: {}".format(", ".join(missing)))
@@ -177,6 +192,7 @@ def bin_factory(source, target, env):
     cmd = [esptool, "--chip", env.BoardConfig().get("build.mcu"), "merge-bin", "-o", factory_file]
     for offset, path in images:
         cmd += [offset, path]
+    print("Merging the factory image:", images)
     if subprocess.run(cmd).returncode != 0:
         print("esptool merge-bin failed, no factory image")
         return

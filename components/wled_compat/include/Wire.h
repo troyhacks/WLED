@@ -46,6 +46,9 @@ public:
     int read() override;
     int peek() override;
 
+    // Is the bus up?
+    bool isReady() const { return _bus != nullptr; }
+
 private:
     bool ensureBus();
     i2c_master_bus_handle_t _bus = nullptr;
@@ -59,3 +62,8 @@ private:
 };
 
 extern TwoWire Wire;
+// The Arduino core has a second I2C bus.
+extern TwoWire Wire1;
+
+// Is the bus on that port up?  The Arduino core has it, and LovyanGFX asks.
+bool i2cIsInit(uint8_t port);

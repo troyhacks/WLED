@@ -34,18 +34,29 @@ void HardwareSerial::begin(uint32_t baud, uint32_t config, int8_t rxPin, int8_t 
 
     // The first UART is UART0, the second UART1.
     _uartNum = (s_uartCount == 0) ? UART_NUM_0 : UART_NUM_1;
+    _hasPort = true;
     s_uartCount++;
 
     uart_config_t uartCfg = {};
     uartCfg.baud_rate = baud;
-    uartCfg.data_bits = (uart_word_length_t)(config & UART_DATA_BITS_MASK);
-    uartCfg.stop_bits = (uart_stop_bits_t)((config & UART_STOP_BITS_MASK) >> UART_STOP_BITS_POS);
-    uartCfg.parity = (uart_parity_t)((config & UART_PARITY_MASK) >> UART_PARITY_POS);
+    uartCfg.data_bits = UART_DATA_8_BITS;
+    uartCfg.stop_bits = UART_STOP_BITS_1;
+    uartCfg.parity = UART_PARITY_DISABLE;
     uartCfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     uartCfg.source_clk = UART_SCLK_DEFAULT;
 
+    // The Arduino core's configuration values.
+    switch (config) {
+    case SERIAL_8N2: uartCfg.stop_bits = UART_STOP_BITS_2; break;
+    case SERIAL_8E1: uartCfg.parity = UART_PARITY_EVEN; break;
+    case SERIAL_8E2: uartCfg.parity = UART_PARITY_EVEN; uartCfg.stop_bits = UART_STOP_BITS_2; break;
+    case SERIAL_8O1: uartCfg.parity = UART_PARITY_ODD; break;
+    case SERIAL_8O2: uartCfg.parity = UART_PARITY_ODD; uartCfg.stop_bits = UART_STOP_BITS_2; break;
+    default: break;
+    }
+
     if (uart_driver_install(_uartNum, 1024, 1024, 0, nullptr, 0) != ESP_OK) {
-        _uartNum = -1;
+        _hasPort = false;
         s_uartCount--;
         return;
     }
@@ -64,7 +75,7 @@ void HardwareSerial::end()
     if (_started) {
         uart_driver_delete(_uartNum);
         _started = false;
-        _uartNum = -1;
+        _hasPort = false;
         s_uartCount--;
     }
 }

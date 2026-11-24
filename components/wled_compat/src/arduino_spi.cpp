@@ -82,9 +82,9 @@ void SPIClass::beginTransaction(SPISettings settings)
     if (!_begun) {
         begin();
     } else {
-        spi_device_t *dev = (spi_device_t *)_handle;
-        dev->cfg.clock_speed_hz = (int)_clock;
-        dev->cfg.mode = _dataMode;
+        // The device's configuration is fixed when it is added to the bus.
+        _clock = settings.clock();
+        _dataMode = settings.dataMode();
     }
 }
 
@@ -195,4 +195,49 @@ void SPIClass::setBitOrder(uint8_t bitOrder)
 void SPIClass::setDataMode(uint8_t dataMode)
 {
     _dataMode = dataMode;
+}
+
+// --- the Arduino core's old SPI driver interface ---------------------------
+//
+// ESP-IDF 5.x has only the new driver, but LovyanGFX still asks for the old
+// one.  The handle is a token here: LovyanGFX uses it as a "is this bus set
+// up" flag, and does the transfers with the new driver itself.
+
+extern "C" {
+
+struct spi_struct_t {
+    uint8_t spi_num;
+};
+
+static spi_struct_t s_spiBus;
+
+spi_t *spiStartBus(uint8_t spi_num, uint32_t clockDiv, uint8_t dataMode, uint8_t bitOrder)
+{
+    (void)clockDiv;
+    (void)dataMode;
+    (void)bitOrder;
+    s_spiBus.spi_num = spi_num;
+    return &s_spiBus;
+}
+
+void spiStopBus(spi_t *spi)
+{
+    (void)spi;
+}
+
+void spiSimpleTransaction(spi_t *spi)
+{
+    (void)spi;
+}
+
+void spiEndTransaction(spi_t *spi)
+{
+    (void)spi;
+}
+
+} // extern "C"
+
+spi_t *SPIClass::bus()
+{
+    return &s_spiBus;
 }

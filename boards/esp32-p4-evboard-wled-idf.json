@@ -11,7 +11,7 @@
     "mcu": "esp32p4",
     "chip_variant": "esp32p4_es",
     "variant": "esp32p4",
-    "partitions": "partitions.csv"
+    "partitions": "tools/WLED_ESP32_8MB_1500KB_FS.csv"
   },
   "connectivity": [
     "bluetooth",

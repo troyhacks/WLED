@@ -23,9 +23,26 @@ CONFIG_ESPTOOLPY_AFTER_RESET="hard_reset"
 # "spiffs" on purpose: the label is what LittleFS mounts by, and changing it
 # would orphan the data on every deployed board.
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="tools/WLED_ESP32_8MB_1500KB_FS.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
 CONFIG_PARTITION_TABLE_MD5=y
+
+# --- the bootloader ---------------------------------------------------------
+# The bootloader is compiled for size, and it logs at error level only, and it
+# does not validate the image in deep sleep.  These are the settings the
+# Arduino build uses, and they matter: the bootloader has to fit between the
+# offset it is flashed at (0x2000) and the partition table (0x8000), and a
+# bootloader built any other way does not fit there.
+CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_ERROR=y
+CONFIG_LOG_BOOTLOADER_LEVEL_ERROR=y
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+# --- the P4's memory layout ------------------------------------------------
+# The P4 changed its SRAM map in rev 3.  The board is an "ES pre rev.300"
+# part, and the Arduino build runs on ESP-IDF 5.3, which only had the older
+# layout - so the pure IDF build has to use the same one, or the linker is
+# given a memory map that does not match the sections script.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 
 # --- PSRAM -----------------------------------------------------------------
 CONFIG_SPIRAM=y
@@ -67,12 +84,23 @@ CONFIG_LITTLEFS_CACHE_SIZE=512
 CONFIG_LITTLEFS_BLOCK_CYCLES=512
 CONFIG_LITTLEFS_USE_MTIME=y
 
+# --- FreeRTOS --------------------------------------------------------------
+# WLED's task list prints each task's core, and that field only exists when
+# FreeRTOS is built with the core id in its statistics.
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
 # --- compiler --------------------------------------------------------------
 # The Arduino build used -Ofast -fno-exceptions -fno-rtti -DNDEBUG.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_CXX_RTTI=n
 CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS=n
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# ESP-IDF's own code - and the bootloader with it - is built for size.  The
+# bootloader has to fit between the offset it is flashed at (0x2000) and the
+# partition table (0x8000), and WLED's own code asks for speed, so it sets
+# its own flags (see wled00/CMakeLists.txt).
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
 CONFIG_COMPILER_WARN_UNINITIALIZED_AUTOS=y
@@ -87,6 +115,13 @@ CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 
-# --- USB -------------------------------------------------------------------
-# ARDUINO_USB_MODE=1: the console writes to USB-Serial-JTAG *and* to UART0.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# --- USB and the console ---------------------------------------------------
+# The console writes to USB-Serial-JTAG *and* to UART0: WLED's own console
+# takes the USB peripheral over, and ESP_LOG goes to UART0, which is what the
+# Arduino build does too.
+#
+# The ESP-IDF console is on UART0 rather than on USB-Serial-JTAG, because the
+# USB console code makes the second stage bootloader bigger than the space
+# between the bootloader and the partition table.
+CONFIG_ESP_CONSOLE_UART=y
+CONFIG_ESP_CONSOLE_UART_NUM=0

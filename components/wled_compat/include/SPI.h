@@ -85,6 +85,9 @@ public:
     void setDataMode(uint8_t dataMode);
     void setClock(int32_t clock) { setFrequency((uint32_t)clock); }
 
+    // The Arduino core's old driver's bus handle.  LovyanGFX asks for it.
+    spi_t *bus();
+
 private:
     int8_t _sck, _miso, _mosi, _ss;
     bool _begun = false;
@@ -92,6 +95,10 @@ private:
     uint8_t _bitOrder = MSBFIRST;
     uint8_t _dataMode = 0;
     void * _handle = nullptr;
+
+    // The transfer itself: the bytes go out and the bytes that come back
+    // (if any) are put where the caller asked for them.
+    void transfer(const uint8_t *data, size_t size, uint8_t *received);
 };
 
 extern SPIClass SPI;

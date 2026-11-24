@@ -108,6 +108,13 @@ i2c_port_t wledI2cBusPort(i2c_master_bus_handle_t bus)
 // --- the Wire class ---------------------------------------------------------
 
 TwoWire Wire;
+TwoWire Wire1;
+
+// Is the bus on that port up?
+bool i2cIsInit(uint8_t port)
+{
+    return port == 0 ? Wire.isReady() : Wire1.isReady();
+}
 
 bool TwoWire::begin(int sda, int scl, uint32_t frequency)
 {

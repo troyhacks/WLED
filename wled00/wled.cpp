@@ -1658,7 +1658,46 @@ void WLED::setup() {
 
       #ifdef CONFIG_ETH_USE_ESP32_EMAC
         // Initialize Ethernet driver
+        #if defined(WLED_BUILD_IDF)
+        // IDF 5.5's ETH_ESP32_EMAC_DEFAULT_CONFIG() cannot be used here: it
+        // names its fields out of order, and C++ does not allow that.  The
+        // fields are set out instead, in the order the struct declares them,
+        // with the same values.
+        eth_esp32_emac_config_t esp32_emac_config = {
+            .smi_gpio = {
+                .mdc_num = 31,
+                .mdio_num = 52,
+            },
+            .interface = EMAC_DATA_INTERFACE_RMII,
+            .clock_config = {
+                .rmii = {
+                    .clock_mode = EMAC_CLK_EXT_IN,
+                    .clock_gpio = (emac_rmii_clock_gpio_t)50,
+                },
+            },
+            .dma_burst_len = ETH_DMA_BURST_LEN_32,
+            .intr_priority = 0,
+            .emac_dataif_gpio = {
+                .rmii = {
+                    .tx_en_num = 49,
+                    .txd0_num = 34,
+                    .txd1_num = 35,
+                    .crs_dv_num = 28,
+                    .rxd0_num = 29,
+                    .rxd1_num = 30,
+                },
+            },
+            .clock_config_out_in = {
+                .rmii = {
+                    .clock_mode = EMAC_CLK_EXT_IN,
+                    .clock_gpio = (emac_rmii_clock_gpio_t)-1,
+                },
+            },
+            .mdc_freq_hz = 0,
+        };
+        #else
         eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+        #endif
         esp32_emac_config.smi_gpio.mdc_num = 31;
         esp32_emac_config.smi_gpio.mdio_num = 52;
         eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
@@ -2700,7 +2739,7 @@ void WLED::handleConnection() {
     if (Network.isEthernet() && !Network.isWiFi()) {
       USER_PRINT(F(" via Ethernet (Primary Route)\n"));
       backup = Network.getWiFiIP();
-      if (backup != INADDR_NONE && backup != IPAddress(IPADDR_BROADCAST)) {
+      if (backup != IPAddress(INADDR_NONE) && backup != IPAddress(IPADDR_BROADCAST)) {
         USER_PRINT(F("IP address: http://"));
         USER_PRINT(backup);
         USER_PRINT(F(" via WiFi (Backup Route)\n"));
@@ -2708,7 +2747,7 @@ void WLED::handleConnection() {
     } else if (Network.isWiFi() && !Network.isEthernet()) {
       USER_PRINT(F(" via WiFi (Primary Route)\n"));
       backup = Network.getEthernetIP();
-      if (backup != INADDR_NONE && backup != IPAddress(IPADDR_BROADCAST)) {
+      if (backup != IPAddress(INADDR_NONE) && backup != IPAddress(IPADDR_BROADCAST)) {
         USER_PRINT(F("IP address: http://"));
         USER_PRINT(backup);
         USER_PRINT(F(" via Ethernet (Backup Route)\n"));

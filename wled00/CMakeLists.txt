@@ -106,9 +106,21 @@ idf_component_register(
         espressif__esp-dsp
         espressif__esp_lcd_lt8912b
         espressif__esp_h264
+        espressif__usb_host_msc
         mbedtls
 )
 
 # The Arduino build has no such thing, so the sources that have to behave
 # differently under IDF (the I2C bus registry, for one) check for this.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE WLED_BUILD_IDF=1)
+
+# WLED's own code wants speed, the way the Arduino build has it: -Ofast and
+# the rest.  ESP-IDF's own code - and the bootloader with it - is built for
+# size, because the bootloader has to fit between the offset it is flashed at
+# (0x2000) and the partition table (0x8000).
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Ofast
+    -funroll-loops
+    -fstrict-volatile-bitfields
+    -fmerge-all-constants
+)

@@ -14,10 +14,11 @@ extern "C" {
 #include "esp_flash.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
-#include "esp_private/esp_private.h"
-#if CONFIG_IDF_TARGET_ESP32P4
+#include "esp_app_format.h"
+#include "esp_partition.h"
+#include "esp_mac.h"
+#include "esp_private/esp_clk.h"
 #include "soc/soc.h"
-#endif
 }
 
 long random(long howbig)
@@ -57,15 +58,25 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+// The Arduino core's dtostrf(): a double as a fixed point string.
+char *dtostrf(double value, signed int width, unsigned int prec, char *buffer)
+{
+    if (!buffer) {
+        return buffer;
+    }
+    snprintf(buffer, (size_t)(width > 0 ? width : 1), "%.*f", (int)prec, value);
+    return buffer;
+}
+
 // --- the chip ---------------------------------------------------------------
 
 EspClass ESP;
 
 uint32_t EspClass::getChipId()
 {
-    uint32_t id = 0;
-    esp_read_mac_to_system_flash((uint8_t *)&id, 4);
-    return id;
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    return ((uint32_t)mac[2] << 16) | ((uint32_t)mac[3] << 8) | mac[4];
 }
 
 const char *EspClass::getChipModel()
@@ -94,12 +105,16 @@ uint32_t EspClass::getCpuFreqMHz()
 
 uint32_t EspClass::getFlashChipSize()
 {
-    return (uint32_t)esp_flash_get_size();
+    uint32_t size = 0;
+    if (esp_flash_get_size(nullptr, &size) != ESP_OK) {
+        return 0;
+    }
+    return size;
 }
 
 uint32_t EspClass::getFlashChipRealSize()
 {
-    return (uint32_t)esp_flash_get_size();
+    return getFlashChipSize();
 }
 
 uint8_t EspClass::getFlashChipMode()
@@ -186,10 +201,45 @@ void *EspClass::getResetInfoPtr()
 
 uint32_t EspClass::getFreeSketchSpace()
 {
-    // The Arduino core reports the room left in the app partition.
-    const esp_partition_t *part = esp_app_get_ota_partition();
-    if (!part) {
+    // The room for an update: the app partition that is not the running one.
+    const esp_partition_t *running = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+    if (!running) {
         return 0;
     }
-    return (uint32_t)esp_ota_get_app_partition_size() - (uint32_t)esp_ota_get_app_elf_size();
+    const esp_partition_t *ota0 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
+    const esp_partition_t *ota1 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+    const esp_partition_t *target = (running == ota0) ? ota1 : ota0;
+    if (!target) {
+        return 0;
+    }
+    return (uint32_t)target->size;
+}
+
+// --- the partition helpers -------------------------------------------------
+//
+// The Arduino core has these on the ESP object, and its Update library uses
+// them to write the new image.
+
+bool EspClass::partitionEraseRange(const esp_partition_t *partition, size_t offset, size_t size)
+{
+    if (!partition) {
+        return false;
+    }
+    return esp_partition_erase_range(partition, offset, size) == ESP_OK;
+}
+
+bool EspClass::partitionWrite(const esp_partition_t *partition, size_t offset, const uint32_t *data, size_t size)
+{
+    if (!partition || !data) {
+        return false;
+    }
+    return esp_partition_write(partition, offset, data, size) == ESP_OK;
+}
+
+bool EspClass::partitionRead(const esp_partition_t *partition, size_t offset, uint32_t *data, size_t size)
+{
+    if (!partition || !data) {
+        return false;
+    }
+    return esp_partition_read(partition, offset, data, size) == ESP_OK;
 }

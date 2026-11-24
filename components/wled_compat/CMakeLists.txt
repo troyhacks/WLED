@@ -19,6 +19,9 @@ idf_component_register(
         "vendor/StreamString.cpp"
         "vendor/IPAddress.cpp"
         "vendor/AsyncUDP.cpp"
+        "vendor/ESPmDNS.cpp"
+        "vendor/MD5Builder.cpp"
+        "vendor/HEXBuilder.cpp"
         "vendor/fs/FS.cpp"
         "vendor/fs/vfs_api.cpp"
         "vendor/fs/LittleFS.cpp"
@@ -33,9 +36,12 @@ idf_component_register(
         "src/arduino_spi.cpp"
         "src/arduino_udp.cpp"
         "src/arduino_eth.cpp"
-        "src/arduino_mdns.cpp"
         "src/arduino_misc.cpp"
         "src/arduino_events.cpp"
+        "src/arduino_tcp.cpp"
+        "src/arduino_update.cpp"
+        "src/arduino_cpu.cpp"
+        "src/arduino_stdlib.cpp"
         "libb64/cencode.c"
         "libb64/cdecode.c"
     INCLUDE_DIRS
@@ -63,4 +69,8 @@ idf_component_register(
         esp_driver_spi
         espressif__mdns
         esp_adc
+        spi_flash
+        app_update
+        mbedtls
+        esp_hw_support
 )

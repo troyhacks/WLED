@@ -51,6 +51,18 @@ int8_t analogChannelToDigitalPin(uint8_t channel)
     return -1;
 }
 
+// The Arduino core's analogInputToDigitalPin(): the GPIO behind an A0..A13.
+uint8_t analogInputToDigitalPin(uint8_t pin)
+{
+    static const uint8_t ANALOG_PINS[] = {A0, A1, A2,  A3,  A4,  A5, A6,
+                                          A7, A8, A9, A10, A11, A12, A13};
+    constexpr uint8_t ANALOG_PIN_COUNT = sizeof(ANALOG_PINS) / sizeof(ANALOG_PINS[0]);
+    if (pin < ANALOG_PIN_COUNT) {
+        return ANALOG_PINS[pin];
+    }
+    return pin;
+}
+
 int8_t digitalPinToTouchChannel(uint8_t pin)
 {
     // The P4 has no touch sensor peripheral - the touch panel on the EV board

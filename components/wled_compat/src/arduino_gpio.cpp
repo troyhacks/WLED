@@ -14,7 +14,7 @@ extern "C" {
 #include "esp_intr_alloc.h"
 }
 
-static gpio_isr_handler_t s_isrHandler = nullptr;
+static gpio_isr_t s_isrHandler = nullptr;
 static void *s_isrArg = nullptr;
 static gpio_num_t s_isrPin = GPIO_NUM_NC;
 static portMUX_TYPE s_criticalMux = portMUX_INITIALIZER_UNLOCKED;
