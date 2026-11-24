@@ -101,10 +101,10 @@ on top of IDF drivers:
 
 | Arduino | IDF |
 | --- | --- |
-| `String`, `Print`, `Stream`, `IPAddress` | the ESP32 Arduino core's own files, vendored (they are portable C++ with no HAL in them) |
+| `String`, `Print`, `Stream`, `IPAddress`, `FS` | the ESP32 Arduino core's own files, vendored (they are portable C++ with no HAL in them) |
 | `AsyncUDP` | the Arduino core's own file, vendored (it is already lwIP) |
 | `libb64` | the Arduino core's own copy, vendored - the web server's basic auth needs it |
-| `esp32-hal.h` | a shim: the Arduino API layer plus the P4's ADC channel map |
+| `esp32-hal.h` | a shim, and it has to stay C - WLED includes it from inside an `extern "C"` block |
 | `PROGMEM`, `PSTR`, `pgm_read_byte`, `F()` | identity - on the P4 the flash is memory mapped, exactly as on the Arduino core |
 | `millis`, `micros`, `delay` | `esp_timer` and the FreeRTOS tick |
 | `pinMode`, `digitalWrite`, `digitalRead` | `driver/gpio.h` |
@@ -117,9 +117,25 @@ on top of IDF drivers:
 | `SPI` | `driver/spi_master.h` |
 | `LittleFS`, `FS`, `File` | `esp_vfs_littlefs` |
 | `WiFiUDP` | lwIP sockets |
+| `NetworkClient` | lwIP sockets |
 | `MDNS` | the `mdns` component |
 | `EEPROM` | NVS, in the "eeprom" namespace, where the Arduino core keeps it |
 | `xTaskCreateUniversal` | `xTaskCreatePinnedToCore` |
+| the network events | IDF's Ethernet and IP events, translated into the Arduino's `arduino_event_id_t` and handed to WLED's `WiFiEvent()` |
+
+Two of these are worth calling out, because the Arduino core does them and
+nothing else would:
+
+* **The network events.**  The core called WLED's global `WiFiEvent()` when
+  the link came up, and WLED does the board's Ethernet bookkeeping there -
+  the static address, the hostname, the reconnect.  Without the core there
+  would be nobody to call it, so the compatibility layer does what the core
+  did.
+* **`ETH.config()`.**  WLED asks for a static address with it, and passes
+  `INADDR_NONE` to mean "use DHCP".  The compatibility layer has to
+  recognise that and leave the DHCP client alone; setting the address to
+  255.255.255.255 and stopping DHCP loses the lease.
+
 
 Two things are worth calling out:
 
@@ -181,13 +197,23 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   the Arduino layer, a stock IDF will not have them.  This is the first thing
   to check, and the Ethernet link has to be verified before anything is built
   on top of it.
+* **The P4's memory layout.**  The silicon changed in rev 3, and the layout
+  the bootloader is linked for has to be the one the chip is.  It is the one
+  line `CONFIG_ESP32P4_SELECTS_REV_LESS_V3` in `sdkconfig.defaults`, and it
+  wants to be flipped when the rev 3 board arrives.  The partition table sits
+  between the bootloader and the app, so the bootloader has to fit in the
+  gap - which is what `CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE`, the
+  error-level bootloader log and the skipped deep-sleep validation are for.
+  They are the Arduino build's settings, so both builds agree.
 * **`-flto`.**  PlatformIO compiles every IDF component with the project's
   flags, and LTO across the whole of IDF is not IDF-clean.  It stays off until
   the port is green.
 * **The partition label.**  The filesystem partition is labelled `spiffs`,
   because that is the label the Arduino build mounts by and the label is what
   finds the partition.  Renaming it would orphan the data on every deployed
-  board.
+  board.  The table itself is WLED's own -
+  `tools/WLED_ESP32_8MB_1500KB_FS.csv` - and both builds use it, so a board
+  can be flashed with either and keep its data.
 * **The environment macros.**  `AsyncTCP` only includes `IPAddress.h` under
   `#ifdef ARDUINO`, and `ESPAsyncWebServer` only recognises the ESP32 under
   `#ifdef ESP32`.  The Arduino core is gone, but the macros still decide which
@@ -208,6 +234,16 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   USB-Serial-JTAG peripheral, and two drivers on one peripheral fight over the
   same FIFOs.  WLED's console already handles this by uninstalling the IDF
   driver first; in the pure build the firmware owns the peripheral outright.
+* **"No static address" is `INADDR_NONE`.**  WLED asks for a static address
+  with `ETH.config()`, and passes `INADDR_NONE` to mean "use DHCP".  The
+  compatibility layer has to recognise that and leave the DHCP client alone -
+  setting the address to 255.255.255.255 and stopping DHCP loses the lease.
+* **The generated linker scripts go stale.**  PlatformIO's rules for the
+  memory and sections scripts depend on the *source* script, not on the
+  sdkconfig, so a configuration change does not regenerate them.  When the
+  P4's layout changes, the generated `memory.ld` has to be deleted (and the
+  build cache entry with it) or the old layout is linked in.
+
 
 ## Verifying
 
