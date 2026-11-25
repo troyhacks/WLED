@@ -63,7 +63,9 @@ void DenonStageLinqUsermod::loop() {
     if (b.beat != _lastRawBeat) {
       _lastRawBeat = b.beat;
       _lastMoveMs = millis();
-      stagelinq_beat_packets_public++;
+      // Not "++": the increment of a volatile is deprecated in C++20, and a
+      // read and a write say the same thing.
+      stagelinq_beat_packets_public = stagelinq_beat_packets_public + 1;
     }
     _lastPacketMs = millis();
   }

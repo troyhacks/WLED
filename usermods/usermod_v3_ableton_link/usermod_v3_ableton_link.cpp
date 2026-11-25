@@ -95,7 +95,9 @@ void AbletonLinkUsermod::onPacket(AsyncUDPPacket packet) {
       _phase = (double)phaseMillionths / 1000000.0;
       _haveTempo = true;
       _lastPacketMs = millis();
-      abletonlink_packets_public++;
+      // Not "++": the increment of a volatile is deprecated in C++20, and a
+      // read and a write say the same thing.
+      abletonlink_packets_public = abletonlink_packets_public + 1;
       if (_debug && (abletonlink_packets_public % 400u) == 1u) {
         USER_PRINTF("[Link] %.3f BPM, phase %.3f beats\n", (double)_bpm, _phase);
       }
