@@ -110,7 +110,12 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
     cctFromRgb = request->hasArg(F("CR"));
     strip.cctBlending = request->arg(F("CB")).toInt();
     Bus::setCCTBlend(strip.cctBlending);
-    Bus::setGlobalAWMode(request->arg(F("AW")).toInt());
+    // The global auto white override is only changed when the form actually
+    // carries it.  A missing field reads as 0 - which is "None", and that
+    // would silently switch the auto white off for every bus.
+    if (request->hasArg(F("AW"))) {
+      Bus::setGlobalAWMode(request->arg(F("AW")).toInt());
+    }
     strip.setTargetFps(request->arg(F("FR")).toInt());
     strip.useLedsArray = request->hasArg(F("LD"));
 

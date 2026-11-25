@@ -311,6 +311,16 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   1 ..." became a reboot and "the display is in the fixed window ..." became
   a window command.  The Arduino core routes the pins itself and never calls
   `uart_set_pin()` at all, so it never had the chance to get this wrong.
+* **`dtostrf()`'s width is a field width, not a buffer size.**  The core's
+  `dtostrf(value, width, precision, buffer)` pads the result to at least
+  `width` characters and the buffer has to hold `width + 1` of them.  The
+  platform layer's copy is the core's own code, because the rounding is part
+  of the contract as well: `print(2.8, 1)` is "2.8" and not "2.9", since 2.85
+  is not exactly representable.  A `snprintf()` with the width as the buffer
+  size truncates instead of padding, and that is not a small difference: the
+  gamma correction value came out as "2.", the browser refused that as a
+  number, and the `required` field on the LED settings page was left empty -
+  which stopped the **whole form** from being submitted.
 
 
 
