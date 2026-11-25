@@ -299,6 +299,27 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   FIFO bias is the other way round: the Arduino build uses "Periodic OUT",
   but WLED's own USB host code insists on "Balanced" and says so
   (`wled.cpp`).
+* **The USB host's enumeration filter rejects everything.**  With
+  `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y` and no callback registered,
+  the IDF's enumeration driver takes the configuration descriptor only if a
+  filter says so - and it defaults to "no":
+
+  ```c
+  bool enum_proceed = false;
+  if (p_enum_driver->constant.enum_filter_cb) {
+      enum_proceed = p_enum_driver->constant.enum_filter_cb(dev_desc, &bConfigurationValue);
+  }
+  if (!enum_proceed) {
+      ESP_LOGW(ENUM_TAG, "[%d:%d] Abort request of enumeration process (%#x:%#x)", ...);
+  ```
+
+  Nothing in WLED registers a callback, so **every** device was rejected -
+  the HID controller, the deck, the hub - and the log line reads like the
+  device giving up when it is the host doing it.  The option is off.
+  Turning an option off in the per-env defaults means writing it out as
+  `# CONFIG_... is not set`: the defaults are applied *over* the resolved
+  sdkconfig, and a value that is simply absent from them keeps whatever the
+  resolved file says.
 * **`uart_set_pin()` takes the transmit pin first.**  The IDF's order is
   `uart_set_pin(uart, tx, rx, rts, cts)`, and the Arduino core's `begin()`
   takes them the other way round (`rx, tx`).  Passing the compatibility
