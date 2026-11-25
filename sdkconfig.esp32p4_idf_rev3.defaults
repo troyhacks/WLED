@@ -43,7 +43,19 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 
 # The USB host
-CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y
+#
+# The enumeration filter callback is NOT enabled: with the option on and no
+# callback registered, the IDF's enum driver leaves "enum_proceed" false and
+# rejects **every** device - "Abort request of enumeration process" - which
+# is what happened to the HID devices.
+#
+# It has to be written out as "not set" rather than left out: the defaults
+# are applied over the resolved sdkconfig, and a value that is simply absent
+# from them keeps whatever the resolved file says.
+# CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK is not set
+#
+# The control transfer limit is raised instead, so a device with a long
+# configuration descriptor can still enumerate.
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=3000
 
 # The display and the audio: the ISRs stay safe while the flash writes
