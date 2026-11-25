@@ -167,12 +167,12 @@
   #define WLED_SHARED_I2C 1
 #endif
 
-#ifndef TCM_IRAM_ATTR
-#define TCM_IRAM_ATTR
+#ifndef SPM_IRAM_ATTR
+#define SPM_IRAM_ATTR
 #endif
 
-#ifndef FORCE_TCM_IRAM_ATTR
-#define FORCE_TCM_IRAM_ATTR
+#ifndef FORCE_SPM_IRAM_ATTR
+#define FORCE_SPM_IRAM_ATTR
 #endif
 
 #ifndef TCM_DRAM_ATTR

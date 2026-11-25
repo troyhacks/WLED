@@ -5018,16 +5018,16 @@ void arAnalysisTask(void * parameter)
   arInitCalMs     = (float)((double)(tCal1 - tCal0) / 1000.0);
   arInitChainMs   = (float)((double)(tChain1 - tChain0) / 1000.0);
   arInitTotalMs   = (float)((double)(tChain1 - tInit0) / 1000.0);
-  USER_PRINTF("AR init: buffers %.1f ms, calibration %.1f ms, chain self-test %.1f ms, total %.1f ms\n",
+  DEBUG_PRINTF("AR init: buffers %.1f ms, calibration %.1f ms, chain self-test %.1f ms, total %.1f ms\n",
               (double)(tCal0 - tInit0) / 1000.0,
               (double)(tCal1 - tCal0) / 1000.0,
               (double)(tChain1 - tChain0) / 1000.0,
               (double)(tChain1 - tInit0) / 1000.0);
   if (!arBootSelfTests) {
-    USER_PRINTLN("AR: the boot-time self-tests are off (chain, both banks). "
+    DEBUG_PRINTLN("AR: the boot-time self-tests are off (chain, both banks). "
                  "Run the chain's with 't'; the banks' run at the next boot with them on.");
   }
-  USER_PRINTLN("AR measurement: the filter banks (the FFT transform is gone)");
+  DEBUG_PRINTLN("AR measurement: the filter banks (the FFT transform is gone)");
   USER_FLUSH();
 
   // The clock check, once, at boot. The codec never reports its own clock and
@@ -5042,11 +5042,11 @@ void arAnalysisTask(void * parameter)
     }
     if (gotMclk && gotFs) {
       long ppm = (long)((((long long)gotFs - (long long)SAMPLE_RATE) * 1000000LL) / (long long)SAMPLE_RATE);
-      USER_PRINTF("AR clock: want MCLK %lu Hz (256 x %lu Hz) | measured MCLK %lu Hz -> %lu Hz (%+ld ppm)\n",
+      DEBUG_PRINTF("AR clock: want MCLK %lu Hz (256 x %lu Hz) | measured MCLK %lu Hz -> %lu Hz (%+ld ppm)\n",
                   (unsigned long)ES8311_MCLK_HZ, (unsigned long)SAMPLE_RATE,
                   (unsigned long)gotMclk, (unsigned long)gotFs, ppm);
     } else {
-      USER_PRINTF("AR clock: want MCLK %lu Hz (256 x %lu Hz) | not readable on this target\n",
+      DEBUG_PRINTF("AR clock: want MCLK %lu Hz (256 x %lu Hz) | not readable on this target\n",
                   (unsigned long)ES8311_MCLK_HZ, (unsigned long)SAMPLE_RATE);
     }
     USER_FLUSH();
@@ -6790,6 +6790,15 @@ class AudioReactive : public Usermod {
       txCalls++;
       txLastMs = millis();
       size_t sent = 0;
+      // The time the send takes.  The send is on the board's critical path
+      // - it is in the usermods' loop, which is in the Background loop,
+      // which is where the LED rendering's neighbours are - so a send that
+      // takes a long time is worth saying out loud.
+      //
+      // MEASURED (2026-11-25): the Background loop was "Running" with a
+      // third of a core and the LED strip was at 5 fps; the usermods'
+      // loop is what it was spinning in, and this is the suspect inside it.
+      const uint64_t tSendUs = esp_timer_get_time();
 
       // Name the adapter: a multicast group has no route, and the routeless
       // send is the one that fails silently.
@@ -6812,6 +6821,15 @@ class AudioReactive : public Usermod {
         if (txFail == 1) {
           DEBUGSR_PRINTLN(F("AR: UDP sound sync send FAILED."));
           DEBUG_PRINTF("AR: UDP sound sync send error %d on adapter %d\n", txLastErr, txIf);
+        }
+      }
+      const uint64_t sendUs = esp_timer_get_time() - tSendUs;
+      if (sendUs > 20000) {   // 20 ms - the send should not take that long
+        static uint32_t lastSlowSend = 0;
+        if (millis() - lastSlowSend > 30000) {
+          lastSlowSend = millis();
+          USER_PRINTF("AR: the UDP sync send took %llu ms\n",
+                      (unsigned long long)(sendUs / 1000));
         }
       }
       return sent;

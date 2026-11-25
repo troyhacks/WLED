@@ -11,6 +11,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_lt8912b.h"
+#include "esp_log.h"
 #endif // CONFIG_IDF_TARGET_ESP32P4
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
@@ -549,6 +550,12 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   }
 
   {
+    // The bridge driver logs at INFO every time it looks for the input -
+    // and it looks every 200 ms, so the console fills with it while the
+    // link is being waited for.  The IDF's log level is a runtime setting,
+    // so the one tag that does this can be turned down here.
+    esp_log_level_set("lt8912b", ESP_LOG_WARN);
+
     // The wait for the HDMI link: 5 s per attempt.  It used to be 15 s,
     // because cold-boot monitors (especially behind KVM switches, or with a
     // slow EDID) can take more than 5 s before HPD asserts - but a board
@@ -863,8 +870,29 @@ static bool hdmiComputePicture(int srcW, int srcH, int dstW, int dstH, hdmi_pict
   int outH = (int)(scaleInt * blockH + (scaleFrag * blockH) / 16);
   if (outW < 1) outW = 1;
   if (outH < 1) outH = 1;
-  if (outW > dstW) outW = dstW;
-  if (outH > dstH) outH = dstH;
+
+  // The size the DRIVER computes: the float scale times the block,
+  // truncated.  It is a little BIGGER than the size above, and the driver
+  // compares ITS size against the output picture less the offset - so the
+  // block has to be small enough that it fits at all, and the offset has
+  // to leave room for it.
+  //
+  // MEASURED (2026-11-25): ESP-IDF 55.03.37's PPA driver refused every
+  // frame - "scale does not fit in the out pic" - with the size here 1274
+  // and the offset 3, because the driver works in 1280, and 1280 does not
+  // fit in 1280 less 3.
+  int fitW = (int)((uint32_t)(scale * (float)blockW));
+  int fitH = (int)((uint32_t)(scale * (float)blockH));
+  while ((fitW > dstW || fitH > dstH) && (blockW > 1 || blockH > 1)) {
+    if (fitW > dstW && blockW > 1) blockW--;
+    if (fitH > dstH && blockH > 1) blockH--;
+    fitW = (int)((uint32_t)(scale * (float)blockW));
+    fitH = (int)((uint32_t)(scale * (float)blockH));
+    outW = (int)(scaleInt * blockW + (scaleFrag * blockW) / 16);
+    outH = (int)(scaleInt * blockH + (scaleFrag * blockH) / 16);
+    if (outW < 1) outW = 1;
+    if (outH < 1) outH = 1;
+  }
 
   g.scale     = scale;
   g.blockW    = blockW;
@@ -873,8 +901,17 @@ static bool hdmiComputePicture(int srcW, int srcH, int dstW, int dstH, hdmi_pict
   g.blockOffY = (srcH - blockH) / 2;
   g.outW      = outW;
   g.outH      = outH;
-  g.outX      = (dstW - outW) / 2;
-  g.outY      = (dstH - outH) / 2;
+  // The offset is worked out from the DRIVER's size, so it leaves the room
+  // the driver's own (slightly conservative) arithmetic needs.  The picture
+  // is then a little to the left of centre - the few pixels are the
+  // driver's own rounding, and the picture is drawn where the hardware
+  // puts it.
+  int outX = (dstW - fitW) / 2;
+  int outY = (dstH - fitH) / 2;
+  if (outX < 0) outX = 0;
+  if (outY < 0) outY = 0;
+  g.outX      = outX;
+  g.outY      = outY;
   return true;
 }
 

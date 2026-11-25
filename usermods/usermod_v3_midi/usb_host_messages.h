@@ -1,7 +1,6 @@
 // usb_host_messages.h
-// Shared USB Host app_message_t used by wled.cpp (producer/consumer),
-// midi_usb_host.cpp (producer of MIDI events) and deck_usb_host.cpp
-// (producer of deck input events).
+// Shared USB Host app_message_t used by wled.cpp (producer/consumer) and
+// midi_usb_host.cpp (producer of MIDI events).
 //
 // Lives in the usermod_v3_midi directory because it started out there, but it
 // is now the shared host message type — each control-surface usermod adds its
@@ -29,11 +28,6 @@
 #include "../usermod_v3_hidctl/hidctl_types.h"
 #endif
 
-// Bytes of the raw deck input report copied alongside the parsed index/state,
-// so the usermod (and the serial log) can inspect fields the parser doesn't
-// yet interpret. Kept small — this rides on the app queue.
-#define DECK_REPORT_SNAPSHOT 32
-
 typedef struct {
   enum {
     APP_QUIT = 0,                  // Signals request to exit the application
@@ -43,11 +37,6 @@ typedef struct {
     APP_MIDI_PACKET = 10,          // Inbound MIDI message from controller (parsed)
     APP_MIDI_DEVICE_CONNECTED = 11,    // Controller enumerated
     APP_MIDI_DEVICE_DISCONNECTED = 12, // Controller gone
-#endif
-#ifdef USERMOD_DECK_USB
-    APP_DECK_PACKET = 20,              // Inbound input report from the deck
-    APP_DECK_DEVICE_CONNECTED = 21,    // Deck enumerated
-    APP_DECK_DEVICE_DISCONNECTED = 22, // Deck gone
 #endif
 #ifdef USERMOD_HIDCTL_USB
     APP_HIDCTL_PACKET = 30,                // Inbound HID report from a control surface
@@ -87,19 +76,6 @@ typedef struct {
       uint16_t pid;
       char     name[24];
     } hidctl_device_info;
-#endif
-#ifdef USERMOD_DECK_USB
-    struct {
-      uint8_t  index;                    // report[9] — which key/encoder changed
-      uint8_t  state;                    // report[10] — pressed / released
-      uint16_t bytes;                    // full length of the received report
-      uint8_t  report[DECK_REPORT_SNAPSHOT];  // leading raw report bytes
-    } deck;
-    struct {
-      uint16_t vid;
-      uint16_t pid;
-      char     name[24];
-    } deck_device_info;
 #endif
   } data;
 } app_message_t;

@@ -620,14 +620,14 @@ inline int16_t sin16_t(uint16_t theta) {
   int16_t result = numerator / denominator;
   return result * scale;
 }
-TCM_IRAM_ATTR inline int16_t cos16_t(uint16_t theta) {
+SPM_IRAM_ATTR inline int16_t cos16_t(uint16_t theta) {
   return sin16_t(theta + 0x4000); //cos(x) = sin(x+pi/2)
 }
 
 #if defined(ARDUINO_ARCH_ESP32)
 // WLEDMM: use pre-calculated lookup-table for sin8_t
-TCM_DRAM_ATTR extern uint8_t sinT[256];    // wled_math.cpp
-TCM_IRAM_ATTR inline uint8_t sin8_t(uint8_t theta) { return sinT[theta]; }
+SPM_IRAM_ATTR extern uint8_t sinT[256];    // wled_math.cpp
+SPM_IRAM_ATTR inline uint8_t sin8_t(uint8_t theta) { return sinT[theta]; }
 #else
 // no LUT on 8266, to save 256 bytes of RAM
 inline uint8_t sin8_t(uint8_t theta) {
@@ -636,7 +636,7 @@ inline uint8_t sin8_t(uint8_t theta) {
   return min(sin16, int32_t(0xFFFF)) >> 8; // min performs saturation, and prevents overflow
 }
 #endif
-TCM_IRAM_ATTR inline uint8_t cos8_t(uint8_t theta) {
+SPM_IRAM_ATTR inline uint8_t cos8_t(uint8_t theta) {
   return sin8_t(theta + 64); //cos(x) = sin(x+pi/2)
 }
 
@@ -711,7 +711,13 @@ void serveSettingsJS(AsyncWebServerRequest* request);
 //ws.cpp
 void handleWs();
 void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len);
-void sendDataWs(AsyncWebSocketClient * client = nullptr);
+// The websocket state push.
+//
+// waitForLock false means it does NOT wait for the shared JSON document:
+// the push is skipped if the document is busy.  The main loop's push uses
+// that, because the LED rendering waits behind it and must not be stalled
+// by a request that holds the document.
+void sendDataWs(AsyncWebSocketClient * client = nullptr, bool waitForLock = true);
 
 //xml.cpp
 void XML_response(AsyncWebServerRequest *request, char* dest = nullptr);

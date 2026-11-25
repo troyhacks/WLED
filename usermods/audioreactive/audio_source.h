@@ -1483,8 +1483,8 @@ class ES8311Source : public I2SSource {
       // Read the chip rather than guess at a datasheet: the register maps
       // disagree between sources on exactly these registers.
       {
-        USER_PRINTLN("ES8311 regs:");
-        _es8311ReadRegs(dev);
+        // USER_PRINTLN("ES8311 regs:");
+        // _es8311ReadRegs(dev);
         // The ALC registers (0x18-0x1B) are the ones NO driver writes - not
         // this one, not ESPhome's, not Espressif's - so their values come from
         // the chip's reset state. They are now written explicitly above (ALC
@@ -1498,12 +1498,12 @@ class ES8311Source : public I2SSource {
         // NOTE: USER_PRINTF expands to a braced block, so the semicolon after
         // the call is a stray null statement - which is a syntax error between
         // an if and its else. The braces below are load-bearing.
-        if (AR_I2C.readReg(dev, 0x18, &alcCtrl)) {
-          USER_PRINTF("ES8311 ALC: 18=%02X  ALC_ENABLE(bit7)=%d  AUTOMUTE(bit6)=%d\n",
-                      alcCtrl, (alcCtrl & 0x80) ? 1 : 0, (alcCtrl & 0x40) ? 1 : 0);
-        } else {
-          USER_PRINTLN("ES8311 ALC: 18 unreadable");
-        }
+        // if (AR_I2C.readReg(dev, 0x18, &alcCtrl)) {
+        //   USER_PRINTF("ES8311 ALC: 18=%02X  ALC_ENABLE(bit7)=%d  AUTOMUTE(bit6)=%d\n",
+        //               alcCtrl, (alcCtrl & 0x80) ? 1 : 0, (alcCtrl & 0x40) ? 1 : 0);
+        // } else {
+        //   USER_PRINTLN("ES8311 ALC: 18 unreadable");
+        // }
       }
     }
 
