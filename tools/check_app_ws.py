@@ -105,8 +105,10 @@ def main():
                 print(out[-3000:])
             bad += 1
         else:
-            warns = len([l for l in out.split("\n") if "warning:" in l])
-            print("=== %s: OK (%d warning(s))" % (s, warns))
+            warnlines = [l for l in out.split("\n") if "warning:" in l]
+            print("=== %s: OK (%d warning(s))" % (s, len(warnlines)))
+            for l in warnlines[:10]:
+                print("    " + l.strip()[:160])
     return 1 if bad else 0
 
 
