@@ -2186,7 +2186,10 @@ void WLED::setup() {
   // enumerates first and the device behind it comes later - but plugged
   // straight into the board it does, and the control surface was then
   // matched against an empty list of profiles and let go.
-  xTaskCreatePinnedToCore(usb_task, "usb_task", 8192, NULL, 5, NULL, 1);
+  // Its stack is 16384 and not 8192: when the USB stack goes into its error
+  // path - every URB refused with ESP_ERR_INVALID_STATE - the calls get
+  // deeper, and 8192 was not enough.  The stack is in internal RAM.
+  xTaskCreatePinnedToCore(usb_task, "usb_task", 16384, NULL, 5, NULL, 1);
   DEBUG_PRINTLN("Setup complete. Waiting for USB Host events.");
   #endif
 
