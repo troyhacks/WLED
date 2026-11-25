@@ -117,6 +117,9 @@ void arPublishRtaDb(const float* db, const ArRtaScale& scale);
 // scale is filled with a window that is not there.
 bool arCopyRtaDb(float* dest, ArRtaScale* scale);
 
+// AI: Forget the published absolute levels, until the next local frame.
+void arResetRtaDb();
+
 // The loudness frame: the programme loudness and its family.
 //
 // These are the numbers a hardware analyser's programme meter shows, measured

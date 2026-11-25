@@ -7092,6 +7092,7 @@ class AudioReactive : public Usermod {
         uint8_t rta[NUM_RTA_CHANNELS] = {0};
         memcpy(rta, f.thirds, min((int)f.thirdsCount, (int)NUM_RTA_CHANNELS));
         arPublishRtaBands(rta);
+        arResetRtaDb();   // AI: the absolute levels were this board's own, and are now old
         mmRxThirdsMs = millis();
       }
       if (f.hasBeat) {   // another board's beat: a beat source here (AR_SRC_NETWORK), after the decks
