@@ -326,14 +326,14 @@ So the rev 3 needs its own environment, and it differs in three places:
 
 | what | where | why |
 | --- | --- | --- |
-| `chip_variant` | `boards/esp32-p4-evboard-wled-idf-rev3.json` | the builder picks the **linker scripts** from the board's chip variant, not from Kconfig - `sections.rev3.ld.in` and `bootloader.rev3.ld.in` instead of the `esp32p4_es` ones |
-| the sdkconfig delta | `sdkconfig.esp32p4_idf_rev3.defaults` | `pio-scripts/env_sdkconfig.py` puts it after the shared `sdkconfig.defaults`, so the shared settings still apply |
+| `chip_variant` | `boards/esp32-p4-evboard-wled-idf-rev3.json` | the builder picks the **bootloader's** linker script from the board's chip variant, not from Kconfig: `chip_variant: esp32p4` gets `bootloader.rev3.ld`, `esp32p4_es` gets the old `bootloader.ld` |
+| the sdkconfig delta | `sdkconfig.esp32p4_idf_rev3.defaults` | `CONFIG_ESP32P4_SELECTS_REV_LESS_V3` off is what puts the **application** on the rev 3 memory map - the IDF's own `memory.ld.in` switches on it, and `pio-scripts/env_sdkconfig.py` puts the file after the shared `sdkconfig.defaults`, so the shared settings still apply |
 | the partition table | the board JSON | the same WLED table, so a board can be flashed with either build and keep its data |
 
 The board JSON is a copy of the rev 1 one with `chip_variant` changed.  That one
-field is what picks the memory layout the bootloader and the app are linked for;
-leaving it as `esp32p4_es` links the rev 3 layout with the old scripts, and the
-board dies before the application starts.
+field is what picks the script the bootloader is linked for; leaving it as
+`esp32p4_es` links the rev 3 bootloader with the old script, and the board dies
+before the application starts.
 
 One thing the rev 3 does not do by itself, and the application has to do:
 
