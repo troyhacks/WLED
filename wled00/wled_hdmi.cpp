@@ -1051,6 +1051,23 @@ void hdmi_blit() {
   esp_lcd_panel_handle_t ph = panel_handle;
   if (!back_fb || !ph) return;
 
+  // No monitor, no picture.
+  //
+  // The blit draws 1280x720 into the framebuffer and hands it to the DSI at
+  // 60 Hz, and it does it while holding the BUS MUTEX - the same mutex the
+  // LED rendering waits on.  So with no monitor attached it is a 121 MB/s
+  // draw out of the PSRAM, into a buffer nobody reads, holding up the LED
+  // rendering while it happens.
+  //
+  // And the PSRAM cannot afford it: the DSI says so itself, on every boot
+  // ("can't fetch data from external memory fast enough, underrun
+  // happens"), and the board's own LEDs are the ones that suffer.
+  //
+  // busNetworkDummyMode is TRUE when a monitor IS present (that is what it
+  // means: the network output is held back so the pixels go to the display
+  // instead).  So FALSE is no monitor, and there is nothing to draw.
+  if (!busNetworkDummyMode) return;
+
   static uint32_t last_blit_us = 0;
   uint32_t now_us = esp_timer_get_time();
   if (now_us - last_blit_us >= 16667) {  // ~60fps, match the panel refresh

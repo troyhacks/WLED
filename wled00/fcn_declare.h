@@ -509,6 +509,10 @@ void prepareHostname(char* hostname);
 bool startsWithWled(const char* s);
 bool isAsterisksOnly(const char* str, byte maxLen)  __attribute__((pure));
 bool requestJSONBufferLock(uint8_t module=255);
+// The same, but WITHOUT waiting: it fails at once if the document is busy.
+// For the callers that must not be stalled by it - the main loop's state
+// push, which the LED rendering waits behind.
+bool tryJSONBufferLock(uint8_t module=255);
 void releaseJSONBufferLock();
 // The HID control surface's LED demo (the serial console's 'r').
 void hidctlToggleLedDemo();

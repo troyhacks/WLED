@@ -709,7 +709,7 @@ private:
     uint8_t* data = packet.data();
     if (packet.length() < 0x11F || data[0x0A] != TYPE_STATUS) return;
 
-    prolink_status_packets_public++;
+    prolink_status_packets_public = prolink_status_packets_public + 1;
 
     uint8_t playerID = data[0x21];
     bool isMaster = (data[0x89] & 0x20) != 0;
@@ -817,7 +817,7 @@ private:
     uint8_t* data = packet.data();
     if (packet.length() < 60 || data[0x0A] != TYPE_BEAT) return;
 
-    prolink_beat_packets_public++;
+    prolink_beat_packets_public = prolink_beat_packets_public + 1;
 
     uint8_t playerID = data[0x21];
     if (playerID != linkState.activePlayerID) return;
@@ -870,7 +870,7 @@ private:
       lastPacketBeatNo = linkState.beatNumber;
       // A beat was announced.  Counting them is how the deck's count's age
       // is measured exactly - see the member's comment.
-      beatsAnnounced++;
+      beatsAnnounced = beatsAnnounced + 1;
       prolinkClockPacked = (millis() & PROLINK_CLOCK_ANC_MASK) |
                            ((uint32_t)(linkState.beatNumber - 1u) << PROLINK_CLOCK_POS_SHIFT);
     }

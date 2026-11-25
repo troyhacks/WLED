@@ -195,17 +195,22 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
   }
 }
 
-void sendDataWs(AsyncWebSocketClient * client)
+void sendDataWs(AsyncWebSocketClient * client, bool waitForLock)
 {
   DEBUG_PRINTF("sendDataWs\n");
   if (!ws.count()) return;
 
-  if (!requestJSONBufferLock(12)) {
+  // The main loop's push does NOT wait for the shared JSON document: the
+  // LED rendering waits behind it, and it must not be stalled by a request
+  // that holds the document.  See tryJSONBufferLock().
+  const bool got = waitForLock ? requestJSONBufferLock(12) : tryJSONBufferLock(12);
+  if (!got) {
     if (client) {
       client->text(F("{\"error\":3}")); // ERR_NOBUF
-    } else {
+    } else if (waitForLock) {
       ws.textAll(F("{\"error\":3}")); // ERR_NOBUF
     }
+    // A skipped push says nothing: the next one carries the state anyway.
     return;
   }
 
@@ -554,6 +559,6 @@ void handleWs()
 
 #else
 void handleWs() {}
-void sendDataWs(AsyncWebSocketClient * client) {}
+void sendDataWs(AsyncWebSocketClient * client, bool waitForLock) {}
 #pragma message "WebSockets disabled - no live preview."
 #endif

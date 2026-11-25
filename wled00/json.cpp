@@ -1728,29 +1728,43 @@ void serializeModeNames(JsonArray arr) {
   }
 }
 
-// Global buffer locking response helper class (to make sure lock is released when AsyncJsonResponse is destroyed)
-class LockedJsonResponse: public AsyncJsonResponse {
-  bool _holding_lock;
-  public:
-  // WARNING: constructor assumes requestJSONBufferLock() was successfully acquired externally/prior to constructing the instance
-  // Not a good practice with C++. Unfortunately AsyncJsonResponse only has 2 constructors - for dynamic buffer or existing buffer,
-  // with existing buffer it clears its content during construction
-  // if the lock was not acquired (using JSONBufferGuard class) previous implementation still cleared existing buffer
-  inline LockedJsonResponse(JsonDocument* doc, bool isArray) : AsyncJsonResponse(doc, isArray), _holding_lock(true) {};
-
-  virtual size_t _fillBuffer(uint8_t *buf, size_t maxLen) { 
-    size_t result = AsyncJsonResponse::_fillBuffer(buf, maxLen);
-    // Release lock as soon as we're done filling content
-    if (((result + _sentLength) >= (_contentLength)) && _holding_lock) {
-      releaseJSONBufferLock();
-      _holding_lock = false;
-    }
-    return result;
+// Send the shared document's answer, and let go of the document BEFORE the
+// bytes go out.
+//
+// The answer used to be sent AS the shared document: the response
+// serialises it on the way out, so the lock had to stay until the last
+// byte had been copied down the network.  On a slow link that is most of
+// a second - and the main loop's state push wants the same document, so
+// it waits, and the LED rendering waits behind it.
+//
+// MEASURED (2026-11-25): the strip ran at 44 fps at rest and at 4 fps
+// while the web GUI's tempo panel was polling /json/ar.  The tempo panel
+// was the thing that made the wall lights slow.
+//
+// Two of the paths had the opposite fault: they released the lock straight
+// after handing the response over, so the web server could serialise a
+// document that another request had already cleared.
+//
+// So: the answer is copied here - while the document is still ours - the
+// document is let go of, and only then is the copy sent.  One memcpy, and
+// the stall is gone.
+//
+// The caller must have taken the lock, and must NOT use a response object
+// afterwards: the object is deleted here.
+static void sendJsonCopyAndRelease(AsyncWebServerRequest* request, JsonDocument& document)
+{
+  const size_t len = measureJson(document);
+  char* copy = (char*)malloc(len + 1);
+  if (!copy) {
+    releaseJSONBufferLock();
+    request->send(503, "application/json", F("{\"error\":3}"));
+    return;
   }
-
-  // destructor will remove JSON buffer lock when response is destroyed in AsyncWebServer
-  virtual ~LockedJsonResponse() { if (_holding_lock) releaseJSONBufferLock(); };
-};
+  serializeJson(document, copy, len + 1);
+  releaseJSONBufferLock();          // the document is free NOW
+  request->send(200, "application/json", copy);   // the String argument copies it
+  free(copy);
+}
 
 void serveJson(AsyncWebServerRequest* request)
 {
@@ -1776,9 +1790,12 @@ void serveJson(AsyncWebServerRequest* request)
       AsyncJsonResponse* response = new AsyncJsonResponse(&doc, true);  // array document
       JsonArray lDoc = response->getRoot();
       serializeModeNames(lDoc); // remove WLED-SR extensions from effect names
-      response->setLength();
-      request->send(response);
-      releaseJSONBufferLock();
+      // The answer is copied out and the document is let go of BEFORE the
+      // bytes go out - see sendJsonCopyAndRelease().  It used to be
+      // released straight after the handover, which left the web server
+      // serialising a document another request could already have cleared.
+      sendJsonCopyAndRelease(request, doc);
+      delete response;
     } else {
       request->send(503, "application/json", F("{\"error\":3}"));
     }
@@ -1800,9 +1817,10 @@ void serveJson(AsyncWebServerRequest* request)
       uint32_t since_ms = 0;
       if (request->hasParam("since")) since_ms = request->getParam("since")->value().toInt();
       wled::EventLog::toJson(arr, (unsigned long)since_ms);
-      response->setLength();
-      request->send(response);
-      releaseJSONBufferLock();
+      // Copied out, and the document let go of, before the bytes go out -
+      // see sendJsonCopyAndRelease().
+      sendJsonCopyAndRelease(request, doc);
+      delete response;
     } else {
       request->send(503, "application/json", F("{\"error\":3}"));
     }
@@ -1817,23 +1835,26 @@ void serveJson(AsyncWebServerRequest* request)
   // downloading (or parsing) the whole info page.
   else if (url.indexOf("/ar") > 0) {
     if (requestJSONBufferLock(19)) {
-      // LockedJsonResponse, not a plain AsyncJsonResponse: the response is
-      // filled in LATER, by the web server, and it serializes the SHARED
-      // document. Releasing the lock here would let another request clear
-      // the document out from under it.
-      LockedJsonResponse* response = new LockedJsonResponse(&doc, false);
+      // The answer is built in the shared document and then COPIED out of
+      // it, and the document is let go of before the bytes go out.  See
+      // sendJsonCopyAndRelease() for why: the tempo panel polls this
+      // endpoint, and holding the document for the whole transfer stopped
+      // the LED rendering (44 fps at rest, 4 fps while the panel was
+      // polling).
+      AsyncJsonResponse* response = new AsyncJsonResponse(&doc, false);
       JsonObject root = response->getRoot();
       usermods.addToJsonAr(root);
       if (doc.overflowed()) {
         // The document is shared with the other JSON paths, so a future
         // usermod could push it over. Say so rather than return a truncated
         // document that looks complete.
-        delete response;   // the destructor releases the lock
+        delete response;
+        releaseJSONBufferLock();
         request->send(500, "application/json", F("{\"error\":\"the /json/ar document overflowed\"}"));
         return;
       }
-      response->setLength();
-      request->send(response);   // the lock is released when the buffer is filled
+      sendJsonCopyAndRelease(request, doc);
+      delete response;   // the copy has been sent; the response is not used
     } else {
       request->send(503, "application/json", F("{\"error\":3}"));
     }
@@ -1848,9 +1869,11 @@ void serveJson(AsyncWebServerRequest* request)
     request->send(503, "application/json", F("{\"error\":3}"));
     return;
   }
-  // releaseJSONBufferLock() will be called when "response" is destroyed (from AsyncWebServer)
-  // make sure you delete "response" if no "request->send(response);" is made
-  LockedJsonResponse *response = new LockedJsonResponse(&doc, subJson==JSON_PATH_FXDATA || subJson==JSON_PATH_EFFECTS); // will clear and convert JsonDocument into JsonArray if necessary
+  // A plain AsyncJsonResponse: the answer is COPIED out of the shared
+  // document below and the document is let go of before the bytes go out -
+  // see sendJsonCopyAndRelease().  The lock is released by that call, and
+  // the response object is not used.
+  AsyncJsonResponse *response = new AsyncJsonResponse(&doc, subJson==JSON_PATH_FXDATA || subJson==JSON_PATH_EFFECTS); // will clear and convert JsonDocument into JsonArray if necessary
 
   JsonVariant lDoc = response->getRoot();
 
@@ -1887,8 +1910,12 @@ void serveJson(AsyncWebServerRequest* request)
 
   DEBUG_PRINTF("JSON buffer size: %u for request: %d (%s)\n", lDoc.memoryUsage(), subJson, url.c_str());
 
-  response->setLength();
-  request->send(response);
+  // The answer is copied out of the shared document, the document is let
+  // go of, and only then is the copy sent.  The state and the info pages
+  // are polled by the web GUI, and holding the document for the whole
+  // transfer stopped the main loop - and with it the LED rendering.
+  sendJsonCopyAndRelease(request, doc);
+  delete response;
 }
 
 #ifdef WLED_ENABLE_JSONLIVE

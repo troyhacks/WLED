@@ -596,6 +596,27 @@ bool requestJSONBufferLock(uint8_t module)
   return true;
 }
 
+// Take the JSON buffer lock WITHOUT waiting for it.
+//
+// The main loop's state push is the LED rendering's neighbour: it runs on
+// the same task, one line apart, so if it waits for the buffer the strip
+// waits with it.  MEASURED (2026-11-25): a request that held the shared
+// document for the length of its (slow) transfer took the strip from 44
+// fps to 4 fps.
+//
+// So the push does not wait: if the document is busy, the push is skipped
+// and the next one carries the state anyway.  The push is a courtesy to
+// the GUI - the LED rendering is not.
+bool tryJSONBufferLock(uint8_t module)
+{
+  if (jsonBufferLock) return false;   // busy - do not wait
+
+  jsonBufferLock = module ? module : 255;
+  fileDoc = &doc;  // used for applying presets (presets.cpp)
+  doc.clear();
+  return true;
+}
+
 
 void releaseJSONBufferLock()
 {

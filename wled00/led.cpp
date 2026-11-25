@@ -193,7 +193,12 @@ void updateInterfaces(uint8_t callMode)
 {
   if (!interfaceUpdateCallMode || millis() - lastInterfaceUpdate < INTERFACE_UPDATE_COOLDOWN) return;
 
-  sendDataWs();
+  // The push does not wait for the shared JSON document: the LED
+  // rendering is one line away from it and must not be stalled by a
+  // request that holds the document.  MEASURED (2026-11-25): a request
+  // that held it for the length of its transfer took the strip from 44
+  // fps to 4 fps.
+  sendDataWs(nullptr, false);
   lastInterfaceUpdate = millis();
   interfaceUpdateCallMode = 0; //disable
 

@@ -36,6 +36,12 @@
 //
 // It is NOT recursive. Taking it twice from the same task deadlocks, so
 // anything that already holds it uses the *Locked variants below.
+// The wait counters: how many acquisitions of the document had to wait,
+// and how many spins they took.  The lock is a spin lock, so a waiter
+// burns a core until the holder lets go - see ArPublishGuard.
+uint32_t arPublishWaitCount(void);
+uint32_t arPublishSpinCount(void);
+
 class ArPublishGuard {
 public:
   ArPublishGuard();

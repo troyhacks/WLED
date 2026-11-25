@@ -69,7 +69,7 @@ void IRAM_ATTR onTimer() {
 	}
 	else
 	{
-		_interruptCounter++;
+		_interruptCounter = _interruptCounter + 1;
 	}
 	if (_interruptCounter > 9)
 	{	

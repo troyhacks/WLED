@@ -1065,7 +1065,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     // A CANCELLED transfer is the result of our own flush, not a fault
     // of the device: counting it as an error sends the recovery path
     // round again, and the pipe never comes back.
-    hid_in_error_count++;
+    hid_in_error_count = hid_in_error_count + 1;
   }
 
   if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
@@ -1078,7 +1078,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     // one packet: asking for more changes the arithmetic, and the report
     // comes back with a length that is not the packet's.)
     if (D->in_exact_mps && !D->in_xfer_len && n != D->in_mps) {
-      D->in_zlp_count++;
+      D->in_zlp_count = D->in_zlp_count + 1;
       hid_log_event(nullptr, 0, true);
       // A zero-length packet is the device saying it has nothing to say.
       // It is worth one line: on this deck it is the only thing that
@@ -1094,7 +1094,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
     }
     if (n > 0) {
       if (n > HIDCTL_MAX_REPORT) n = HIDCTL_MAX_REPORT;
-      D->in_report_count++;
+      D->in_report_count = D->in_report_count + 1;
       // A report whose length differs from the last one is worth knowing
       // about: the HID stacks pad every report up to the report's size, but
       // the raw host sees what the device really sent - and the F1 may send
@@ -1123,7 +1123,7 @@ static void hid_in_transfer_cb(usb_transfer_t* xfer) {
       // report. Treating it as a failure tore the interrupt endpoint
       // down - halt, flush, clear - fifty times a second, which is a
       // hard reset of the device's endpoint state.
-      D->in_zlp_count++;
+      D->in_zlp_count = D->in_zlp_count + 1;
       hid_log_event(nullptr, 0, true);
     }
     hid_in_error_recovery_needed = false;
@@ -1619,7 +1619,7 @@ bool hid_usb_get_out_via_control(uint8_t d) {
 // from any task, and it never touches a transfer.
 bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
   HidDevice* dev = hid_dev_of(d);
-  if (!dev->handle || !dev->out_xfer || !data || len == 0) { dev->out_refused_no_device++; return false; }
+  if (!dev->handle || !dev->out_xfer || !data || len == 0) { dev->out_refused_no_device = dev->out_refused_no_device + 1; return false; }
   // The framing is the device's, and it is applied here, so the bytes in
   // the queue are exactly the bytes that go on the wire.
   bool shifted = false;
@@ -1639,12 +1639,12 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
     return hid_usb_send_output_report(d, data[0], data + 1, (uint16_t)(len - 1));
   }
   if (dev->out_cap && len > dev->out_cap) len = dev->out_cap;
-  if (len > HIDCTL_MAX_OUTPUT) { dev->out_refused_too_long++; return false; }
+  if (len > HIDCTL_MAX_OUTPUT) { dev->out_refused_too_long = dev->out_refused_too_long + 1; return false; }
   if (dev->out_broken) {
     // The OUT pipe is dead and the recovery could not bring it back. The
     // packet cannot go out, so it is dropped rather than queued: a queue
     // full of packets that will never go out is not a queue.
-    dev->out_refused_busy++;
+    dev->out_refused_busy = dev->out_refused_busy + 1;
     return false;
   }
 
@@ -1654,7 +1654,7 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
     // The packet does not fit the slot. It would be written past the end
     // of it, which is how the board ended up crashing in a task that had
     // nothing to do with the deck.
-    dev->out_refused_too_long++;
+    dev->out_refused_too_long = dev->out_refused_too_long + 1;
     if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
     HIDCTL_LOG("OUT endpoint (device %u): the packet is %u bytes and the "
                "slot holds %u", (unsigned)d, (unsigned)len,
@@ -1688,7 +1688,7 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
   } else {
     // The queue is full. The packet is dropped, and that is a lost frame:
     // it is counted, because that is how it is seen from outside.
-    dev->out_refused_busy++;
+    dev->out_refused_busy = dev->out_refused_busy + 1;
   }
   if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
   if (!queued) {
@@ -1762,7 +1762,7 @@ static bool hid_out_send_next(uint8_t d) {
     dev->out_in_flight = false;
     dev->out_started_ms = 0;
     dev->out_submit_error = (int8_t)err;
-    dev->out_refused_submit++;
+    dev->out_refused_submit = dev->out_refused_submit + 1;
     if (err == ESP_ERR_INVALID_STATE) {
       // The pipe is not in a state that can carry a transfer: it is dead
       // and a clear alone will not bring it back. The recovery runs, and
@@ -1806,7 +1806,7 @@ static bool hid_out_send_next_piece(uint8_t d) {
     dev->out_in_flight = false;
     dev->out_started_ms = 0;
     dev->out_submit_error = (int8_t)err;
-    dev->out_refused_submit++;
+    dev->out_refused_submit = dev->out_refused_submit + 1;
     if (err == ESP_ERR_INVALID_STATE) {
       // The pipe is not in a state that can carry a transfer: it is dead
       // and a clear alone will not bring it back. The recovery runs, and
@@ -1957,7 +1957,7 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
   }
   if (xfer) {
     D->last_out_status = (int8_t)xfer->status;
-    D->out_count++;
+    D->out_count = D->out_count + 1;
     // Only the failures are worth a line: the reports go out several times a
     // second and the console would drown in them.
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
@@ -1990,7 +1990,7 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
 static void hid_out_watchdog(void) {
   if (!D->out_in_flight || !D->out_started_ms) return;
   if ((uint32_t)(millis() - D->out_started_ms) < HID_OUT_TIMEOUT_MS) return;
-  D->out_stuck++;
+  D->out_stuck = D->out_stuck + 1;
   HIDCTL_LOG("OUT endpoint (device %u): the transfer did not finish in %u ms "
              "(piece %u of %u)", (unsigned)HIDCTL_D, (unsigned)HID_OUT_TIMEOUT_MS,
              (unsigned)(D->out_sent ? D->out_sent : D->out_xfer->num_bytes),
@@ -2010,13 +2010,13 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
     HidDevice* dev = (HidDevice*)xfer->context;
     HIDCTL_D = (uint8_t)(dev - hid_dev);
   }
-  if (xfer && D->out_via_control) D->ctrl_out_count++;
+  if (xfer && D->out_via_control) D->ctrl_out_count = D->ctrl_out_count + 1;
   if (xfer) {
     D->last_report_status = (int8_t)xfer->status;
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
       HIDCTL_LOG("control transfer status=%d", (int)xfer->status);
     } else {
-      D->reports_ok++;
+      D->reports_ok = D->reports_ok + 1;
       // A device-to-host transfer brings data back: that is the LED state
       // readback, so it is worth seeing.
       if (D->ctrl_want_readback && xfer->actual_num_bytes > 8) {

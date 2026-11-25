@@ -10,21 +10,76 @@
 #include "ar_publish.h"
 
 #include <atomic>
+#include <esp_log.h>       // the console, for the stall warning
 #include <esp_random.h>    // the hardware random, for the fake fill's roll
 #include <esp_timer.h>     // the native timer, for the handoff's decay
+#include <freertos/FreeRTOS.h>  // must come first: task.h insists on it
+#include <freertos/task.h>      // taskYIELD(), for the spin that gives the holder the CPU back
 #include <math.h>
 #include <string.h>
+
+// The log's tag, for the stall warning below.
+static const char* TAG = "AR";
 
 // The one publish lock.
 static std::atomic<uint8_t> arPublishLock{0};
 
+// How often a reader had to WAIT for the document, and how many spins it
+// took.
+//
+// The lock is a SPIN lock, so a waiter burns a core until the holder lets
+// go - and a holder that is slow makes every other core slow with it.
+//
+// MEASURED (2026-11-25): the board's Background loop was "Running" with a
+// third of a core, the LED strip was at 5 fps, and the task list could not
+// say what was spinning.  These counters say whether the document is the
+// thing.
+static uint32_t arPublishWaits = 0;   // how many acquisitions had to wait
+static uint32_t arPublishSpins = 0;   // ... and how many spins they took
+
 ArPublishGuard::ArPublishGuard() {
-  while (arPublishLock.exchange(1, std::memory_order_acquire)) { /* spin */ }
+  uint32_t spins = 0;
+  while (arPublishLock.exchange(1, std::memory_order_acquire)) {
+    spins++;
+    // A bare spin on a cross-core lock is a trap.
+    //
+    // The web server's task is priority 10 and it is NOT pinned to a core,
+    // so it can land on the same core as the analysis task - which holds
+    // the document for a few microseconds.  The waiter preempts the
+    // holder, the holder cannot run because it is the lower priority, and
+    // the waiter spins for ever: a livelock, and the whole board goes
+    // with it, because the web server's task at priority 10 also starves
+    // the main loop.
+    //
+    // MEASURED (2026-11-25): the board wedged with the web server's task
+    // and the analysis task both spinning - and the ping still answered,
+    // because the network stack was fine.
+    //
+    // So the waiter YIELDS: the holder gets the CPU back, finishes its
+    // few microseconds, and lets go.
+    if ((spins & 0x3F) == 0) taskYIELD();
+  }
+  if (spins) {
+    arPublishWaits++;
+    arPublishSpins += spins;
+    // A wait this long is not a wait, it is a stall, and it is worth
+    // saying out loud: the console is the only thing that survives the
+    // wedge, because the web server does not.
+    if (spins > 200000) {
+      ESP_LOGE(TAG, "the publish lock was held for %u spins",
+               (unsigned)spins);
+    }
+  }
 }
 
 ArPublishGuard::~ArPublishGuard() {
   arPublishLock.store(0, std::memory_order_release);
 }
+
+// The wait counters, for a reader that wants to know whether the document
+// is the thing that is slow.
+uint32_t arPublishWaitCount(void) { return arPublishWaits; }
+uint32_t arPublishSpinCount(void) { return arPublishSpins; }
 
 // The published RTA frame: double buffered, the index names the published
 // one. Both the buffer and the index are only touched under the lock.
