@@ -383,6 +383,10 @@ class Usermod {
     virtual ~Usermod() { if (um_data) delete um_data; }
     virtual void setup() = 0; // pure virtual, has to be overriden
     virtual void loop() = 0;  // pure virtual, has to be overriden
+    // The usermod's name, for a log that has to say WHICH one.  The
+    // AudioReactive usermod and the control surfaces have names; the rest
+    // do not, and say nothing rather than lie.
+    const char* getName() const { return _name ? _name : "usermod"; }
     virtual void loop2() {}                                                  // WLEDMM called just before effects will be processed
     virtual void handleOverlayDraw() {}                                      // called after all effects have been processed, just before strip.show()
     virtual bool handleButton(uint8_t b) { return false; }                   // button overrides are possible here

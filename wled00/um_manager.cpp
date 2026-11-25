@@ -7,7 +7,33 @@
 //Usermod Manager internals
 void UsermodManager::setup()             { for (unsigned i = 0; i < numMods; i++) ums[i]->setup(); }
 void UsermodManager::connected()         { for (unsigned i = 0; i < numMods; i++) ums[i]->connected(); }
-void UsermodManager::loop()              { for (unsigned i = 0; i < numMods; i++) ums[i]->loop();  }
+void UsermodManager::loop() {
+  // The usermods' loop is on the board's critical path: it carries the
+  // tempo's UDP sync and the control surface's work, and a usermod that
+  // spins in there takes the board with it.
+  //
+  // So each usermod's time is measured, and the one that took too long is
+  // NAMED.  MEASURED (2026-11-25): the Background loop was "Running" with
+  // a third of a core and the LED strip was at 5 fps, and the task list
+  // could not say which usermod it was.
+  //
+  // The measurement is two clock reads a usermod - nothing next to the work
+  // the usermods do - and the report is once a minute, so a console that
+  // is being read by a person is not interrupted for nothing.
+  for (unsigned i = 0; i < numMods; i++) {
+    const uint64_t t0 = esp_timer_get_time();
+    ums[i]->loop();
+    const uint64_t dt = esp_timer_get_time() - t0;
+    if (dt > 10000) {   // 10 ms - far longer than any of them should take
+      static uint32_t lastReport = 0;
+      if (millis() - lastReport > 30000) {
+        lastReport = millis();
+        USER_PRINTF("[usermods] %s took %llu ms in its loop\n",
+                    ums[i]->getName(), (unsigned long long)(dt / 1000));
+      }
+    }
+  }
+}
 void UsermodManager::loop2()             { for (unsigned i = 0; i < numMods; i++) ums[i]->loop2(); }
 void UsermodManager::handleOverlayDraw() { for (unsigned i = 0; i < numMods; i++) ums[i]->handleOverlayDraw(); }
 // void UsermodManager::appendConfigData()  { for (unsigned i = 0; i < numMods; i++) ums[i]->appendConfigData(); } //WLEDMM not used

@@ -7211,7 +7211,23 @@ class AudioReactive : public Usermod {
           // counts once.
           if (mmRxLastMs && (millis() - mmRxLastMs < 1000)) return false;
           receivedFormat = 2;
+          // The time the decode takes.  The decode is on the receive path,
+          // so it is in the way of everything else on the board.
+          //
+          // MEASURED (2026-11-25): with an Art-Net source feeding the
+          // matrix, the LED rendering took 94-98 ms and this usermod's loop
+          // 57-106 ms - and the sync's own send was 51-72 ms of that.
+          const uint64_t tDecodeUs = esp_timer_get_time();
           success = decodeAudioData(incomingPacketSize, incomingBuffer);
+          const uint64_t decodeUs = esp_timer_get_time() - tDecodeUs;
+          if (decodeUs > 20000) {   // 20 ms - a decode should not take that long
+            static uint32_t lastSlowDecode = 0;
+            if (millis() - lastSlowDecode > 30000) {
+              lastSlowDecode = millis();
+              USER_PRINTF("AR: the Art-Net decode took %llu ms\n",
+                          (unsigned long long)(decodeUs / 1000));
+            }
+          }
       } else if (isValidUdpSyncVersion_v1((const char *)incomingBuffer)) {
           receivedFormat = 1;
           decodeAudioData_v1(incomingPacketSize, incomingBuffer);
@@ -8331,6 +8347,23 @@ class AudioReactive : public Usermod {
         // The beats counted since the lock - the number the scrolling text's
         // #BPOS macro shows, and the number the bars are counted from.
         t["beat_count"]    = (int)tf.beatCount;
+        // The USER's rotation of the bar's numbering: a signed offset of
+        // -3..+3 beats, and the identity that says a new one has been made.
+        // It is already in the beat in the bar above - it is published so
+        // the correction can be seen and so the grid can be read against it.
+        t["bar_rot"]       = (int)tf.barRot;
+        t["bar_rot_gen"]   = (int)tf.barRotGen;
+        // The HINT: 0 = none, +1 = looking up (faster), -1 = looking down,
+        // and how far it is looking.  It is a question the search answers,
+        // so it is normally zero.
+        t["hint"]          = (int)arTempoHintDir();
+        t["hint_bpm"]      = (double)arTempoHintMinBpm();
+        // The shared document's contention: how many acquisitions had to
+        // wait for it, and how many spins they took.  The lock is a SPIN
+        // lock, so a waiter burns a core until the holder lets go - these
+        // two say whether that is what the board is doing.
+        t["pub_waits"]     = (int)arPublishWaitCount();
+        t["pub_spins"]     = (int)arPublishSpinCount();
         // The tracker's own settings, so the numbers can be read against the
         // tolerance that produced them.
         t["tolerance_ms"] = (double)st.tempoTolMs;

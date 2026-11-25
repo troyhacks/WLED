@@ -947,6 +947,20 @@ void background_loop_nonblocking(void* pvParameters) {
   }
 }
 
+// The time a part of the main loop took, said when it is long.
+//
+// The main loop decides the strip's frame rate, and it does the LED
+// rendering and the display's blit.  MEASURED (2026-11-25): the strip was
+// at 5 fps and the main loop was "Blocked", and the task list could not
+// say which of the two was the reason.
+static void wled_report_slow(const char* what, uint64_t us) {
+  if (us < 50000) return;   // 50 ms - nothing here should take that long
+  static uint32_t lastReport = 0;
+  if (millis() - lastReport < 30000) return;
+  lastReport = millis();
+  USER_PRINTF("[main] %s took %llu ms\n", what, (unsigned long long)(us / 1000));
+}
+
 void WLED::loop() { // loopTask
   #ifdef WLED_DEBUG
   // esp_log_level_set("*",ESP_LOG_VERBOSE);
@@ -968,7 +982,9 @@ void WLED::loop() { // loopTask
 
     if (!offMode || strip.isOffRefreshRequired()) {
       if (xSemaphoreTake(busMutex, 0)) {
+        const uint64_t tRender = esp_timer_get_time();
         strip.service();
+        wled_report_slow("the LED rendering", esp_timer_get_time() - tRender);
         xSemaphoreGive(busMutex);
       }
     } else {
@@ -997,7 +1013,9 @@ void WLED::loop() { // loopTask
   }
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
+  const uint64_t tBlit = esp_timer_get_time();
   hdmi_blit();
+  wled_report_slow("the display blit", esp_timer_get_time() - tBlit);
 #endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE && CONFIG_SOC_PPA_SUPPORTED
 
   #if defined(WLED_DEBUG) && !defined(WLED_DEBUG_HEAP) // DEBUG serial logging (every 30s)
