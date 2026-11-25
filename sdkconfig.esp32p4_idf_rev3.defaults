@@ -50,8 +50,8 @@ CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 # is what happened to the HID devices.
 #
 # It has to be written out as "not set" rather than left out: the defaults
-# are applied over the resolved sdkconfig, and a value that is simply absent
-# from them keeps whatever the resolved file says.
+# only seed a resolved sdkconfig that does not exist yet, and a value that
+# is in the resolved one wins over them.
 # CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK is not set
 #
 # The control transfer limit is raised instead, so a device with a long
