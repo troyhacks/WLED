@@ -148,7 +148,23 @@ inline void hidctlDwcSnapshot(HidctlDwcProbe& out) {
     const uint32_t qtd_addr = d.hcdma & 0xFFFFFE00;
     if (qtd_addr) {
       uint32_t* q = (uint32_t*)(uintptr_t)qtd_addr;
-      esp_cache_msync((void*)q, 16, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+      // The qTD is 16 bytes and the P4's cache line is 64, and the IDF's
+      // msync wants the address AND the size to be a multiple of the line
+      // size - so a 16-byte sync is refused:
+      //
+      //   E cache: esp_cache_msync(122): start address: 0x4ff84e00, or the
+      //   size: 0x10 is(are) not aligned with cache line size (0x40)B
+      //
+      // ESP_CACHE_MSYNC_FLAG_UNALIGNED is the flag for that, but the IDF
+      // refuses it in the M2C direction (the one that invalidates), so the
+      // line that holds the qTD is invalidated instead.  The qTDs are
+      // contiguous DMA memory, so what is in the rest of the line is a
+      // descriptor as well - and without this the probe reads a qTD the
+      // DMA wrote but the cache never saw.
+      const uintptr_t line = 64;
+      const uintptr_t start = (uintptr_t)q & ~(line - 1);
+      const size_t len = (size_t)((((uintptr_t)q + 16 - start) + line - 1) & ~(line - 1));
+      esp_cache_msync((void*)start, len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
       // The qTD: the buffer pointer, then the status word, then the
       // descriptor's own fields (the size among them).
       // The qTD on this SoC: the first word is the status (the bytes

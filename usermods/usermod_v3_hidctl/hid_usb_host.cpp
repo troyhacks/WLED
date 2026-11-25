@@ -1670,7 +1670,20 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
                (unsigned)(dev->out_q_stride - 2));
     return false;
   }
-  if (dev->out_q && dev->out_q_count < dev->out_q_slots) {
+  if (dev->out_q) {
+    if (dev->out_q_count >= dev->out_q_slots) {
+      // The queue is full.  The OLDEST picture is dropped so that the new
+      // one can take its place.
+      //
+      // Dropping the new one instead - which is what this used to do -
+      // leaves the device showing a stale picture until the whole queue
+      // has drained, and a burst is exactly when that hurts: changing the
+      // deck's page pushes several pictures at once, and the one the user
+      // wants to see is the last.
+      dev->out_q_tail = (uint16_t)((dev->out_q_tail + 1) % dev->out_q_slots);
+      dev->out_q_count--;
+      dev->out_refused_busy = dev->out_refused_busy + 1;
+    }
     uint8_t* slot = dev->out_q + (size_t)dev->out_q_head * dev->out_q_stride;
     if (shifted) {
       memcpy(slot + 2, data + 1, len - 1);
@@ -1695,8 +1708,9 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
       dev->out_q_count++;
     }
   } else {
-    // The queue is full. The packet is dropped, and that is a lost frame:
-    // it is counted, because that is how it is seen from outside.
+    // There is no queue at all - the device was never opened properly, or
+    // the queue would not fit in PSRAM.  The packet is dropped, and it is
+    // counted, because that is how it is seen from outside.
     dev->out_refused_busy = dev->out_refused_busy + 1;
   }
   if (dev->out_q_lock) xSemaphoreGive(dev->out_q_lock);
@@ -1705,7 +1719,7 @@ bool hid_usb_queue_out(uint8_t d, const uint8_t* data, uint16_t len) {
     // drop and then every fiftieth are said, not every one.
     static uint16_t drops = 0;
     if ((drops++ % 50) == 0) {
-      HIDCTL_LOG("OUT endpoint (device %u): the queue is full, a packet is "
+      HIDCTL_LOG("OUT endpoint (device %u): there is no queue, a packet is "
                  "dropped (%u so far)", (unsigned)d, (unsigned)drops);
     }
     return false;
