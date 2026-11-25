@@ -17,6 +17,7 @@ import hashlib
 import os
 import shutil
 import sys
+import zipfile
 
 # The images, and where they go in the flash.
 IMAGES = [
@@ -93,6 +94,17 @@ def build_bundle(project_dir, build_dir, out_dir):
     with open(os.path.join(out_dir, "SHA256SUMS.txt"), "w") as f:
         f.write("\n".join(sums) + "\n")
     print("SHA256SUMS.txt written")
+
+    # And a zip of it, because one file is easier to hand over than a folder.
+    zip_path = os.path.join(os.path.dirname(out_dir), os.path.basename(out_dir) + ".zip")
+    if os.path.isfile(zip_path):
+        os.remove(zip_path)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in sorted(os.listdir(out_dir)):
+            path = os.path.join(out_dir, name)
+            if os.path.isfile(path):
+                z.write(path, os.path.join(os.path.basename(out_dir), name))
+    print("%s (%d bytes)" % (zip_path, os.path.getsize(zip_path)))
 
     return out_dir
 

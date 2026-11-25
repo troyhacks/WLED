@@ -12,8 +12,8 @@ REM  (On the P4 the USB port alone will not do it - the chip has to be told to
 REM  listen for the flasher.)
 REM
 REM  The image is the whole flash: the bootloader, the partition table, the
-REM  boot partition pointer and the application.  Your settings and your
-REM  presets live on a partition of their own and are NOT touched.
+REM  OTA data partition and the application.  Your settings and your presets
+REM  live on a partition of their own and are NOT touched.
 REM
 REM  This image is for the rev 3 chip ONLY.  It will not run on the older
 REM  "ES pre rev.300" silicon, and that older firmware will not run on this

@@ -343,11 +343,27 @@ One thing the rev 3 does not do by itself, and the application has to do:
   `esp_psram_extram_add_to_heap_allocator()` itself (see `wled_idf.cpp`).
   Without it the board reports 33.5 MB of PSRAM it cannot allocate from.
 
+### The variants
+
+The firmware has three network variants, and they are two defines:
+
+| variant | `WLED_USE_ETHERNET` | `WLED_USE_ETHERNET_ONLY` |
+| --- | --- | --- |
+| WiFi | - | - |
+| Ethernet only | yes | yes |
+| Ethernet and WiFi | yes | - |
+
+The IDF environments share their flags in `esp32p4_idf_flags` in
+`platformio/idf/esp32p4.ini`, so a variant is a set of flags over that
+section - the same way `esp32p4_idf_hidctl` adds one usermod to it.  The
+defines are not in the shared section yet, because the Ethernet-only build is
+the one the board wants.
+
 ### The bundle
 
 `pio-scripts/make_bundle.py` collects the four images, the factory image, the
 flashing script, the notes and the checksums into `build_output/bundle-<env>/`,
-so the result can be handed to someone else as it is:
+and zips it, so the result can be handed to someone else as it is:
 
 ```
 pio run -e esp32p4_idf_rev3

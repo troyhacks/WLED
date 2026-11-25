@@ -52,7 +52,7 @@ certutil -hashfile firmware.factory.bin SHA256
 | `firmware.factory.bin` | the whole flash in one image | **write it at 0x0** |
 | `bootloader.bin` | the second-stage bootloader | 0x2000 |
 | `partitions.bin` | the partition table | 0x8000 |
-| `ota_data_initial.bin` | the boot partition pointer | 0xe000 |
+| `ota_data_initial.bin` | the OTA data partition (empty, so the factory app is the one that runs) | 0xe000 |
 | `firmware.bin` | the application | 0x10000 |
 
 The P4's ROM looks for its bootloader at **0x2000**, so if you flash the
