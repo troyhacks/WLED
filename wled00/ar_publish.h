@@ -1,6 +1,7 @@
 #ifndef WLED_AR_PUBLISH_H
 #define WLED_AR_PUBLISH_H
 
+#include "ar_net_beat.h"   // AI: the received beat's clock
 #include <stdint.h>
 
 /*
@@ -274,7 +275,9 @@ bool arGetSourceBeat(ArSourceBeat* d);
 // source after the decks and Ableton, so a deck this board hears itself still
 // wins; it counts while packets keep coming, and its phase runs on at its
 // tempo between them.
-void arPublishNetworkBeat(float bpm, uint8_t beatInBar, float beatProgress, uint32_t beatsElapsed);
+// AI: the packets steer a clock - see ar_net_beat.h. A change of sender starts it again.
+// AI: atMs is when the packet arrived, by millis().
+void arPublishNetworkBeat(const ArNetBeatPacket& p, bool newSender, uint32_t atMs);
 
 // The BEAT SOURCE: the board's one answer to "what is the beat?"
 //
