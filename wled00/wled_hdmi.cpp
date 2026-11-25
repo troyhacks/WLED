@@ -799,11 +799,198 @@ void hdmi_switch_mode(int mode) {
 
 #endif // CONFIG_IDF_TARGET_ESP32P4 && WLEDMM_DISPLAY_MODE
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
+
+// ============================================================
+// The picture: the bus's LEDs, scaled onto the screen.
+//
+// This is the HDMI branch of the display that the "display-and-usb-audio"
+// branch has for the DSI panel: ONE PPA pass, always, and a black screen
+// around the picture.
+//
+// A board with a handful of LEDs would want a scale of a hundred and more
+// to fill the screen - and the PPA cannot do that in one pass, so the
+// picture used to be refused outright and the screen showed nothing at
+// all.  Now the scale is capped at what the PPA can do and the LEDs are
+// shown as big as it can make them, in the middle of a black screen.
+// ============================================================
+
+// The picture's geometry: what is scaled, from where, and where it lands.
+struct hdmi_picture_t {
+  float scale;
+  int   blockW, blockH;      // the part of the source that is taken
+  int   blockOffX, blockOffY;
+  int   outW, outH;          // the size of the scaled picture
+  int   outX, outY;          // where it lands in the frame
+};
+
+// The picture's geometry.
+//
+// ONE PPA pass, always.  The scale is what fits the screen, clamped to
+// what one pass can do: from a sixteenth to sixteen times.  Past that the
+// picture is letterboxed (too small) or cropped (too big) - never scaled
+// twice.
+static bool hdmiComputePicture(int srcW, int srcH, int dstW, int dstH, hdmi_picture_t& g) {
+  if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return false;
+
+  float scale = (float)dstW / (float)srcW;
+  const float byH = (float)dstH / (float)srcH;
+  if (byH < scale) scale = byH;
+
+  // What one PPA pass can do.  The driver refuses a scale outside
+  // 1/16 .. 255; sixteen is the largest that has been seen to come out
+  // right.
+  const float PPA_MIN_SCALE = 0.0625f;   // 1/16
+  const float PPA_MAX_SCALE = 16.0f;
+  if (scale < PPA_MIN_SCALE) scale = PPA_MIN_SCALE;
+  if (scale > PPA_MAX_SCALE) scale = PPA_MAX_SCALE;
+
+  // The part of the source the picture is taken from.  If the scaled result
+  // would not fit the frame, the source is cropped in the middle instead.
+  int blockW = srcW, blockH = srcH;
+  int maxBlockW = (int)((float)dstW / scale + 0.5f);
+  int maxBlockH = (int)((float)dstH / scale + 0.5f);
+  if (maxBlockW < 1) maxBlockW = 1;
+  if (maxBlockH < 1) maxBlockH = 1;
+  if (blockW > maxBlockW) blockW = maxBlockW;
+  if (blockH > maxBlockH) blockH = maxBlockH;
+
+  // The scaled size - the PPA's own arithmetic (the fractional part is in
+  // sixteenths), so the picture lands exactly where it is meant to.
+  const uint32_t scaleInt  = (uint32_t)scale;
+  const uint32_t scaleFrag = ((uint32_t)(scale * 16.0f)) & 15;
+  int outW = (int)(scaleInt * blockW + (scaleFrag * blockW) / 16);
+  int outH = (int)(scaleInt * blockH + (scaleFrag * blockH) / 16);
+  if (outW < 1) outW = 1;
+  if (outH < 1) outH = 1;
+  if (outW > dstW) outW = dstW;
+  if (outH > dstH) outH = dstH;
+
+  g.scale     = scale;
+  g.blockW    = blockW;
+  g.blockH    = blockH;
+  g.blockOffX = (srcW - blockW) / 2;
+  g.blockOffY = (srcH - blockH) / 2;
+  g.outW      = outW;
+  g.outH      = outH;
+  g.outX      = (dstW - outW) / 2;
+  g.outY      = (dstH - outH) / 2;
+  return true;
+}
+
+// The red, green and blue bytes of a pixel, in the bus's colour order.
+static void hdmiColourOrder(uint8_t order, uint8_t& r, uint8_t& g, uint8_t& b) {
+  switch (order) {
+    case COL_ORDER_RGB: r = 0; g = 1; b = 2; break;
+    case COL_ORDER_BRG: r = 1; g = 0; b = 2; break;
+    case COL_ORDER_GRB: r = 1; g = 2; b = 0; break;
+    case COL_ORDER_GBR: r = 2; g = 0; b = 1; break;
+    case COL_ORDER_RBG: r = 0; g = 2; b = 1; break;
+    case COL_ORDER_BGR: default: r = 2; g = 1; b = 0; break;
+  }
+}
+
+// The bus's picture, packed as RGB888 for the PPA.
+//
+// The PPA cannot convert between colour formats: it scales in the format it
+// is given and writes the format it is told to write.  So a bus that holds
+// four bytes a pixel - red, green, blue and white - has to be repacked
+// here, because the white has nowhere to go on an RGB panel.
+//
+// The repacking is a copy, so it is only done for a bus that needs it, and
+// the result is kept until the picture's size changes.
+static uint8_t*  hdmiRgbPicture    = nullptr;
+static size_t   hdmiRgbPictureSize = 0;
+static uint32_t hdmiRgbPictureW    = 0;
+static uint32_t hdmiRgbPictureH    = 0;
+
+static uint8_t* hdmiSourcePicture(const uint8_t* busData, uint32_t w, uint32_t h,
+                                   uint32_t bpp, uint8_t order) {
+  // The bus's pixels are in the bus's colour order - unless the bus remaps
+  // at the output, in which case its buffer is always red, green, blue
+  // whatever the segment asked for.
+  uint8_t r, g, b;
+  hdmiColourOrder(order, r, g, b);
+
+  // Nothing to do: the picture is already RGB888.
+  if (bpp == 3 && r == 0 && g == 1 && b == 2) return (uint8_t*)busData;
+
+  const size_t need = (size_t)w * h * 3;
+  if (hdmiRgbPictureSize < need || hdmiRgbPictureW != w || hdmiRgbPictureH != h) {
+    if (hdmiRgbPicture) { free(hdmiRgbPicture); hdmiRgbPicture = nullptr; hdmiRgbPictureSize = 0; }
+    hdmiRgbPicture = (uint8_t*)heap_caps_aligned_alloc(128, (need + 255) & ~(size_t)127,
+                              MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!hdmiRgbPicture) {
+      USER_PRINTLN("HDMI: no room for the picture");
+      return nullptr;
+    }
+    hdmiRgbPictureSize = need;
+    hdmiRgbPictureW = w;
+    hdmiRgbPictureH = h;
+  }
+
+  const uint8_t* s = busData;
+  uint8_t* d = hdmiRgbPicture;
+  for (uint32_t i = 0; i < w * h; i++) {
+    d[0] = s[r]; d[1] = s[g]; d[2] = s[b];
+    d += 3; s += bpp;
+  }
+  return hdmiRgbPicture;
+}
+
+// The background: everything around the picture is black.
+//
+// The PPA does the filling, not the CPU: the framebuffer is in PSRAM and
+// the CPU's copy of it is a cache that the PPA cannot see.  The PPA's own
+// driver drops the CPU's copy before it writes, so the CPU has no business
+// in the framebuffer at all.
+//
+// The fill is only needed when the picture moves or changes size - the
+// picture itself is drawn over it every frame.
+static bool hdmiFillRect(uint8_t* fb, int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) return true;
+  ppa_fill_oper_config_t fill = {};
+  fill.out.buffer         = fb;
+  fill.out.buffer_size    = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+  fill.out.pic_w          = WLEDMM_DISPLAY_W;
+  fill.out.pic_h          = WLEDMM_DISPLAY_H;
+  fill.out.fill_cm        = PPA_FILL_COLOR_MODE_RGB888;
+  fill.out.block_offset_x = x;
+  fill.out.block_offset_y = y;
+  fill.fill_block_w       = w;
+  fill.fill_block_h       = h;
+  fill.fill_argb_color.r  = 0;
+  fill.fill_argb_color.g  = 0;
+  fill.fill_argb_color.b  = 0;
+  fill.fill_argb_color.a  = 255;
+  fill.mode               = PPA_TRANS_MODE_BLOCKING;
+  return ppa_do_fill(ppa_fill_handle, &fill) == ESP_OK;
+}
+
+// The black around the picture.
+static void hdmiFillBlack(uint8_t* fb, const hdmi_picture_t& g) {
+  const int W = WLEDMM_DISPLAY_W, H = WLEDMM_DISPLAY_H;
+  const int x0 = g.outX, y0 = g.outY;
+  const int x1 = g.outX + g.outW, y1 = g.outY + g.outH;
+  hdmiFillRect(fb, 0,    0,  W, y0);         // above
+  hdmiFillRect(fb, 0,    y1, W, H - y1);     // below
+  hdmiFillRect(fb, 0,    y0, x0, g.outH);    // left
+  hdmiFillRect(fb, x1,   y0, W - x1, g.outH); // right
+}
+
+// Where the picture landed last time, for each of the two buffers.
+//
+// There are TWO buffers and they take turns being written, so each one has
+// to remember its own picture: a buffer that has not been filled yet still
+// has the last picture's margins in it, and they would show up on the
+// screen when the buffers swap.
+static int hdmiLastPic[2][4] = {{-1, -1, -1, -1}, {-1, -1, -1, -1}};
+static int hdmiBufParity = 0;
+
 // ============================================================
 // hdmi_blit() — PPA scale-rotate-mirror: LED bus buffer → display framebuffer.
 // Call from WLED::loop() every frame.
 // ============================================================
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE) && defined(CONFIG_SOC_PPA_SUPPORTED)
 void hdmi_blit() {
   // ── Follow the link, not the build ──────────────────────────────────────
   // Polled before the early-out below so it keeps running even when there
@@ -834,59 +1021,96 @@ void hdmi_blit() {
       last_blit_us = now_us;  // stamp on success, so a contended attempt doesn't burn the window
       Bus* bus = busses.getBus(0);
       uint8_t* busPixelData = bus ? bus->getPixelData() : nullptr;
-      if (busPixelData) {
-        const int ledW = SEGMENT.maxWidth  ? SEGMENT.maxWidth  : WLEDMM_DISPLAY_W;
-        const int ledH = SEGMENT.maxHeight ? SEGMENT.maxHeight : WLEDMM_DISPLAY_H;
-        float scale  = min((float)WLEDMM_DISPLAY_W / ledW, (float)WLEDMM_DISPLAY_H / ledH);
-        int scaledW  = (int)(ledW * scale);
-        int scaledH  = (int)(ledH * scale);
+      if (busPixelData && bus->isOk()) {
+        // The picture the bus really has.
+        //
+        // The matrix can be taller than the LEDs fill, so the picture's
+        // height comes from the bus and not from the matrix - and the bus
+        // holds four bytes a pixel when it has a white channel.
+        const uint32_t len  = bus->getLength();
+        const uint32_t size = bus->getPixelDataSize();
+        const uint32_t bpp  = bus->hasWhite() ? 4 : 3;
+        uint32_t srcW = SEGMENT.maxWidth ? SEGMENT.maxWidth : 1;
+        uint32_t srcH = len ? len / srcW : 1;
+        if (!srcH) srcH = 1;
+        while (srcH > 1 && (uint64_t)srcW * srcH * bpp > size) srcH--;
 
-        if (scale > 0.0f && scale <= 16.0f && scaledW > 0 && scaledH > 0) {
-          static uint32_t blit_ok = 0, blit_fail = 0, blit_log_ms = 0;
-          const size_t fb_size = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
+        // The bus's pixels are in the bus's colour order - unless the bus
+        // remaps at the output, in which case its buffer is always red,
+        // green, blue whatever the segment asked for.
+        uint8_t order = COL_ORDER_RGB;
+        #ifndef WLEDMM_REMAP_AT_OUTPUT
+        order = bus->getColorOrder();
+        #endif
 
-          ppa_srm_oper_config_t srm_cfg = {};
-          srm_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
-          srm_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB888;
-          srm_cfg.in.buffer          = busPixelData;
-          srm_cfg.in.pic_w           = ledW;
-          srm_cfg.in.pic_h           = ledH;
-          srm_cfg.in.block_w         = ledW;
-          srm_cfg.in.block_h         = ledH;
-          srm_cfg.out.buffer         = back_fb;
-          srm_cfg.out.buffer_size    = fb_size;
-          srm_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
-          srm_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
-          srm_cfg.out.block_offset_x = (WLEDMM_DISPLAY_W - scaledW) / 2;
-          srm_cfg.out.block_offset_y = (WLEDMM_DISPLAY_H - scaledH) / 2;
-          srm_cfg.scale_x            = scale;
-          srm_cfg.scale_y            = scale;
-          srm_cfg.rotation_angle     = PPA_SRM_ROTATION_ANGLE_0;
-          srm_cfg.rgb_swap           = true;
-          srm_cfg.byte_swap          = false;
-          srm_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
+        uint8_t* src = hdmiSourcePicture(busPixelData, srcW, srcH, bpp, order);
+        if (src) {
+          hdmi_picture_t g;
+          if (hdmiComputePicture((int)srcW, (int)srcH, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, g)) {
+            static uint32_t blit_ok = 0, blit_fail = 0, blit_log_ms = 0;
+            const size_t fb_size = (size_t)WLEDMM_DISPLAY_W * WLEDMM_DISPLAY_H * 3;
 
-          if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
-            blit_ok++;
-            // Present the back buffer at next vsync, then swap so next blit writes to the old front.
-            esp_lcd_panel_draw_bitmap(ph, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, back_fb);
-            uint8_t* tmp          = display_front_framebuffer;
-            display_front_framebuffer = back_fb;
-            display_framebuffer       = tmp;
-          } else {
-            blit_fail++;
-          }
-
-          // Diagnostic: every 5s — always log if HPD=0 (no monitor), silent when HPD=1
-          uint32_t now_ms = millis();
-          if (now_ms - blit_log_ms >= 5000) {
-            blit_log_ms = now_ms;
-            uint8_t r_c1 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xC1) : 0;
-            bool hpd = (r_c1 >> 7) & 1;
-            if (!hpd) {
-              USER_PRINTF("HDMI: no monitor connected (HPD=0) blit ok=%u fail=%u\n", blit_ok, blit_fail);
+            // The black around the picture.  It only has to be filled when
+            // the picture moves or changes size - not every frame.  Each
+            // buffer remembers its own picture, because the two take turns.
+            const int par = hdmiBufParity & 1;
+            if (hdmiLastPic[par][0] != g.outX || hdmiLastPic[par][1] != g.outY ||
+                hdmiLastPic[par][2] != g.outW || hdmiLastPic[par][3] != g.outH) {
+              hdmiFillBlack(back_fb, g);
+              hdmiLastPic[par][0] = g.outX; hdmiLastPic[par][1] = g.outY;
+              hdmiLastPic[par][2] = g.outW; hdmiLastPic[par][3] = g.outH;
+              USER_PRINTF("HDMI: picture %ux%u -> %ux%u at %d,%d (scale %f)\n",
+                  srcW, srcH, g.outW, g.outH, g.outX, g.outY, (double)g.scale);
             }
-            blit_ok = blit_fail = 0;
+
+            ppa_srm_oper_config_t srm_cfg = {};
+            srm_cfg.in.srm_cm          = PPA_SRM_COLOR_MODE_RGB888;
+            srm_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB888;
+            srm_cfg.in.buffer          = src;
+            srm_cfg.in.pic_w           = srcW;
+            srm_cfg.in.pic_h           = srcH;
+            srm_cfg.in.block_w         = g.blockW;
+            srm_cfg.in.block_h         = g.blockH;
+            srm_cfg.in.block_offset_x  = g.blockOffX;
+            srm_cfg.in.block_offset_y  = g.blockOffY;
+            srm_cfg.out.buffer         = back_fb;
+            srm_cfg.out.buffer_size    = fb_size;
+            srm_cfg.out.pic_w          = WLEDMM_DISPLAY_W;
+            srm_cfg.out.pic_h          = WLEDMM_DISPLAY_H;
+            srm_cfg.out.block_offset_x = g.outX;
+            srm_cfg.out.block_offset_y = g.outY;
+            srm_cfg.scale_x            = g.scale;
+            srm_cfg.scale_y            = g.scale;
+            srm_cfg.rotation_angle     = PPA_SRM_ROTATION_ANGLE_0;
+            // The bus's pixels are red, green, blue and the framebuffer is
+            // red, green, blue - so nothing is to be swapped.
+            srm_cfg.rgb_swap           = false;
+            srm_cfg.byte_swap          = false;
+            srm_cfg.mode               = PPA_TRANS_MODE_BLOCKING;
+
+            if (ESP_ERROR_CHECK_WITHOUT_ABORT(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_cfg)) == ESP_OK) {
+              blit_ok++;
+              // Present the back buffer at next vsync, then swap so next blit writes to the old front.
+              esp_lcd_panel_draw_bitmap(ph, 0, 0, WLEDMM_DISPLAY_W, WLEDMM_DISPLAY_H, back_fb);
+              uint8_t* tmp          = display_front_framebuffer;
+              display_front_framebuffer = back_fb;
+              display_framebuffer       = tmp;
+              hdmiBufParity++;
+            } else {
+              blit_fail++;
+            }
+
+            // Diagnostic: every 5s — always log if HPD=0 (no monitor), silent when HPD=1
+            uint32_t now_ms = millis();
+            if (now_ms - blit_log_ms >= 5000) {
+              blit_log_ms = now_ms;
+              uint8_t r_c1 = lt8912b_io_main ? lt8912b_read_reg(lt8912b_io_main, 0xC1) : 0;
+              bool hpd = (r_c1 >> 7) & 1;
+              if (!hpd) {
+                DEBUG_PRINTF("HDMI: no monitor connected (HPD=0) blit ok=%u fail=%u\n", blit_ok, blit_fail);
+              }
+              blit_ok = blit_fail = 0;
+            }
           }
         }
       }
