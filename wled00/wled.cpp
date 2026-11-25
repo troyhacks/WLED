@@ -84,6 +84,32 @@ static const char *TAG = "WLED";
   static bool sd_ldo_ours = false;
   #endif
 
+  // The bus the card is tried with, in the order it is tried.
+  //
+  // The fast one comes first: four data lines at 40 MHz.  That is what the
+  // card does on the older chip, and it is what it will do here when it can.
+  //
+  // The rev 3's silicon is pickier.  There the card powers up, identifies
+  // itself as an SD card, and answers over one data line - and then the
+  // first transfer over four lines fails with a data error:
+  //
+  //   sdmmc_sd: sdmmc_init_sd_ssr: sdmmc_send_cmd returned 0xffffffff
+  //
+  // which is the 512-byte status read, the first bulk transfer in the card's
+  // bring-up.  So there are slower ways to try, and the card is mounted with
+  // the first one that works.  The console says which one that was.
+  struct sd_bus_t {
+    uint8_t width;        // data lines
+    uint32_t freq_khz;    // the clock
+    const char* what;
+  };
+  static const sd_bus_t sd_buses[] = {
+    {4, SDMMC_FREQ_HIGHSPEED, "4-bit at 40 MHz"},
+    {4, SDMMC_FREQ_DEFAULT,   "4-bit at 20 MHz"},
+    {1, SDMMC_FREQ_DEFAULT,   "1-bit at 20 MHz"},
+    {1, SDMMC_FREQ_PROBING,   "1-bit at 400 kHz"},
+  };
+
   static void sdcard_power_on(void) {
     #if defined(CONFIG_IDF_TARGET_ESP32P4)
     if (!sd_ldo) {
@@ -121,50 +147,64 @@ static const char *TAG = "WLED";
     #endif
   }
 
+  // The bus the card is tried with, in the order it is tried: see sd_buses
+  // above.
   esp_err_t mount_sdcard(void) {
-    sdcard_power_on();
-
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
 
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+    esp_err_t ret = ESP_FAIL;
+    for (size_t i = 0; i < sizeof(sd_buses)/sizeof(sd_buses[0]); i++) {
+      const sd_bus_t& bus = sd_buses[i];
+      card = NULL;
+      sdcard_power_on();
 
-    #if CONFIG_ESP_HOSTED_SDIO_SLOT == 0
-    host.slot = SDMMC_HOST_SLOT_1;
-    #elif CONFIG_ESP_HOSTED_SDIO_SLOT == 1
-    host.slot = SDMMC_HOST_SLOT_0;
-    #else
-    host.slot = SDMMC_HOST_SLOT_0;
-    #endif
+      sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+      host.max_freq_khz = bus.freq_khz;
 
-    sdmmc_slot_config_t slot_config = {
-        .clk = GPIO_NUM_43,
-        .cmd = GPIO_NUM_44,
-        .d0 = GPIO_NUM_39,
-        .d1 = GPIO_NUM_40,
-        .d2 = GPIO_NUM_41,
-        .d3 = GPIO_NUM_42,
-        .cd = SDMMC_SLOT_NO_CD,
-        .wp = SDMMC_SLOT_NO_WP,
-        .width = 4,
-        .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
-    };
+      #if CONFIG_ESP_HOSTED_SDIO_SLOT == 0
+        host.slot = SDMMC_HOST_SLOT_1;
+      #elif CONFIG_ESP_HOSTED_SDIO_SLOT == 1
+        host.slot = SDMMC_HOST_SLOT_0;
+      #else
+        host.slot = SDMMC_HOST_SLOT_0;
+      #endif
 
-    esp_err_t ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+      sdmmc_slot_config_t slot_config = {
+          .clk = GPIO_NUM_43,
+          .cmd = GPIO_NUM_44,
+          .d0 = GPIO_NUM_39,
+          .d1 = GPIO_NUM_40,
+          .d2 = GPIO_NUM_41,
+          .d3 = GPIO_NUM_42,
+          .cd = SDMMC_SLOT_NO_CD,
+          .wp = SDMMC_SLOT_NO_WP,
+          .width = bus.width,
+          .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
+      };
 
-    if (ret != ESP_OK) {
-      USER_PRINTF("Mount failed : %s\n", esp_err_to_name(ret));
+      ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+
+      if (ret == ESP_OK) {
+        sdmmc_card_print_info(stdout, card);
+        USER_PRINTF("SD: the card is on %s\n", bus.what);
+        USER_PRINTF("Mounted at %s\n", MOUNT_POINT);
+        return ESP_OK;
+      }
+
+      // The card is power-cycled between the tries: one that has failed a
+      // transfer is not always ready for the next one.
+      USER_PRINTF("SD: %s failed (%s)\n", bus.what, esp_err_to_name(ret));
       sdcard_power_off();
-      return ret;
+      card = NULL;
+      vTaskDelay(pdMS_TO_TICKS(200));
     }
 
-    sdmmc_card_print_info(stdout, card);
-    USER_PRINTF("Mounted at %s\n", MOUNT_POINT);
-    return ESP_OK;
+    USER_PRINTF("Mount failed : %s\n", esp_err_to_name(ret));
+    return ret;
   }
 
   esp_err_t unmount_sdcard(void) {
