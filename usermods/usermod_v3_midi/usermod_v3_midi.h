@@ -59,6 +59,10 @@ static constexpr const char* kGUIVerbs[] = {
   "toggleMirrorY", "toggleReverseY",
   "toggleTranspose", "toggleFreeze",
   "fullRepaint", "rebootArm", "selectMode",
+  // The tempo tracker's verbs.
+  "temporeport", "tempobpm", "tempogrid",
+  "temoshiftback", "temoshiftfwd",
+  "tempofaster", "temposlower",
 };
 static constexpr uint8_t kNumGUIVerbs = sizeof(kGUIVerbs) / sizeof(kGUIVerbs[0]);
 
@@ -430,6 +434,13 @@ class MidiUsermod : public Usermod {
     //   9  prevpreset    19 fullRepaint (inline: shift-gated)
     //                    20 rebootArm   (inline: shift-gated)
     //                    21 selectMode
+    //                    22 temporeport
+    //                    23 tempobpm
+    //                    24 tempogrid
+    //                    25 temposhiftback
+    //                    26 temposhiftfwd
+    //                    27 tempofaster
+    //                    28 temposlower
     static const ActionFn kActionHandlers[kNumGUIVerbs] = {
       /* 0  power         */ &MidiUsermod::act_power,
       /* 1  blackout      */ &MidiUsermod::act_blackout,
@@ -453,6 +464,13 @@ class MidiUsermod : public Usermod {
       /* 19 fullRepaint   */ nullptr,  // inline (shift-gated)
       /* 20 rebootArm     */ nullptr,  // inline (shift-gated)
       /* 21 selectMode    */ &MidiUsermod::act_selectMode,
+      /* 22 temporeport   */ &MidiUsermod::act_tempreport,
+      /* 23 tempobpm      */ &MidiUsermod::act_tempobpm,
+      /* 24 tempogrid     */ &MidiUsermod::act_tempogrid,
+      /* 25 temposhiftback*/ &MidiUsermod::act_temoshiftback,
+      /* 26 temposhiftfwd */ &MidiUsermod::act_temoshiftfwd,
+      /* 27 tempofaster   */ &MidiUsermod::act_tempofaster,
+      /* 28 temposlower   */ &MidiUsermod::act_temposlower,
     };
     for (uint8_t i = 0; i < kNumGUIVerbs; i++) {
       if (!strcmp(action, kGUIVerbs[i])) {
@@ -645,6 +663,54 @@ class MidiUsermod : public Usermod {
     // NoteOn/NoteOff (mirrors how shift works). The action handler is
     // a no-op; the actual state change happens in the MIDI dispatcher
     // (sets select_mode_active = true on NoteOn, false on NoteOff).
+  }
+
+  // ---- the tempo tracker's verbs -----------------------------------------
+  //
+  // The tempo lives in the AudioReactive usermod, so these are REQUESTS
+  // to it: the grid belongs to the analysis task, and this is not it.
+  //
+  // TAKE THE ESTIMATION.  It is taken now - the tracker's own snapshot,
+  // at most one frame old - and it is printed on the console.
+  void act_tempreport(uint8_t) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoEstimate(true, true);
+#endif
+  }
+  void act_tempobpm(uint8_t) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoEstimate(true, false);
+#endif
+  }
+  void act_tempogrid(uint8_t) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoEstimate(false, true);
+#endif
+  }
+  // SHIFT THE BAR'S NUMBERING, a beat back or forward.  The user says
+  // where the bar starts; the tracker counts it from there.
+  void act_temoshiftback(uint8_t) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoShift(-1);
+#endif
+  }
+  void act_temoshiftfwd(uint8_t) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoShift(+1);
+#endif
+  }
+  // THE HINT: "that tempo is wrong - look up (or down) for a better
+  // match".  The verb says which way; the value that comes with it is
+  // how far the hint looks, in BPM, and zero means the default.
+  void act_tempofaster(uint8_t value) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoHint(+1, (value > 0) ? (float)value : 0.0f);
+#endif
+  }
+  void act_temposlower(uint8_t value) {
+#ifdef USERMOD_AUDIOREACTIVE
+    audioReactiveTempoHint(-1, (value > 0) ? (float)value : 0.0f);
+#endif
   }
 
   // Push a websocket state update if it's been long enough since the

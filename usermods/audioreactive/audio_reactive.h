@@ -5659,6 +5659,8 @@ void arAnalysisTask(void * parameter)
       tf.deckSourceId = arTempoDeckSourceId();
       tf.downbeatT    = arTempoDownbeatT();
       tf.beatCount    = arTempoBeatCount();
+      tf.barRot       = arTempoBarRot();
+      tf.barRotGen    = arTempoBarRotGen();
       tf.refBpm       = arTempoRefBpm();
       tf.refErrMs     = arTempoRefErrMs();
       tf.refBeat      = arTempoRefBeat();

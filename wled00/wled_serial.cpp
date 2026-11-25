@@ -349,7 +349,10 @@ void handleSerial() {
       // which sixteen of the thirty-one bands the sixteen bars show.
       audioReactiveRtaCommand(next);
     } else if (next == 'e' || next == 'E' || next == 'q' ||
-               next == 'j' || next == 'J' || next == 'M' || next == 'P') {
+               next == 'j' || next == 'J' || next == 'M' || next == 'P' ||
+               next == 'h' || next == 'H' || next == 'i' ||
+               next == '[' || next == ']' ||
+               next == '<' || next == '>') {
       // The tempo tracker: the comb score's tolerance, the re-lock, the
       // downbeat, and the mode.
       //
@@ -369,6 +372,11 @@ void handleSerial() {
       // cent of them, which is chance - so the person at the board says it,
       // and the estimator then counts 1, 2, 3, 4 with its own beats.
       // 'J' takes the mark away again.
+      //
+      // 'h' and 'H' and 'i' take the estimate - the BPM, the grid, or
+      // both - and print it. '[' and ']' shift the bar's numbering a beat
+      // back or forward, and '<' and '>' are the hint: "that tempo is
+      // wrong - look down (or up) for a better match".
       audioReactiveTempoCommand(next);
 #endif
     } else if (next == 0xB0) {

@@ -233,6 +233,7 @@ void arCopyTempoLocked(ArTempoFrame* dest) {
     dest->downbeatGen = 0;
     dest->fakeFill = 0;
     dest->downbeatT = 0.0f; dest->beatCount = 0;
+    dest->barRot = 0; dest->barRotGen = 0;
     dest->refBpm = 0.0f; dest->refErrMs = 0.0f;
     dest->refBeat = 0; dest->refOurBeat = 0;
     dest->refCount = 0; dest->refLocked = 0; dest->refSlips = 0;
@@ -321,6 +322,17 @@ static float    arHandoffDeckAtMark = 0.0f;   // the grid's position at the mark
 static uint32_t arHandoffMarkGen    = 0;      // the mark's identity, as it was last time
 static uint8_t  arHandoffMarkOn     = 0;      // 1 when a mark was in force last time
 
+// THE USER'S ROTATION of the bar's numbering.
+//
+// The estimator rotates the bar's numbering when the user says the bar
+// starts a beat later than the tracker thinks.  That is a CORRECTION, and
+// a correction is not a glitch: the phase has to MOVE, because the user
+// has just said where the bar is.
+//
+// The rotation's identity is what tells the handoff that the step in the
+// phase was the user's and not a glitch to be taken back.
+static uint32_t arHandoffRotGen = 0;      // the rotation's identity, as it was last time
+
 // THE FAKE FILL's roll.
 //
 // Which measure the roll was made for - the measure's number and the mark
@@ -381,6 +393,12 @@ static void arApplyHandoff(ArBeatSource* b) {
   while (step >  2.0f) step -= 4.0f;
   while (step < -2.0f) step += 4.0f;
 
+  // THE USER ROTATED THE BAR.  The estimator's rotation is the user
+  // saying where the bar starts, so the step in the phase is THEIRS and
+  // not a glitch - and a glitch is taken back, but a correction is not.
+  const bool rotChanged = (src == 1) && (b->rotGen != arHandoffRotGen);
+  if (src == 1) arHandoffRotGen = b->rotGen;
+
   if (src != arHandoffSrc) {
     if (arHandoffSrc == 0) {
       // The first beat of a run: nothing to correct.
@@ -413,7 +431,14 @@ static void arApplyHandoff(ArBeatSource* b) {
     // step the phase at all - the anchor holds and the phase keeps
     // running - so a whole-beat step from the deck is its numbering
     // moving and nothing else.
-    if (src == 2 && fabsf(step) >= 0.5f) {
+    if (rotChanged) {
+      // The USER moved the bar.  The phase moves with it: no correction is
+      // taken back, and the accumulator moves with the phase, so the bar
+      // number and the bar's position stay on the same grid.
+      arHandoffCorr = 0.0f;
+      arHandoffAcc  = expected + step;
+      arHandoffAt   = now;
+    } else if (src == 2 && fabsf(step) >= 0.5f) {
       // The deck moved its grid on purpose: re-anchor on it, with no
       // correction to let go.
       //
@@ -864,6 +889,9 @@ ArBeatSource arGetBeatSource(bool ignoreProLink) {
     b.beatInMeasure32 = tf.beatInMeasure32;
     b.locked        = tf.hold;
     b.driftMs       = tf.driftMs;
+    // The USER's rotation of the bar's numbering.  The identity goes with
+    // it, so the handoff can tell a step the user made from a glitch.
+    b.rotGen        = tf.barRotGen;
     // The drift as a PERCENTAGE of the beat: how far off the beat the
     // grid is, in units a person can read at a glance. A beat at 120 BPM
     // is 500 ms, so 10 ms of phase error is 2 %.

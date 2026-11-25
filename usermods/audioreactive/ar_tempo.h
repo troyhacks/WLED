@@ -820,6 +820,48 @@ static constexpr float AR_TEMPO_DOWNBEAT_T = 5.0f;
 // its 95th 4.43).
 static constexpr float AR_TEMPO_MEASURE_T = 4.5f;
 
+// ---- the bar's rotation --------------------------------------------------
+//
+// THE USER'S CORRECTION TO THE BAR'S NUMBERING: "the bar starts a beat
+// later than you think" - or a beat earlier.
+//
+// A beat lattice shifted by exactly one period is THE SAME lattice: the
+// beats are at ..., 0, P, 2P and at ..., P, 2P, 3P.  So a whole-beat shift
+// in TIME is not a thing that can be done to a beat grid - it would change
+// nothing at all.
+//
+// What CAN be moved by a beat is the NUMBERING: which beat is called beat
+// one.  That is the bar's position inside the music, and it is the thing
+// the user is correcting when the lights' bar is a beat out.
+//
+// So the rotation is a signed offset on the numbering, and it is applied to
+// the beat in the bar, to the beat in the measure and to the thirty-two
+// together: they are one grid, and a rotation that moved only one of them
+// would leave them a beat apart.
+static constexpr int8_t AR_TEMPO_BARROT_MAX = 3;
+
+// ---- the hint ------------------------------------------------------------
+//
+// "You have picked a tempo and it is wrong - look UP (or DOWN) for a
+// better match."
+//
+// The steady search looks at a NARROW window around the rate the grid
+// believes - AR_TEMPO_NARROW_BPM either side - and the comb's plateau is
+// about that wide itself.  So a rate that is wrong by more than the
+// window is simply OUT OF REACH: the search never sees it and the tracker
+// cannot get out of the hole it is in.
+//
+// The hint is the way out.  It sends the search over the WHOLE band and
+// takes the best match on the ONE SIDE of the current rate that the user
+// named.  The side matters: the user has heard the music and knows which
+// way the truth lies.
+//
+// The DISTANCE is the user's: the hint looks for a rate at least this far
+// from the one it has, so a hint cannot be spent on a wander inside the
+// plateau the tracker is already sitting in.
+static constexpr float AR_TEMPO_HINT_MIN_BPM = 3.0f;    // the default distance
+static constexpr float AR_TEMPO_HINT_MAX_BPM = 40.0f;   // the most it may be
+
 // Fewer onsets than this in the window and there is no search at all.
 static constexpr int AR_TEMPO_MIN_PEAKS = 8;
 
@@ -1039,6 +1081,7 @@ struct ArTempoState {
   bool     sweepActive;
   bool     sweepWasNarrow;                // this search looked around
   bool     sweepBackground;               // ... and this one is the background's
+  int8_t   sweepHint;                     // ... and this one is the HINT's: 0, +1 up, -1 down
   bool     playlist;                      // PLAYLIST mode, not DJ SET
   uint8_t  collapseCount;                 // searches below the floor, in a row
 
@@ -1143,6 +1186,29 @@ struct ArTempoState {
   // even when the grid is thrown away and the mark goes with it - so a mark
   // made after a reset is still a different mark from the one before it.
   uint32_t downbeatGen;
+
+  // ---- the BAR's ROTATION ----
+  //
+  // The user's correction to the bar's numbering: a signed offset of
+  // -AR_TEMPO_BARROT_MAX..+AR_TEMPO_BARROT_MAX beats.  It is applied to
+  // the beat in the bar, to the beat in the measure and to the thirty-two,
+  // so all three keep agreeing with each other.
+  int8_t   barRot;
+  // The rotation's IDENTITY: bumped on every rotation, so the publisher
+  // can tell one rotation from another.  That is what tells it that the
+  // step in the phase is the USER's and not a glitch - and a step the
+  // user made must NOT be taken back, or the light would not go where
+  // the user just put it.
+  uint32_t barRotGen;
+
+  // ---- the HINT ----
+  //
+  // 0 = none, +1 = look UP (a faster tempo), -1 = look DOWN.
+  int8_t   hintDir;
+  // How far the hint looks: the best match at least this many BPM away
+  // from the rate the grid has.  The user's, because the user knows the
+  // music and the board does not.
+  float    hintMinBpm;
 
   // ---- the ProLink OVERRIDE ----
   //
@@ -1253,6 +1319,28 @@ static inline bool arTempoHoldRequested() {
 // for when the drift has grown and the grid should be put back on the
 // music - without the rate the user froze being disturbed.
 static std::atomic<uint8_t> arTempoSyncRequest{0};
+
+// THE BAR'S ROTATION.
+//
+// "The bar starts a beat later than you think" - the user's correction to
+// the numbering.
+//
+// It is a REQUEST, like the mark and the sync: the grid belongs to the
+// analysis task, and the buttons and the web page are not it.  0 = nothing,
+// -1 = back a beat, +1 = forward a beat.
+static std::atomic<int8_t> arTempoShiftRequest{0};
+
+// THE HINT.
+//
+// "That tempo is wrong - look up (or down) for a better match."
+//
+// It is a REQUEST, for the same reason.  0 = nothing, -1 = look DOWN (a
+// slower tempo), +1 = look UP.
+//
+// The distance the hint looks is in HUNDREDTHS of a BPM, so it can be a
+// fraction; 0 means the default.
+static std::atomic<int8_t>  arTempoHintRequest{0};
+static std::atomic<int16_t> arTempoHintDistance{0};
 
 // ---------------------------------------------------------------------------
 // The filters.
@@ -1618,6 +1706,11 @@ static void arTempoReset(void) {
   arTempo.sweepActive = false;
   arTempo.sweepWasNarrow = false;
   arTempo.sweepBackground = false;
+  arTempo.sweepHint   = 0;
+  // The hint is a question, and the reset throws the question away with
+  // everything else.
+  arTempo.hintDir     = 0;
+  arTempo.hintMinBpm  = 0.0f;
   arTempo.sweepBestScore = 0.0f;
   arTempo.sweepBestBpm   = 0.0f;
   arTempo.sweepBestPhase = 0.0f;
@@ -1762,6 +1855,41 @@ static void arTempoRequestHold(bool on) {
 static void arTempoRequestSync(void) {
   arTempoSyncRequest.store(1, std::memory_order_relaxed);
 }
+
+// THE BAR'S ROTATION, requested.
+//
+// -1 is back a beat and +1 is forward a beat.  The direction is in TIME:
+// forward a beat means the bar starts a beat LATER than the tracker
+// thinks, so the beat sounding now is one position EARLIER in the bar.
+//
+// It is a request because the grid belongs to the analysis task.
+static void arTempoRequestShift(int8_t dir) {
+  if (dir == 0) return;
+  arTempoShiftRequest.store(dir > 0 ? 1 : -1, std::memory_order_relaxed);
+}
+
+// THE HINT, requested.
+//
+// dir is +1 to look UP (a faster tempo) and -1 to look DOWN.  minBpm is
+// how far the hint looks: the best match at least that far from the rate
+// the grid has.  Zero means the default.
+//
+// It is a request because the search belongs to the analysis task.
+static void arTempoRequestHint(int8_t dir, float minBpm) {
+  if (dir == 0) return;
+  arTempoHintRequest.store(dir > 0 ? 1 : -1, std::memory_order_relaxed);
+  const int16_t cents = (int16_t)lroundf(minBpm * 100.0f);
+  arTempoHintDistance.store(cents, std::memory_order_relaxed);
+}
+
+// The rotation, for a reader that wants to show it.
+static int8_t arTempoBarRot(void)   { return arTempo.barRot; }
+static uint32_t arTempoBarRotGen(void) { return arTempo.barRotGen; }
+
+// The hint's state, for a reader that wants to show it: the direction
+// (0 none, +1 up, -1 down) and the distance it looks.
+static int8_t arTempoHintDir(void)    { return arTempo.hintDir; }
+static float arTempoHintMinBpm(void)  { return arTempo.hintMinBpm; }
 
 // ---------------------------------------------------------------------------
 // The PLL's rate update and re-anchor.
@@ -1941,6 +2069,12 @@ static void arTempoAdopt(float bpm, float phase, float now, bool hard) {
     arTempo.downbeatKnown = false;
     arTempo.downbeatManual = false;
     arTempo.measureKnown  = false;
+    // The grid is new, so the bar's numbering is new with it: the
+    // rotation was a correction to the old one's.
+    if (arTempo.barRot != 0) {
+      arTempo.barRot = 0;
+      arTempo.barRotGen++;
+    }
     arTempo.downbeatEvalIndex = 0;
     arTempo.downbeatApplyAt = 0;
     arTempo.measureApplyAt = 0;
@@ -2121,13 +2255,21 @@ static void arTempoSweepStart(bool background) {
   int first = 0;
   int count = lattice ? ((AR_TEMPO_CAND_COUNT + 1) / 2) : AR_TEMPO_CAND_COUNT;
   bool narrow = false;
-  if (!background && arTempo.locked && arTempo.bpm > 0.0f) {
+  // THE HINT: the user says the rate is wrong, and which way to look.
+  //
+  // The hint's search goes over the WHOLE band, because the narrow window
+  // is exactly what the hint is escaping: the rate that is wrong is out
+  // of the window's reach, and a search that stayed in the window would
+  // find nothing new.
+  const bool hint = (!background && arTempo.hintDir != 0);
+  if (!background && arTempo.locked && arTempo.bpm > 0.0f && !hint) {
     if (lattice) arTempoNarrowWindowLattice(arTempo.bpm, &first, &count);
     else         arTempoNarrowWindow(arTempo.bpm, &first, &count);
     narrow = true;
   }
   arTempo.sweepWasNarrow  = narrow;
   arTempo.sweepBackground = background;
+  arTempo.sweepHint       = hint ? arTempo.hintDir : 0;
   if (background && n < AR_TEMPO_MIN_PEAKS) {
     // Nothing to look at: a breakdown, or the music has not started.  The
     // background says NOTHING, and it does not accuse the steady state -
@@ -2183,8 +2325,9 @@ static void arTempoSweepStart(bool background) {
 // scored - and the run is found in the RAW score.  The prior enters the
 // plateau's VALUE, never its extent.
 // ---------------------------------------------------------------------------
-static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
+static bool arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
                                 bool usePrior,
+                                float refBpm, int8_t dir, float minDist,
                                 float *rateOut, float *scoreOut,
                                 float *phaseOut, uint16_t *peakIdxOut) {
   const int st = (int)stride;
@@ -2194,6 +2337,7 @@ static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
   float bestRate  = AR_TEMPO_BPM_LO + (float)f * AR_TEMPO_CAND_STEP;
   float bestScore = 0.0f;
   int   bestPeak  = f;
+  bool  found     = false;
   for (int idx = f; idx <= last; idx += st) {
     const float s = arTempo.sweepScore[idx];
     // The run's peak: a local maximum.  An equal neighbour is part of the
@@ -2208,6 +2352,21 @@ static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
     while (b + st <= last && arTempo.sweepScore[b + st] >= s - tol) b += st;
     const float centre = 0.5f * ((AR_TEMPO_BPM_LO + (float)a * AR_TEMPO_CAND_STEP)
                                 + (AR_TEMPO_BPM_LO + (float)b * AR_TEMPO_CAND_STEP));
+    // THE HINT'S DIRECTION.
+    //
+    // The hint looks for the best match on ONE SIDE of the rate the grid
+    // has - the side the user named - and it looks for one that is far
+    // enough away to be worth taking.
+    //
+    // The run is found on the WHOLE band before this test, so a plateau at
+    // the edge of the band is not cut in half by it: the run's centre is
+    // the centre of the whole plateau, and only then is the plateau
+    // accepted or refused.
+    if (dir != 0) {
+      const float d = centre - refBpm;
+      if ((d > 0.0f) != (dir > 0)) continue;     // the wrong side
+      if (fabsf(d) < minDist) continue;          // too near to be worth taking
+    }
     // The value: the evidence, less the lattice's preference, less the
     // prior - and the prior ONLY here, at the plateau's centre, so it
     // chooses between plateaus and never inside one.
@@ -2219,11 +2378,13 @@ static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
       bestRate  = centre;
       bestScore = s;
       bestPeak  = idx;
+      found     = true;
     }
   }
   *rateOut   = bestRate;
   *scoreOut  = bestScore;
   *peakIdxOut = (uint16_t)bestPeak;
+  if (!found) return false;
   // The phase, at the plateau's peak: the comb's own answer for that rate,
   // recomputed so that the phase and the score come from the same
   // measurement.
@@ -2232,6 +2393,7 @@ static void arTempoPlateauPick(uint16_t first, uint16_t n, uint8_t stride,
                    arTempo.sweepTotal,
                    AR_TEMPO_BPM_LO + (float)bestPeak * AR_TEMPO_CAND_STEP, &ph);
   *phaseOut = ph;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2368,8 +2530,15 @@ static void arTempoSweepStep(void) {
   // where it would be a tie-breaker pulling towards 125.
   float rate = 0.0f, score = 0.0f, phase = 0.0f;
   uint16_t peak = 0;
-  arTempoPlateauPick(arTempo.sweepFirst, arTempo.sweepN, arTempo.sweepStride,
-                      !arTempo.sweepWasNarrow, &rate, &score, &phase, &peak);
+  // The HINT's search is a whole-band one, and the prior is NOT in it: the
+  // prior would drag the answer towards 125, and the user has already
+  // said WHICH WAY to look.  The direction filter and the distance are the
+  // hint's own.
+  const int8_t hintDir = arTempo.sweepHint;
+  const bool found = arTempoPlateauPick(arTempo.sweepFirst, arTempo.sweepN, arTempo.sweepStride,
+                      !arTempo.sweepWasNarrow && hintDir == 0,
+                      arTempo.bpm, hintDir, arTempo.hintMinBpm,
+                      &rate, &score, &phase, &peak);
   // THE FIRST LOCK IS THE PLATEAU'S CENTRE, and it is left alone.
   //
   // The centre is a lattice point, so the first lock is a round number -
@@ -2387,6 +2556,51 @@ static void arTempoSweepStep(void) {
 
   if (arTempo.sweepBackground) {
     arTempoBackgroundResult(rate, score, phase);
+    return;
+  }
+
+  // THE HINT'S ANSWER.
+  //
+  // The search went over the whole band and took the best match on the
+  // side the user named.  It is taken if the MUSIC explains it - the
+  // user's "this is wrong" is not evidence, the music is - and the grid
+  // HOLDS if it does not, so a hint that finds nothing costs the grid
+  // nothing.
+  //
+  // The hint is answered either way: it was a question, and the answer is
+  // "here is the best match I could find" or "there was none".
+  if (hintDir != 0) {
+    arTempo.hintDir = 0;
+    // The grid may have gone away between the hint and the search - a
+    // re-lock, or a track that stopped.  There is nothing to correct
+    // then, and the comb needs a rate to ask about.
+    if (!arTempo.locked || arTempo.bpm <= 0.0f) return;
+    const float was = arTempo.bpm;
+    // The score the grid's OWN rate gets on the same onsets, so the two
+    // can be compared: a hinted rate that explains the music much worse
+    // than the rate the grid has is not an answer, it is a coincidence.
+    float localPh = 0.0f;
+    const float local = arTempoCombScore(arTempo.sweepFrame, arTempo.sweepStr,
+                                          arTempo.sweepCount, arTempo.sweepTotal,
+                                          arTempo.bpm, &localPh);
+    if (!found || score < AR_TEMPO_MIN_SCORE || score < local * 0.5f) {
+      USER_PRINTF("tempo: the hint found nothing better - the rate stays "
+                  "(the best that way scored %.2f, this one %.2f)\n",
+                  (double)score, (double)local);
+      return;
+    }
+    if (arTempo.userHold) {
+      USER_PRINTLN("tempo: the clock is locked - the hint is not taken");
+      return;
+    }
+    // The rate is taken HARD: the user has said the rate is wrong, and a
+    // soft step towards it would take the follower's time constant - and
+    // the follower is there to smooth a wobble, not to walk a beat.
+    arTempoAdopt(rate, phase, arTempo.sweepNow, true);
+    arTempo.score = score;
+    USER_PRINTF("tempo: the hint took %.2f BPM (it was %.2f, and it scored "
+                "%.2f against %.2f)\n",
+                (double)rate, (double)was, (double)score, (double)local);
     return;
   }
 
@@ -2996,6 +3210,18 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
     arTempo.prevPeakStr = 0.0f;
     arTempo.sweepActive = false;
     arTempo.sweepBackground = false;
+    // A hint that has not been answered yet goes with the grid: the next
+    // search after a re-lock is the ACQUISITION's, and the acquisition
+    // looks everywhere - it must not be told to look on one side only.
+    arTempo.hintDir    = 0;
+    arTempo.sweepHint  = 0;
+    // The rotation goes with it too: the new grid counts its bars from its
+    // own lock, and a correction to the old grid's numbering says nothing
+    // about the new one.
+    if (arTempo.barRot != 0) {
+      arTempo.barRot = 0;
+      arTempo.barRotGen++;
+    }
     arTempo.bgHave = false;
     arTempo.bgConverged = false;
     arTempo.bgAgree = 0;
@@ -3091,6 +3317,13 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
         arTempo.downbeatApplyAt = arTempo.beatIndex;
         arTempo.downbeatManual  = true;
         arTempo.downbeatKnown   = true;
+        // The mark is ABSOLUTE: "the beat sounding now is beat one".  It
+        // replaces the numbering, so the ROTATION - which was a relative
+        // correction to the numbering the mark replaces - goes with it.
+        if (arTempo.barRot != 0) {
+          arTempo.barRot = 0;
+          arTempo.barRotGen++;
+        }
         // A NEW mark.  The publisher rebases the bar number when this
         // changes, so the identity of the mark is what says "the user has
         // marked again" - the beat it was marked on is not enough, because
@@ -3140,6 +3373,70 @@ static void arTempoProcess(const float *samples, int n, bool gateOpen) {
       // "back to the Pro Link broadcast data" means.
       arTempo.deckOverride    = false;
       USER_PRINTLN("tempo: downbeat cleared - the numbering is the convention again");
+    }
+  }
+
+  // THE BAR'S ROTATION, applied here for the same reason: the grid belongs
+  // to the analysis task.
+  //
+  // The rotation is the USER's correction to the bar's numbering, and it
+  // moves the bar's position inside the music by whole beats.  The
+  // rotation's IDENTITY is bumped, so the publisher can tell this step
+  // from a glitch: the phase moves because the user moved it, and a step
+  // the user made must NOT be taken back - the light has to go where the
+  // user just put it.
+  {
+    const int8_t dir = arTempoShiftRequest.exchange(0, std::memory_order_relaxed);
+    if (dir != 0) {
+      if (!arTempo.locked) {
+        USER_PRINTLN("tempo: no grid - there is no bar to shift");
+      } else {
+        const int8_t before = arTempo.barRot;
+        int16_t rot = (int16_t)before + (int16_t)dir;
+        if (rot >  AR_TEMPO_BARROT_MAX) rot =  AR_TEMPO_BARROT_MAX;
+        if (rot < -AR_TEMPO_BARROT_MAX) rot = -AR_TEMPO_BARROT_MAX;
+        arTempo.barRot = (int8_t)rot;
+        if (arTempo.barRot != before) {
+          arTempo.barRotGen++;
+          USER_PRINTF("tempo: the bar shifted %s a beat - it is now %d beat(s) %s "
+                      "of where it was, and the beat sounding now is %u of 4\n",
+                      dir > 0 ? "forward" : "back",
+                      (int)arTempo.barRot,
+                      arTempo.barRot == 0 ? "out" : (arTempo.barRot > 0 ? "forward" : "back"),
+                      (unsigned)arTempoBeatInBar());
+        } else {
+          USER_PRINTLN("tempo: the bar is already as far as it goes");
+        }
+      }
+    }
+  }
+
+  // THE HINT, applied here for the same reason.
+  //
+  // "That tempo is wrong - look up (or down) for a better match."
+  //
+  // The hint is a question, and the search is what answers it: the next
+  // search goes over the WHOLE band and takes the best match on the side
+  // the user named.  So the search is made due at once - and the
+  // background's search is put off, so the hint is answered by the next
+  // search and not by the one after it.
+  {
+    const int8_t dir = arTempoHintRequest.exchange(0, std::memory_order_relaxed);
+    if (dir != 0) {
+      float dist = (float)arTempoHintDistance.exchange(0, std::memory_order_relaxed) / 100.0f;
+      if (dist <= 0.0f) dist = AR_TEMPO_HINT_MIN_BPM;
+      if (dist > AR_TEMPO_HINT_MAX_BPM) dist = AR_TEMPO_HINT_MAX_BPM;
+      if (!arTempo.locked) {
+        USER_PRINTLN("tempo: no grid - there is no tempo to correct");
+      } else {
+        arTempo.hintDir    = (int8_t)dir;
+        arTempo.hintMinBpm = dist;
+        // The search is due NOW, and the background waits for its turn.
+        arTempo.lastSweepFrame = arTempo.frameIndex - AR_TEMPO_SEARCH_EVERY;
+        arTempo.bgLastFrame    = arTempo.frameIndex;
+        USER_PRINTF("tempo: looking %s for a better match, at least %.1f BPM away\n",
+                    dir > 0 ? "up" : "down", (double)dist);
+      }
     }
   }
 
@@ -3443,6 +3740,19 @@ static bool arTempoRateHeld(void) {
   return arTempo.confCount < arTempoConfirmNeed();
 }
 
+// The bar's rotation, applied to a position in a cycle.
+//
+// The rotation is a signed offset of -3..+3 and the cycle is four, sixteen
+// or thirty-two beats, so the result is folded back into the cycle: in a
+// four-beat bar a rotation of three beats and a rotation of minus one are
+// the same place.
+static uint32_t arTempoRotate(uint32_t pos, uint32_t cycle) {
+  int32_t p = (int32_t)(pos % cycle) + (int32_t)arTempo.barRot;
+  while (p < 0) p += (int32_t)cycle;
+  while (p >= (int32_t)cycle) p -= (int32_t)cycle;
+  return (uint32_t)p;
+}
+
 // The beat in the bar.
 //
 // When the profile has found a downbeat, the numbering is put on it: the
@@ -3464,7 +3774,7 @@ static uint8_t arTempoBeatInBar(void) {
   const uint32_t base = applied
                       ? (arTempo.beatIndex - (uint32_t)arTempo.downbeatPos)
                       : arTempo.beatIndex;
-  return (uint8_t)((base % 4) + 1);
+  return (uint8_t)(arTempoRotate(base, 4) + 1);
 }
 
 // The beat in the measure: the same, over sixteen beats.  One beat in
@@ -3476,7 +3786,7 @@ static uint8_t arTempoBeatInMeasure(void) {
   const uint32_t base = applied
                       ? (arTempo.beatIndex - (uint32_t)arTempo.measurePos)
                       : arTempo.beatIndex;
-  return (uint8_t)((base % 16) + 1);
+  return (uint8_t)(arTempoRotate(base, 16) + 1);
 }
 
 // The beat in the thirty-two: the measure the user set by ear.
@@ -3490,7 +3800,7 @@ static uint8_t arTempoBeatInMeasure32(void) {
                        && arTempo.beatIndex >= arTempo.measure32ApplyAt)
                       ? (arTempo.beatIndex - arTempo.measure32ApplyAt)
                       : arTempo.beatIndex;
-  return (uint8_t)((base % 32) + 1);
+  return (uint8_t)(arTempoRotate(base, 32) + 1);
 }
 
 // How sure is the downbeat?  The t-score of the bar's profile: zero when
@@ -3540,8 +3850,14 @@ static uint32_t arTempoBeatCount(void) {
   if (!arTempo.locked) return 0u;
   const bool applied = arTempo.downbeatKnown
                     && arTempo.beatIndex >= arTempo.downbeatApplyAt;
-  return applied ? (arTempo.beatIndex - arTempo.downbeatApplyAt)
-                 : arTempo.beatIndex;
+  const uint32_t base = applied ? (arTempo.beatIndex - arTempo.downbeatApplyAt)
+                                : arTempo.beatIndex;
+  // The USER's rotation moves the count with the numbering, so the two
+  // still agree: the count over four is the beat in the bar minus one.
+  // The count is a growing number and the rotation is a small offset, so
+  // it is only ever the sign that matters - and a count is never negative.
+  const int32_t count = (int32_t)base + (int32_t)arTempo.barRot;
+  return (count > 0) ? (uint32_t)count : 0u;
 }
 
 // The progress through the current beat, 0..1.
@@ -3598,6 +3914,73 @@ static bool arTempoValid(void) {
 }
 
 // ---------------------------------------------------------------------------
+// THE VERBS.
+//
+// These are what a button, a pad or a key calls.  They are free functions
+// and not statics, so that the other usermods can reach them; the
+// declarations are in wled.h.
+//
+// TAKE THE ESTIMATION.
+//
+// The estimate is taken NOW: the published frame is the tracker's own
+// snapshot, at most one frame old, so what is read is what the tracker
+// HAS - not what it had when the button was pressed.
+//
+// withBpm and withGrid say which half of it is reported.
+void audioReactiveTempoEstimate(bool withBpm, bool withGrid) {
+  ArTempoFrame tf;
+  if (!arCopyTempo(&tf) || tf.valid == 0) {
+    USER_PRINTLN("tempo: there is no estimate - the tracker has not locked on");
+    return;
+  }
+  USER_PRINTF("tempo: ");
+  if (withBpm) {
+    USER_PRINTF("%.2f BPM", (double)tf.bpm);
+    if (withGrid) USER_PRINTF(" | ");
+  }
+  if (withGrid) {
+    USER_PRINTF("the grid is on beat %u of 4", (unsigned)tf.beatInBar);
+    if (tf.beatInMeasure >= 1 && tf.beatInMeasure <= 16) {
+      USER_PRINTF(", beat %u of 16", (unsigned)tf.beatInMeasure);
+    }
+    if (tf.beatInMeasure32 >= 1 && tf.beatInMeasure32 <= 32) {
+      USER_PRINTF(", beat %u of 32", (unsigned)tf.beatInMeasure32);
+    }
+    USER_PRINTF(", count %u, %.0f %% through the beat",
+                (unsigned)tf.beatCount,
+                (double)(tf.beatProgress * 100.0f));
+    if (tf.downbeatSet) {
+      USER_PRINTF(", the downbeat is YOURS");
+    } else if (tf.downbeatKnown) {
+      USER_PRINTF(", the downbeat is measured (t=%.1f)", (double)tf.downbeatT);
+    } else {
+      USER_PRINTF(", the downbeat is a convention");
+    }
+  }
+  USER_PRINTLN("");
+}
+
+// SHIFT THE BAR'S NUMBERING.
+//
+// dir is -1 for back a beat and +1 for forward a beat.  It is the user's
+// correction to the bar's position: "the bar starts a beat later than you
+// think".
+void audioReactiveTempoShift(int8_t dir) {
+  if (dir == 0) return;
+  arTempoRequestShift(dir);
+}
+
+// THE HINT.
+//
+// dir is +1 to look UP (a faster tempo) and -1 to look DOWN.  minBpm is
+// how far the hint looks: the best match at least that far from the rate
+// the grid has.  Zero means the default.
+void audioReactiveTempoHint(int8_t dir, float minBpm) {
+  if (dir == 0) return;
+  arTempoRequestHint(dir, minBpm);
+}
+
+// ---------------------------------------------------------------------------
 // The serial console's tempo keys.
 //
 //   e / E    the comb's tolerance, down / up by 5 ms
@@ -3606,6 +3989,13 @@ static bool arTempoValid(void) {
 //   J        clear the downbeat: the numbering is the convention again
 //   M        the mode: DJ SET (one continuous mix)
 //   P        the mode: PLAYLIST (anything can shuffle in)
+//   h        take the estimate: the BPM
+//   H        take the estimate: the BPM and the grid
+//   i        take the estimate: the grid
+//   [        the bar's numbering: back a beat
+//   ]        the bar's numbering: forward a beat
+//   <        the hint: look DOWN for a better match
+//   >        the hint: look UP for a better match
 //
 // Lowercase is the lower number and uppercase the higher one, for every
 // pair - the same rule as the rest of the AudioReactive keys.
@@ -3618,6 +4008,27 @@ static bool arTempoValid(void) {
 // ---------------------------------------------------------------------------
 void audioReactiveTempoCommand(char c) {
   switch (c) {
+    case 'h':
+      audioReactiveTempoEstimate(true, false);
+      break;
+    case 'H':
+      audioReactiveTempoEstimate(true, true);
+      break;
+    case 'i':
+      audioReactiveTempoEstimate(false, true);
+      break;
+    case '[':
+      audioReactiveTempoShift(-1);
+      break;
+    case ']':
+      audioReactiveTempoShift(+1);
+      break;
+    case '<':
+      audioReactiveTempoHint(-1, 0.0f);
+      break;
+    case '>':
+      audioReactiveTempoHint(+1, 0.0f);
+      break;
     case 'e': case 'E': {
       const float delta = (c == 'E') ? 5.0f : -5.0f;
       const ArLiveSettings s = arSettingsEdit([delta](ArLiveSettings& st) {

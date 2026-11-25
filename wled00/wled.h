@@ -610,6 +610,11 @@ void audioReactiveRtaPlot();
 void audioReactiveResetAutoRange();
 void audioReactiveRtaCommand(char c);
 void audioReactiveTempoCommand(char c);
+// The tempo's verbs, for the other usermods: take the estimate, shift the
+// bar's numbering a beat, and hint that the rate is wrong.
+void audioReactiveTempoEstimate(bool withBpm, bool withGrid);
+void audioReactiveTempoShift(int8_t dir);
+void audioReactiveTempoHint(int8_t dir, float minBpm);
 #endif
 
 // User Interface CONFIG

@@ -44,6 +44,9 @@
 //               effectCustom1, effectCustom2, effectCustom3, seg0bri .. seg7bri
 //   verbs       power, blackout, full, nextfx, prevfx, nextpal, prevpal,
 //               nextpreset, prevpreset, toggleFreeze, seg0 .. seg7
+//   tempo       temporeport, tempobpm, tempogrid,   the estimate, taken now
+//               temposhiftback, temposhiftfwd,      the bar's numbering
+//               tempofaster, temposlower,            the hint
 //   presets     preset1 .. preset64, savepreset1 .. savepreset64
 //
 // A parameter's value is given on the controls' own 0..255 scale. The
@@ -366,6 +369,15 @@ class HidctlUsermod : public Usermod {
   uint8_t  wheelLast = 0;     // the encoder's last position
   bool     wheelSeen = false;
   uint32_t showWheelUntil = 0; // the encoder's position is on the display until then
+
+  // The TEMPO's estimate, on the display for a moment.
+  //
+  // The button that takes the estimate prints it on the console and puts
+  // the rate on the controller's own display, so the number can be read
+  // off the desk without a laptop.
+  uint16_t showTempoValue = 0;
+  uint32_t showTempoUntil = 0;
+  static constexpr uint32_t TEMPO_SHOW_MS = 2000;
 
   // The last page a preset can live on, for a profile. The pages are not
   // limited to the presets that happen to be saved: the user browses
@@ -1120,6 +1132,51 @@ class HidctlUsermod : public Usermod {
 #endif
       return;
     }
+
+    // ---- the tempo's estimate and the tempo's corrections -------------------
+    //
+    // TAKE THE ESTIMATION.  The estimate is taken NOW - the tracker's own
+    // snapshot, at most one frame old - and it is printed on the console
+    // and put on the controller's display.
+    if (!strcmp(action, "temporeport") || !strcmp(action, "tempobpm") ||
+        !strcmp(action, "tempogrid")) {
+      const bool wantBpm   = !strcmp(action, "tempogrid") ? false : true;
+      const bool wantGrid  = !strcmp(action, "tempobpm")  ? false : true;
+#ifdef USERMOD_AUDIOREACTIVE
+      // The console line is the tracker's own: it knows what it is
+      // measuring, and it says it in the tracker's words.
+      audioReactiveTempoEstimate(wantBpm, wantGrid);
+      // And the rate goes on the display, so it can be read off the desk.
+      ArTempoFrame tf;
+      if (arCopyTempo(&tf) && tf.valid != 0 && tf.bpm > 0.0f) {
+        showTempoValue = (uint16_t)(tf.bpm + 0.5f);
+        showTempoUntil = millis() + TEMPO_SHOW_MS;
+      }
+#endif
+      return;
+    }
+    // SHIFT THE BAR'S NUMBERING, a beat back or forward.  The user says
+    // where the bar starts; the tracker counts it from there.
+    if (!strcmp(action, "temoshiftback") || !strcmp(action, "temoshiftfwd")) {
+#ifdef USERMOD_AUDIOREACTIVE
+      audioReactiveTempoShift(!strcmp(action, "temoshiftfwd") ? 1 : -1);
+#endif
+      return;
+    }
+    // THE HINT: "that tempo is wrong - look up (or down) for a better
+    // match".  The button says which way; the value that comes with it is
+    // how far the hint looks, in BPM, and zero means the default.
+    //
+    // A BUTTON has no value: the HIDCTL passes 255 for one, so 255 is
+    // "no value" here and the hint takes its default distance.  (A 255 BPM
+    // look would find nothing at all.)
+    if (!strcmp(action, "tempofaster") || !strcmp(action, "temposlower")) {
+#ifdef USERMOD_AUDIOREACTIVE
+      const float dist = (value > 0 && value < 255) ? (float)value : 0.0f;
+      audioReactiveTempoHint(!strcmp(action, "tempofaster") ? 1 : -1, dist);
+#endif
+      return;
+    }
     if (!strcmp(action, "showpage")) {
       // Show the page on the display for a moment.
       showPageBriefly(cur_surface);
@@ -1621,7 +1678,10 @@ class HidctlUsermod : public Usermod {
     // --- the display: the page for a moment, then the preset number ---
     uint16_t val = (tracked_active_preset >= 1 && tracked_active_preset <= 99)
                    ? tracked_active_preset : 0;
-    if (millis() < surfaces[s].show_page_until) {
+    if (millis() < showTempoUntil) {
+      // The tempo's rate, for a moment: the estimate the user asked for.
+      showNumber(report, p, showTempoValue);
+    } else if (millis() < surfaces[s].show_page_until) {
       // The encoder turned the page: show the page. That is what the
       // encoder is for, so it is what the display shows.
       if (surfaces[s].page < 10) {

@@ -197,6 +197,15 @@ struct ArTempoFrame {
                             // not rotate a DIFFERENT deck's numbering
   float    downbeatT;       // the bar profile's t-score: how sure the downbeat is
   uint32_t beatCount;       // beats counted since the lock (the monotonic counter)
+  // THE USER'S ROTATION of the bar's numbering: a signed offset of -3..+3
+  // beats.  It is the user's correction to the bar's position inside the
+  // music, and it is already applied to the beat in the bar, to the beat in
+  // the measure and to the thirty-two above.
+  int8_t   barRot;
+  // The rotation's IDENTITY: bumped on every rotation, so a reader can
+  // tell one rotation from another - and, in the handoff, so a step in the
+  // phase that the USER made is not taken back as if it were a glitch.
+  uint32_t barRotGen;
   // The ProLink reference: the deck's grid, measured against ours.  All zero
   // when no deck is connected.
   float    refBpm;          // the deck's rate
@@ -321,6 +330,13 @@ struct ArBeatSource {
   uint32_t markBack;        // the whole beats from now back to the marked beat
   uint32_t markAt;          // the source's count at the marked beat
   uint32_t markGen;         // bumped when the mark changes
+  // The USER's ROTATION of the bar's numbering - the estimator's own.
+  //
+  // It is here so that the handoff can tell a step the USER made from a
+  // step that is a glitch: a rotation is a correction, and a correction
+  // must NOT be taken back, or the light would not go where the user just
+  // put it.
+  uint32_t rotGen;          // bumped when the rotation changes
   // The PHRASE: the song's structure, when there is one.
   uint8_t  phraseOn;        // 1 when there is a phrase
   uint8_t  phraseFill;      // 1 when the phrase is a FILL
