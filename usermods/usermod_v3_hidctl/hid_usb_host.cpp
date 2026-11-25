@@ -1381,11 +1381,11 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
         info->ep_count++;
       }
     }
-    USER_PRINTF("[HIDCTL]   iface %u: class=0x%02X subclass=0x%02X proto=0x%02X eps=%u\n",
+    DEBUG_PRINTF("[HIDCTL]   iface %u: class=0x%02X subclass=0x%02X proto=0x%02X eps=%u\n",
                 ifn, ifd->bInterfaceClass, ifd->bInterfaceSubClass,
                 ifd->bInterfaceProtocol, ifd->bNumEndpoints);
     for (uint8_t e = 0; e < info->ep_count; e++) {
-      USER_PRINTF("[HIDCTL]     ep 0x%02X attr=0x%02X mps=%u\n",
+      DEBUG_PRINTF("[HIDCTL]     ep 0x%02X attr=0x%02X mps=%u\n",
                   info->ep_addr[e], info->ep_attr[e], (unsigned)info->ep_mps[e]);
     }
     D->iface_count++;
@@ -2028,7 +2028,7 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
         for (int i = 0; i < n && len < 100; i++) {
           len += snprintf(line + len, sizeof(line) - len, " %02X", d[i]);
         }
-        USER_PRINTF("[HIDCTL] %s\n", line);
+        DEBUG_PRINTF("[HIDCTL] %s\n", line);
         // Keep the first bytes so they can be read over /json/ar.
         for (uint8_t i = 0; i < HIDCTL_READBACK_BYTES && i < n; i++) {
           D->readback[i] = d[i];

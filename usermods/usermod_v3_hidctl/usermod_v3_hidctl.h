@@ -408,7 +408,7 @@ class HidctlUsermod : public Usermod {
     if (want == (int)surfaces[s].page) return;
     surfaces[s].page = (uint8_t)want;
     surfaces[s].show_page_until = millis() + 1500;
-    USER_PRINTF("[HIDCTL] page %u\n", surfaces[s].page);
+    DEBUG_PRINTF("[HIDCTL] page %u\n", surfaces[s].page);
     // The page is on the display for a moment, and the pads move to the
     // new page's slots whether or not a preset is saved on them.
     paint();
@@ -657,7 +657,7 @@ class HidctlUsermod : public Usermod {
       // The button bytes are read out of the report, so they have to be
       // inside it.
       if (off >= p.report_len) {
-        USER_PRINTF("[HIDCTL] button byte %u is outside the %u-byte report\n",
+        DEBUG_PRINTF("[HIDCTL] button byte %u is outside the %u-byte report\n",
                     off, p.report_len);
         continue;
       }
@@ -725,7 +725,7 @@ class HidctlUsermod : public Usermod {
       // has nowhere to go - and shifting by that much is undefined.
       if (btn.index >= 32) {
         const char* bn = b["name"];
-        USER_PRINTF("[HIDCTL] button %s: index %u is outside the 32-bit bitmap\n",
+        DEBUG_PRINTF("[HIDCTL] button %s: index %u is outside the 32-bit bitmap\n",
                     bn ? bn : "?", btn.index);
         continue;
       }
@@ -817,12 +817,12 @@ class HidctlUsermod : public Usermod {
   void writeDefaultProfile(const char* filename, const char* content) {
     File f = WLED_FS.open(filename, "w");
     if (!f) {
-      USER_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
+      DEBUG_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
       return;
     }
     f.print(content);
     f.close();
-    USER_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
+    DEBUG_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
   }
 
   // Write both built-in profiles over the ones on the filesystem and read
@@ -888,12 +888,12 @@ class HidctlUsermod : public Usermod {
       DeserializationError err = deserializeJson(doc, buf);
       heap_caps_free(buf);
       if (err) {
-        USER_PRINTF("[HIDCTL] %s: bad JSON (%s)\n", path.c_str(), err.c_str());
+        DEBUG_PRINTF("[HIDCTL] %s: bad JSON (%s)\n", path.c_str(), err.c_str());
         continue;
       }
       JsonObject j = doc.as<JsonObject>();
       if (parseProfile(j, profiles[profile_count])) {
-        USER_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons%s\n",
+        DEBUG_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons%s\n",
                     profile_count, profiles[profile_count].name,
                     profiles[profile_count].vid, profiles[profile_count].pid,
                     profiles[profile_count].control_count,
@@ -901,7 +901,7 @@ class HidctlUsermod : public Usermod {
                     profiles[profile_count].opendeck ? " opendeck" : "");
         profile_count++;
       } else {
-        USER_PRINTF("[HIDCTL] %s: profile rejected\n", path.c_str());
+        DEBUG_PRINTF("[HIDCTL] %s: profile rejected\n", path.c_str());
       }
     }
     dir.close();
@@ -939,7 +939,7 @@ class HidctlUsermod : public Usermod {
     loadProfiles();
     uint8_t idx = matchDevice(vid, pid);
     if (idx == 0xFF) {
-      USER_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — no profile wants it\n", (unsigned)device, vid, pid);
+      DEBUG_PRINTF("[HIDCTL] device %u 0x%04X:0x%04X — no profile wants it\n", (unsigned)device, vid, pid);
       return;
     }
     // The surface for this device. A device that has been here before
@@ -954,7 +954,7 @@ class HidctlUsermod : public Usermod {
         if (!surfaces[i].bound) { s = i; break; }
       }
       if (s == 0xFF) {
-        USER_PRINTF("[HIDCTL] no room for another surface\n");
+        DEBUG_PRINTF("[HIDCTL] no room for another surface\n");
         return;
       }
       surfaces[s].bound = true;
@@ -981,7 +981,7 @@ class HidctlUsermod : public Usermod {
     if (tracked_active_preset) {
       surfaces[s].page = pageOfPreset(tracked_active_preset, surfaces[s].profile);
     }
-    USER_PRINTF("[HIDCTL] %s connected (device %u)\n", profiles[idx].name,
+    DEBUG_PRINTF("[HIDCTL] %s connected (device %u)\n", profiles[idx].name,
                 (unsigned)device);
     // An OpenDeck-family deck needs its session opened: DIS resets the
     // display, LIG sets the backlight, and CONNECT keeps the session
@@ -1017,7 +1017,7 @@ class HidctlUsermod : public Usermod {
     if (s == 0xFF) return;
     const bool was_deck = surfaces[s].opendeck;
     if (surfaces[s].profile < profile_count) {
-      USER_PRINTF("[HIDCTL] %s disconnected (device %u)\n",
+      DEBUG_PRINTF("[HIDCTL] %s disconnected (device %u)\n",
                   profiles[surfaces[s].profile].name, (unsigned)device);
     }
     surfaces[s].in_use = false;
@@ -1244,7 +1244,7 @@ class HidctlUsermod : public Usermod {
       // to see which one is the active preset.
       ctrl_bri = value;
       if (ctrl_bri < CTRL_BRI_MIN) ctrl_bri = CTRL_BRI_MIN;
-      USER_PRINTF("[HIDCTL] controller brightness %u\n", ctrl_bri);
+      DEBUG_PRINTF("[HIDCTL] controller brightness %u\n", ctrl_bri);
       // On a deck the controller's own brightness is the backlight, which
       // is the "LIG" command. The same floor applies.
       if (deckProfile() != 0xFF) {
@@ -1545,7 +1545,7 @@ class HidctlUsermod : public Usermod {
     if (on == demoActive) return;
     demoActive = on;
     demoStart = millis();
-    USER_PRINTF("[HIDCTL] LED demo %s\n", on ? "on" : "off");
+    DEBUG_PRINTF("[HIDCTL] LED demo %s\n", on ? "on" : "off");
   }
 
   // The serial console's key.
@@ -1590,7 +1590,7 @@ class HidctlUsermod : public Usermod {
       static bool said = false;
       if (!said) {
         said = true;
-        USER_PRINTF("[HIDCTL] %s: the output report is %u bytes, and it can "
+        DEBUG_PRINTF("[HIDCTL] %s: the output report is %u bytes, and it can "
                     "only take %u\n", p.name, (unsigned)p.output.length,
                     (unsigned)HIDCTL_MAX_LED);
       }
@@ -1676,7 +1676,7 @@ class HidctlUsermod : public Usermod {
           (int)tracked_active_preset != last_child) {
         last_parent = playlist_parent;
         last_child = (int)tracked_active_preset;
-        USER_PRINTF("[HIDCTL] playlist %d, child %d\n", last_parent, last_child);
+        DEBUG_PRINTF("[HIDCTL] playlist %d, child %d\n", last_parent, last_child);
       }
     }
     if (playlist_active) {
@@ -1878,7 +1878,7 @@ class HidctlUsermod : public Usermod {
           // has to be: a position on the knob, not a value of the
           // parameter, so the person reading it knows which way to turn.
           if (!sf.control_waited[idx]) {
-            USER_PRINTF("[HIDCTL] %s: waiting for takeover (raw %u, target %u)\n",
+            DEBUG_PRINTF("[HIDCTL] %s: waiting for takeover (raw %u, target %u)\n",
                         ctl.name, raw, (unsigned)curRaw);
             sf.control_waited[idx] = true;
           }
@@ -1907,7 +1907,7 @@ class HidctlUsermod : public Usermod {
       // The value the parameter is put at, not the one on the controls'
       // scale: the fifth slider is five bits, and it would say 124 where
       // the parameter holds 15.
-      USER_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act,
+      DEBUG_PRINTF("[HIDCTL] %s = %u -> %s = %u\n", ctl.name, raw, act,
                   (unsigned)valueToParam(value, actionMax(act)));
     }
     runAction(act, value);
@@ -1933,7 +1933,7 @@ class HidctlUsermod : public Usermod {
     const uint8_t msg   = data[ack + 9];
     const uint8_t state = data[ack + 10];
     const Opendeck::EventInfo ev = Opendeck::decodeMessage(msg);
-    USER_PRINTF("[HIDCTL] deck: event %u, message 0x%02X, state %u\n",
+    DEBUG_PRINTF("[HIDCTL] deck: event %u, message 0x%02X, state %u\n",
                 (unsigned)len, (unsigned)msg, (unsigned)state);
     if (ev.type == Opendeck::Event::None) return;
 
@@ -1964,7 +1964,7 @@ class HidctlUsermod : public Usermod {
           // its actions would disagree.
           char shifted[HIDCTL_MAX_ACTION + 8];
           const char* use = withPageOffset(act, shifted, sizeof(shifted));
-          USER_PRINTF("[HIDCTL] %s -> %s\n", buttonNameFor(p, idx), use);
+          DEBUG_PRINTF("[HIDCTL] %s -> %s\n", buttonNameFor(p, idx), use);
           runAction(use, 255);
         }
         paint();
@@ -1977,7 +1977,7 @@ class HidctlUsermod : public Usermod {
           // The encoder is on one of the effect's check boxes, and a press
           // turns it on and off.
           const char* act = opendeckCtrlAction(enc.ctrl);
-          USER_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, act);
+          DEBUG_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, act);
           opendeck_strip_change = true;
           runAction(act, 255);
           opendeck_strip_change = false;
@@ -1985,7 +1985,7 @@ class HidctlUsermod : public Usermod {
           break;
         }
         if (enc.push_action[0]) {
-          USER_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, enc.push_action);
+          DEBUG_PRINTF("[HIDCTL] %s push -> %s\n", enc.name, enc.push_action);
           runAction(enc.push_action, 255);
         }
         paint();
@@ -2024,7 +2024,7 @@ class HidctlUsermod : public Usermod {
         if (v < 0) v = 0;
         if (v > (int)amax) v = (int)amax;
         enc.value = (uint8_t)v;
-        USER_PRINTF("[HIDCTL] %s twist -> %s = %u\n", enc.name, act, v);
+        DEBUG_PRINTF("[HIDCTL] %s twist -> %s = %u\n", enc.name, act, v);
         // The parameter moved: the strip shows what it is at, and the
         // keys do not change. The state change that follows is told, so
         // it does not send the ten keys again.
@@ -2257,7 +2257,7 @@ class HidctlUsermod : public Usermod {
                                                (uint32_t)((size_t)w * h * 3),
                                                jpeg, (uint32_t)jpeg_cap, &outSize);
     if (err != ESP_OK || outSize == 0) {
-      USER_PRINTF("[HIDCTL] the JPEG encoder refused the picture (%d)\n", (int)err);
+      DEBUG_PRINTF("[HIDCTL] the JPEG encoder refused the picture (%d)\n", (int)err);
       return false;
     }
     // The DMA wrote the JPEG, the CPU reads it. The length is the size of
@@ -2735,7 +2735,7 @@ class HidctlUsermod : public Usermod {
     enc.ctrl = (uint8_t)((enc.ctrl + 1) % OPENDECK_CTRLS);
     // The new control starts from its own value.
     enc.touched = false;
-    USER_PRINTF("[HIDCTL] %s -> %s\n", enc.name, opendeckCtrlAction(enc.ctrl));
+    DEBUG_PRINTF("[HIDCTL] %s -> %s\n", enc.name, opendeckCtrlAction(enc.ctrl));
     // Only the strip says what the encoder is doing now.
     repaintDeck(true);
   }
@@ -3202,7 +3202,7 @@ class HidctlUsermod : public Usermod {
       static uint32_t lastSaid = 0;
       if (t_prev - lastSaid > 1000) {
         lastSaid = t_prev;
-        USER_PRINTF("[HIDCTL] deck: a picture took %u ms (draw %u, rotate %u, "
+        DEBUG_PRINTF("[HIDCTL] deck: a picture took %u ms (draw %u, rotate %u, "
                     "encode %u, preview %u)\n",
                     (unsigned)(t_prev - t0),
                     (unsigned)(t_draw - t0), (unsigned)(t_rot - t_draw),
@@ -3267,7 +3267,7 @@ class HidctlUsermod : public Usermod {
       }
       self->opendeck_build_failed = !ok;
       if (!ok) {
-        USER_PRINTF("[HIDCTL] the picture for slot %u would not build\n",
+        DEBUG_PRINTF("[HIDCTL] the picture for slot %u would not build\n",
                     (unsigned)self->opendeck_pics[index].slot);
       }
       self->opendeck_build_busy = false;
@@ -3298,7 +3298,7 @@ class HidctlUsermod : public Usermod {
       Opendeck::stp(opendeck_buf);
       if (opendeckSend(opendeck_buf)) {
         opendeck_painting = false;
-        USER_PRINTF("[HIDCTL] deck: %u pictures are away\n", opendeck_queue_count);
+        DEBUG_PRINTF("[HIDCTL] deck: %u pictures are away\n", opendeck_queue_count);
       }
       return;
     }
@@ -3323,7 +3323,7 @@ class HidctlUsermod : public Usermod {
       if (!opendeck_build_request && !opendeck_build_busy && opendeck_build_task) {
         opendeck_build_index = opendeck_queue_pos;
         opendeck_build_request = true;
-        USER_PRINTF("[HIDCTL] deck: building picture %u on core 1\n",
+        DEBUG_PRINTF("[HIDCTL] deck: building picture %u on core 1\n",
                     (unsigned)opendeck_queue_pos);
       }
       return;                     // come back for it when it is ready
@@ -3335,7 +3335,7 @@ class HidctlUsermod : public Usermod {
         // There is no picture to send. Announcing one of no bytes is
         // worse than sending nothing: the device's display controller
         // does not survive it, and nothing shows on the deck at all.
-        USER_PRINTF("[HIDCTL] deck: slot %u has no picture - skipped\n",
+        DEBUG_PRINTF("[HIDCTL] deck: slot %u has no picture - skipped\n",
                     pic.slot);
         opendeck_queue_pos++;
         opendeck_stage = OPENDECK_STAGE_ENCODE;
@@ -3348,7 +3348,7 @@ class HidctlUsermod : public Usermod {
         Opendeck::bat(opendeck_buf, (uint8_t)(pic.slot - 1), jpeg_len);
       }
       if (!opendeckSend(opendeck_buf)) return;    // the pipe is busy: try again
-      USER_PRINTF("[HIDCTL] deck: picture for slot %u (%ux%u, %u bytes)\n",
+      DEBUG_PRINTF("[HIDCTL] deck: picture for slot %u (%ux%u, %u bytes)\n",
                   pic.slot, pic.w, pic.h, jpeg_len);
       opendeck_chunk_off = 0;
       opendeck_stage = OPENDECK_STAGE_CHUNK;
@@ -3446,7 +3446,7 @@ class HidctlUsermod : public Usermod {
     if (p.report_id && data[0] != p.report_id) {
       // A report we did not ask for. Say so: the device may send the
       // encoder's position in a report of its own.
-      USER_PRINTF("[HIDCTL] report id 0x%02X (%u bytes): %s\n", data[0], len,
+      DEBUG_PRINTF("[HIDCTL] report id 0x%02X (%u bytes): %s\n", data[0], len,
                   bytes_to_hex(data, len < 8 ? len : 8));
       return;
     }
@@ -3525,13 +3525,13 @@ class HidctlUsermod : public Usermod {
       if (sf.wheelSeen) {
         int8_t delta = (int8_t)(pos - sf.wheelLast);   // the counter wraps
         if (delta != 0) {
-          USER_PRINTF("[HIDCTL] wheel %u -> %u (delta %d)\n",
+          DEBUG_PRINTF("[HIDCTL] wheel %u -> %u (delta %d)\n",
                       sf.wheelLast, pos, (int)delta);
           showWheelUntil = millis() + 1000;   // show it on the display
           turnPage(s, delta);
         }
       } else {
-        USER_PRINTF("[HIDCTL] wheel first value %u\n", pos);
+        DEBUG_PRINTF("[HIDCTL] wheel first value %u\n", pos);
       }
       sf.wheelLast = pos;
       sf.wheelSeen = true;
@@ -3548,7 +3548,7 @@ class HidctlUsermod : public Usermod {
 
         char shifted[HIDCTL_MAX_ACTION + 8];
         const char* use = withPageOffset(act, shifted, sizeof(shifted));
-        USER_PRINTF("[HIDCTL] %s -> %s\n", btn.name, use);
+        DEBUG_PRINTF("[HIDCTL] %s -> %s\n", btn.name, use);
         runAction(use, 255);
       }
       // The LEDs may have changed (a button lights while it is held).
@@ -3621,7 +3621,7 @@ class HidctlUsermod : public Usermod {
         lastBeat = millis();
         lastSurfaces = surface_count;
         lastDeck = deck;
-        USER_PRINTF("[HIDCTL] loop: surfaces=%u count=%u deck=%u pending=%u\n",
+        DEBUG_PRINTF("[HIDCTL] loop: surfaces=%u count=%u deck=%u pending=%u\n",
                     surface_count, profile_count, deck,
                     opendeck_pending_init ? 1 : 0);
       }
@@ -3721,7 +3721,7 @@ class HidctlUsermod : public Usermod {
           if (!surfaces[s].in_use) continue;
           surfaces[s].page = pageOfPreset(slot, surfaces[s].profile);
         }
-        USER_PRINTF("[HIDCTL] preset %u -> page %u (cached=%u playlist=%u music=%u)\n",
+        DEBUG_PRINTF("[HIDCTL] preset %u -> page %u (cached=%u playlist=%u music=%u)\n",
                     slot, surfaces[focus_surface < surface_count ? focus_surface : 0].page,
                     getCachedPresetExists(slot) ? 1 : 0,
                     (presetCache != nullptr && presetCache[slot].isPlaylist) ? 1 : 0,
@@ -3736,7 +3736,7 @@ class HidctlUsermod : public Usermod {
       // connected: it says which device, and this event does not - it is
       // published by the MIDI host, which sees every device on the bus.
       // So the event is only news; the surfaces are bound elsewhere.
-      USER_PRINTF("[HIDCTL] a device on the bus changed (connected=%u)\n",
+      DEBUG_PRINTF("[HIDCTL] a device on the bus changed (connected=%u)\n",
                   ev.payload.usbDevice.connected ? 1 : 0);
     }
   }
@@ -3812,7 +3812,7 @@ class HidctlUsermod : public Usermod {
     // of step ignores every token.
     if (h.containsKey("pid")) {
       bool ok = hid_usb_set_in_pid(dev, (uint8_t)(h["pid"] | 0));
-      USER_PRINTF("[HIDCTL] the IN channel's data toggle: %s\n", ok ? "set" : "no channel");
+      DEBUG_PRINTF("[HIDCTL] the IN channel's data toggle: %s\n", ok ? "set" : "no channel");
     }
     // Ask the device for its firmware, the way the reference does.
     if (h["fwver"]) hid_usb_read_firmware(dev);
