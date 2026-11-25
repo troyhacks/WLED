@@ -10755,8 +10755,8 @@ class AudioReactive : public Usermod {
       // hidden input that carries the field's type, so " On " used to land
       // BEFORE the dropdown instead of after it.
       oappend(SET_F("addInfo(ux+':dynamics:limiter',1,'<i>slew-limits the level the volume effects see</i>');"));
-      oappend(SET_F("addInfo(ux+':dynamics:rise',1,'ms <i>(&#x266A; effects only)</i>');"));
-      oappend(SET_F("addInfo(ux+':dynamics:fall',1,'ms <i>(&#x266A; effects only)</i>');"));
+      oappend(SET_F("addInfo(ux+':dynamics:rise',1,'ms <i>(volume limiter, and always the bars)</i>');"));
+      oappend(SET_F("addInfo(ux+':dynamics:fall',1,'ms <i>(volume limiter, and always the bars)</i>');"));
 
       // The "frequency:scale" and "frequency:profile" dropdowns are GONE.
       //
