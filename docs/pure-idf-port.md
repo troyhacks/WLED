@@ -370,6 +370,12 @@ pio run -e esp32p4_idf_rev3
 python pio-scripts/make_bundle.py esp32p4_idf_rev3
 ```
 
+The bundle is self-sufficient on Windows: it carries Espressif's `esptool.exe`
+(the official build for Windows, fetched once into `tools/.cache/`), the notes
+as plain text (`README.txt` - Windows does not know what to do with a `.md`),
+and the script that finds the board, checks that it is a rev 3 chip, and
+flashes it.  Whoever gets it needs no Python, no installation and no network.
+
 The one command that flashes the whole thing is
 
 ```

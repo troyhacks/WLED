@@ -10,29 +10,59 @@ This is the WLED-MM-P4 firmware built for the **ESP32-P4 rev 3** (and later).
 ## What you need
 
 * An ESP32-P4 **rev 3** board (the chip reports `revision v3.2`).
-* [esptool](https://pypi.org/project/esptool/): `pip install esptool`
+* [esptool](https://pypi.org/project/esptool/) **5**: `pip install esptool`
 * The board in **download mode**: hold **BOOT**, press **RESET**, release
   **BOOT**.  On the P4 the USB port on its own is not enough - the chip has
   to be told to listen for the flasher.
+
+## `--no-stub`, and why
+
+Every command below carries **`--no-stub`**, and it is not optional.
+
+Esptool normally uploads a small "stub flasher" into the chip's RAM and lets
+that do the writing.  The stub is built for the **older** P4 memory map, and
+the rev 3 silicon has a different one.  On this chip the stub starts up
+noisy (`Invalid head of packet (0x50): Possible serial noise or corruption`)
+and it **panics the chip** the moment esptool asks it to change the baud
+rate:
+
+```
+Changing baud rate to 921600...
+A fatal error occurred: Guru Meditation Error detected.
+```
+
+`--no-stub` leaves the flashing to the **ROM loader**, which is part of the
+silicon and cannot be wrong about the map.  It is slower - the whole image
+takes about 20 s instead of a few - but it works.
+
+Esptool 5 is needed for the flag; esptool 4 does not have it.
+
+This is about the *stub*, not about esptool in general: with **esptool 5.6.0
+or newer** the stub fits the rev 3 chip and runs clean, so the flag only
+matters for the older esptools - the one PlatformIO ships is 5.1.2, which is
+the one that panics the chip.
 
 ## Flashing
 
 Put all the files in one folder and run:
 
 ```
-flash_p4_rev3.bat COM4
+flash_p4_rev3.bat COM14
 ```
 
-(`COM4` is the port the board shows in Device Manager.  If you leave it out,
-the script uses COM4.)
+(`COM14` is the port the rev 3 board shows in Device Manager.  If you leave
+the port out, the script uses COM14.  **Check the port** - the other board
+on the desk is the older "ES pre rev.300" chip, and it wants a different
+image.  The script reads the chip first and refuses to flash the rev 3 image
+onto the older one.)
 
 Or, by hand, the one command that does it:
 
 ```
-esptool --chip esp32p4 --port COM4 write_flash 0x0 firmware.factory.bin
+esptool --no-stub --chip esp32p4 --port COM14 write_flash 0x0 firmware.factory.bin
 ```
 
-If esptool is not on your PATH: `python -m esptool --chip esp32p4 --port COM4 write_flash 0x0 firmware.factory.bin`.
+If esptool is not on your PATH: `python -m esptool --no-stub --chip esp32p4 --port COM14 write_flash 0x0 firmware.factory.bin`.
 
 (Esptool 5 renamed the command to `write-flash`; the old `write_flash` still
 works there, and `write-flash` does not work on esptool 4.  The batch script
@@ -60,7 +90,7 @@ pieces one at a time, use those offsets - in particular, do **not** put
 `bootloader.bin` at 0x0:
 
 ```
-esptool --chip esp32p4 --port COM4 write_flash 0x2000 bootloader.bin 0x8000 partitions.bin 0xe000 ota_data_initial.bin 0x10000 firmware.bin
+esptool --no-stub --chip esp32p4 --port COM14 write_flash 0x2000 bootloader.bin 0x8000 partitions.bin 0xe000 ota_data_initial.bin 0x10000 firmware.bin
 ```
 
 (The same command with `write-flash` on esptool 5.)
