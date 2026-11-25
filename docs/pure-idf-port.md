@@ -274,6 +274,12 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   needed by target").  `pio-scripts/touch_cmake.py` touches the app
   component's `CMakeLists.txt` when a component's is newer than the CMake
   cache, which is the condition the builder checks for.
+* **Adding an environment costs a full rebuild of every environment.**
+  Before the build PlatformIO compares a checksum of the project
+  configuration with the one in `.pio/build/project.checksum`, and if they
+  differ it deletes the whole build tree.  So a new env in `platformio.ini`,
+  or one changed `extra_scripts` line, throws away every environment's
+  objects.  Do the environment changes in one go, and expect the rebuild.
 * **The watchdog watches both cores.**  WLED's `enableWatchdog()`
   reconfigures the task watchdog to watch the idle task on every core.  The
   AudioReactive's analysis task lives on the second core, so the watchdog's
@@ -307,6 +313,55 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
   `uart_set_pin()` at all, so it never had the chance to get this wrong.
 
 
+
+## The rev 3 environment
+
+The ESP32-P4 came in two silicon revisions: the "ES pre rev.300" chip and the
+rev 3 (the board reports `revision v3.2`).  They are **not** the same silicon
+under a different label - the SRAM map changed, and ESP-IDF's support for the
+two is mutually exclusive.  `CONFIG_ESP32P4_SELECTS_REV_LESS_V3` is the switch,
+and it is off by default.
+
+So the rev 3 needs its own environment, and it differs in three places:
+
+| what | where | why |
+| --- | --- | --- |
+| `chip_variant` | `boards/esp32-p4-evboard-wled-idf-rev3.json` | the builder picks the **linker scripts** from the board's chip variant, not from Kconfig - `sections.rev3.ld.in` and `bootloader.rev3.ld.in` instead of the `esp32p4_es` ones |
+| the sdkconfig delta | `sdkconfig.esp32p4_idf_rev3.defaults` | `pio-scripts/env_sdkconfig.py` puts it after the shared `sdkconfig.defaults`, so the shared settings still apply |
+| the partition table | the board JSON | the same WLED table, so a board can be flashed with either build and keep its data |
+
+The board JSON is a copy of the rev 1 one with `chip_variant` changed.  That one
+field is what picks the memory layout the bootloader and the app are linked for;
+leaving it as `esp32p4_es` links the rev 3 layout with the old scripts, and the
+board dies before the application starts.
+
+One thing the rev 3 does not do by itself, and the application has to do:
+
+* **PSRAM.**  Espressif's own rev 3 defconfig leaves `CONFIG_SPIRAM_BOOT_INIT`
+  off, and ESP-IDF only registers the PSRAM with the heap allocator when that
+  flag is set.  So the application calls `esp_psram_init()` and
+  `esp_psram_extram_add_to_heap_allocator()` itself (see `wled_idf.cpp`).
+  Without it the board reports 33.5 MB of PSRAM it cannot allocate from.
+
+### The bundle
+
+`pio-scripts/make_bundle.py` collects the four images, the factory image, the
+flashing script, the notes and the checksums into `build_output/bundle-<env>/`,
+so the result can be handed to someone else as it is:
+
+```
+pio run -e esp32p4_idf_rev3
+python pio-scripts/make_bundle.py esp32p4_idf_rev3
+```
+
+The one command that flashes the whole thing is
+
+```
+esptool --chip esp32p4 --port COM4 write_flash 0x0 firmware.factory.bin
+```
+
+The P4's ROM looks for its bootloader at **0x2000**, not at 0x0 - so the
+bootloader must not be written at 0x0 when the files are flashed one at a time.
 
 ## Verifying
 
