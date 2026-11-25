@@ -9323,7 +9323,7 @@ class AudioReactive : public Usermod {
           // The momentary, the short term and the sliding ten seconds are
           // MEASUREMENTS and they are on /json/ar, where they are numbers
           // and not a wall of text.
-          {
+          if (arLoud) {   // AI: only when the meter could get its history
             const ArLoudnessFrame lf = arLoudnessSnapshot();
             char loudBuf[64];
             infoArr = user.createNestedArray(F("Programme loudness"));
