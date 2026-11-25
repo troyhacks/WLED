@@ -64,6 +64,7 @@ static const char *TAG = "WLED";
   #include "sdmmc_cmd.h"
   #include "driver/sdmmc_host.h"
   #include "driver/gpio.h"
+  #include "esp_log.h"
   #include <sys/stat.h>
   // SOC_SDMMC_HOST_SUPPORTED needs to be checked for SDMMC cards support.
   
@@ -106,6 +107,7 @@ static const char *TAG = "WLED";
   static const sd_bus_t sd_buses[] = {
     {4, SDMMC_FREQ_HIGHSPEED, "4-bit at 40 MHz"},
     {4, SDMMC_FREQ_DEFAULT,   "4-bit at 20 MHz"},
+    {4, 10000,                "4-bit at 10 MHz"},
     {1, SDMMC_FREQ_DEFAULT,   "1-bit at 20 MHz"},
     {1, SDMMC_FREQ_PROBING,   "1-bit at 400 kHz"},
   };
@@ -155,6 +157,16 @@ static const char *TAG = "WLED";
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
+
+    // The SDMMC driver says what went wrong at DEBUG level - the status
+    // register with the exact error bits in it - and that is the only place
+    // that has them.  The strings have to be in the binary for that
+    // (CONFIG_LOG_MAXIMUM_LEVEL_DEBUG), so the levels are set here rather
+    // than globally.
+    static const char* const sd_log_tags[] = {"sdmmc_host", "sdmmc_sd", "sdmmc", "vfs_fat_sdmmc"};
+    for (const char* tag : sd_log_tags) {
+      esp_log_level_set(tag, ESP_LOG_DEBUG);
+    }
 
     esp_err_t ret = ESP_FAIL;
     for (size_t i = 0; i < sizeof(sd_buses)/sizeof(sd_buses[0]); i++) {

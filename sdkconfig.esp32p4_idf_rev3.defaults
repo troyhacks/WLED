@@ -58,6 +58,12 @@ CONFIG_FATFS_LFN_STACK=y
 CONFIG_FATFS_USE_LABEL=y
 CONFIG_FATFS_CODEPAGE_850=y
 
+# The SDMMC driver says what went wrong at DEBUG level, and that is the only
+# place the status register with the error bits in it is printed.  The strings
+# have to be in the binary for that, so the maximum level is DEBUG and the
+# tags that matter are turned up where the card is mounted.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
 # A crash leaves a core in the flash, which is the only way to see where a
 # boot died on a board whose console says nothing.
 CONFIG_ESP_COREDUMP_ENABLE=y
