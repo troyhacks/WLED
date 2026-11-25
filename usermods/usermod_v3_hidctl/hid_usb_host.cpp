@@ -1195,8 +1195,17 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
   uint8_t profile = 0xFF;
   if (hidctlUsermodPtr) profile = hidctlUsermodPtr->matchDevice(D->vid, D->pid);
   if (profile == 0xFF) {
-    HIDCTL_DEBUG("configure: VID=0x%04X PID=0x%04X — no profile wants it, releasing",
+    // The profiles are loaded in the usermod's setup(), and the USB host
+    // task is started after that - so there is a list by now.  If there is
+    // not, this says so: it is the difference between "no profile for this
+    // controller" and "no profiles at all".
+    if (hidctlUsermodPtr && hidctlUsermodPtr->profileCount() == 0) {
+      HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — no profiles are loaded, releasing",
                  D->vid, D->pid);
+    } else {
+      HIDCTL_LOG("configure: VID=0x%04X PID=0x%04X — no profile wants it, releasing",
+                 D->vid, D->pid);
+    }
     usb_host_device_close(hid_client, dev);
     return ESP_FAIL;
   }

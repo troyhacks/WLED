@@ -829,12 +829,12 @@ class HidctlUsermod : public Usermod {
   void writeDefaultProfile(const char* filename, const char* content) {
     File f = WLED_FS.open(filename, "w");
     if (!f) {
-      DEBUG_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
+      USER_PRINTF("[HIDCTL] could not write default profile %s\n", filename);
       return;
     }
     f.print(content);
     f.close();
-    DEBUG_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
+    USER_PRINTF("[HIDCTL] wrote default profile %s\n", filename);
   }
 
   // Write both built-in profiles over the ones on the filesystem and read
@@ -900,12 +900,12 @@ class HidctlUsermod : public Usermod {
       DeserializationError err = deserializeJson(doc, buf);
       heap_caps_free(buf);
       if (err) {
-        DEBUG_PRINTF("[HIDCTL] %s: bad JSON (%s)\n", path.c_str(), err.c_str());
+        USER_PRINTF("[HIDCTL] %s: bad JSON (%s)\n", path.c_str(), err.c_str());
         continue;
       }
       JsonObject j = doc.as<JsonObject>();
       if (parseProfile(j, profiles[profile_count])) {
-        DEBUG_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons%s\n",
+        USER_PRINTF("[HIDCTL] profile %u: %s (0x%04X:0x%04X) %u controls, %u buttons%s\n",
                     profile_count, profiles[profile_count].name,
                     profiles[profile_count].vid, profiles[profile_count].pid,
                     profiles[profile_count].control_count,
@@ -913,7 +913,7 @@ class HidctlUsermod : public Usermod {
                     profiles[profile_count].opendeck ? " opendeck" : "");
         profile_count++;
       } else {
-        DEBUG_PRINTF("[HIDCTL] %s: profile rejected\n", path.c_str());
+        USER_PRINTF("[HIDCTL] %s: profile rejected\n", path.c_str());
       }
     }
     dir.close();
@@ -923,6 +923,11 @@ class HidctlUsermod : public Usermod {
   // device matching
   // -------------------------------------------------------------------------
  public:
+  // How many profiles are loaded. Zero means the list has not been read yet:
+  // the USB host runs before the profiles are written and loaded, so a device
+  // that is plugged in at boot is matched against an empty list.
+  uint8_t profileCount() const { return profile_count; }
+
   // Does any profile want this device? Returns the profile index, or 0xFF.
   uint8_t matchDevice(uint16_t vid, uint16_t pid) const {
     for (uint8_t i = 0; i < profile_count; i++) {

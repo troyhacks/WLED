@@ -2143,19 +2143,8 @@ void WLED::setup() {
     DEBUG_PRINTLN("Failed to create USB Host app_queue");
     return;
   }
-  // The USB host task.
-  //
-  // It lives on core 1, not core 0. On core 0 it was one notch above the
-  // task that runs the usermods' loop ("Background", priority 1), so
-  // every USB event preempted the very task that paints the F1's pads
-  // and pushes the deck's pictures - and the pads froze while the
-  // buttons kept working.
-  //
-  // Its priority is 5, just under the AudioReactive's 6: the analysis and
-  // the beat detection must not be delayed by USB traffic, and the USB
-  // must not be delayed by the LED rendering.
-  xTaskCreatePinnedToCore(usb_task, "usb_task", 8192, NULL, 5, NULL, 1);
-  DEBUG_PRINTLN("Setup complete. Waiting for USB Host events.");
+  // The USB host task is started further down, after the usermods' setup -
+  // see the note there.
   #endif
 
 #if defined(STATUSLED) && STATUSLED>=0
@@ -2176,6 +2165,30 @@ void WLED::setup() {
   userSetup();
   usermods.setup();
   DEBUG_PRINT(F("heap ")); DEBUG_PRINTLN(ESP.getFreeHeap());
+
+  #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(SOC_USB_OTG_SUPPORTED)
+  // The USB host task.
+  //
+  // It lives on core 1, not core 0. On core 0 it was one notch above the
+  // task that runs the usermods' loop ("Background", priority 1), so
+  // every USB event preempted the very task that paints the F1's pads
+  // and pushes the deck's pictures - and the pads froze while the
+  // buttons kept working.
+  //
+  // Its priority is 5, just under the AudioReactive's 6: the analysis and
+  // the beat detection must not be delayed by USB traffic, and the USB
+  // must not be delayed by the LED rendering.
+  //
+  // It is started HERE, after the usermods' setup, and not before it: a
+  // device that is plugged in when the board comes up enumerates in the
+  // first milliseconds, and it has to find the HID control surface's
+  // profiles already loaded.  Behind a hub it never shows up - the hub
+  // enumerates first and the device behind it comes later - but plugged
+  // straight into the board it does, and the control surface was then
+  // matched against an empty list of profiles and let go.
+  xTaskCreatePinnedToCore(usb_task, "usb_task", 8192, NULL, 5, NULL, 1);
+  DEBUG_PRINTLN("Setup complete. Waiting for USB Host events.");
+  #endif
 
   if (strcmp(clientSSID, DEFAULT_CLIENT_SSID) == 0) {
     #ifndef WLED_USE_ETHERNET_ONLY
