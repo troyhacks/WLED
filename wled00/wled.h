@@ -964,6 +964,45 @@ WLED_GLOBAL bool ledStatusState _INIT(false); // the current LED state
 WLED_GLOBAL AsyncWebServer server _INIT_N(((80)));
 #ifdef WLED_ENABLE_WEBSOCKETS
 WLED_GLOBAL AsyncWebSocket ws _INIT_N((("/ws")));
+
+// The WEBSOCKET'S CLIENTS, and the lock that keeps them alive long
+// enough to use.
+//
+// A client can be DELETED at any moment: it is deleted on the async task,
+// when its TCP connection drops.  The delete happens INSIDE the library's
+// removal of the client from its list - so the client is ALREADY GONE by
+// the time our own disconnect handler runs, and a lock in that handler
+// cannot help.
+//
+// MEASURED (2026-11-25): a load access fault in
+// AsyncWebSocketClient::queueLength(), called from wsSendTempo().
+//
+// So every fetch-and-use of a websocket client has to be done under the
+// SAME lock the library takes when it changes its list.  The library's
+// lock is the patched one (see pio-scripts/patch_asyncws_client_lock.py):
+// the application's own lock and the library's removal have to be the
+// same lock, or the client can still be deleted between the fetch and
+// the use.
+//
+// Without the patch - an unpatched library - the application's own mutex
+// is used instead.  It keeps the application consistent with itself, but
+// it cannot stop the library's delete: the crash is still possible.
+#ifdef WLED_ASYNCWS_CLIENT_LOCK
+class WsClientGuard {
+  public:
+    WsClientGuard()  { ws.lockClients(); }
+    ~WsClientGuard() { ws.unlockClients(); }
+};
+#else
+WLED_GLOBAL SemaphoreHandle_t wsClientMutex _INIT(xSemaphoreCreateMutex());
+
+// The lock, taken for a scope - so an early return cannot leave it held.
+class WsClientGuard {
+  public:
+    WsClientGuard()  { if (wsClientMutex) xSemaphoreTake(wsClientMutex, portMAX_DELAY); }
+    ~WsClientGuard() { if (wsClientMutex) xSemaphoreGive(wsClientMutex); }
+};
+#endif
 #endif
 WLED_GLOBAL AsyncClient     *hueClient _INIT(NULL);
 WLED_GLOBAL AsyncWebHandler *editHandler _INIT(nullptr);

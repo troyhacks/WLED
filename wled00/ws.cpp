@@ -45,6 +45,9 @@ static volatile uint32_t wsPendingClient = 0;
 static uint32_t wsTempoClients[WS_TEMPO_MAX_CLIENTS] = {0};
 static unsigned long wsLastTempoTime = 0;
 
+// The lock, and the guard that takes it, are in wled.h - the JSON live
+// path uses them too.
+
 static void wsTempoAddClient(uint32_t id) {
   for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
     if (wsTempoClients[i] == id) return;                 // already subscribed
@@ -91,9 +94,15 @@ static void wsSendTempo(void) {
 
   for (int i = 0; i < WS_TEMPO_MAX_CLIENTS; i++) {
     if (!wsTempoClients[i]) continue;
+    // The client is fetched and used under the lock: the library deletes
+    // a client on the async task, and the lock is the one it takes - so
+    // the delete cannot land between the fetch and the use.
+    //
+    // This is where the crash was: a load access fault in
+    // AsyncWebSocketClient::queueLength(), on 2026-11-25.
+    WsClientGuard guard;
     AsyncWebSocketClient* wsc = ws.client(wsTempoClients[i]);
-    if (!wsc || wsc->queueLength() > 0) continue;  // busy: it will get the next one
-    wsc->text(buf);
+    if (wsc && wsc->queueLength() == 0) wsc->text(buf);
   }
 }
 
@@ -106,6 +115,15 @@ void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventTyp
     wsPendingClient = client->id();
   } else if(type == WS_EVT_DISCONNECT){
     //client disconnected
+    //
+    // The client is DELETED already: this handler is called from the
+    // client's destructor, which the library runs inside its removal of
+    // the client from the list.  So the client is gone before we get here,
+    // and the only thing this handler can do is stop the application from
+    // looking for it.
+    //
+    // The lock is taken because the main loop reads the same two things.
+    WsClientGuard guard;
     if (client->id() == wsLiveClientId) wsLiveClientId = 0;
     wsTempoDelClient(client->id());
     DEBUG_PRINTLN(F("WS client disconnected."));
@@ -341,8 +359,17 @@ static void populatePixelData(uint8_t* buffer, size_t bufferSize, size_t headerS
 #if defined(SOC_PPA_SUPPORTED)
 static bool sendLiveLedsWs(uint32_t wsClient) {
   if (!busses.canAllShow()) return false;
-  AsyncWebSocketClient* wsc = ws.client(wsClient);
-  if (!wsc || wsc->queueLength() > 0) return false;
+
+  // The client is fetched under the lock, and it is USED under the lock
+  // too - but not for the whole function: the PPA work below can take
+  // milliseconds, and the lock holds the library's client list, so the
+  // async task would wait for it.  The client is fetched again, under the
+  // lock, before it is used.
+  {
+    WsClientGuard guard;
+    AsyncWebSocketClient* wsc = ws.client(wsClient);
+    if (!wsc || wsc->queueLength() > 0) return false; // Client invalid or busy
+  }
 
   Bus* bus = busses.getBus(0);
   if (!bus) return false;
@@ -438,7 +465,13 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
     buffer[3] = dstH;
     memcpy(buffer + headerSize, ppaBuffer, pixelDataSize);
 
-    wsc->binary(std::move(wsBuf));
+    // The send, under the lock - see the note at the top.
+    {
+      WsClientGuard guard;
+      AsyncWebSocketClient* wsc = ws.client(wsClient);
+      if (!wsc || wsc->queueLength() > 0) return false; // it went away, or it is busy
+      wsc->binary(std::move(wsBuf));
+    }
     return true;
   }
   #endif
@@ -463,13 +496,27 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
     memcpy(buffer + dst, srcBuffer + (i * 3), 3);
   }
 
-  wsc->binary(std::move(wsBuf));
+  // The send, under the lock - see the note at the top.
+  {
+    WsClientGuard guard;
+    AsyncWebSocketClient* wsc = ws.client(wsClient);
+    if (!wsc || wsc->queueLength() > 0) return false; // it went away, or it is busy
+    wsc->binary(std::move(wsBuf));
+  }
   return true;
 }
 #else
 static bool sendLiveLedsWs(uint32_t wsClient) {
-  AsyncWebSocketClient* wsc = ws.client(wsClient);
-  if (!wsc || wsc->queueLength() > 0) return false; // Client invalid or busy
+  // The client is fetched under the lock, and it is USED under the lock
+  // too - but not for the whole function: the work below can take
+  // milliseconds, and the lock holds the library's client list, so the
+  // async task would wait for it.  The client is fetched again, under the
+  // lock, before it is used.
+  {
+    WsClientGuard guard;
+    AsyncWebSocketClient* wsc = ws.client(wsClient);
+    if (!wsc || wsc->queueLength() > 0) return false; // Client invalid or busy
+  }
 
   // Check for memory backoff period
   static unsigned long memory_backoff_ts = 0;
@@ -520,7 +567,13 @@ static bool sendLiveLedsWs(uint32_t wsClient) {
   // Populate pixel data
   populatePixelData(buffer, bufSize, headerSize, samplingFactor);
 
-  wsc->binary(std::move(wsBuf));
+  // The send, under the lock - see the note at the top.
+  {
+    WsClientGuard guard;
+    AsyncWebSocketClient* wsc = ws.client(wsClient);
+    if (!wsc || wsc->queueLength() > 0) return false; // it went away, or it is busy
+    wsc->binary(std::move(wsBuf));
+  }
   return true;
 }
 #endif
@@ -540,6 +593,8 @@ void handleWs()
   if (strip.isUpdating()) return;
 
     if (wsPendingClient) {
+    // The client is fetched and used under the lock - see WsClientGuard.
+    WsClientGuard guard;
     AsyncWebSocketClient* wsc = ws.client(wsPendingClient);
     if (wsc && wsc->queueLength() == 0) {
       sendDataWs(wsc);

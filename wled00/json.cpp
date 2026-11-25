@@ -1926,9 +1926,14 @@ void serveJson(AsyncWebServerRequest* request)
 bool serveLiveLeds(AsyncWebServerRequest* request, uint32_t wsClient)
 {
   #ifdef WLED_ENABLE_WEBSOCKETS
-  AsyncWebSocketClient * wsc = nullptr;
+  // The client is fetched under the lock, and it is USED under the lock
+  // too - but not for the whole function: the buffer below takes time, and
+  // the lock holds the library's client list, so the async task would wait
+  // for it.  The client is fetched again, under the lock, before it is
+  // used.  See WsClientGuard.
   if (!request) { //not HTTP, use Websockets
-    wsc = ws.client(wsClient);
+    WsClientGuard guard;
+    AsyncWebSocketClient * wsc = ws.client(wsClient);
     if (!wsc || wsc->queueLength() > 0) return false; //only send if queue free
   }
   #endif
@@ -1978,9 +1983,13 @@ bool serveLiveLeds(AsyncWebServerRequest* request, uint32_t wsClient)
   }
   #ifdef WLED_ENABLE_WEBSOCKETS
   else {
+    // The send, under the lock - see the note at the top.
+    WsClientGuard guard;
+    AsyncWebSocketClient * wsc = ws.client(wsClient);
+    if (!wsc) return false; // the client went away
     wsc->text(toString(std::move(buffer)));
   }
-  #endif  
+  #endif
   return true;
 }
 #endif
