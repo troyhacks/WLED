@@ -36,6 +36,7 @@ idf_component_register(
         "src/arduino_tcp.cpp"
         "src/arduino_update.cpp"
         "src/arduino_cpu.cpp"
+        "src/mbedtls_legacy_hashes.c"
     INCLUDE_DIRS
         "."
         "include"

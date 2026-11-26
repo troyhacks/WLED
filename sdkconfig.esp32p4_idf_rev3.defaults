@@ -32,7 +32,9 @@ CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 # CONFIG_SPIRAM_BOOT_INIT is not set
 
 # The hosted coprocessor
-CONFIG_ESP_HOSTED_USE_MEMPOOL=n
+# (ESP-IDF 6.0 moved the Wi-Fi remote support into the IDF's esp_wifi, and
+# esp_hosted 3.x is the backend behind it - the option was renamed.)
+CONFIG_ESP_HOSTED_HOST_SDIO_USE_MEMPOOL=n
 
 # lwIP: the buffers the WLED-MM build uses
 CONFIG_LWIP_TCP_SACK_OUT=y

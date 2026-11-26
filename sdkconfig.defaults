@@ -86,6 +86,24 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x1
 CONFIG_ETH_USE_ESP32_EMAC=y
 CONFIG_ETH_USE_SPI_ETHERNET=y
 
+# --- The hosted coprocessor ----------------------------------------------
+#
+# ESP-IDF 6.0 moved the Wi-Fi "remote" (slave) support into the IDF's own
+# esp_wifi component, and esp_hosted 3.x is the backend behind it.  The C6
+# is reached over SDIO - slot 1, 4 bits, 40 MHz, which are esp_hosted's
+# defaults for the P4.
+#
+# The 3.x host is back-compatible with the 2.x coprocessor firmware, so the
+# C6 does not have to be reflashed.
+CONFIG_ESP_HOSTED=y
+CONFIG_ESP_HOSTED_HOST=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
+CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+
 # --- filesystem ------------------------------------------------------------
 # The Arduino core's LittleFS library is guarded by CONFIG_LITTLEFS_PAGE_SIZE,
 # so the page size has to be there for the class to exist at all.  These are
@@ -110,7 +128,13 @@ CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
 # The Arduino build used -Ofast -fno-exceptions -fno-rtti -DNDEBUG.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_CXX_RTTI=n
-CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS=n
+; ESP-IDF 6.0 replaced the old CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS with a
+; level: DISABLE (0), SILENT (1) or ENABLE (2, the default).  The Arduino
+; build had the assertions off, so DISABLE is what keeps the two builds the
+; same.
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
+; CONFIG_COMPILER_WARN_UNINITIALIZED_AUTOS is gone in ESP-IDF 6.0 - the
+; warning it turned on does not exist any more.
 # ESP-IDF's own code - and the bootloader with it - is built for size.  The
 # bootloader has to fit between the offset it is flashed at (0x2000) and the
 # partition table (0x8000), and WLED's own code asks for speed, so it sets
@@ -118,7 +142,6 @@ CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS=n
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
-CONFIG_COMPILER_WARN_UNINITIALIZED_AUTOS=y
 CONFIG_COMPILER_DISABLE_GCC12_WARNINGS=y
 
 # --- logging / watchdog ----------------------------------------------------

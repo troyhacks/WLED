@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include <math.h>
 #include <algorithm>
 #include <cmath>
@@ -124,12 +125,35 @@ uint16_t makeWord(uint8_t h, uint8_t l);
 
 // The maths helpers come from the standard library, the way the Arduino core
 // does it: a macro named min or max collides with <algorithm>.
+// picolibc declares isinf/isnan as C functions (int isinf(double)) in math.h
+// which conflicts with the C++ std:: versions. picolibc also provides them
+// as __builtin_* macros, so the using declarations are not needed there.
+// (This is the Arduino core's own fix, and its guard needs <inttypes.h>,
+// which is what picolibc's inttypes.h pulls in - hence the include above.)
 using std::abs;
+#if !defined(__PICOLIBC__)
 using std::isinf;
 using std::isnan;
+#endif
 using std::max;
 using std::min;
 using std::round;
+
+// ESP-IDF 6.0 renamed the ROM's GPIO matrix functions: what was
+// gpio_matrix_out() and gpio_matrix_in() is now rom_gpio_matrix_out() and
+// rom_gpio_matrix_in().  The libraries WLED uses still call the old names
+// (NeoPixelBus does, in its RMT method), so the old names are provided
+// here - the Arduino API layer is where a name the libraries expect
+// belongs.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+  #include <rom/gpio.h>
+  static inline void gpio_matrix_out(uint32_t gpio, uint32_t signal_idx, bool out_inv, bool oen_inv) {
+      rom_gpio_matrix_out(gpio, signal_idx, out_inv, oen_inv);
+  }
+  static inline void gpio_matrix_in(uint32_t gpio, uint32_t signal_idx, bool inv) {
+      rom_gpio_matrix_in(gpio, signal_idx, inv);
+  }
+#endif
 
 #define HIGH 0x1
 #define LOW  0x0

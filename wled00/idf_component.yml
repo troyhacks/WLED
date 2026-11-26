@@ -13,16 +13,24 @@
 ## core there is nothing to pull them in, so the project has to ask for them.
 
 dependencies:
-  idf: ">=5.5,<5.6"
+  idf: ">=6.1,<6.2"
 
   # AudioReactive: the FFT (esp-dsp) and the ES8311 codec control.
   espressif/esp-dsp: "1.7.1"
   espressif/esp_codec_dev: "1.5.4"
 
   # The P4 has no radio of its own - the C6 coprocessor is reached over
-  # esp-hosted, with esp_wifi_remote in front of it for the Wi-Fi side.
-  espressif/esp_hosted: "2.12.3"
-  espressif/esp_wifi_remote: "1.3.0"
+  # esp-hosted.
+  #
+  # This is the 3.x line, the one built for ESP-IDF 6.x: from IDF 6.0 the
+  # Wi-Fi "remote" (slave) support lives in the IDF's own esp_wifi
+  # component, and esp_hosted 3.x is the backend that feeds it.  The
+  # separate esp_wifi_remote component is not used any more - on IDF 6.x it
+  # registers itself empty.
+  #
+  # The 3.x host is back-compatible with the 2.x coprocessor firmware, so
+  # the C6 does not have to be reflashed.
+  espressif/esp_hosted: "3.1.0"
 
   # The filesystem.  The port brings the esp_vfs wrapper with it.
   joltwallet/littlefs: "1.23.3"
@@ -35,10 +43,16 @@ dependencies:
   espressif/esp_lcd_lt8912b: "0.2.0"
   espressif/esp_lcd_ek79007: "2.0.2"
   espressif/esp_lcd_ili9881c: "1.1.0"
-  waveshare/esp_lcd_st7703: "1.0.1"
+  waveshare/esp_lcd_st7703: "2.0.0"
 
   # The software H.264 decoder, for the HDMI path.
   espressif/esp_h264: "1.0.4"
 
   # The USB mass storage host, for the memory card over USB.
   espressif/usb_host_msc: "1.1.4"
+
+  # The P4's Ethernet PHY.  ESP-IDF 6.0 moved the PHY and MAC drivers out
+  # of the IDF and into the Component Registry, so the IP101 the board has
+  # comes from here now.  (The EMAC itself - esp_eth_mac_new_esp32 - is
+  # still in the IDF.)
+  espressif/ip101: "1.1.0"

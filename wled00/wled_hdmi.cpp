@@ -478,7 +478,9 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   dpi_config.video_timing.vsync_front_porch = timing.vsync_front_porch;
   dpi_config.video_timing.vsync_pulse_width = timing.vsync_pulse_width;
   dpi_config.video_timing.vsync_back_porch  = timing.vsync_back_porch;
-  dpi_config.flags.use_dma2d                = true;
+  // The use_dma2d flag is gone in ESP-IDF 6.0 (DMA2D is switched on with
+  // esp_lcd_dpi_panel_enable_dma2d() now), and it never applied here: this
+  // is the LT8912B bridge, which is told the timing over I2C.
   dpi_config.flags.disable_lp               = timing.disable_lp;
 
   // Three I2C handles for LT8912B register access (main, CEC-DSI, AVI)
@@ -526,12 +528,15 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
   vendor_config.video_timing.aspect_ratio = timing.aspect_ratio;
   vendor_config.video_timing.pclk_mhz   = timing.dpi_clock_freq_mhz;
 
-  const esp_lcd_panel_dev_config_t panel_config = {
-    .reset_gpio_num = -1,
-    .rgb_ele_order  = (lcd_rgb_element_order_t)LCD_RGB_ELEMENT_ORDER_RGB,
-    .bits_per_pixel = WLEDMM_DISPLAY_DEPTH,
-    .vendor_config  = &vendor_config,
-  };
+  // The fields are set one by one: ESP-IDF 6.0 moved rgb_ele_order to the
+  // front of the struct and made reset_gpio_num a gpio_num_t, and a
+  // designated initialiser list has to follow the declaration order - which
+  // is not the same in the two IDF versions this firmware builds with.
+  esp_lcd_panel_dev_config_t panel_config = {};
+  panel_config.rgb_ele_order  = (lcd_rgb_element_order_t)LCD_RGB_ELEMENT_ORDER_RGB;
+  panel_config.bits_per_pixel = WLEDMM_DISPLAY_DEPTH;
+  panel_config.reset_gpio_num = GPIO_NUM_NC;
+  panel_config.vendor_config  = &vendor_config;
   esp_lcd_panel_lt8912b_io_t lt8912b_io = { .main = io_main, .cec_dsi = io_cec, .avi = io_avi };
 
   USER_PRINTLN("Installing LT8912B HDMI bridge driver");

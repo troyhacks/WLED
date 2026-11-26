@@ -98,7 +98,9 @@ inline AR_CodecRegs& arCodecRegs() {
   return regs;
 }
 
-constexpr i2s_port_t AR_I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change!  I2S_NUM_1 possible but this has
+// ESP-IDF 6.0 removed the i2s_port_t type - the ports are plain ints now,
+// and I2S_NUM_0 and the rest stay as compatibility macros.
+constexpr int AR_I2S_PORT = I2S_NUM_0;               // I2S port to use (do not change!  I2S_NUM_1 possible but this has
                                                     // strong limitations -> no MCLK routing, no PDM support on some targets
 
 // Read the ESP32-P4's I2S clock back out of the clock registers.

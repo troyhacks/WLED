@@ -1127,11 +1127,14 @@ void serializeInfo(JsonObject root)
 
       const char* bandwidth_str;
       switch (ap_info.bandwidth) {
-      case WIFI_BW_HT40:   bandwidth_str = "40MHz"; break;
+      // ESP-IDF 6.0 dropped the WIFI_BW_HT20/WIFI_BW_HT40 names and kept
+      // only WIFI_BW20/WIFI_BW40 - the old ones are aliases of these in
+      // IDF 5.x, so these names work in both builds.
+      case WIFI_BW40:      bandwidth_str = "40MHz"; break;
       case WIFI_BW80:      bandwidth_str = "80MHz"; break;
       case WIFI_BW160:     bandwidth_str = "160MHz"; break;
       case WIFI_BW80_BW80: bandwidth_str = "80+80MHz"; break;
-      case WIFI_BW_HT20:
+      case WIFI_BW20:
       default:             bandwidth_str = "20MHz"; break;
       }
       ap_obj["bw"] = bandwidth_str;

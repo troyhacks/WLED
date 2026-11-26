@@ -72,12 +72,32 @@ def framework_dirs():
     return seen
 
 
-dirs = framework_dirs()
-if not dirs:
+def driver_files():
+    """Every hcd_dwc.c the patch has to reach.
+
+    Up to ESP-IDF 5.5 the DWC2 driver was part of the IDF itself
+    (components/usb/hcd_dwc.c).  From ESP-IDF 6.0 the USB component moved
+    out of the IDF and into the Component Registry, so the driver comes
+    from the managed component espressif/usb and lands in the project's
+    managed_components directory.
+    """
+    out = []
+    for pkg in framework_dirs():
+        out.append(os.path.join(pkg, "components", "usb", "hcd_dwc.c"))
+    project_dir = env.subst("$PROJECT_DIR")
+    out.append(
+        os.path.join(
+            project_dir, "managed_components", "espressif__usb", "src", "hcd_dwc.c"
+        )
+    )
+    return out
+
+
+files = driver_files()
+if not files:
     print("[dwc2] the framework-espidf package was not found - not patching")
 else:
-    for pkg in dirs:
-        path = os.path.join(pkg, "components", "usb", "hcd_dwc.c")
+    for path in files:
         if not os.path.isfile(path):
             print("[dwc2] %s is not there - not patching" % path)
             continue

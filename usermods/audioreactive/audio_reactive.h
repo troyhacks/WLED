@@ -24,9 +24,17 @@
 // energy is the legacy magnitude scale the banks publish on, and it is
 // computed once at init to get that constant. Nothing applies a window.
 #include "dsps_wind_blackman_harris.h"
-#include <driver/i2s.h>
-#include <driver/adc.h>
+// The legacy <driver/i2s.h> and <driver/adc.h> are gone in ESP-IDF 6.0, and
+// nothing here used them: the audio comes in through the new I2S driver
+// (driver/i2s_std.h, see audio_source.h) and the ADC through the oneshot
+// driver in the Arduino layer.
 #include <math.h>
+// I2S_PIN_NO_CHANGE came with the old I2S driver, which ESP-IDF 6.0
+// removed.  It is the value a pin variable holds when the pin was left
+// alone, and the value is the IDF's own (-1).
+#if !defined(I2S_PIN_NO_CHANGE)
+  #define I2S_PIN_NO_CHANGE (-1)
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <esp_timer.h>

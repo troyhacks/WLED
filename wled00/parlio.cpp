@@ -280,7 +280,8 @@ uint8_t IRAM_ATTR __attribute__((hot)) show_parlio(uint8_t* parallelPins, uint32
     parlio_config.trans_queue_depth = 16;
     parlio_config.max_transfer_size = 65535;
     parlio_config.flags.clk_gate_en = 0;
-    parlio_config.flags.io_loop_back = 0;
+    // The io_loop_back flag is gone in ESP-IDF 6.0: assigning the same GPIO
+    // to two driver objects is what it meant, and it was off here anyway.
     parlio_config.flags.allow_pd = 0;
     parlio_config.flags.invert_valid_out = 0;
 

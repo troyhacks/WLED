@@ -35,18 +35,29 @@ project_dir = env.subst("$PROJECT_DIR")
 pioenv = env.subst("$PIOENV")
 extra_name = "sdkconfig.%s.defaults" % pioenv
 extra = os.path.join(project_dir, extra_name)
+shared = os.path.join(project_dir, "sdkconfig.defaults")
 
 if os.path.isfile(extra):
     os.environ["SDKCONFIG_DEFAULTS"] = "sdkconfig.defaults;%s" % extra_name
 
-    # The resolved sdkconfig holds the values the build uses, and a value in
-    # it beats the defaults.  So the defaults file only takes effect on a
-    # resolved file that is regenerated from them - which means deleting the
-    # resolved one when the defaults are newer than it.
-    own = os.path.join(project_dir, "sdkconfig.%s" % pioenv)
-    if os.path.isfile(own) and os.path.getmtime(extra) > os.path.getmtime(own):
-        os.remove(own)
-        print("env_sdkconfig: %s is newer - the resolved sdkconfig is dropped "
-              "so the defaults are applied" % extra_name)
+# The resolved sdkconfig holds the values the build uses, and a value in it
+# beats the defaults.  So the defaults files only take effect on a resolved
+# file that is regenerated from them - which means deleting the resolved one
+# when a defaults file is newer than it.
+#
+# Both defaults files are watched: the shared one (which the IDF builder
+# itself watches) and the environment's own.  A change to the shared file
+# that is not picked up here leaves the environment on the old values
+# silently - the ESP_MAIN_TASK_STACK_SIZE went that way once.
+own = os.path.join(project_dir, "sdkconfig.%s" % pioenv)
+newest = max(
+    (os.path.getmtime(p) for p in (shared, extra) if os.path.isfile(p)),
+    default=0,
+)
+if os.path.isfile(own) and newest > os.path.getmtime(own):
+    os.remove(own)
+    print("env_sdkconfig: the defaults are newer - the resolved sdkconfig "
+          "is dropped so they are applied")
 
+if os.path.isfile(extra):
     print("env_sdkconfig: %s" % extra_name)

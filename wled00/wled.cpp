@@ -3,6 +3,13 @@ static const char *TAG = "WLED";
 #include "wled.h"
 #include "wled_ethernet.h"
 #include <Arduino.h>
+#if defined(WLED_BUILD_IDF) && defined(CONFIG_ETH_USE_ESP32_EMAC)
+  // The IP101 PHY driver left ESP-IDF in 6.0 - it is the registry component
+  // espressif/ip101 now, and this is the header that declares it.  The
+  // Arduino build still has the driver inside the IDF, so it does not need
+  // this.
+  #include "esp_eth_phy_ip101.h"
+#endif
 #if !defined(CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT)
   #define CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT 0
 #endif
@@ -1601,7 +1608,7 @@ void WLED::setup() {
           USER_PRINTF("Set bandwidths result: %d (%s)\n", err, esp_err_to_name(err));
         } else {
           ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N));
-          esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT40);
+          esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW40);
           USER_PRINTF("Set bandwidth result: %d (%s)\n", err, esp_err_to_name(err));
         }
 
@@ -1702,7 +1709,7 @@ void WLED::setup() {
             .clock_config = {
                 .rmii = {
                     .clock_mode = EMAC_CLK_EXT_IN,
-                    .clock_gpio = (emac_rmii_clock_gpio_t)50,
+                    .clock_gpio = 50,
                 },
             },
             .dma_burst_len = ETH_DMA_BURST_LEN_32,
@@ -1720,7 +1727,7 @@ void WLED::setup() {
             .clock_config_out_in = {
                 .rmii = {
                     .clock_mode = EMAC_CLK_EXT_IN,
-                    .clock_gpio = (emac_rmii_clock_gpio_t)-1,
+                    .clock_gpio = -1,
                 },
             },
             .mdc_freq_hz = 0,
@@ -2434,14 +2441,14 @@ void WLED::initAP(bool resetAP) {
       };
       ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_protocols(WIFI_IF_STA, &xprotocols));
       bw_config = {
-        .ghz_2g = WIFI_BW_HT40,
-        .ghz_5g = WIFI_BW_HT40,
+        .ghz_2g = WIFI_BW40,
+        .ghz_5g = WIFI_BW40,
       };
       esp_err_t err = esp_wifi_set_bandwidths(WIFI_IF_STA, &bw_config);
       USER_PRINTF("Set bandwidths result: %d (%s)\n", err, esp_err_to_name(err));
     } else {
       ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N));
-      esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT40);
+      esp_err_t err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW40);
       USER_PRINTF("Set bandwidth result: %d (%s)\n", err, esp_err_to_name(err));
     }
 

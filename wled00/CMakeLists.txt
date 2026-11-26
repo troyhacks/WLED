@@ -90,7 +90,13 @@ idf_component_register(
         vfs
         espressif__mdns
         esp_lcd
-        usb
+        # The USB host driver is not in the IDF any more: from ESP-IDF 6.0
+        # the USB component lives in the Component Registry, and the
+        # component manager puts it in managed_components/espressif__usb.
+        espressif__usb
+        # The IP101 PHY left the IDF in 6.0 as well - it is a registry
+        # component now (espressif/ip101).
+        espressif__ip101
         esp_wifi
         esp_driver_gpio
         esp_driver_ledc
@@ -103,7 +109,9 @@ idf_component_register(
         esp_driver_ppa
         esp_driver_jpeg
         esp_psram
-        espressif__esp_hosted
+        # esp_hosted 3.x registers itself under this name (not the
+        # espressif__esp_hosted the managed component would suggest).
+        esp_hosted
         espressif__esp_codec_dev
         espressif__esp-dsp
         espressif__esp_lcd_lt8912b

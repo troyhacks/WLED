@@ -22,8 +22,14 @@
 
 #include <ctype.h>
 #include "arduino_types.h"
+// The C library may define these itself - picolibc does, and redefining
+// them is a warning.  The Arduino core guards them the same way.
+#ifndef isascii
 #define isascii(__c) ((unsigned)(__c) <= 0177)
+#endif
+#ifndef toascii
 #define toascii(__c) ((__c) & 0177)
+#endif
 
 // WCharacter.h prototypes
 inline boolean isAlphaNumeric(int c) __attribute__((always_inline));

@@ -44,6 +44,34 @@ for sub in ("", "include", "vendor", os.path.join("vendor", "fs")):
     if os.path.isdir(path):
         include_dirs.append(path)
 
+# esp_hosted 3.x force-includes one of its headers into every source file
+# that links its targets:
+#
+#   target_compile_options(eh_host_config INTERFACE
+#       "SHELL:-include eh_host_port_master_config.h")
+#
+# The builder hands the application's compile flags to every component it
+# compiles, so that "-include" reaches components that have nothing to do
+# with esp_hosted - and they cannot find the header.  The header is a
+# macro translator with every definition guarded, so it is safe to have
+# it on the include path everywhere.
+#
+# The assembler gets the flags too (ASPPFLAGS), so the directory has to
+# be on that path as well - the assembly sources are preprocessed, and
+# they fail the same way.
+esp_hosted_dirs = []
+for path in sorted(glob.glob(os.path.join(
+        project_dir, "managed_components", "espressif__esp_hosted",
+        "host", "*", "include"))):
+    if os.path.isdir(path):
+        esp_hosted_dirs.append(path)
+        include_dirs.append(path)
+
 if include_dirs:
     env.AppendUnique(CCFLAGS=[("-I", d) for d in include_dirs])
     print("Added %d library include directories" % len(include_dirs))
+
+if esp_hosted_dirs:
+    env.AppendUnique(ASPPFLAGS=[("-I", d) for d in esp_hosted_dirs])
+    print("Added %d esp_hosted include directories to the assembler"
+          % len(esp_hosted_dirs))
