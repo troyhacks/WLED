@@ -103,6 +103,20 @@ CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
 CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
 CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+#
+# The coprocessor is not reset by the host.
+#
+# esp_hosted 3.x resets the C6 every time the host boots (it drives the
+# EN line: parked high, pulsed low), and the C6 does not come back from
+# that pulse - the SDIO card init times out on the OCR and the link
+# never comes up.  esp_hosted 2.x did not reset it: the C6 boots with
+# the P4 and keeps running, and the host just talks to it.
+#
+# So the reset pin is left unset (-1), which is the "no in-band reset"
+# option the component has.
+CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MIN=-1
+CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MAX=54
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=-1
 
 # --- filesystem ------------------------------------------------------------
 # The Arduino core's LittleFS library is guarded by CONFIG_LITTLEFS_PAGE_SIZE,
@@ -148,6 +162,11 @@ CONFIG_COMPILER_DISABLE_GCC12_WARNINGS=y
 # CORE_DEBUG_LEVEL=0 in the Arduino build; IDF level 1 is ERROR.
 CONFIG_LOG_DEFAULT_LEVEL=1
 CONFIG_LOG_MAXIMUM_LEVEL=3
+# Frame pointers, so the panic handler can print a backtrace.  Without
+# them it says so and prints nothing:
+#   "Please enable CONFIG_ESP_SYSTEM_USE_FRAME_POINTER option to have a
+#    full backtrace."
+CONFIG_ESP_SYSTEM_USE_FRAME_POINTER=y
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y

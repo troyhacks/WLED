@@ -165,7 +165,10 @@ int mbedtls_sha1_update(mbedtls_sha1_context *ctx, const unsigned char *input, s
 int mbedtls_sha1_finish(mbedtls_sha1_context *ctx, unsigned char output[20]) {
     uint32_t high, low;
     size_t last, pad;
-    unsigned char padding[SHA1_BLOCK_SIZE];
+    // The padding is the 0x80, the zeroes and the 8 length bytes: 72 bytes
+    // at the most (when the message ends 56 bytes into a block, the length
+    // needs a block of its own).
+    unsigned char padding[SHA1_BLOCK_SIZE + 8];
     int i;
 
     if (!ctx || !output) {
@@ -336,7 +339,8 @@ int mbedtls_md5_update(mbedtls_md5_context *ctx, const unsigned char *input, siz
 int mbedtls_md5_finish(mbedtls_md5_context *ctx, unsigned char output[16]) {
     uint32_t high, low;
     size_t last, pad;
-    unsigned char padding[MD5_BLOCK_SIZE];
+    // 72 bytes at the most - see the SHA-1 above.
+    unsigned char padding[MD5_BLOCK_SIZE + 8];
     int i;
 
     if (!ctx || !output) {
