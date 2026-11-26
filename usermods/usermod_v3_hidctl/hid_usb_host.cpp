@@ -120,6 +120,9 @@ struct HidDevice {
   // pass of the poll, because the flush's cancellation has to be
   // delivered before the interface can be released.
   uint8_t out_recovery = 0;       // 0 = none, 1 = halt, 2 = flush, ...
+  // The halt has been asked for and the answer has not come back yet.
+  // The halt is done by the halt task, because it can block for ever.
+  bool     out_halt_started = false;
   // How many times the recovery has run from the start.
   //
   // The clear at the end of a round **reports** success even when the pipe
@@ -241,6 +244,55 @@ static inline HidDevice* hid_dev_of(uint8_t d) {
 // Module state
 // ---------------------------------------------------------------------------
 static usb_host_client_handle_t hid_client = nullptr;
+
+// ---------------------------------------------------------------------------
+// The halt task
+// ---------------------------------------------------------------------------
+//
+// THE ONE STEP OF THE RECOVERY THAT CAN BLOCK FOR EVER IS THE HALT.
+//
+// The IDF's endpoint halt asks the controller to halt the channel and then
+// WAITS for the controller's interrupt to say that the channel is halted.
+// The wait has no timeout: a device that has stopped answering - which is
+// the very thing the recovery is for - never produces that interrupt, and
+// the call never returns.
+//
+// It used to be made from the USB task, which owns the whole USB host
+// stack.  So a wedge of one OUT pipe took the entire bus down with it:
+// the IN pipe was never armed again, the MIDI client stopped, the deck
+// stopped, and only a reset of the chip brought the devices back.  The
+// board looked alive - the main loop kept running, and the log kept saying
+// that packets were dropped - but nothing on the USB bus did.
+//
+// So the halt is done in a task of its own.  A task can be lost; the USB
+// task cannot.  The recovery waits for the answer, and if it never comes
+// the OUT pipe stays dead - which is what happens anyway - while the
+// controller keeps working.
+static TaskHandle_t   hid_halt_task = nullptr;
+static volatile uint8_t  hid_halt_device = 0xFF;  // whose pipe is to be halted
+static volatile bool      hid_halt_busy = false;  // the task is inside the halt
+static volatile bool      hid_halt_done = false;  // the halt came back
+static volatile esp_err_t hid_halt_result = ESP_OK;
+
+static void hid_halt_task_fn(void* /*arg*/) {
+  for (;;) {
+    // Wait for a request.  The notification carries the device.
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const uint8_t d = hid_halt_device;
+    HidDevice* dev = hid_dev_of(d);
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (dev && dev->used && dev->handle) {
+      // This line is the one that matters: if the halt never comes back,
+      // it is the last thing the log says.
+      HIDCTL_LOG("OUT endpoint (device %u): the pipe is being halted",
+                 (unsigned)d);
+      err = usb_host_endpoint_halt(dev->handle, dev->out_ep);
+    }
+    hid_halt_result = err;
+    hid_halt_done = true;
+    hid_halt_busy = false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The wire log
@@ -590,6 +642,20 @@ void hid_usb_init(void) {
     return;
   }
 
+  // The task that does the halting, when a pipe wedges.  It is created once
+  // and it waits for work until then.  Without it the recovery would halt
+  // the pipe from the USB task, and that call can block for ever - see the
+  // halt task's own comment.
+  if (!hid_halt_task) {
+    BaseType_t ok = xTaskCreatePinnedToCore(hid_halt_task_fn, "hid_halt", 4096,
+                                             nullptr, 4, &hid_halt_task, 1);
+    if (ok != pdPASS) {
+      hid_halt_task = nullptr;
+      HIDCTL_LOG("init: the halt task would not start - a wedged pipe will "
+                 "take the USB stack down with it");
+    }
+  }
+
   HIDCTL_LOG("init: USB Host client ready");
 }
 
@@ -704,10 +770,37 @@ static void hid_poll_device(void) {
   if (D->out_recovery) {
     switch (D->out_recovery) {
       case 1: {   // halt: the pipe stops moving
-        esp_err_t err = usb_host_endpoint_halt(D->handle, D->out_ep);
+        // The halt is done by the halt task: it can block for ever, and
+        // this task - the one that owns the whole USB stack - cannot.
+        if (!D->out_halt_started) {
+          D->out_halt_started = true;
+          hid_halt_done = false;
+          hid_halt_result = ESP_OK;
+          hid_halt_device = HIDCTL_D;
+          if (!hid_halt_task) {
+            // There is no task to do it.  The pipe stays dead rather than
+            // the whole USB stack going down with it.
+            HIDCTL_LOG("OUT endpoint (device %u): there is no task to halt "
+                       "the pipe, so it stays dead", (unsigned)HIDCTL_D);
+            D->out_halt_started = false;
+            D->out_broken = true;
+            D->out_recovery = 0;
+            break;
+          }
+          if (hid_halt_busy) {
+            // The halt task is inside another halt that has not come back.
+            // This pipe stays dead; the USB stack stays alive.
+            break;
+          }
+          hid_halt_busy = true;
+          xTaskNotifyGive(hid_halt_task);
+          if (D->out_recovery_rounds < 255) D->out_recovery_rounds++;
+          break;            // come back when the halt is done
+        }
+        if (!hid_halt_done) break;   // the halt task is still inside it
         HIDCTL_LOG("OUT endpoint (device %u): halt -> %s",
-                   (unsigned)HIDCTL_D, esp_err_to_name(err));
-        if (D->out_recovery_rounds < 255) D->out_recovery_rounds++;
+                   (unsigned)HIDCTL_D, esp_err_to_name(hid_halt_result));
+        D->out_halt_started = false;
         D->out_recovery = 2;
         break;
       }
@@ -751,6 +844,7 @@ static void hid_poll_device(void) {
           D->out_failed = false;
           D->out_flushed = false;
           D->out_recovery = 0;
+          D->out_halt_started = false;
           D->out_xfer->device_handle = D->handle;
           D->out_xfer->bEndpointAddress = D->out_ep;
           D->out_xfer->num_bytes = 0;
@@ -772,6 +866,7 @@ static void hid_poll_device(void) {
           HIDCTL_LOG("OUT endpoint (device %u): the pipe was not emptied, "
                      "the device needs to be unplugged", (unsigned)HIDCTL_D);
           D->out_recovery = 0;
+          D->out_halt_started = false;
           D->out_failed = false;
           D->out_broken = true;
           break;
@@ -786,6 +881,7 @@ static void hid_poll_device(void) {
           D->out_failed = false;
           D->out_broken = false;
           D->out_recovery = 0;
+          D->out_halt_started = false;
           D->out_xfer->device_handle = D->handle;
           D->out_xfer->bEndpointAddress = D->out_ep;
           D->in_xfer->device_handle = D->handle;
@@ -809,6 +905,7 @@ static void hid_poll_device(void) {
         HIDCTL_LOG("OUT endpoint (device %u): the device is reopened",
                    (unsigned)HIDCTL_D);
         D->out_recovery = 0;
+        D->out_halt_started = false;
         D->out_flushed = false;
         hid_close_device();
         if (hidctlUsermodPtr) hidctlUsermodPtr->onDeviceDisconnected(HIDCTL_D);
@@ -816,6 +913,7 @@ static void hid_poll_device(void) {
       }
       default:
         D->out_recovery = 0;
+        D->out_halt_started = false;
         break;
     }
     // The ladder is over: the flag is cleared, so the sender tries again
@@ -1512,6 +1610,7 @@ static void hid_close_device(void) {
   D->out_broken = false;
   D->out_failed = false;
   D->out_recovery = 0;
+  D->out_halt_started = false;
 }
 
 bool hid_usb_connected(uint8_t d) {
