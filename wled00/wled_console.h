@@ -19,7 +19,7 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 
-#if defined(SOC_USB_SERIAL_JTAG_SUPPORTED) && ARDUINO_USB_MODE
+#if defined(SOC_USB_SERIAL_JTAG_SUPPORTED) && ARDUINO_USB_MODE && !WLEDMM_NO_USB_CONSOLE
 #include <HWCDC.h>
 #define WLEDMM_CONSOLE_USB 1
 // The core's USB-Serial-JTAG instance exists only when it was built with

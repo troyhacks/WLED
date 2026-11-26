@@ -31,6 +31,9 @@ public:
 
 private:
     bool _started = false;
+    // True when this class installed the driver, false when it adopted one
+    // that was already there.  Only the former may uninstall it.
+    bool _ownsDriver = false;
     uint32_t _txTimeoutMs = 0;
     bool _debugOutput = false;
     // The peripheral hands us whole packets, so the bytes wait here until the

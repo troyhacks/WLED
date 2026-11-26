@@ -195,20 +195,35 @@ void HWCDC::begin()
     if (_started) {
         return;
     }
+    if (usb_serial_jtag_is_driver_installed()) {
+        // The IDF already owns this peripheral - it is its secondary
+        // console.  Two drivers on one peripheral fight over the same
+        // FIFOs, and the IDF's console is left holding a handle to a
+        // driver that is gone: its log writes then land on freed memory,
+        // which is how the web server's task got its stack overwritten.
+        //
+        // So: one driver.  If the IDF installed it, this class writes
+        // through it and leaves it alone.
+        _started = true;
+        _ownsDriver = false;
+        return;
+    }
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     cfg.rx_buffer_size = RX_BUFFER_SIZE;
     cfg.tx_buffer_size = 4096;
     if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
         _started = true;
+        _ownsDriver = true;
     }
 }
 
 void HWCDC::end()
 {
-    if (_started) {
+    if (_started && _ownsDriver) {
         usb_serial_jtag_driver_uninstall();
-        _started = false;
     }
+    _started = false;
+    _ownsDriver = false;
 }
 
 size_t HWCDC::write(uint8_t c)

@@ -39,16 +39,20 @@ void WledConsole::begin(uint32_t baud) {
     return;
   }
 #if WLEDMM_CONSOLE_USB
-  // The IDF owns the USB-Serial-JTAG as its secondary console.  Two drivers
-  // on one peripheral fight over the same FIFOs - the fork has already seen
-  // what that looks like: "invalid header: 0x..." spam and a watchdog reset.
-  // So the IDF's driver goes first and the Arduino core's HWCDC gets the
-  // only interrupt handler.  The price is that the IDF's own log (ESP_LOG)
-  // no longer reaches the USB port - it still goes to UART0.
-  if (usb_serial_jtag_is_driver_installed()) {
-    usb_serial_jtag_driver_uninstall();
-  }
-  // A bigger TX buffer means the boot log survives a monitor that opens late.
+  // The IDF owns the USB-Serial-JTAG as its secondary console, and it keeps
+  // it: two drivers on one peripheral fight over the same FIFOs - the fork
+  // has already seen what that looks like: "invalid header: 0x..." spam and
+  // a watchdog reset.
+  //
+  // The console writes through that driver rather than taking the
+  // peripheral over.  Uninstalling it left the IDF's console holding a
+  // handle to a driver that was gone, and its log writes landed on freed
+  // memory - which is how the web server's task got its stack overwritten
+  // with a USB-Serial-JTAG register address.
+  //
+  // A bigger TX buffer means the boot log survives a monitor that opens
+  // late - but the buffer belongs to the driver, so it only takes effect
+  // when this class installs it itself.
   WLEDMM_USB_CDC->setTxBufferSize(4096);
   WLEDMM_USB_CDC->setRxBufferSize(1024);
   WLEDMM_USB_CDC->begin();
