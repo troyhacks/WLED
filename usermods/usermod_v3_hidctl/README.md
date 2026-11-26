@@ -19,6 +19,24 @@ The **Traktor Kontrol F1** profile ships with the firmware and is written to
 
 in the P4 env (`esp32p4_8MB_troyhacks` in `platformio_override.ini`).
 
+## The log
+
+Every line the HID prints carries the time since the board came up, in
+milliseconds:
+
+```
+[1234ms][HIDCTL] connect: device 1, VID=0x17CC PID=0x1120
+```
+
+The macros are in `hid_log.h`:
+
+| macro | what it says |
+| --- | --- |
+| `HIDCTL_LOG` | the USB host's events: the device, the pipe, the transfers. Always on, to the console. |
+| `HIDCTL_INFO` | the usermod's own messages: the profiles, the controls, the pictures. Always on. |
+| `HIDCTL_DEBUG` | the HID's debug. On by default, and it does **not** need `WLED_DEBUG` — that turns on every debug message in the firmware and costs a full rebuild. Turn it off with `-D WLED_DISABLE_HIDCTL_DEBUG`. |
+| `HIDCTL_TRACE` | the per-report lines, one for every report the device sends. Only with `WLED_DEBUG`: a device that talks at a kilohertz would fill the console. |
+
 ## Profile format
 
 ```json

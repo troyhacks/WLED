@@ -22,6 +22,7 @@
 #include "../usermods/usermod_v3_midi/usb_host_messages.h"
 #include "../usermods/usermod_v3_hidctl/usermod_v3_hidctl.h"
 #include "../usermods/usermod_v3_hidctl/hid_dwc_probe.h"
+#include "../usermods/usermod_v3_hidctl/hid_log.h"
 
 #include <cstring>
 #include "usb/usb_host.h"
@@ -29,8 +30,7 @@
 
 extern HidctlUsermod* hidctlUsermodPtr;
 
-#define HIDCTL_LOG(fmt, ...) do { if (canUseSerial()) Serial.printf("[HIDCTL] " fmt "\n", ##__VA_ARGS__); } while (0)
-#define HIDCTL_DEBUG(fmt, ...) DEBUG_PRINTF("[HIDCTL] " fmt "\n", ##__VA_ARGS__)
+// The log macros (with the time on every line) are in hid_log.h.
 
 // How many times the OUT pipe's recovery may run from the start before the
 // ladder goes on to taking the interface and giving the device a new pipe.
@@ -981,7 +981,11 @@ static void hid_poll_device(void) {
           // refuses a second submit until the first one has reported.
           // That is not a fault and it needs no recovery - the callback
           // will come (or not) and the poll will try again.
-          HIDCTL_DEBUG("IN re-submit: the transfer is still in flight");
+          //
+          // It is a TRACE and not a DEBUG: it is said on every pass of the
+          // poll while the transfer is in flight, and the poll runs as
+          // often as the main loop does.
+          HIDCTL_TRACE("IN re-submit: the transfer is still in flight");
         } else {
           // This one is worth a line: a submit that is refused means the
           // pipe is stuck, and the recovery path will keep trying.
@@ -1421,11 +1425,11 @@ static esp_err_t hid_open_and_configure(uint8_t dev_addr) {
         info->ep_count++;
       }
     }
-    DEBUG_PRINTF("[HIDCTL]   iface %u: class=0x%02X subclass=0x%02X proto=0x%02X eps=%u\n",
+    HIDCTL_DEBUG("  iface %u: class=0x%02X subclass=0x%02X proto=0x%02X eps=%u",
                 ifn, ifd->bInterfaceClass, ifd->bInterfaceSubClass,
                 ifd->bInterfaceProtocol, ifd->bNumEndpoints);
     for (uint8_t e = 0; e < info->ep_count; e++) {
-      DEBUG_PRINTF("[HIDCTL]     ep 0x%02X attr=0x%02X mps=%u\n",
+      HIDCTL_DEBUG("    ep 0x%02X attr=0x%02X mps=%u",
                   info->ep_addr[e], info->ep_attr[e], (unsigned)info->ep_mps[e]);
     }
     D->iface_count++;
@@ -2075,7 +2079,7 @@ static void hid_ctrl_transfer_cb(usb_transfer_t* xfer) {
         for (int i = 0; i < n && len < 100; i++) {
           len += snprintf(line + len, sizeof(line) - len, " %02X", d[i]);
         }
-        DEBUG_PRINTF("[HIDCTL] %s\n", line);
+        HIDCTL_DEBUG("%s", line);
         // Keep the first bytes so they can be read over /json/ar.
         for (uint8_t i = 0; i < HIDCTL_READBACK_BYTES && i < n; i++) {
           D->readback[i] = d[i];
