@@ -112,6 +112,15 @@ struct HidDevice {
   // pass of the poll, because the flush's cancellation has to be
   // delivered before the interface can be released.
   uint8_t out_recovery = 0;       // 0 = none, 1 = halt, 2 = flush, ...
+  // How many times the recovery has run from the start.
+  //
+  // The clear at the end of a round **reports** success even when the pipe
+  // is still dead - the transfer is still queued in the controller - so a
+  // round that ends in a clear does not mean the pipe works.  Without a
+  // count the ladder goes round for ever: halt, flush, clear, try again,
+  // hang, halt, flush, clear... and the device never gets the reclaim and
+  // the reopen that would actually give it a new pipe.
+  uint8_t out_recovery_rounds = 0;
   // The flush emptied the pipe's transfer list. Freeing an endpoint whose
   // pipe still holds one aborts the firmware, so the interface is only
   // taken when this is true.
@@ -690,6 +699,7 @@ static void hid_poll_device(void) {
         esp_err_t err = usb_host_endpoint_halt(D->handle, D->out_ep);
         HIDCTL_LOG("OUT endpoint (device %u): halt -> %s",
                    (unsigned)HIDCTL_D, esp_err_to_name(err));
+        if (D->out_recovery_rounds < 255) D->out_recovery_rounds++;
         D->out_recovery = 2;
         break;
       }
@@ -717,6 +727,19 @@ static void hid_poll_device(void) {
           // The pipe is idle again. The transfers are re-pointed at it and
           // the queue is left alone: the packets in it are still the right
           // ones.
+          //
+          // But the clear only REPORTS that the pipe is idle: the transfer
+          // can still be sitting in the controller, and then the next one
+          // hangs in the same way.  So after a few rounds the ladder goes
+          // on to the reclaim and the reopen, which give the device a pipe
+          // that really is new.
+          if (D->out_recovery_rounds >= HIDCTL_RECOVERY_ROUNDS) {
+            HIDCTL_LOG("OUT endpoint (device %u): the pipe did not come back "
+                       "after %u rounds - the interface is taken again",
+                       (unsigned)HIDCTL_D, (unsigned)D->out_recovery_rounds);
+            D->out_recovery = 4;
+            break;
+          }
           D->out_failed = false;
           D->out_flushed = false;
           D->out_recovery = 0;
@@ -1450,6 +1473,9 @@ static void hid_close_device(void) {
   usb_host_interface_release(hid_client, D->handle, D->iface);
   if (D->in_xfer) D->in_xfer->device_handle = nullptr;
   usb_host_device_close(hid_client, D->handle);
+  // A device that comes back is a new device: its recovery starts from the
+  // top again.
+  D->out_recovery_rounds = 0;
   if (D->out_q_lock) {
     // The lock is only deleted when it is free: deleting a mutex that is
     // held is not allowed, and the producer may be holding it.
@@ -1969,7 +1995,11 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
     D->out_count = D->out_count + 1;
     // Only the failures are worth a line: the reports go out several times a
     // second and the console would drown in them.
-    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+    if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+      // The pipe works. A later wedge starts the recovery from the top
+      // again, and not from wherever it had got to.
+      D->out_recovery_rounds = 0;
+    } else {
       HIDCTL_LOG("OUT endpoint (device %u) transfer status=%d, %d bytes",
                  (unsigned)HIDCTL_D, (int)xfer->status, (int)xfer->actual_num_bytes);
       // The packet did not go out. The pipe may be wedged, and the recovery
@@ -1995,6 +2025,14 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
 // A transfer that never finishes would leave the OUT pipe stuck for ever
 // and every later packet would be refused, so it is given a deadline.
 #define HID_OUT_TIMEOUT_MS 2000
+
+// How many times the recovery may run from the start before the ladder goes
+// on to taking the interface and giving the device a new pipe.
+//
+// A round is halt, flush, clear.  The clear reports success even when the
+// pipe is still dead - the transfer is still queued in the controller - so
+// rounds on their own never get anywhere.
+#define HIDCTL_RECOVERY_ROUNDS 3
 
 static void hid_out_watchdog(void) {
   if (!D->out_in_flight || !D->out_started_ms) return;
