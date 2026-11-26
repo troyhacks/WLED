@@ -172,6 +172,21 @@ CONFIG_LOG_MAXIMUM_LEVEL=3
 #   "Please enable CONFIG_ESP_SYSTEM_USE_FRAME_POINTER option to have a
 #    full backtrace."
 CONFIG_ESP_SYSTEM_USE_FRAME_POINTER=y
+
+# A crash leaves a dump in the flash, at the 64K coredump partition
+# (0x7F0000).  It survives a reflash, and tools/coredump_decode.py reads it
+# without gdb.
+#
+# This has to be on for the rev 1 board too: a hang that is not a fault
+# prints nothing and does not reboot, and the dump is then the only
+# evidence of where it was.
+CONFIG_ESP_COREDUMP_ENABLE=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
+CONFIG_ESP_COREDUMP_STACK_SIZE=0
+CONFIG_ESP_COREDUMP_LOGS=y
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y
