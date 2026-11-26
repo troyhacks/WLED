@@ -47,18 +47,26 @@
   } } while (0)
 
 // The usermod's own messages.
+//
+// USER_PRINTF is a braced block of its own, so the do-block here is closed
+// by ONE brace.  Two would close the function the call sits in as well, and
+// everything after the call would be read as a member declaration.
 #define HIDCTL_INFO(fmt, ...) do { \
     USER_PRINTF("[%lums][HIDCTL] " fmt "\n", (unsigned long)millis(), ##__VA_ARGS__); \
-  } } while (0)
+  } while (0)
 
 #if defined(USERMOD_HIDCTL_DEBUG) || defined(WLED_DEBUG)
-  #define HIDCTL_DEBUG(fmt, ...) USER_PRINTF("[%lums][HIDCTL] " fmt "\n", (unsigned long)millis(), ##__VA_ARGS__)
+  #define HIDCTL_DEBUG(fmt, ...) do { \
+    USER_PRINTF("[%lums][HIDCTL] " fmt "\n", (unsigned long)millis(), ##__VA_ARGS__); \
+  } while (0)
 #else
   #define HIDCTL_DEBUG(fmt, ...) do { } while (0)
 #endif
 
 #if defined(WLED_DEBUG)
-  #define HIDCTL_TRACE(fmt, ...) USER_PRINTF("[%lums][HIDCTL] " fmt "\n", (unsigned long)millis(), ##__VA_ARGS__)
+  #define HIDCTL_TRACE(fmt, ...) do { \
+    USER_PRINTF("[%lums][HIDCTL] " fmt "\n", (unsigned long)millis(), ##__VA_ARGS__); \
+  } while (0)
 #else
   #define HIDCTL_TRACE(fmt, ...) do { } while (0)
 #endif
