@@ -32,6 +32,14 @@ extern HidctlUsermod* hidctlUsermodPtr;
 #define HIDCTL_LOG(fmt, ...) do { if (canUseSerial()) Serial.printf("[HIDCTL] " fmt "\n", ##__VA_ARGS__); } while (0)
 #define HIDCTL_DEBUG(fmt, ...) DEBUG_PRINTF("[HIDCTL] " fmt "\n", ##__VA_ARGS__)
 
+// How many times the OUT pipe's recovery may run from the start before the
+// ladder goes on to taking the interface and giving the device a new pipe.
+//
+// A round is halt, flush, clear.  The clear reports success even when the
+// pipe is still dead - the transfer is still queued in the controller - so
+// rounds on their own never get anywhere.
+#define HIDCTL_RECOVERY_ROUNDS 3
+
 // ---------------------------------------------------------------------------
 // One device on the bus
 // ---------------------------------------------------------------------------
@@ -2025,14 +2033,6 @@ static void hid_out_transfer_cb(usb_transfer_t* xfer) {
 // A transfer that never finishes would leave the OUT pipe stuck for ever
 // and every later packet would be refused, so it is given a deadline.
 #define HID_OUT_TIMEOUT_MS 2000
-
-// How many times the recovery may run from the start before the ladder goes
-// on to taking the interface and giving the device a new pipe.
-//
-// A round is halt, flush, clear.  The clear reports success even when the
-// pipe is still dead - the transfer is still queued in the controller - so
-// rounds on their own never get anywhere.
-#define HIDCTL_RECOVERY_ROUNDS 3
 
 static void hid_out_watchdog(void) {
   if (!D->out_in_flight || !D->out_started_ms) return;
