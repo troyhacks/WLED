@@ -104,19 +104,24 @@ CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
 CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
 #
-# The coprocessor is not reset by the host.
+# The coprocessor is not reset by the host - and that is not something
+# this file can say.  esp_hosted 3.x resets the C6 every time the host
+# boots (it drives the EN line: parked high, pulsed low), and the C6
+# does not come back from that pulse: the SDIO card init times out on
+# the OCR and the link never comes up.  esp_hosted 2.x did not reset it
+# - the C6 boots with the P4 and keeps running, and the host just talks
+# to it.
 #
-# esp_hosted 3.x resets the C6 every time the host boots (it drives the
-# EN line: parked high, pulsed low), and the C6 does not come back from
-# that pulse - the SDIO card init times out on the OCR and the link
-# never comes up.  esp_hosted 2.x did not reset it: the C6 boots with
-# the P4 and keeps running, and the host just talks to it.
+# The option that would say it is CONFIG_ESP_HOSTED_HOST_RESET_GPIO=-1
+# ("no in-band reset"), but the value is checked against a range that
+# comes from CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MIN/MAX, and
+# those are invisible Kconfig symbols - a defaults file cannot set
+# them.  So it needs a patch of the component.
 #
-# So the reset pin is left unset (-1), which is the "no in-band reset"
-# option the component has.
-CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MIN=-1
-CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MAX=54
-CONFIG_ESP_HOSTED_HOST_RESET_GPIO=-1
+# The Wi-Fi is not compiled in this firmware anyway
+# (WLED_USE_ETHERNET_ONLY), so the link is not wanted here; what the
+# transport does cost is the SDMMC slot: it takes the one the SD card
+# wants, and the card falls back to 20 MHz.
 
 # --- filesystem ------------------------------------------------------------
 # The Arduino core's LittleFS library is guarded by CONFIG_LITTLEFS_PAGE_SIZE,
