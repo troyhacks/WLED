@@ -12,6 +12,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_lt8912b.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #endif // CONFIG_IDF_TARGET_ESP32P4
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(WLEDMM_DISPLAY_MODE)
@@ -569,8 +570,13 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
     // (2026-11-15); put it back if a slow monitor needs the longer wait.
     //
     // There are two attempts: this one, and the one inside the rebuild
-    // below, so the worst case is 10 s rather than 30 s.  Watchdog isn't
-    // armed during setup(), so the wait itself is safe.
+    // below, so the worst case is 10 s rather than 30 s.
+    //
+    // The watchdog IS armed by now (enableWatchdog() runs before the
+    // display setup), and the wait can be as long as the watchdog's own
+    // timeout - so the wait has to FEED it.  Otherwise a board with no
+    // monitor attached trips the watchdog on every boot, and a trip that
+    // always happens is a trip that hides the ones that matter.
     const uint32_t timeout_ms = 5000, poll_ms = 200;
     uint32_t elapsed = 0;
     bool ready = false;
@@ -579,6 +585,7 @@ static void hdmi_display_init_timing(const hdmi_dpi_config_t& timing, const char
       ready = esp_lcd_panel_lt8912b_is_ready((esp_lcd_panel_t*)panel_handle);
       if (ready) break;
       USER_PRINT(".");
+      esp_task_wdt_reset();
       vTaskDelay(pdMS_TO_TICKS(poll_ms));
       elapsed += poll_ms;
     }
