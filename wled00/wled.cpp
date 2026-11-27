@@ -1920,7 +1920,7 @@ void WLED::setup() {
   USER_PRINT(F(" rev.")); USER_PRINT(ESP.getChipRevision());
   #endif
   USER_PRINT(F(", ")); USER_PRINT(ESP.getChipCores()); USER_PRINT(F(" core(s)"));
-  USER_PRINT(F(", ")); USER_PRINT(ESP.getCpuFreqMHz()); USER_PRINTLN(F("MHz."));
+  USER_PRINT(F(", ")); USER_PRINT(ESP.getCpuFreqMHz()/1000/1000); USER_PRINTLN(F("MHz."));
 
   // WLEDMM begin
   delay(20); USER_FLUSH(); // drain serial output buffers

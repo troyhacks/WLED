@@ -1313,7 +1313,7 @@ void serializeInfo(JsonObject root)
     root[F("arch")] = ESP.getChipModel();
   #endif
   root[F("core")] = ESP.getSdkVersion();
-  root[F("clock")] = ESP.getCpuFreqMHz();
+  root[F("clock")] = ESP.getCpuFreqMHz()/1000/1000;
   root[F("flash")] = (ESP.getFlashChipSize()/1024)/1024;
   //root[F("maxalloc")] = ESP.getMaxAllocHeap();
   #ifdef WLED_DEBUG
@@ -1334,7 +1334,7 @@ void serializeInfo(JsonObject root)
   #else
   root[F("arch")] = "esp8266";
   root[F("core")] = ESP.getCoreVersion();
-  root[F("clock")] = ESP.getCpuFreqMHz();
+  root[F("clock")] = ESP.getCpuFreqMHz()/1000/1000;
   root[F("flash")] = (ESP.getFlashChipSize()/1024)/1024;
   //root[F("maxalloc")] = ESP.getMaxFreeBlockSize();
   #ifdef WLED_DEBUG
@@ -1400,7 +1400,7 @@ void serializeInfo(JsonObject root)
   snprintf(msgbuf, sizeof(msgbuf)-1, "%s rev.%d", ESP.getChipModel(), ESP.getChipRevision());
   root[F("e32model")] = msgbuf;
   root[F("e32cores")] = ESP.getChipCores();
-  root[F("e32speed")] = ESP.getCpuFreqMHz();
+  root[F("e32speed")] = ESP.getCpuFreqMHz()/1000/1000;
   root[F("e32flash")] = int((ESP.getFlashChipSize()/1024)/1024);
   root[F("e32flashspeed")] = int(ESP.getFlashChipSpeed()/1000000);
   #if !defined (CONFIG_IDF_TARGET_ARCH_RISCV)
@@ -1432,7 +1432,7 @@ void serializeInfo(JsonObject root)
 
   root[F("e32model")] = F("ESP8266  (id 0x") + String(ESP.getChipId(), 16) + String(") ");      // can only be "ESP8266EX" or "ESP8285"
   root[F("e32cores")] = 1;
-  root[F("e32speed")] = ESP.getCpuFreqMHz();
+  root[F("e32speed")] = ESP.getCpuFreqMHz()/1000/1000;
   root[F("e32flash")] = int((ESP.getFlashChipRealSize()/1024)/1024);
   root[F("e32flashspeed")] = int(ESP.getFlashChipSpeed()/1000000);
   // root[F("e32flashmode")] = int(ESP.getFlashChipMode());
