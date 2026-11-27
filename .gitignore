@@ -56,3 +56,4 @@ __pycache__/
 *.pyc
 tools/beat_handoff_frames.json
 .clangd
+.vscode/extensions.json
