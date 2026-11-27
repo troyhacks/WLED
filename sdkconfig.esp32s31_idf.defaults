@@ -30,6 +30,15 @@ CONFIG_SPIRAM_MODE_OCT=y
 
 # --- Ethernet --------------------------------------------------------------
 # The chip has an internal Ethernet MAC - the IDF has an esp32s31 driver for
-# it - but this board has no PHY on it, so the MAC is left off and nothing
-# would use it.  (The P4's file turns it on, because that board has an
-# IP101.)
+# it - and this board has a PHY on it: a YT8531DC, a gigabit part, on the
+# chip's RGMII interface.  So the internal MAC is what brings the Ethernet
+# up, and the PHY's driver is the registry component espressif/yt8531.
+# (The P4's file turns the MAC on too, for the IP101 on that board.)
+CONFIG_ETH_USE_ESP32_EMAC=y
+#
+# The RGMII TX clock comes from the APLL, not from the MPLL.  The MPLL is
+# the Wi-Fi's (it runs at 400 MHz), and the RGMII TX clock has to be a
+# multiple of 125 MHz - so the two cannot share it.  The APLL's top is
+# 125 MHz, which is exactly the gigabit RGMII clock, and the I2S (the
+# AudioReactive) runs off the XTAL, so the APLL is free for the MAC.
+CONFIG_ETH_EMAC_RGMII_TX_CLK_SRC_APLL=y

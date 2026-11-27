@@ -717,7 +717,7 @@ void serializeConfig() {
   wifi[F("sleep")] = !noWifiSleep;
   wifi[F("phy")] = force802_3g;
 
-#if defined(WLED_USE_ETHERNET) && !defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(WLED_USE_ETHERNET) && defined(WLED_ETH_SHIELD_TABLE)
   JsonObject ethernet = doc.createNestedObject("eth");
   ethernet["type"] = ethernetType;
   if (ethernetType != WLED_ETH_NONE && ethernetType < WLED_NUM_ETH_TYPES) {

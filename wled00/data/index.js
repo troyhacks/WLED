@@ -730,6 +730,11 @@ ${(() => {
       html += inforow("Ethernet IP", eth.ip);
     }
     html += inforow("Ethernet MAC", eth.mac);
+    if (eth.speed !== undefined) {
+      html += inforow("Ethernet Speed", `${eth.speed} Mbps${eth.link === false ? " (no link)" : ""}`);
+    } else if (eth.link === false) {
+      html += inforow("Ethernet Link", "Down");
+    }
   }
   if (i.network.default_route) {
     html += inforow("Priority", i.network.default_route);

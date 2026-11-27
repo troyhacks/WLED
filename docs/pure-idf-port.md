@@ -345,6 +345,65 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
 
 
 
+## The S31's Ethernet
+
+The ESP32-S31-Function-CoreBoard-1 has a **gigabit** PHY on it - a YT8531DC
+- and it is wired to the chip's **RGMII** interface, not the RMII one the P4
+uses.  So the Ethernet is a different piece of hardware from the P4's, and it
+takes a different set of pins:
+
+| signal | GPIO | signal | GPIO |
+| --- | --- | --- | --- |
+| MDC | 5 | TXD0-3 | 8-11 |
+| MDIO | 6 | TX_CTL | 12 |
+| PHY power/reset | 7 | TX_CLK | 13 |
+| | | RX_CLK | 14 |
+| | | RX_CTL | 15 |
+| | | RXD3-0 | 16-19 |
+
+The PHY drives the RX and the TX clock, and it is the source of the 50 MHz
+reference, so the chip's own reference clock pin is not used.  The PHY's
+driver is the registry component `espressif/yt8531` (the IP101, the P4's,
+left the IDF in 6.0 the same way).
+
+Two things are worth knowing, because both of them fail in a way that does
+not say what is wrong:
+
+* **The RGMII TX clock comes from the APLL, not from the MPLL.**  The TX
+  clock has to be a multiple of 125 MHz, and the only clock that can do
+  that without the Wi-Fi in the way is the APLL - whose top is 125 MHz,
+  exactly the gigabit RGMII clock.  The MPLL is the Wi-Fi's (it runs at
+  400 MHz), and the two cannot share it: with the default
+  `CONFIG_ETH_EMAC_RGMII_TX_CLK_SRC_AUTO` the driver picks the MPLL, finds
+  it occupied, and gives up with
+
+  ```
+  E (2784) esp.emac: emac_set_freq_ref_out_clock(267): EMAC out frequency
+      cannot be used. It would work at an unusable frequency 133333333 Hz
+  ```
+
+  So `CONFIG_ETH_EMAC_RGMII_TX_CLK_SRC_APLL=y` is in the S31's sdkconfig
+  file.  The I2S (the AudioReactive) runs off the XTAL, so the APLL is
+  free for the MAC.
+* **The Ethernet's event handler has to be registered before the driver is
+  started.**  The link can come up in the same tick as `esp_eth_start()`,
+  and the event is then missed - the link comes up, the DHCP client never
+  starts, and there is nothing in the log to say why.
+
+The PHY also needs its RGMII clock delays set: about 2 ns on the RX clock
+(the coarse stage) and about 2 ns on the TX clock (13 steps of 150 ps).
+The Arduino core sets the same delays on this board, through the driver's
+`YT8531_ETH_CMD_S_RGMII_CLK_DELAY` ioctl.
+
+The S31 has a radio of its own, so the Wi-Fi and the Ethernet coexist
+without a hosted coprocessor in the way.  `WLED_USE_ETHERNET_ONLY` is still
+available as an option, but it is not what this board wants - unlike the P4,
+where the SDIO link to the C6 is the price of the Wi-Fi.
+
+The link speed is in the info page, next to the Wi-Fi's details:
+`/json/info` carries it under `network.ethernet.speed` (1000, 100 or 10).
+
+
 ## The rev 3 environment
 
 The ESP32-P4 came in two silicon revisions: the "ES pre rev.300" chip and the

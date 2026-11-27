@@ -7,8 +7,13 @@ static const char *TAG = "WLED";
   // The IP101 PHY driver left ESP-IDF in 6.0 - it is the registry component
   // espressif/ip101 now, and this is the header that declares it.  The
   // Arduino build still has the driver inside the IDF, so it does not need
-  // this.  The PHY on the P4's board is an IP101; the S31 has none.
+  // this.  The PHY on the P4's board is an IP101.
   #include "esp_eth_phy_ip101.h"
+#endif
+#if defined(WLED_BUILD_IDF) && defined(CONFIG_ETH_USE_ESP32_EMAC) && defined(CONFIG_IDF_TARGET_ESP32S31)
+  // Same story for the S31's board: its PHY is a YT8531DC, and its driver
+  // is the registry component espressif/yt8531.
+  #include "esp_eth_phy_yt8531.h"
 #endif
 #if !defined(CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT)
   #define CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT 0
@@ -1320,6 +1325,14 @@ static void wifi_event_handler(void* event_handler_arg, esp_event_base_t event_b
 static void eth_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
   if (event_id == ETHERNET_EVENT_CONNECTED) {
     USER_PRINTLN("Event: Ethernet Link Up");
+    // The speed the PHY negotiated - 1000, 100 or 10 Mbps.
+    {
+      eth_speed_t speed = ETH_SPEED_10M;
+      if (esp_eth_ioctl(eth_handle, ETH_CMD_G_SPEED, &speed) == ESP_OK) {
+        USER_PRINTF("Event: Ethernet Link Speed: %d Mbps\n",
+                    speed == ETH_SPEED_1000M ? 1000 : speed == ETH_SPEED_100M ? 100 : 10);
+      }
+    }
     eth_link_up = true;  // Physical link is up (Layer 2)
     eth_is_connected = false;
   } else if (event_id == ETHERNET_EVENT_DISCONNECTED) {
@@ -1730,6 +1743,54 @@ void WLED::setup() {
         // names its fields out of order, and C++ does not allow that.  The
         // fields are set out instead, in the order the struct declares them,
         // with the same values.
+        #if defined(CONFIG_IDF_TARGET_ESP32S31)
+        // The S31's board: a gigabit PHY (a YT8531DC) on the chip's RGMII
+        // interface.  The pins are the board's own:
+        //   SMI    MDC 5, MDIO 6
+        //   RGMII  TXD0-3 8-11, TX_CTL 12, TX_CLK 13
+        //         RX_CLK 14, RX_CTL 15, RXD3-0 16-19
+        // The PHY drives the RX and the TX clock, and it is the source of
+        // the 50 MHz reference clock (the chip's own reference clock pin is
+        // not used), so clock_phy_ref_gpio is -1.
+        eth_esp32_emac_config_t esp32_emac_config = {
+            .smi_gpio = {
+                .mdc_num = 5,
+                .mdio_num = 6,
+            },
+            .interface = EMAC_DATA_INTERFACE_RGMII,
+            .clock_config = {
+                .rgmii = {
+                    .clock_rx_gpio = 14,
+                    .clock_tx_gpio = 13,
+                    .clock_phy_ref_gpio = -1,
+                },
+            },
+            .dma_burst_len = ETH_DMA_BURST_LEN_16,
+            .intr_priority = 0,
+            .emac_dataif_gpio = {
+                .rgmii = {
+                    .tx_ctl_num = 12,
+                    .txd0_num = 8,
+                    .txd1_num = 9,
+                    .txd2_num = 10,
+                    .txd3_num = 11,
+                    .rx_ctl_num = 15,
+                    .rxd0_num = 19,
+                    .rxd1_num = 18,
+                    .rxd2_num = 17,
+                    .rxd3_num = 16,
+                },
+            },
+            .clock_config_out_in = {
+                .rgmii = {
+                    .clock_rx_gpio = -1,
+                    .clock_tx_gpio = -1,
+                    .clock_phy_ref_gpio = -1,
+                },
+            },
+            .mdc_freq_hz = 0,
+        };
+        #else
         eth_esp32_emac_config_t esp32_emac_config = {
             .smi_gpio = {
                 .mdc_num = 31,
@@ -1762,22 +1823,47 @@ void WLED::setup() {
             },
             .mdc_freq_hz = 0,
         };
+        #endif
         #else
         eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
         #endif
-        esp32_emac_config.smi_gpio.mdc_num = 31;
-        esp32_emac_config.smi_gpio.mdio_num = 52;
         eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
         eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+        esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
+        esp_eth_phy_t *phy = nullptr;
+        #if defined(CONFIG_IDF_TARGET_ESP32S31)
+        // The S31's board has a YT8531DC on it.  Its address is strapped
+        // on the board and the driver finds it, and GPIO 7 is the PHY's
+        // power line - the driver pulses it to bring the PHY up.
+        phy_config.phy_addr = ESP_ETH_PHY_ADDR_AUTO;
+        phy_config.reset_gpio_num = 7;
+        phy = esp_eth_phy_new_yt8531(&phy_config);
+        #else
+        esp32_emac_config.smi_gpio.mdc_num = 31;
+        esp32_emac_config.smi_gpio.mdio_num = 52;
         phy_config.phy_addr = 1; // Set PHY address
         phy_config.reset_gpio_num = 51; // Set PHY reset GPIO number
-
-        esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
-        esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);
+        phy = esp_eth_phy_new_ip101(&phy_config);
+        #endif
 
         esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
-        
+
         ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
+
+        #if defined(CONFIG_IDF_TARGET_ESP32S31)
+        // RGMII needs the clock delays set on the PHY: about 2 ns on the RX
+        // clock (the coarse stage) and about 2 ns on the TX clock (13 steps
+        // of 150 ps).  The Arduino core sets the same delays on this board.
+        {
+          yt8531_rgmii_clk_delay_config_t delays = {
+              .rxc_dly_en = true,
+              .rx_delay_sel = 0,
+              .tx_delay_sel = 13,
+              .tx_delay_sel_fe = 13,
+          };
+          ESP_ERROR_CHECK(esp_eth_ioctl(eth_handle, static_cast<esp_eth_io_cmd_t>(YT8531_ETH_CMD_S_RGMII_CLK_DELAY), &delays));
+        }
+        #endif
 
 #ifdef WLED_ENABLE_COLORLIGHT
         // ColorLight mode: Skip IP stack attachment for raw Layer 2 operation
@@ -1787,16 +1873,20 @@ void WLED::setup() {
         Network.setHostname(hostname);
 #endif
 
-        // Start Ethernet driver
-        ESP_ERROR_CHECK(esp_eth_start(eth_handle));
-
-        // Register event handler for Ethernet events
+        // Register event handler for Ethernet events.
+        // The handler is registered BEFORE the driver is started: the link
+        // can come up in the same tick as the start, and the event would
+        // then be missed.
         ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
 
 #ifndef WLED_ENABLE_COLORLIGHT
         // Only register IP events if not using ColorLight
         ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL));
 #endif
+
+        // Start Ethernet driver
+        ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+
       #elif defined(CONFIG_ETH_USE_SPI_ETHERNET) && defined(CONFIG_ETH_SPI_ETHERNET_W5500)
         USER_PRINTLN("Setup W5500 for ESP32-C5 (IDF v5)...");
 

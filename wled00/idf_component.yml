@@ -90,3 +90,13 @@ dependencies:
     version: "1.1.4"
     rules:
       - if: target in [esp32p4]
+
+  # --- the ESP32-S31's own hardware ------------------------------------------
+  #
+  # The Ethernet PHY on the S31's board: a YT8531DC, a gigabit part, on the
+  # chip's RGMII interface.  Its driver left the IDF in 6.0 too - it is the
+  # registry component espressif/yt8531 now, the same as the IP101 above.
+  espressif/yt8531:
+    version: "0.2.0"
+    rules:
+      - if: target in [esp32s31]

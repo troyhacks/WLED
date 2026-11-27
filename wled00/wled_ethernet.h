@@ -5,6 +5,18 @@
 
 #ifdef WLED_USE_ETHERNET
 
+// The table of Ethernet shields below is the classic ESP32's: the RMII
+// shields with a LAN8720 on them, on pins the chip has no say in.  The
+// ESP32-P4 and the ESP32-S31 have their own Ethernet - an EMAC with the
+// PHY on the board - and WLED brings those up itself (wled00/wled.cpp),
+// so neither of them has a table.
+//
+// WLED_ETH_SHIELD_TABLE is defined when the table is there.
+#if !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32S31)
+  #define WLED_ETH_SHIELD_TABLE 1
+#endif
+
+#ifdef WLED_ETH_SHIELD_TABLE
 // For ESP32, the remaining five pins are at least somewhat configurable.
 // eth_address  is in range [0..31], indicates which PHY (MAC?) address should be allocated to the interface
 // eth_power    is an output GPIO pin used to enable/disable the ethernet port (and/or external oscillator)
@@ -30,6 +42,8 @@ extern const ethernet_settings ethernetBoards[];
 
 #define WLED_ETH_RSVD_PINS_COUNT 6
 extern const managed_pin_type esp32_nonconfigurable_ethernet_pins[WLED_ETH_RSVD_PINS_COUNT];
+#endif // WLED_ETH_SHIELD_TABLE
+
 #endif
 
 #endif

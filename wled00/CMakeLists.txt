@@ -121,8 +121,8 @@ set(WLED_APP_REQUIRES
 
 # The ESP32-P4's own hardware: the display path, the hosted coprocessor,
 # the Ethernet PHY and the USB mass storage host.  The S31 has a radio of
-# its own and no PHY on this board, and none of these components builds
-# there - so they are the P4's alone.
+# its own, and none of these components builds there - so they are the P4's
+# alone.  (The S31 has a PHY of its own, but a different one: see below.)
 #
 # esp_hosted 3.x registers itself under this name (not the
 # espressif__esp_hosted the managed component would suggest).
@@ -142,6 +142,15 @@ if("${IDF_TARGET}" STREQUAL "esp32p4")
         # now (espressif/ip101).
         espressif__ip101
         espressif__usb_host_msc
+    )
+endif()
+
+# The ESP32-S31's own hardware: the Ethernet PHY on its board - a YT8531DC,
+# a gigabit part, on the chip's RGMII interface.  Its driver is a registry
+# component too (espressif/yt8531), for the same reason the IP101 is one.
+if("${IDF_TARGET}" STREQUAL "esp32s31")
+    list(APPEND WLED_APP_REQUIRES
+        espressif__yt8531
     )
 endif()
 

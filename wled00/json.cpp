@@ -1210,6 +1210,14 @@ void serializeInfo(JsonObject root)
       sprintf(ip_str, IPSTR, IP2STR(&ip_info.ip));
       eth_obj["ip"] = ip_str;
     }
+    // The speed the PHY negotiated with the other end - 1000, 100 or 10
+    // Mbps - and whether the link is up at all.
+    eth_speed_t eth_speed = ETH_SPEED_10M;
+    if (esp_eth_ioctl(eth_handle, ETH_CMD_G_SPEED, &eth_speed) == ESP_OK) {
+      eth_obj["speed"] = (eth_speed == ETH_SPEED_1000M) ? 1000
+                         : (eth_speed == ETH_SPEED_100M) ? 100 : 10;
+    }
+    eth_obj["link"] = eth_link_up;
   }
 
   // --- Routing Information Section ---
