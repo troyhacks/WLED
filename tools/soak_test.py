@@ -52,7 +52,7 @@ while time.time() - t_start < DURATION:
             "qual": t["quality"],
             "ws": info.get("ws"),
             "pub_waits": t.get("pub_waits"),
-            "pub_spins": t.get("pub_spins"),
+            "pub_wait_ms": t.get("pub_wait_ms"),
             "heap": info.get("freeheap"),
         }
         if prev:
@@ -67,7 +67,7 @@ while time.time() - t_start < DURATION:
             print(
                 "t=%6.1f  fps=%3s  analysis=%5.1f  udp=%6.1f/s  beat=%5.2f/s  "
                 "bpm=%7.2f score=%.2f  F1 out=%s in=%s stuck=%s busy=%s  "
-                "pub_w=%s pub_s=%s lat_ar=%.2fs lat_info=%.2fs heap=%s"
+                "pub_w=%s pub_ms=%s lat_ar=%.2fs lat_info=%.2fs heap=%s"
                 % (
                     row["t"],
                     row["fps"],
@@ -81,7 +81,7 @@ while time.time() - t_start < DURATION:
                     row["stuck"],
                     row["busy"],
                     row["pub_waits"],
-                    row["pub_spins"],
+                    row["pub_wait_ms"],
                     row["lat_ar"],
                     row["lat_info"],
                     row["heap"],

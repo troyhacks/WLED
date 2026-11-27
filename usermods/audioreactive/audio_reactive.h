@@ -8422,11 +8422,17 @@ class AudioReactive : public Usermod {
         t["hint"]          = (int)arTempoHintDir();
         t["hint_bpm"]      = (double)arTempoHintMinBpm();
         // The shared document's contention: how many acquisitions had to
-        // wait for it, and how many spins they took.  The lock is a SPIN
-        // lock, so a waiter burns a core until the holder lets go - these
-        // two say whether that is what the board is doing.
+        // wait for it, and how long they waited in total.  The lock is a
+        // MUTEX, so a waiter blocks instead of burning a core - these two
+        // say whether the document is the thing the board is waiting on.
         t["pub_waits"]     = (int)arPublishWaitCount();
-        t["pub_spins"]     = (int)arPublishSpinCount();
+        t["pub_wait_ms"]   = (int)arPublishWaitMillis();
+        // The timeouts: how many times a waiter gave up on the lock and
+        // went on without it, and WHO held it when that happened.  A
+        // non-zero count here is a fault, and the holder's name says
+        // which task it is.
+        t["pub_timeouts"]  = (int)arPublishTimeoutCount();
+        t["pub_holder"]    = arPublishHolderName();
         // The tracker's own settings, so the numbers can be read against the
         // tolerance that produced them.
         t["tolerance_ms"] = (double)st.tempoTolMs;

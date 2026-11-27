@@ -1,6 +1,8 @@
 #ifndef WLED_AR_PUBLISH_H
 #define WLED_AR_PUBLISH_H
 
+#include <freertos/FreeRTOS.h>   // must come first: semphr.h insists on it
+#include <freertos/semphr.h>
 #include <stdint.h>
 
 /*
@@ -30,17 +32,37 @@
 
 // The publish critical section.
 //
-// The section is a 16-byte copy and a pointer store - a few hundred
-// nanoseconds - so a spin lock is the right tool: neither task can be blocked
-// by the other for longer than that.
+// The section is a 16-124 byte copy and a pointer store - a few hundred
+// nanoseconds - so it LOOKS like a job for a spin lock.  It is not, and a
+// spin lock here wedges the board.
+//
+// A waiter on a spin lock BURNS a core.  On a two-core board, two waiters
+// take both cores away from the holder, so the holder can neither finish nor
+// release, and the waiters spin for ever: the idle tasks never run, the task
+// watchdog fires and the board reboots.  taskYIELD() does not save it - it
+// only hands the CPU to a task of the SAME priority, and the holder is a
+// lower one.
+//
+// So the lock is a FreeRTOS MUTEX: the waiter BLOCKS (the idle tasks keep
+// running and the watchdog stays fed) and the priority inheritance a mutex
+// carries hands the CPU to the holder even when the waiter has the higher
+// priority.
 //
 // It is NOT recursive. Taking it twice from the same task deadlocks, so
 // anything that already holds it uses the *Locked variants below.
-// The wait counters: how many acquisitions of the document had to wait,
-// and how many spins they took.  The lock is a spin lock, so a waiter
-// burns a core until the holder lets go - see ArPublishGuard.
+//
+// The wait counters: how many acquisitions of the document had to wait, and
+// how long they waited in total.
 uint32_t arPublishWaitCount(void);
-uint32_t arPublishSpinCount(void);
+uint32_t arPublishWaitMillis(void);
+
+// How many times a waiter gave up on the lock and went on without it, and
+// the name of the task that held the lock last.
+//
+// A timeout means the holder cannot let go, and the last holder IS that
+// task - so the name says who is stuck.
+uint32_t arPublishTimeoutCount(void);
+const char* arPublishHolderName(void);
 
 class ArPublishGuard {
 public:
@@ -48,6 +70,10 @@ public:
   ~ArPublishGuard();
   ArPublishGuard(const ArPublishGuard&) = delete;             // not copyable
   ArPublishGuard& operator=(const ArPublishGuard&) = delete;
+private:
+  SemaphoreHandle_t m_mutex = nullptr;   // the mutex this guard holds
+  uint32_t m_waitedUs = 0;               // how long the take took
+  bool     m_held = false;              // did the take succeed?
 };
 
 // Publish one whole frame of RTA bars (NUM_RTA_CHANNELS bytes).

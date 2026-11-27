@@ -9,77 +9,181 @@
 
 #include "ar_publish.h"
 
-#include <atomic>
 #include <esp_log.h>       // the console, for the stall warning
 #include <esp_random.h>    // the hardware random, for the fake fill's roll
 #include <esp_timer.h>     // the native timer, for the handoff's decay
 #include <freertos/FreeRTOS.h>  // must come first: task.h insists on it
-#include <freertos/task.h>      // taskYIELD(), for the spin that gives the holder the CPU back
+#include <freertos/semphr.h>    // the mutex that IS the publish lock
+#include <freertos/task.h>      // the tick and the priorities
 #include <math.h>
 #include <string.h>
 
 // The log's tag, for the stall warning below.
 static const char* TAG = "AR";
 
-// The one publish lock.
-static std::atomic<uint8_t> arPublishLock{0};
+// The one publish lock: a FreeRTOS MUTEX.
+//
+// It is a mutex because of what a spin lock does to a two-core board.
+//
+// MEASURED (2026-11-26, the watchdog hang): the board hung with the idle
+// tasks starved and the task watchdog firing:
+//
+//   E task_wdt:  - wled_main (CPU 0)
+//   E task_wdt:  - IDLE1 (CPU 1)
+//   E task_wdt:  - IDLE0 (CPU 0)
+//   E task_wdt: CPU 0: wled_main
+//   E task_wdt: CPU 1: AudioTask
+//
+// Symbolised, BOTH of them were in the ACQUIRE - neither of them held it:
+//
+//   CPU 0: ArPublishGuard::ArPublishGuard() -> arCopyTempo -> arGetBeatSource
+//          -> beatClock -> mode_beat_sweep -> WS2812FX::service -> WLED::loop
+//   CPU 1: ArPublishGuard::ArPublishGuard() -> estFinalise (audio_reactive.h)
+//
+// So the holder was somebody else - a task that had the lock and could not
+// let go of it - and the two waiters took BOTH cores away from it.  That is
+// the trap of a spin lock on a two-core board: a waiter BURNS a core, and
+// with two waiters there is no core left for the holder.  The holder cannot
+// finish, so it cannot release, so the waiters spin for ever.  taskYIELD()
+// does not save it: it only hands the CPU to a task of the SAME priority, and
+// the holder is a lower one.
+//
+// A mutex fixes both halves of that.  The waiter BLOCKS - so the idle tasks
+// keep running and the watchdog stays fed - and the priority inheritance a
+// FreeRTOS mutex carries hands the CPU to the holder even when the waiter
+// has the higher priority.  The critical sections are a 16-124 byte copy
+// and a pointer store, so blocking on one of them costs nothing.
+//
+// It is NOT recursive, exactly as the spin lock was not: taking it twice
+// from the same task deadlocks, so a caller that already holds it uses the
+// *Locked variants (arCopyRtaBandsLocked, arCopyTempoLocked).
+static SemaphoreHandle_t arPublishMutex = nullptr;
 
-// How often a reader had to WAIT for the document, and how many spins it
-// took.
+// The mutex, made on first use.
 //
-// The lock is a SPIN lock, so a waiter burns a core until the holder lets
-// go - and a holder that is slow makes every other core slow with it.
+// The creation is inside a critical section, so two tasks racing here still
+// end up with ONE mutex - and two mutexes would be no lock at all.
+static SemaphoreHandle_t arPublishGetMutex(void) {
+  if (arPublishMutex == nullptr) {
+    static portMUX_TYPE initMux = portMUX_INITIALIZER_UNLOCKED;
+    portENTER_CRITICAL(&initMux);
+    if (arPublishMutex == nullptr) {
+      arPublishMutex = xSemaphoreCreateMutex();
+      if (arPublishMutex == nullptr) {
+        // No lock at all: the board lives, but a frame can tear.  It is
+        // said out loud, because it is not a state anybody should find.
+        ESP_LOGE(TAG, "the publish lock could not be created");
+      }
+    }
+    portEXIT_CRITICAL(&initMux);
+  }
+  return arPublishMutex;
+}
+
+// How often a reader had to WAIT for the document, and how long it waited.
 //
-// MEASURED (2026-11-25): the board's Background loop was "Running" with a
+// A wait is contention, not a fault: the critical sections are short, so a
+// wait means the section was longer than the gap between two publishers.
+//
+// MEASURED (2026-11-25): the board's Background loop was Running with a
 // third of a core, the LED strip was at 5 fps, and the task list could not
 // say what was spinning.  These counters say whether the document is the
 // thing.
 static uint32_t arPublishWaits = 0;   // how many acquisitions had to wait
-static uint32_t arPublishSpins = 0;   // ... and how many spins they took
+static uint64_t arPublishWaitUs = 0;  // ... and how long they waited, in us
+
+// How many times a waiter gave up on the lock and went on without it.
+static uint32_t arPublishTimeouts = 0;
+
+// The name of the task that held the lock last, copied under the lock.
+//
+// When a waiter times out, the holder cannot let go - so the last holder IS
+// the stuck one, and its name is the answer to "who is holding it?".
+static char arPublishHolder[16] = "none";
+
+// A wait shorter than this is not a wait: the mutex itself costs a little,
+// and a waiter that did not really wait is not contention.
+#define AR_PUBLISH_WAIT_MIN_US 200
+
+// A wait this long is not a wait, it is a stall, and it is worth saying out
+// loud: the console is the only thing that survives a wedge, because the
+// web server does not.
+#define AR_PUBLISH_STALL_US 100000   // 100 ms
+
+// How long a waiter waits for the lock before it goes on WITHOUT it.
+//
+// The critical sections are microseconds, so this is a thousand times the
+// longest hold that should happen.  It is there because a holder that CANNOT
+// let go - a task blocked in a console write, or one that died inside the
+// section - would otherwise take the whole board down with it, and a board
+// that is dark is worse than one that shows a torn frame for a moment.
+//
+// With the mutex alone the board would still die: every publisher would
+// block on a lock that is never released, the LED loop would stop feeding
+// the watchdog and the board would reboot for ever.  So a waiter that has
+// waited long enough goes on WITHOUT the lock, and says so.
+#define AR_PUBLISH_LOCK_TIMEOUT_MS 20
+
+// When the "the holder is stuck" message was last said, so it is said once
+// a second and not once a frame.
+static int64_t arPublishTimeoutLogAt = 0;
 
 ArPublishGuard::ArPublishGuard() {
-  uint32_t spins = 0;
-  while (arPublishLock.exchange(1, std::memory_order_acquire)) {
-    spins++;
-    // A bare spin on a cross-core lock is a trap.
-    //
-    // The web server's task is priority 10 and it is NOT pinned to a core,
-    // so it can land on the same core as the analysis task - which holds
-    // the document for a few microseconds.  The waiter preempts the
-    // holder, the holder cannot run because it is the lower priority, and
-    // the waiter spins for ever: a livelock, and the whole board goes
-    // with it, because the web server's task at priority 10 also starves
-    // the main loop.
-    //
-    // MEASURED (2026-11-25): the board wedged with the web server's task
-    // and the analysis task both spinning - and the ping still answered,
-    // because the network stack was fine.
-    //
-    // So the waiter YIELDS: the holder gets the CPU back, finishes its
-    // few microseconds, and lets go.
-    if ((spins & 0x3F) == 0) taskYIELD();
-  }
-  if (spins) {
-    arPublishWaits++;
-    arPublishSpins += spins;
-    // A wait this long is not a wait, it is a stall, and it is worth
-    // saying out loud: the console is the only thing that survives the
-    // wedge, because the web server does not.
-    if (spins > 200000) {
-      ESP_LOGE(TAG, "the publish lock was held for %u spins",
-               (unsigned)spins);
+  m_mutex = arPublishGetMutex();
+  if (m_mutex == nullptr) return;    // no lock: see the note above
+  const int64_t t0 = esp_timer_get_time();
+  if (xSemaphoreTake(m_mutex, pdMS_TO_TICKS(AR_PUBLISH_LOCK_TIMEOUT_MS)) != pdTRUE) {
+    // The holder could not let go.  The board goes on without the lock: a
+    // frame may tear, but the wall keeps running and the watchdog keeps
+    // being fed.  It is said out loud, because it is the one thing that
+    // must not pass unnoticed.
+    m_held = false;
+    arPublishTimeouts++;
+    const int64_t now = esp_timer_get_time();
+    if ((now - arPublishTimeoutLogAt) > 1000000LL) {
+      arPublishTimeoutLogAt = now;
+      ESP_LOGE(TAG, "the publish lock is still held after %u ms - the holder (%s) is stuck; going on without it",
+               (unsigned)AR_PUBLISH_LOCK_TIMEOUT_MS, arPublishHolder);
     }
+    return;
+  }
+  m_held = true;
+  // Who holds it, for the diagnostic above.
+  const char* name = pcTaskGetName(xTaskGetCurrentTaskHandle());
+  if (name) {
+    strncpy(arPublishHolder, name, sizeof(arPublishHolder) - 1);
+    arPublishHolder[sizeof(arPublishHolder) - 1] = '\0';
+  }
+  const int64_t waited = esp_timer_get_time() - t0;
+  m_waitedUs = (waited > 0) ? (uint32_t)waited : 0;
+  if (m_waitedUs > AR_PUBLISH_WAIT_MIN_US) {
+    arPublishWaits++;
+    arPublishWaitUs += m_waitedUs;
   }
 }
 
 ArPublishGuard::~ArPublishGuard() {
-  arPublishLock.store(0, std::memory_order_release);
+  if (m_mutex == nullptr || !m_held) return;
+  xSemaphoreGive(m_mutex);
+  // The stall warning is printed AFTER the lock is given.  A console write
+  // can block - the USB CDC's FIFO is finite - and a task that blocks while
+  // holding the publish lock is exactly the failure this lock exists to
+  // prevent, so nothing is printed while the lock is held.
+  if (m_waitedUs > AR_PUBLISH_STALL_US) {
+    ESP_LOGE(TAG, "the publish lock was held for %u ms",
+             (unsigned)(m_waitedUs / 1000));
+  }
 }
 
-// The wait counters, for a reader that wants to know whether the document
-// is the thing that is slow.
+// The wait counters, for a reader that wants to know whether the document is
+// the thing that is slow.
 uint32_t arPublishWaitCount(void) { return arPublishWaits; }
-uint32_t arPublishSpinCount(void) { return arPublishSpins; }
+uint32_t arPublishWaitMillis(void) { return (uint32_t)(arPublishWaitUs / 1000ULL); }
+uint32_t arPublishTimeoutCount(void) { return arPublishTimeouts; }
+
+// The name of the last task that held the lock.
+const char* arPublishHolderName(void) { return arPublishHolder; }
+
 
 // The published RTA frame: double buffered, the index names the published
 // one. Both the buffer and the index are only touched under the lock.

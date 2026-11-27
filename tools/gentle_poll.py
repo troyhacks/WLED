@@ -54,10 +54,10 @@ while time.time() - t_start < DURATION:
             h = ar.get("HIDCTL", {})
             tm = A["tempo"]
             line = ("t=%6.1f  bpm=%7.2f score=%.2f beat=%d  analysis=%d frames  "
-                    "pub_w=%s pub_s=%s  F1 out=%s in=%s stuck=%s busy=%s  lat=%.2fs"
+                    "pub_w=%s pub_ms=%s  F1 out=%s in=%s stuck=%s busy=%s  lat=%.2fs"
                     % (now, tm["bpm"], tm["score"], tm["beat_in_bar"],
                        A["timing_us"]["frames_total"], tm.get("pub_waits"),
-                       tm.get("pub_spins"), h.get("out_sent"), h.get("reports_in"),
+                       tm.get("pub_wait_ms"), h.get("out_sent"), h.get("reports_in"),
                        h.get("out_stuck"), h.get("out_busy"), lat))
             print(line, flush=True)
             prev_ar = t
