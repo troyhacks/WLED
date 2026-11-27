@@ -1,4 +1,4 @@
-# WLED-MM-P4 - ESP-IDF configuration for the pure IDF build.
+# WLED-MM - ESP-IDF configuration for the pure IDF build.
 #
 # These values were taken from the Arduino core's own P4 sdkconfig
 # (framework-arduinoespressif32-libs/esp32p4/sdkconfig) so the pure IDF build
@@ -7,8 +7,12 @@
 #
 # Arduino-only options (CONFIG_ARDUINO_RUNNING_CORE, CONFIG_ARDUINO_EVENT_*,
 # CONFIG_OTA_VERSION_FORCE_SLAVEFW) are gone: there is no Arduino core any more.
-
-CONFIG_IDF_TARGET="esp32p4"
+#
+# THIS FILE IS THE PART EVERY CHIP SHARES.  What belongs to one chip alone
+# lives in that chip's own file - sdkconfig.esp32p4_idf.defaults for the P4,
+# sdkconfig.esp32s31_idf.defaults for the S31 - and pio-scripts/env_sdkconfig.py
+# puts the chip's file after this one, so that it wins.  A chip's file that is
+# missing costs that chip its own settings and nothing else.
 
 # --- flash -----------------------------------------------------------------
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
@@ -47,16 +51,12 @@ CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_BOOTLOADER_LOG_LEVEL_ERROR=y
 CONFIG_LOG_BOOTLOADER_LEVEL_ERROR=y
 CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
-# --- the P4's memory layout ------------------------------------------------
-# The P4 changed its SRAM map in rev 3.  The board is an "ES pre rev.300"
-# part, and the Arduino build runs on ESP-IDF 5.3, which only had the older
-# layout - so the pure IDF build has to use the same one, or the linker is
-# given a memory map that does not match the sections script.
-CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 
 # --- PSRAM -----------------------------------------------------------------
+# The mode is the chip's own: the P4's PSRAM is a hex chip, the S31's is an
+# octal one, and the mode is a Kconfig choice - so each chip's file picks
+# its own (the P4's is hex, the S31's is octal).
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
@@ -64,8 +64,6 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 # --- CPU / task model ------------------------------------------------------
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
-CONFIG_ESP32P4_REV_MIN_1=y
 CONFIG_FREERTOS_HZ=1000
 # The Arduino build ran the WLED main loop on a 12000 byte task pinned to core 0
 # (see wled00/wled00.ino, "Core 0 Migrator").  The IDF build does the same with
@@ -76,52 +74,13 @@ CONFIG_FREERTOS_HZ=1000
 # register dump on it - with the USB stack in its error path, that overflowed
 # a 4096 byte stack and the board panicked with "Stack protection fault".
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
-# The Arduino build forced the TCP/IP task onto core 1 (platformio.ini:
-# -D CONFIG_LWIP_TCPIP_TASK_AFFINITY=1 / ..._CPU1=1).
-CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=n
-CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
-CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x1
 
-# --- Ethernet (the P4 has no Wi-Fi radio; the C6 coprocessor is esp-hosted) --
-CONFIG_ETH_USE_ESP32_EMAC=y
+# --- Ethernet ---------------------------------------------------------------
+# The SPI Ethernet driver is for every chip that has one.  The internal MAC
+# (the EMAC) is the chip's own: the P4 has one and the board has an IP101
+# PHY on it, the S31 has one too, but this board has no PHY - so the EMAC
+# is the P4's setting and lives in the P4's file.
 CONFIG_ETH_USE_SPI_ETHERNET=y
-
-# --- The hosted coprocessor ----------------------------------------------
-#
-# ESP-IDF 6.0 moved the Wi-Fi "remote" (slave) support into the IDF's own
-# esp_wifi component, and esp_hosted 3.x is the backend behind it.  The C6
-# is reached over SDIO - slot 1, 4 bits, 40 MHz, which are esp_hosted's
-# defaults for the P4.
-#
-# The 3.x host is back-compatible with the 2.x coprocessor firmware, so the
-# C6 does not have to be reflashed.
-CONFIG_ESP_HOSTED=y
-CONFIG_ESP_HOSTED_HOST=y
-CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
-CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
-CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
-CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
-CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000
-CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
-#
-# The coprocessor is not reset by the host - and that is not something
-# this file can say.  esp_hosted 3.x resets the C6 every time the host
-# boots (it drives the EN line: parked high, pulsed low), and the C6
-# does not come back from that pulse: the SDIO card init times out on
-# the OCR and the link never comes up.  esp_hosted 2.x did not reset it
-# - the C6 boots with the P4 and keeps running, and the host just talks
-# to it.
-#
-# The option that would say it is CONFIG_ESP_HOSTED_HOST_RESET_GPIO=-1
-# ("no in-band reset"), but the value is checked against a range that
-# comes from CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_GPIO_MIN/MAX, and
-# those are invisible Kconfig symbols - a defaults file cannot set
-# them.  So it needs a patch of the component.
-#
-# The Wi-Fi is not compiled in this firmware anyway
-# (WLED_USE_ETHERNET_ONLY), so the link is not wanted here; what the
-# transport does cost is the SDMMC slot: it takes the one the SD card
-# wants, and the card falls back to 20 MHz.
 
 # --- filesystem ------------------------------------------------------------
 # The Arduino core's LittleFS library is guarded by CONFIG_LITTLEFS_PAGE_SIZE,

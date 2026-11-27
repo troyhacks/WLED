@@ -88,6 +88,8 @@ class PinManagerClass {
   #else
   #if defined(CONFIG_IDF_TARGET_ESP32P4)
     #define WLED_NUM_PINS 56 // S3 has 49 gpio, P4 has 55 gpio
+  #elif defined(CONFIG_IDF_TARGET_ESP32S31)
+    #define WLED_NUM_PINS 62 // the S31 has 62 GPIOs (0 - 61)
   #elif defined (CONFIG_IDF_TARGET_ESP32C5)
     #define WLED_NUM_PINS 28
   #endif

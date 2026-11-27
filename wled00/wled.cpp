@@ -3,11 +3,11 @@ static const char *TAG = "WLED";
 #include "wled.h"
 #include "wled_ethernet.h"
 #include <Arduino.h>
-#if defined(WLED_BUILD_IDF) && defined(CONFIG_ETH_USE_ESP32_EMAC)
+#if defined(WLED_BUILD_IDF) && defined(CONFIG_ETH_USE_ESP32_EMAC) && defined(CONFIG_IDF_TARGET_ESP32P4)
   // The IP101 PHY driver left ESP-IDF in 6.0 - it is the registry component
   // espressif/ip101 now, and this is the header that declares it.  The
   // Arduino build still has the driver inside the IDF, so it does not need
-  // this.
+  // this.  The PHY on the P4's board is an IP101; the S31 has none.
   #include "esp_eth_phy_ip101.h"
 #endif
 #if !defined(CONFIG_SLAVE_SOC_WIFI_HE_SUPPORT)
@@ -26,10 +26,21 @@ static const char *TAG = "WLED";
   // ESP-ROM:esp32p4-eco2-20240710 // Wireless Tag Fancy C5 board that's weird.
   // 
 #endif
-#ifdef SOC_USB_OTG_SUPPORTED
+// The USB host.
+//
+// The block is the P4's for now, and the ESP32-S31 is left out of it: the
+// mass storage part of the host (the SD card over USB) is a component of
+// its own - espressif/usb_host_msc - and that component does not list the
+// S31 among the chips it supports, so the headers here (usb/msc_host_vfs.h
+// and the handle type in the message header) do not exist for it.
+//
+// The USB host stack itself does know the S31 (espressif/usb lists it), so
+// the control surfaces - the MIDI and the HID usermods - can be brought
+// back for it as soon as the mass storage part is separated out.
+#if defined(SOC_USB_OTG_SUPPORTED) && !defined(CONFIG_IDF_TARGET_ESP32S31)
   #ifndef CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED
     #error "USB Hardware Buffer Bias must be set to 'Balanced' via USB-OTG or CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED=y."
-    // This is likely to be fixed later. 
+    // This is likely to be fixed later.
     // You could also comment out the #error and try (untested):
     #undef CONFIG_USB_HOST_HW_BUFFER_BIAS_IN
     #undef CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT
@@ -571,6 +582,22 @@ static const char *TAG = "WLED";
 
 #endif // SOC_USB_OTG_SUPPORTED
 
+// The SD card.
+//
+// The card is the P4's: its pins (39 to 44) and its power line (45) are the
+// P4's, and the code that mounts it is in the P4's block above.  The rest of
+// the firmware asks whether there is a card - the web interface reports it,
+// the image cache looks for its sequences there - so the question has to be
+// answered on every board, and on the others the answer is "no".
+//
+// The condition is the opposite of the block above's, so that exactly one of
+// the two is compiled.
+#if !(defined(SOC_USB_OTG_SUPPORTED) && !defined(CONFIG_IDF_TARGET_ESP32S31))
+bool is_sdcard_mounted(void) {
+  return false;
+}
+#endif
+
 #ifdef ARDUINO_ARCH_ESP32
   #include "esp_ota_ops.h"
 #endif
@@ -609,7 +636,7 @@ static const char *TAG = "WLED";
     #error please fix your build environment. only one CONFIG_IDF_TARGET may be defined
   #endif
   // make sure we have a supported CONFIG_IDF_TARGET_
-  #if !defined(CONFIG_IDF_TARGET_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)  && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32C5) 
+  #if !defined(CONFIG_IDF_TARGET_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)  && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32C5) && !defined(CONFIG_IDF_TARGET_ESP32S31)
     #error please fix your build environment. No supported CONFIG_IDF_TARGET was defined
   #endif
   #if CONFIG_IDF_TARGET_ESP32_SOLO || CONFIG_IDF_TARGET_ESP32SOLO
@@ -872,7 +899,10 @@ void background_loop_nonblocking(void* pvParameters) {
     WLED::handleStatusLED();
     #endif
 
-    #ifdef SOC_USB_OTG_SUPPORTED
+    // The USB host's messages: the mass storage devices and the control
+    // surfaces (the MIDI and the HID usermods).  The host is the P4's for
+    // now (see the note at the top of the file), so the pump is too.
+    #if defined(SOC_USB_OTG_SUPPORTED) && defined(CONFIG_IDF_TARGET_ESP32P4)
     app_message_t msg;
     // Poll for messages without blocking. More than one is taken when
     // there is more than one: a control surface reports fifty times a
@@ -997,7 +1027,7 @@ void background_loop_nonblocking(void* pvParameters) {
         break;
       }
     }
-    #endif // SOC_USB_OTG_SUPPORTED
+    #endif // SOC_USB_OTG_SUPPORTED && CONFIG_IDF_TARGET_ESP32P4
 
     toki.resetTick();
 
@@ -1601,8 +1631,8 @@ void WLED::setup() {
           };
           ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_protocols(WIFI_IF_STA, &xprotocols));
           bw_config = {
-            .ghz_2g = WIFI_BW_HT40,
-            .ghz_5g = WIFI_BW_HT40,
+            .ghz_2g = WIFI_BW40,
+            .ghz_5g = WIFI_BW40,
           };
           esp_err_t err = esp_wifi_set_bandwidths(WIFI_IF_STA, &bw_config);
           USER_PRINTF("Set bandwidths result: %d (%s)\n", err, esp_err_to_name(err));
@@ -2130,7 +2160,11 @@ void WLED::setup() {
   deserializeConfigFromFS();
   onload_loadedLedmap = loadedLedmap;
 
-  #if defined(SOC_SDMMC_HOST_SUPPORTED)
+  // The SD card.  The card's pins (39 to 44) and its power line (45) are
+  // the P4's, and the code that mounts it is inside the P4's block above,
+  // so it is the P4's here too.  The S31 has an SDMMC slot of its own, but
+  // its pins are not known here yet.
+  #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(SOC_SDMMC_HOST_SUPPORTED)
   err_t sdcarderr = mount_sdcard();
   if (sdcarderr == ESP_OK) {
     USER_PRINT("Backup of LittleFS to SD Card... ");

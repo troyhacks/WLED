@@ -94,7 +94,7 @@
   #warning please increase SETTINGS_STACK_BUF_SIZE >= 3904
 #endif
 #if (CONFIG_ASYNC_TCP_TASK_STACK_SIZE - SETTINGS_STACK_BUF_SIZE) < 4352 // at least 4096+256 words of free task stack is needed by async_tcp alone
-  #ifndef CONFIG_IDF_TARGET_ESP32P4 /// TroyHacks: Yeah, we got the PSRAM.
+  #if !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32S31) /// TroyHacks: Yeah, we got the PSRAM.
     #error remaining async_tcp stack will be too low - please increase CONFIG_ASYNC_TCP_TASK_STACK_SIZE
   #endif
 #endif
@@ -8125,7 +8125,13 @@ class AudioReactive : public Usermod {
           // ... task creation logic ...
           if (audioSource)
             xTaskCreateUniversal(
-              #if defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
+              #if defined(CONFIG_IDF_TARGET_ESP32S31)
+              // The S31's second core is a low-power core: it has 32 KB of
+              // RAM and it is slow, and the analysis needs both (16 KB of
+              // stack and a lot of floating point).  So the analysis runs on
+              // the fast core there, like everything else does.
+              arAnalysisTask, "AudioTask", AR_TASK_STACK_BYTES, NULL, AR_TASK_PRIORITY, &AR_Task, 0
+              #elif defined(CONFIG_SOC_CPU_CORES_NUM) && CONFIG_SOC_CPU_CORES_NUM > 1
               arAnalysisTask, "AudioTask", AR_TASK_STACK_BYTES, NULL, AR_TASK_PRIORITY, &AR_Task, 1
               #else
               arAnalysisTask, "AudioTask", 8192, NULL, AR_TASK_PRIORITY, & AR_Task, -1

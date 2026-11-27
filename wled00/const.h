@@ -482,7 +482,10 @@
 // string temp buffer (now stored in stack locally) // WLEDMM ...which is actually not the greatest design choice on ESP32
 #ifdef ESP8266
   #define SETTINGS_STACK_BUF_SIZE 2048
-#elif defined(CONFIG_IDF_TARGET_ESP32P4)
+#elif defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)
+  // The chips with PSRAM: the buffer is allocated in the PSRAM (see
+  // serveSettingsJS in wled_server.cpp), so it can be the big one the
+  // AudioReactive's settings page needs.
   #define SETTINGS_STACK_BUF_SIZE 40960
 #else
   #if !defined(USERMOD_AUDIOREACTIVE)

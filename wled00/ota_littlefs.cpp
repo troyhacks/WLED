@@ -4,7 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
- // Includes for Arduino FS API
+// This whole file is the ESP32-P4's hosted coprocessor's firmware update:
+// the C6's new firmware is pushed over the hosted link from a file in the
+// LittleFS.  The S31 has no coprocessor - its radio is its own - so none of
+// this is there for it.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+
+// Includes for Arduino FS API
 #include "FS.h"
 #include "LittleFS.h"
 #include "wled.h" // Includes FS and logging
@@ -311,3 +317,4 @@ esp_err_t ota_littlefs_perform(bool delete_after_use) {
 
   return ESP_HOSTED_SLAVE_OTA_COMPLETED;
 }
+#endif // CONFIG_IDF_TARGET_ESP32P4 - the hosted coprocessor is the P4's

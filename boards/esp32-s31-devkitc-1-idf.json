@@ -1,0 +1,38 @@
+{
+  "build": {
+    "core": "esp32",
+    "extra_flags": [
+      "-DBOARD_HAS_PSRAM"
+    ],
+    "f_cpu": "320000000L",
+    "f_flash": "80000000L",
+    "f_psram": "200000000L",
+    "flash_mode": "qio",
+    "mcu": "esp32s31",
+    "chip_variant": "esp32s31",
+    "variant": "esp32s31",
+    "psram_type": "opi",
+    "partitions": "tools/WLED_ESP32_8MB_1500KB_FS.csv"
+  },
+  "connectivity": [
+    "wifi",
+    "bluetooth",
+    "ethernet"
+  ],
+  "debug": {
+    "openocd_target": "esp32s31.cfg"
+  },
+  "frameworks": [
+    "espidf"
+  ],
+  "name": "Espressif ESP32-S31-Function-CoreBoard-1 (WLED, IDF)",
+  "upload": {
+    "flash_size": "16MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 16777216,
+    "require_upload_port": true,
+    "speed": 1500000
+  },
+  "url": "https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s31/esp32-s31-function-coreboard-1/index.html",
+  "vendor": "Espressif"
+}

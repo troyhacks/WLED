@@ -15,109 +15,140 @@
 ##
 ## log_wrap_shim.c is not here either.  It defines __wrap_esp_log_writev,
 ## which nothing wraps, and it is known to make every ESP_LOG call hang.
+##
+## The list is the same for every chip, with one exception: the ESP32-P4's
+## own hardware.  The chip is IDF_TARGET - the CMake variable the IDF sets
+## from the environment - so the split is made here, where the list is,
+## and not in the source files.
+##
+##   - the PIE vector assembly (particle_simd.S) and the 16-pixel multiply
+##     (p4_mul16x16.S) are P4 instructions, and the S31 is a RISC-V chip
+##     without them
+##   - the HDMI display path is the P4's, and so is the hosted Wi-Fi
+##     coprocessor
 
-idf_component_register(
-    SRCS
-        "wled_idf.cpp"
-        "ArtNetReceiver.cpp"
-        "FX.cpp"
-        "FX_2Dfcn.cpp"
-        "FX_fcn.cpp"
-        "FXparticleSystem.cpp"
-        "FastUDP.cpp"
-        "ImageCacheManager.cpp"
-        "ar_publish.cpp"
-        "bus_colorlight.cpp"
-        "bus_manager.cpp"
-        "button.cpp"
-        "cfg.cpp"
-        "colorlight_protocol.cpp"
-        "colors.cpp"
-        "e131.cpp"
-        "event_bus.cpp"
-        "event_log.cpp"
-        "file.cpp"
-        "improv.cpp"
-        "json.cpp"
-        "led.cpp"
-        "network.cpp"
-        "ntp.cpp"
-        "ota_littlefs.cpp"
-        "overlay.cpp"
-        "parlio.cpp"
+set(WLED_APP_SRCS
+    "wled_idf.cpp"
+    "ArtNetReceiver.cpp"
+    "FX.cpp"
+    "FX_2Dfcn.cpp"
+    "FX_fcn.cpp"
+    "FXparticleSystem.cpp"
+    "FastUDP.cpp"
+    "ImageCacheManager.cpp"
+    "ar_publish.cpp"
+    "bus_colorlight.cpp"
+    "bus_manager.cpp"
+    "button.cpp"
+    "cfg.cpp"
+    "colorlight_protocol.cpp"
+    "colors.cpp"
+    "e131.cpp"
+    "event_bus.cpp"
+    "event_log.cpp"
+    "file.cpp"
+    "improv.cpp"
+    "json.cpp"
+    "led.cpp"
+    "network.cpp"
+    "ntp.cpp"
+    "ota_littlefs.cpp"
+    "overlay.cpp"
+    "parlio.cpp"
+    "pin_manager.cpp"
+    "playlist.cpp"
+    "presets.cpp"
+    "remote.cpp"
+    "set.cpp"
+    "src/dependencies/e131/ESPAsyncE131.cpp"
+    "src/dependencies/esp_lcd_ili9488/esp_lcd_ili9488.c"
+    "src/dependencies/network/Network.cpp"
+    "src/dependencies/time/DateStrings.cpp"
+    "src/dependencies/time/Time.cpp"
+    "src/dependencies/timezone/Timezone.cpp"
+    "udp.cpp"
+    "um_manager.cpp"
+    "usermod.cpp"
+    "usermods_list.cpp"
+    "util.cpp"
+    "wled.cpp"
+    "wled_console.cpp"
+    "wled_eeprom.cpp"
+    "wled_math.cpp"
+    "wled_screenshot.cpp"
+    "wled_serial.cpp"
+    "wled_server.cpp"
+    "ws.cpp"
+    "xml.cpp"
+)
+
+set(WLED_APP_REQUIRES
+    wled_compat
+    wled_platform
+    esp_netif
+    esp_eth
+    esp_event
+    esp_timer
+    esp_system
+    esp_hw_support
+    nvs_flash
+    heap
+    lwip
+    freertos
+    vfs
+    espressif__mdns
+    esp_lcd
+    # The USB host driver is not in the IDF any more: from ESP-IDF 6.0
+    # the USB component lives in the Component Registry, and the
+    # component manager puts it in managed_components/espressif__usb.
+    espressif__usb
+    esp_wifi
+    esp_driver_gpio
+    esp_driver_ledc
+    esp_driver_uart
+    esp_driver_usb_serial_jtag
+    esp_driver_i2c
+    esp_driver_spi
+    esp_driver_i2s
+    esp_driver_parlio
+    esp_driver_ppa
+    esp_driver_jpeg
+    esp_psram
+    espressif__esp_codec_dev
+    espressif__esp-dsp
+    mbedtls
+)
+
+# The ESP32-P4's own hardware: the display path, the hosted coprocessor,
+# the Ethernet PHY and the USB mass storage host.  The S31 has a radio of
+# its own and no PHY on this board, and none of these components builds
+# there - so they are the P4's alone.
+#
+# esp_hosted 3.x registers itself under this name (not the
+# espressif__esp_hosted the managed component would suggest).
+if("${IDF_TARGET}" STREQUAL "esp32p4")
+    list(APPEND WLED_APP_SRCS
+        # The P4's PIE vector assembly and its 16-pixel multiply.
         "particle_simd.S"
         "p4_mul16x16.S"
-        "pin_manager.cpp"
-        "playlist.cpp"
-        "presets.cpp"
-        "remote.cpp"
-        "set.cpp"
-        "src/dependencies/e131/ESPAsyncE131.cpp"
-        "src/dependencies/esp_lcd_ili9488/esp_lcd_ili9488.c"
-        "src/dependencies/network/Network.cpp"
-        "src/dependencies/time/DateStrings.cpp"
-        "src/dependencies/time/Time.cpp"
-        "src/dependencies/timezone/Timezone.cpp"
-        "udp.cpp"
-        "um_manager.cpp"
-        "usermod.cpp"
-        "usermods_list.cpp"
-        "util.cpp"
-        "wled.cpp"
-        "wled_console.cpp"
-        "wled_eeprom.cpp"
+        # The HDMI display path (the bridge, the panels, the H.264 decoder).
         "wled_hdmi.cpp"
-        "wled_math.cpp"
-        "wled_screenshot.cpp"
-        "wled_serial.cpp"
-        "wled_server.cpp"
-        "ws.cpp"
-        "xml.cpp"
-    INCLUDE_DIRS "."
-    REQUIRES
-        wled_compat
-        wled_platform
-        esp_netif
-        esp_eth
-        esp_event
-        esp_timer
-        esp_system
-        esp_hw_support
-        nvs_flash
-        heap
-        lwip
-        freertos
-        vfs
-        espressif__mdns
-        esp_lcd
-        # The USB host driver is not in the IDF any more: from ESP-IDF 6.0
-        # the USB component lives in the Component Registry, and the
-        # component manager puts it in managed_components/espressif__usb.
-        espressif__usb
-        # The IP101 PHY left the IDF in 6.0 as well - it is a registry
-        # component now (espressif/ip101).
-        espressif__ip101
-        esp_wifi
-        esp_driver_gpio
-        esp_driver_ledc
-        esp_driver_uart
-        esp_driver_usb_serial_jtag
-        esp_driver_i2c
-        esp_driver_spi
-        esp_driver_i2s
-        esp_driver_parlio
-        esp_driver_ppa
-        esp_driver_jpeg
-        esp_psram
-        # esp_hosted 3.x registers itself under this name (not the
-        # espressif__esp_hosted the managed component would suggest).
+    )
+    list(APPEND WLED_APP_REQUIRES
         esp_hosted
-        espressif__esp_codec_dev
-        espressif__esp-dsp
         espressif__esp_lcd_lt8912b
         espressif__esp_h264
+        # The IP101 PHY left the IDF in 6.0 - it is a registry component
+        # now (espressif/ip101).
+        espressif__ip101
         espressif__usb_host_msc
-        mbedtls
+    )
+endif()
+
+idf_component_register(
+    SRCS ${WLED_APP_SRCS}
+    INCLUDE_DIRS "."
+    REQUIRES ${WLED_APP_REQUIRES}
 )
 
 # The Arduino build has no such thing, so the sources that have to behave

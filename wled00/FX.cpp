@@ -9,7 +9,10 @@
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)
+// The LovyanGFX sprite: the ProLink effect and the analyser draw their
+// text into one, and the PPA blends it.  The sprite is plain software -
+// the display it would drive is the P4's, but the canvas is not.
 #include <LovyanGFX.hpp>
 #include <stdarg.h>
 #include <esp_cache.h>

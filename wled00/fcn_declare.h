@@ -328,7 +328,11 @@ uint8_t show_parlio(uint8_t* parallelPins, uint32_t length, uint8_t* buffer_in, 
 
 //network.cpp
 int getSignalQuality(int rssi) __attribute__((const));
-#ifndef CONFIG_IDF_TARGET_ESP32P4
+// The Arduino core's Wi-Fi event type (WiFiEvent_t) does not exist in the
+// IDF build - the events come through the Arduino-shaped enumeration in the
+// compatibility layer (arduino_event_id_t) instead.  The P4 was already
+// excluded from this; the S31 is the same.
+#if !defined(WLED_BUILD_IDF)
 void WiFiEvent(WiFiEvent_t event);
 #endif
 

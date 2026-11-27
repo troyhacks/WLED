@@ -74,7 +74,16 @@ uint32_t EspClass::getChipId()
 
 const char *EspClass::getChipModel()
 {
-    return CONFIG_IDF_TARGET_ESP32P4 ? "ESP32-P4" : "ESP32";
+    // The chip's own name - the Arduino core's getChipModel() answers with
+    // it.  The CONFIG_IDF_TARGET_* macros are compile-time, so the answer is
+    // picked at compile time too.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    return "ESP32-P4";
+#elif defined(CONFIG_IDF_TARGET_ESP32S31)
+    return "ESP32-S31";
+#else
+    return "ESP32";
+#endif
 }
 
 uint8_t EspClass::getChipRevision()

@@ -281,15 +281,20 @@ const char *digitalPinToPinName(uint8_t pin);
 bool digitalPinHasPWM(uint8_t pin);
 
 // UART0's pins are fixed by the bootloader.  The Arduino core has the table
-// for every SoC; here is the P4's.
+// for every SoC; here are the P4's and the S31's (the S31's are the ones
+// the core's variants/esp32s31/pins_arduino.h has).
 #ifndef SOC_RX0
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #define SOC_RX0 (gpio_num_t)38
+#elif defined(CONFIG_IDF_TARGET_ESP32S31)
+#define SOC_RX0 (gpio_num_t)59
 #endif
 #endif
 #ifndef SOC_TX0
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #define SOC_TX0 (gpio_num_t)37
+#elif defined(CONFIG_IDF_TARGET_ESP32S31)
+#define SOC_TX0 (gpio_num_t)58
 #endif
 #endif
 

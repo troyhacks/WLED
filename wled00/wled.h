@@ -380,13 +380,9 @@ i2c_port_t globalI2cBusPort(i2c_master_bus_handle_t bus);
 #include "esp_heap_caps.h"
 #include "driver/ppa.h"
 #include "driver/jpeg_decode.h"
-#include "esp_h264_dec_sw.h"
 #include "ImageCacheManager.h"
 #include "esp_lcd_panel_ops.h"
 #include "driver/i2c_master.h"
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-#include "esp_lcd_mipi_dsi.h"
-#endif
 WLED_GLOBAL ppa_client_handle_t ppa_blend_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_blend_config _INIT_N(({ .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 }));
 WLED_GLOBAL ppa_client_handle_t ppa_fill_handle _INIT(NULL);
@@ -396,16 +392,6 @@ WLED_GLOBAL ppa_client_handle_t preview_ppa_srm_handle _INIT(NULL);
 WLED_GLOBAL ppa_client_config_t ppa_srm_config _INIT_N((({ .oper_type = PPA_OPERATION_SRM, .max_pending_trans_num = 1, .data_burst_length = PPA_DATA_BURST_LENGTH_128 })));
 WLED_GLOBAL jpeg_decoder_handle_t jpgd_handle _INIT(NULL);
 WLED_GLOBAL jpeg_decode_engine_cfg_t decode_eng_cfg _INIT_N((({ .timeout_ms = 40, })));
-WLED_GLOBAL esp_lcd_panel_handle_t    panel_handle     _INIT(NULL);
-WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_main  _INIT(NULL);  // kept alive for register-level diagnostics
-WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_cec   _INIT(NULL);
-WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_avi   _INIT(NULL);
-WLED_GLOBAL esp_lcd_dsi_bus_handle_t  lt8912b_dsi_bus  _INIT(NULL);
-WLED_GLOBAL int                       hdmi_current_mode _INIT(0);
-// WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);       // no touch on HDMI board
-// WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
-WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // back buffer — PPA writes here; flipped to front on each blit
-WLED_GLOBAL uint8_t* display_front_framebuffer _INIT(NULL); // front buffer — DPI hardware is displaying this one
 WLED_GLOBAL uint16_t touchscreen_x[1];
 WLED_GLOBAL uint16_t touchscreen_y[1];
 WLED_GLOBAL uint16_t touchscreen_strength[1];
@@ -416,6 +402,29 @@ WLED_GLOBAL bool update_screen_background _INIT(true);
 // WLED_GLOBAL i2c_master_dev_handle_t audio_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t touch_handle _INIT(NULL);
 // WLED_GLOBAL i2c_master_dev_handle_t panel_i2c_handle _INIT(NULL);
+#endif
+
+// The display: the HDMI bridge (an LT8912B), the MIPI-DSI panels behind it
+// and the framebuffers the PPA writes into.
+//
+// This is the P4's path, and the pieces it needs - the DSI bus type and the
+// H.264 decoder - come with the P4's display drivers.  The S31 has a PPA
+// too, but no display path.
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_SOC_PPA_SUPPORTED)
+#include "esp_lcd_mipi_dsi.h"
+// The H.264 decoder is the P4's HDMI path: it comes with the display
+// drivers, and the S31 has neither.
+#include "esp_h264_dec_sw.h"
+WLED_GLOBAL esp_lcd_panel_handle_t    panel_handle     _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_main  _INIT(NULL);  // kept alive for register-level diagnostics
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_cec   _INIT(NULL);
+WLED_GLOBAL esp_lcd_panel_io_handle_t lt8912b_io_avi   _INIT(NULL);
+WLED_GLOBAL esp_lcd_dsi_bus_handle_t  lt8912b_dsi_bus  _INIT(NULL);
+WLED_GLOBAL int                       hdmi_current_mode _INIT(0);
+// WLED_GLOBAL esp_lcd_touch_handle_t tp _INIT(NULL);       // no touch on HDMI board
+// WLED_GLOBAL esp_lcd_panel_io_handle_t touch_io_handle _INIT(NULL);
+WLED_GLOBAL uint8_t* display_framebuffer _INIT(NULL);       // back buffer — PPA writes here; flipped to front on each blit
+WLED_GLOBAL uint8_t* display_front_framebuffer _INIT(NULL); // front buffer — DPI hardware is displaying this one
 #endif
 
 #if defined(USERMOD_PIONEER_PROLINK) || defined(USERMOD_PIONEER_PROLINK_V3)
@@ -460,7 +469,7 @@ WLED_GLOBAL int8_t irPin _INIT(-1);
 WLED_GLOBAL int8_t irPin _INIT(IRPIN);
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||  defined(CONFIG_IDF_TARGET_ESP32P4) ||defined(CONFIG_IDF_TARGET_ESP32S2) || (defined(RX) && defined(TX))
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3) ||  defined(CONFIG_IDF_TARGET_ESP32C6) ||  defined(CONFIG_IDF_TARGET_ESP32P4) ||defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S31) || (defined(RX) && defined(TX))
   // use RX/TX as set by the framework - these boards do _not_ have RX=3 and TX=1
   constexpr uint8_t hardwareRX = RX;
   constexpr uint8_t hardwareTX = TX;

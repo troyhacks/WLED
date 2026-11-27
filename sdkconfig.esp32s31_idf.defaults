@@ -1,0 +1,35 @@
+# The ESP32-S31 - the chip's own settings.
+#
+# This file is the chip's half of the sdkconfig chain: the settings every
+# chip shares are in sdkconfig.defaults, and pio-scripts/env_sdkconfig.py
+# puts this file after it, so what is here wins.
+#
+# The S31 is a P4-class chip - RISC-V, two cores, a PPA, a DMA2D, a JPEG
+# codec, a Parallel IO block, an SDMMC slot, USB OTG and an Ethernet MAC -
+# with a radio of its own: Wi-Fi 6 and Bluetooth on the chip, and no hosted
+# coprocessor.
+
+CONFIG_IDF_TARGET="esp32s31"
+
+# --- the CPU ---------------------------------------------------------------
+# The S31's own choices are 40 MHz (the bring-up one), 240 MHz and 320 MHz;
+# 320 MHz is the default the IDF picks for this chip.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
+
+# --- PSRAM -----------------------------------------------------------------
+# Octal, not hex: the S31's PSRAM is an octal chip, and the mode is a
+# Kconfig choice - so the P4's hex and this are mutually exclusive.
+#
+# The PSRAM sits on a bus of its own (the flash has one to itself too), so
+# it does not take bandwidth from the flash.
+CONFIG_SPIRAM_MODE_OCT=y
+
+# --- the radio -------------------------------------------------------------
+# The Wi-Fi is the chip's own, so none of the hosted (esp_hosted) settings
+# apply here: they are in the P4's file, where the C6 coprocessor is.
+
+# --- Ethernet --------------------------------------------------------------
+# The chip has an internal Ethernet MAC - the IDF has an esp32s31 driver for
+# it - but this board has no PHY on it, so the MAC is left off and nothing
+# would use it.  (The P4's file turns it on, because that board has an
+# IP101.)

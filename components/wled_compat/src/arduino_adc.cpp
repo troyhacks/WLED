@@ -56,6 +56,10 @@ bool ensureCalibration()
     if (s_caliReady) {
         return true;
     }
+    // The calibration scheme is the chip's: the ESP32 and the P4 (and most
+    // of the others) burn a curve into their eFuse, the S31 burns a line.
+    // The IDF says which one the chip has.
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     adc_cali_curve_fitting_config_t caliCfg = {};
     caliCfg.unit_id = ADC_UNIT_1;
     caliCfg.chan = ADC_CHANNEL_0;
@@ -64,6 +68,18 @@ bool ensureCalibration()
     if (adc_cali_create_scheme_curve_fitting(&caliCfg, &s_cali) == ESP_OK) {
         s_caliReady = true;
     }
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    // The line fitting scheme has no channel: it reads the calibration the
+    // chip burned into its eFuse.  If that is not there, the scheme fails
+    // and the readings stay raw - which is what the core does too.
+    adc_cali_line_fitting_config_t caliCfg = {};
+    caliCfg.unit_id = ADC_UNIT_1;
+    caliCfg.atten = ADC_ATTEN_DB_12;
+    caliCfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_line_fitting(&caliCfg, &s_cali) == ESP_OK) {
+        s_caliReady = true;
+    }
+#endif
     return s_caliReady;
 }
 

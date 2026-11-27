@@ -846,13 +846,16 @@ class I2SSource : public AudioSource {
           _rx_handle = nullptr;
           return;
         }
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)
         // P4 workaround: the IDF v5 new I2S driver does not explicitly disable
         // the GPIO output driver on the DIN pin. Without this, the GPIO output
         // register drives the pin (gpio_dump_io_configuration shows
         // OutputEn:1, SigOut:256 on GPIO 45) and masks any external mic
         // signal — every sample reads 0xFFFFFFFF. The legacy i2s_set_pin()
         // cleared this implicitly via gpio_set_direction(pin, GPIO_MODE_INPUT).
+        //
+        // The S31 is the same family of chip (and the same I2S driver), so
+        // it gets the same treatment.
         gpio_set_direction((gpio_num_t)i2ssdPin, GPIO_MODE_INPUT);
 #endif
         DEBUGSR_PRINTF("AR: I2S#0 driver installed in %s mode, %u-bit.\n",
@@ -2243,9 +2246,10 @@ class CodecDevSource : public AudioSource {
         _rx_handle = nullptr;
         return false;
       }
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)
       // P4 workaround: see I2SSource::initialize() — the new I2S driver does
       // not explicitly disable the GPIO output driver on the DIN pin.
+      // The S31 is the same family of chip and has the same driver.
       gpio_set_direction((gpio_num_t)i2ssdPin, GPIO_MODE_INPUT);
 #endif
       err = i2s_channel_enable(_rx_handle);

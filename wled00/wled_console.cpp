@@ -58,9 +58,10 @@ void WledConsole::begin(uint32_t baud) {
   WLEDMM_USB_CDC->begin();
   WLEDMM_USB_CDC->setTxTimeoutMs(0);  // never wait for a host that is not there
 #endif
-  // UART0: GPIO37 (TX) / GPIO38 (RX) on the P4.  A ring buffer for TX, so a
-  // board with nothing on the other end of the wire drops output instead of
-  // stalling the app on it.
+  // UART0: GPIO37 (TX) / GPIO38 (RX) on the P4, GPIO58 / GPIO59 on the S31
+  // (the pins are SOC_TX0 / SOC_RX0 - the compat layer's table has them).
+  // A ring buffer for TX, so a board with nothing on the other end of the
+  // wire drops output instead of stalling the app on it.
   Serial0.setRxBufferSize(1024);
   Serial0.setTxBufferSize(1024);
   Serial0.begin(baud, SERIAL_8N1, SOC_RX0, SOC_TX0, false, 20000UL, 120U);

@@ -148,6 +148,19 @@ String PinManagerClass::getPinSpecialText(int gpio) {  // special purpose PIN in
       if (gpio == 6) return (F("ESP32-C6 wakeup (usable)"));
       if (gpio == 53) return (F("Audio Amp Enable (usable)"));
       if (gpio == 45) return (F("Might be N/C on some boards."));
+    #elif defined(CONFIG_IDF_TARGET_ESP32S31)
+      // The ESP32-S31's EV function board.  The pins are the ones the
+      // Arduino core's variants/esp32s31/pins_arduino.h has:
+      //   2, 3      the I2C (SDA, SCL)
+      //   6 - 19    the touch inputs (T0 - T13)
+      //   37 - 40   the SPI (SS, MOSI, MISO, SCK)
+      //   42 - 57   the second ADC (A0 - A15)
+      //   58, 59    the console (TX, RX)
+      if (gpio == 2 || gpio == 3) return (F("I2C (SDA/SCL)"));
+      if (gpio == 37 || gpio == 40) return (F("SPI (SS/SCK)"));
+      if (gpio == 38 || gpio == 39) return (F("SPI (MOSI/MISO)"));
+      if (gpio == 58) return (F("Serial TX"));
+      if (gpio == 59) return (F("Serial RX"));
     #else
       // "classic" ESP32, or ESP32 PICO-D4
       //if (gpio == 0 || gpio == 2 || gpio == 5) return (F("(strapping pin)"));
@@ -837,6 +850,17 @@ bool PinManagerClass::isPinOk(byte gpio, bool output) const
     // 45 is SD power but it's NC without hacking the board.
     // 53 is for PA enable but it's exposed on header and works for WLED pin output. Best to not use it but left available.
     // 54 is "C4 EN pin" so I guess we shouldn't fuck with that.
+  #elif defined(CONFIG_IDF_TARGET_ESP32S31)
+    // The ESP32-S31's EV function board.  The pins that are on it are the
+    // ones the Arduino core's variants/esp32s31/pins_arduino.h has:
+    //   0 - 5      general
+    //   6 - 19     the touch inputs (T0 - T13) and the Ethernet PHY
+    //   37 - 40    the SPI (SS, MOSI, MISO, SCK)
+    //   42 - 57    the second ADC (A0 - A15) and the audio codec
+    //   58, 59    the console (TX, RX)
+    // Everything in between is not brought out.
+    if (gpio > 19 && gpio < 37) return false;     // 20-36: not on the board
+    if (             gpio == 41) return false;     // 41: not on the board
   #else
     if ((gpio > 5 && gpio < 12) &&   // WLEDMM slightly faster to first check for "potentially reserved pins" and then call ESP.getChipModel()
         ((strncmp_P(PSTR("ESP32-U4WDH"), ESP.getChipModel(), 11) == 0) ||    // this is the correct identifier, but....
