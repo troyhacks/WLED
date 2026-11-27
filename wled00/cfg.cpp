@@ -200,13 +200,29 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       uint32_t outputs = elm["outputs"] | 1; // sanity check
       uint32_t leds_per_output = elm["leds_per_output"] | length; // sanity check
       uint8_t fps_limit = elm["fps_limit"] | 24; // sanity check
+      // WLEDMM the native HUB75 panel's own settings: the width in pixels,
+      // the scan rate, the bit depth and the peripheral that clocks it out.
+      uint16_t hubWidth = 0;
+      uint8_t hubScan = 0, hubDepth = 0, hubPeriph = 2, hubLead = 1;
+      JsonObject hub = elm["hub75"];
+      if (!hub.isNull()) {
+        hubWidth = hub["w"] | 0;
+        hubScan = hub["scan"] | 0;
+        hubDepth = hub["depth"] | 0;
+        hubPeriph = hub["periph"] | 2;
+        // The address timing: 1 = the address leads the data (the classic
+        // timing), 0 = it lags the data by a row (MoonLight's).
+        hubLead = hub["lead"] | 1;
+      }
       if (fromFS) {
         BusConfig bc = BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, outputs, leds_per_output, fps_limit);
+        bc.hubWidth = hubWidth; bc.hubScan = hubScan; bc.hubDepth = hubDepth; bc.hubPeriph = hubPeriph; bc.hubLead = hubLead;
         mem += BusManager::memUsage(bc);
         if (mem <= MAX_LED_MEMORY) if (busses.add(bc) == -1) break;  // finalization will be done in WLED::beginStrip()
       } else {
         if (busConfigs[s] != nullptr) delete busConfigs[s];
         busConfigs[s] = new BusConfig(ledType, pins, start, length, colorOrder, reversed, skipFirst, AWmode, freqkHz, outputs, leds_per_output, fps_limit);
+        busConfigs[s]->hubWidth = hubWidth; busConfigs[s]->hubScan = hubScan; busConfigs[s]->hubDepth = hubDepth; busConfigs[s]->hubPeriph = hubPeriph; busConfigs[s]->hubLead = hubLead;
         busesChanged = true;
       }
       s++;
@@ -814,6 +830,15 @@ void serializeConfig() {
     ins["outputs"] = bus->get_outputs();
     ins["fps_limit"] = bus->get_fps_limit();
     ins["leds_per_output"] = bus->get_leds_per_output();
+    if (bus->getType() == TYPE_HUB75) {
+      // WLEDMM the native HUB75 panel's own settings
+      JsonObject hub = ins.createNestedObject("hub75");
+      hub["w"] = bus->getHubWidth();
+      hub["scan"] = bus->getHubScan();
+      hub["depth"] = bus->getHubDepth();
+      hub["periph"] = bus->getHubPeriph();
+      hub["lead"] = bus->getHubLead();
+    }
   }
 
   JsonArray hw_com = hw.createNestedArray(F("com"));

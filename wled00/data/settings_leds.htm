@@ -58,6 +58,9 @@
 
       // Special/Matrix
       // 100: { name: "Hub75 Matrix", cat: 5, isMatrix: true }
+      // WLEDMM the native HUB75 driver: a panel driven straight from the chip's
+      // own pins, over LCD_CAM or PARLIO.
+      111: { name: "HUB75 Panel", cat: 5, isHub75: true, color: "RGB" },
     };
 
     // Helper function to get properties safely
@@ -89,6 +92,8 @@
         }
       }
     }
+    // WLEDMM: the native HUB75 driver is a build flag of its own, so its LED
+    // type is only offered when the firmware has it.
     function off(n) { d.getElementsByName(n)[0].value = -1; }
     // https://www.educative.io/edpresso/how-to-dynamically-load-a-js-file-in-javascript
     function loadJS(FILE_URL, async = true) {
@@ -140,6 +145,9 @@
 
         const name = input.name;
         const isPinInput = (name.startsWith("L") && !isNaN(name.substring(1))) ||
+          // WLEDMM a HUB75 panel's lines have their own fields (HB, HC, HD and
+          // HE are the panel's settings, not pins)
+          (name.startsWith("H") && !isNaN(name.substring(1))) ||
           name.startsWith("RL") || name.startsWith("BT") || name.startsWith("IR");
 
         // Only process inputs that are for GPIO pins
@@ -257,6 +265,21 @@
           if (typeDef.cat === 3) return 5; // Analog uses negligible mem
           if (typeDef.cat === 4) return len * 3; // Network (usually just buffer)
 
+          // WLEDMM a HUB75 panel: the picture, the copy of it the remap needs,
+          // and the bit planes the panel's own peripheral scans.
+          if (typeDef.isHub75) {
+            const w = Number(d.getElementsByName("HB" + n)[0].value) || 64;
+            const scan = Number(d.getElementsByName("HC" + n)[0].value) || 16;
+            const depth = Number(d.getElementsByName("HD" + n)[0].value) || 6;
+            const h = w ? Math.floor(len / w) : 0;
+            const rowsPerScan = scan ? Math.floor(h / scan) : 0;
+            const rowWords = w * Math.floor(rowsPerScan / 2);
+            const hold = (rowWords > 0 && depth >= 2 && rowWords <= Math.pow(2, depth - 2))
+              ? (Math.pow(2, depth - 1) + 1 - rowWords) : 0;
+            const frame = depth * scan * (rowWords + hold) * 2;
+            return len * 6 + frame;
+          }
+
           return len * 3;
         }
         function isValidPositiveNumber(value) {
@@ -325,7 +348,8 @@
 
               // A. Labels
               let p0Label = "GPIO:";
-              if (typeDef.isPar) p0Label = "Parallel IO Pins:";
+              if (typeDef.isHub75) p0Label = "";
+              else if (typeDef.isPar) p0Label = "Parallel IO Pins:";
               else if (typeDef.isMatrix) p0Label = "Chain Length:";
               else if (t === 86 || t === 87) p0Label = "(Not used)";
               else if (typeDef.cat === 4) p0Label = "IP Address:";
@@ -351,6 +375,7 @@
 
                 let showPin = false;
                 if (typeDef.isMatrix) showPin = false;
+                else if (typeDef.isHub75) showPin = false; // the panel's lines have their own fields
                 else if (typeDef.isPar) showPin = (p < loopmax);
                 else if (typeDef.cat === 4) showPin = (p < 4); // Always show 4 for Network
                 else if (typeDef.cat === 2) showPin = (p < 2);
@@ -418,6 +443,35 @@
                 } else {
                   LK.style.display = "none";
                   LK.required = false;
+                  // A hidden field still counts in the form's check: a leftover
+                  // value (an IP, say) outside the GPIO range would stop the
+                  // save.  The matrix bus keeps its chain length.
+                  if (!(typeDef.isMatrix && p === 0)) LK.value = Number(-1);
+                }
+              }
+
+              // WLEDMM a HUB75 panel names its lines in the ribbon's order, and
+              // they have their own fields: the plain pin fields belong to the
+              // other buses.
+              if (typeDef.isHub75) {
+                for (let k = 0; k < 14; k++) {
+                  const HK = d.getElementsByName("H" + k + n)[0];
+                  if (!HK) continue;
+                  HK.min = -1;
+                  HK.max = Number(d.max_gpio);
+                  HK.style.display = "inline";
+                  // A new panel starts out on the chip's default wiring.
+                  if ((HK.value === "" || HK.value === undefined) &&
+                      Array.isArray(d.hub75_default_pins) && typeof d.hub75_default_pins[k] === "number") {
+                    HK.value = Number(d.hub75_default_pins[k]);
+                  }
+                }
+              } else {
+                // Another bus now: the panel's lines are not this row's, and a
+                // leftover pin would look like a duplicate.
+                for (let k = 0; k < 14; k++) {
+                  const HK = d.getElementsByName("H" + k + n)[0];
+                  if (HK) HK.value = "";
                 }
               }
 
@@ -442,11 +496,13 @@
           gId("pbr8_" + n).style.display = (isPar && loopmax > 8) ? "inline" : "none";
           gId("pbr12_" + n).style.display = (isPar && loopmax > 12) ? "inline" : "none";
           gId("dig" + n + "w").style.display = (t === 30 || t === 31) ? "inline" : "none";
+          gId("dig" + n + "h").style.display = (typeDef.isHub75) ? "inline" : "none";
+          gId("dig" + n + "P").style.display = (typeDef.isHub75) ? "inline" : "none";
 
           gId("dig" + n + "O").style.display = (isNet || isPar) ? "inline" : "none";
           gId("dig" + n + "L").style.display = (isNet || isPar) ? "inline" : "none";
           gId("dig" + n + "F").style.display = (isNet) ? "inline" : "none";
-          gId("dig" + n + "W").style.display = (isNet || isPar) ? "inline" : "none";
+          gId("dig" + n + "W").style.display = (isNet || isPar || typeDef.isHub75) ? "inline" : "none";
 
           let el = gId("dig" + n + "F");
           if (el.style.display === "inline" && (el.value === "" || isNaN(el.value))) el.value = 30;
@@ -458,6 +514,13 @@
             d.getElementsByName("CV" + n)[0].style.display = "none";
             d.getElementsByName("RF" + n)[0].style.display = "none"; // coimment out if Parallel IO needs off-refresh
           }
+          // WLEDMM a HUB75 panel has no skipped LEDs, no white channel and no
+          // off-refresh: it is scanned, not latched.
+          if (typeDef.isHub75) {
+            gId("dig" + n + "s").style.display = "none";
+            gId("dig" + n + "a").style.display = "none";
+            gId("dig" + n + "f").style.display = "none";
+          }
           d.getElementsByName("AO" + n)[0].min = (isNet || isPar) ? 1 : -1;
           d.getElementsByName("AL" + n)[0].min = (isNet || isPar) ? 1 : -1;
           if (isPar) d.getElementsByName("AL" + n)[0].max = Number(2048);
@@ -466,6 +529,22 @@
 
           // Warnings and Info
           gId("dig" + n + "W").innerHTML = "";
+
+          // WLEDMM the native HUB75 panel
+          if (typeDef.isHub75) {
+            const hubLen = Number(d.getElementsByName("LC" + n)[0].value);
+            const hubW = Number(d.getElementsByName("HB" + n)[0].value);
+            gId("dig" + n + "W").innerHTML += `<br /><b>HUB75 panel:</b>`;
+            if (hubW > 0) {
+              gId("dig" + n + "W").innerHTML += `<br />• ${hubLen} LEDs = ${hubW} x ${Math.floor(hubLen / hubW)} pixels`;
+              if (hubLen % hubW !== 0) gId("dig" + n + "W").innerHTML += `<br />• ⚠️ ${hubLen} is not a multiple of ${hubW}`;
+            } else {
+              gId("dig" + n + "W").innerHTML += `<br />• Set the panel width`;
+            }
+            gId("dig" + n + "W").innerHTML += `<br />• The panel lights only while it is clocked, so the picture is sent as bit planes`;
+            gId("dig" + n + "W").innerHTML += `<br />• A 1/16 scan needs the D line, a 1/32 scan needs D and E`;
+            gId("dig" + n + "W").innerHTML += `<br />• "Reversed" makes the panel sample the clock on its falling edge`;
+          }
 
           if (gId("dig" + n + "O").style.display == "inline") {
             let outputs = Number(d.getElementsByName("AO" + n)[0].value);
@@ -735,7 +814,8 @@
       if (n == 1) {
         let optionsHtml = "";
         for (const [id, def] of Object.entries(LED_TYPES)) {
-          if (def.cat === 0 || def.cat === 5 && !def.isMatrix) continue;
+          if (def.cat === 0 || def.cat === 5 && !def.isMatrix && !def.isHub75) continue;
+          if (def.isHub75 && !d.hub75_native) continue;  // WLEDMM: the firmware may not have the driver
           optionsHtml += `<option value="${id}">${def.name}</option>`;
         }
 
@@ -776,6 +856,19 @@ ${optionsHtml}
 <span id="p13d${i}"></span><input title="Pin 14" type="number" name="L13${i}" class="s" onchange="UI()"/>
 <span id="p14d${i}"></span><input title="Pin 15" type="number" name="L14${i}" class="s" onchange="UI()"/>
 <span id="p15d${i}"></span><input title="Pin 16" type="number" name="L15${i}" class="s" onchange="UI()"/>
+<div id="dig${i}P" style="display:none"><br><b>HUB75 panel lines</b> - the ribbon's order:<br>
+<table class="hub75">
+<tr><td>R1:</td><td><input type="number" name="H0${i}" class="s" onchange="UI()"/></td><td>G1:</td><td><input type="number" name="H1${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>B1:</td><td><input type="number" name="H2${i}" class="s" onchange="UI()"/></td><td>GND</td><td></td></tr>
+<tr><td>R2:</td><td><input type="number" name="H3${i}" class="s" onchange="UI()"/></td><td>G2:</td><td><input type="number" name="H4${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>B2:</td><td><input type="number" name="H5${i}" class="s" onchange="UI()"/></td><td>E:</td><td><input type="number" name="H6${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>A:</td><td><input type="number" name="H7${i}" class="s" onchange="UI()"/></td><td>B:</td><td><input type="number" name="H8${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>C:</td><td><input type="number" name="H9${i}" class="s" onchange="UI()"/></td><td>D:</td><td><input type="number" name="H10${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>CLK:</td><td><input type="number" name="H11${i}" class="s" onchange="UI()"/></td><td>LAT:</td><td><input type="number" name="H12${i}" class="s" onchange="UI()"/></td></tr>
+<tr><td>OE:</td><td><input type="number" name="H13${i}" class="s" onchange="UI()"/></td><td>GND</td><td></td></tr>
+</table>
+<span style="color:orange">E is marked GND (or NC) on many panels - leave it unset on those, and use a scan rate that does not need it. A line the panel does not use does no harm.</span>
+</div>
 <div id="dig${i}O" style="display:inline"><br>Number of Outputs: <input type="number" name="AO${i}" min="1" max="255" value="1" oninput="UI()"></div>
 <div id="dig${i}L" style="display:inline"><br>LEDs Per Output: <input type="number" name="AL${i}" min="1" max="65535" value="1" oninput="UI()"></div>
 <div id="dig${i}F" style="display:inline"><br>FPS Limit: <input type="number" name="AF${i}" min="1" max="255" value="30" oninput="UI()"></div>
@@ -784,6 +877,7 @@ ${optionsHtml}
 <div id="dig${i}s" style="display:inline"><br>Skip 1st: <input type="number" name="SL${i}" min="0" max="255" value="0" oninput="UI()"></div>
 <div id="dig${i}f" style="display:inline"><br><span id="ref${i}">Off Refresh</span>: <input id="rf${i}" type="checkbox" name="RF${i}"></div>
 <div id="dig${i}a" style="display:inline"><br>Auto-calculate white channel from RGB:<br><select name="AW${i}"><option value=0>None</option><option value=1>Brighter</option><option value=2>Accurate</option><option value=3>Dual</option><option value=4>Max</option></select>&nbsp;</div>
+<div id="dig${i}h" style="display:none"><br>HUB75 panel width: <input type="number" name="HB${i}" min="8" max="512" value="64" oninput="UI()"> pixels<br>HUB75 scan rate: <select name="HC${i}"><option value="16">1/16</option><option value="8">1/8</option><option value="32">1/32</option></select>&nbsp;HUB75 bit depth: <select name="HD${i}"><option value="6">6-bit</option><option value="5">5-bit</option><option value="4">4-bit</option><option value="3">3-bit</option><option value="2">2-bit</option></select><br>HUB75 peripheral: <select name="HE${i}"><option value="2">Automatic</option><option value="0">LCD_CAM</option><option value="1">PARLIO</option></select><br><span title="The classic timing: the row address is set before the row's data is clocked in. Turn it off for a panel that takes the address one row late (MoonLight's timing).">Address leads the data</span>: <input type="checkbox" name="HF${i}" checked></div>
 </div>`;
         f.insertAdjacentHTML("beforeend", cn);
       }
@@ -919,7 +1013,9 @@ ${optionsHtml}
             var l = c.hw.led;
             l.ins.forEach((v, i, a) => {
               addLEDs(1);
-              for (var j = 0; j < v.pin.length; j++) d.getElementsByName(`L${j}${i}`)[0].value = v.pin[j];
+              // WLEDMM a HUB75 panel's lines have their own fields, in the ribbon's order
+              const hub = (v.type == 111);
+              for (var j = 0; j < v.pin.length; j++) d.getElementsByName(`${hub ? "H" : "L"}${j}${i}`)[0].value = v.pin[j];
               d.getElementsByName("LT" + i)[0].value = v.type;
               d.getElementsByName("LS" + i)[0].value = v.start;
               d.getElementsByName("LC" + i)[0].value = v.len;
@@ -927,6 +1023,14 @@ ${optionsHtml}
               d.getElementsByName("SL" + i)[0].value = v.skip;
               d.getElementsByName("RF" + i)[0].checked = v.ref;
               d.getElementsByName("CV" + i)[0].checked = v.rev;
+              // WLEDMM the native HUB75 panel's own settings
+              if (v.hub75) {
+                d.getElementsByName("HB" + i)[0].value = v.hub75.w;
+                d.getElementsByName("HC" + i)[0].value = v.hub75.scan;
+                d.getElementsByName("HD" + i)[0].value = v.hub75.depth;
+                d.getElementsByName("HE" + i)[0].value = v.hub75.periph;
+                d.getElementsByName("HF" + i)[0].checked = (v.hub75.lead !== undefined) ? v.hub75.lead : 1;
+              }
             });
           }
           if (c.hw.com) {
@@ -970,6 +1074,10 @@ ${optionsHtml}
   </script>
   <style>
     @import url("style.css");
+    /* WLEDMM the HUB75 panel's lines, two to a row in the ribbon's order */
+    table.hub75 { border-collapse: collapse; margin: 4px 0 4px 10px; }
+    table.hub75 td { padding: 2px 8px 2px 0; vertical-align: middle; }
+    table.hub75 td input { width: 60px; }
   </style>
 </head>
 

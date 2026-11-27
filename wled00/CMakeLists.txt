@@ -47,6 +47,7 @@ set(WLED_APP_SRCS
     "event_bus.cpp"
     "event_log.cpp"
     "file.cpp"
+    "hub75/Hub75Panel.cpp"
     "improv.cpp"
     "json.cpp"
     "led.cpp"
@@ -111,6 +112,11 @@ set(WLED_APP_REQUIRES
     esp_driver_spi
     esp_driver_i2s
     esp_driver_parlio
+    # The HUB75 panel driver reads the GPIO matrix signals of the two
+    # peripherals it drives: the LCD_CAM's i80 bus and the parallel IO
+    # transmitter.
+    esp_hal_lcd
+    esp_hal_parlio
     esp_driver_ppa
     esp_driver_jpeg
     esp_psram
@@ -165,7 +171,7 @@ endif()
 
 idf_component_register(
     SRCS ${WLED_APP_SRCS}
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "hub75"
     REQUIRES ${WLED_APP_REQUIRES}
 )
 

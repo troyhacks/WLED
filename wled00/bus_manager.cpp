@@ -8,6 +8,9 @@
 #include "pin_manager.h"
 #include "bus_wrapper.h"
 #include "bus_manager.h"
+#ifdef WLED_ENABLE_HUB75
+#include "esp_heap_caps.h"   // the picture's own memory
+#endif
 
 // WLEDMM functions to get/set bits in an array - based on functions created by Brandon for GOL
 //  toDo : make this a class that's completely defined in a header file
@@ -1480,6 +1483,311 @@ void BusHub75Matrix::deallocatePins() {
 #endif
 // ***************************************************************************
 
+#ifdef WLED_ENABLE_HUB75
+// ============================================================================
+// The native HUB75 bus: a panel driven straight from the chip's own pins.
+//
+// The panel is a matrix, so the bus's LED count is the panel's width times
+// its height and the picture fills it row by row.  The bus holds the picture
+// in its own buffer - the way WLED's 2D matrix does - and hands it to the
+// panel's peripheral as bit planes.
+//
+// The driver underneath (hub75/) is ported from MoonLight; see
+// hub75/README.md.
+// ============================================================================
+
+// The default wiring per chip, in the ribbon's order: R1, G1, B1, R2, G2, B2,
+// E, A, B, C, D, CLK, LAT, OE.  255 leaves the line to the user.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+// The ESP32-P4 Function EV Board's J1 header: the fourteen GPIOs of it that
+// nothing else on the board wants - 2, 3, 4, 5, 20, 21, 22, 23, 26, 27, 32,
+// 33, 47 and 48 - in the order the header carries them.  The strapping pin
+// (36), the wakeup pin (6), the button (46), the amp enable (53), the I2C
+// (7, 8), the audio (10 - 13) and the Ethernet and SD pins are left alone.
+static const uint8_t kHub75DefaultPins[HUB75_PIN_COUNT] =
+  { 2, 3, 4, 5, 20, 21, 22, 23, 26, 27, 32, 33, 47, 48 };
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+// The MoonHub75 board (the LilyGO T7-S3), the map MoonLight ships.
+static const uint8_t kHub75DefaultPins[HUB75_PIN_COUNT] =
+  { 1, 5, 6, 7, 13, 9, 38, 16, 48, 47, 21, 18, 8, 4 };
+#else
+// Nothing is guessed on a board we do not know: a blind guess lands on
+// octal PSRAM, USB, UART0 or a strapping pin.
+static const uint8_t kHub75DefaultPins[HUB75_PIN_COUNT] =
+  { 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255 };
+#endif
+
+// The names of the fourteen lines, in the ribbon's order: the connector
+// carries R1, G1, B1, GND, R2, G2, B2, E, A, B, C, D, CLK, LAT, OE, GND, and
+// the two grounds are the panel's own.
+static const char* const kHub75PinNames[HUB75_PIN_COUNT] =
+  { "R1", "G1", "B1", "R2", "G2", "B2", "E", "A", "B", "C", "D", "CLK", "LAT", "OE" };
+
+// The chip's default wiring, for the settings page.
+void getHub75DefaultPins(uint8_t* pins) {
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) pins[i] = kHub75DefaultPins[i];
+}
+
+BusHub75::BusHub75(BusConfig &bc, const ColorOrderMap &com)
+  : Bus(bc.type, bc.start, bc.autoWhite)
+  , _colorOrderMap(com) {
+  _valid = false;
+  _len = 0;
+  reversed = bc.reversed;
+  _panelWidth = bc.hubWidth ? bc.hubWidth : 64;
+  _scanRate = bc.hubScan ? bc.hubScan : 16;
+  _bitDepth = bc.hubDepth ? bc.hubDepth : hub75::kHub75PortMaxBitDepth;
+  _peripheral = bc.hubPeriph;
+  _lead = bc.hubLead ? 1 : 0;
+  _colorOrder = bc.colorOrder & 0x0F;
+#ifdef WLEDMM_REMAP_AT_OUTPUT
+  _remapAtOutput = true;
+#endif
+
+  // The lines: the user's, or the chip's default when the user left them all
+  // unset.  A half-set map is a mistake, and the panel would be dark.
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) _pins[i] = bc.pins[i];
+  applyDefaults(_pins);
+
+  if (bc.count == 0) {
+    snprintf(_status, sizeof(_status), "no LEDs on the panel");
+    return;
+  }
+  if (_panelWidth == 0 || (bc.count % _panelWidth) != 0) {
+    snprintf(_status, sizeof(_status), "the LED count is not a multiple of the panel width");
+    return;
+  }
+  _panelHeight = bc.count / _panelWidth;
+
+  // The picture, three bytes per LED.  PSRAM if the board has it: the panel's
+  // own frame buffer has to be in internal memory, but the picture does not.
+  // The allocation is cache-line aligned, because the PPA effects draw into
+  // this very buffer with the accelerator.
+  _rgbLen = bc.count * 3;
+  _rgb = (uint8_t*)allocAlignedBuffer(
+    _rgbLen,
+    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SIMD,
+    MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_32BIT | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SIMD
+  );
+  if (_rgb == nullptr) {
+    snprintf(_status, sizeof(_status), "not enough memory for the panel's picture");
+    return;
+  }
+  if (_remapAtOutput) {
+    _remapped = (uint8_t*)heap_caps_calloc_prefer(_rgbLen, 1, 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_INTERNAL);
+    if (_remapped == nullptr) {
+      snprintf(_status, sizeof(_status), "not enough memory for the panel's picture");
+      return;
+    }
+  }
+
+  // Take the lines before the peripheral asks for them: a line another bus
+  // already owns has to be reported, not silently driven.
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) {
+    if (_pins[i] == 255) continue;
+    if (!pinManager.allocatePin(_pins[i], true, PinOwner::HUB75)) {
+      snprintf(_status, sizeof(_status), "GPIO %d (%s) is already in use", _pins[i], kHub75PinNames[i]);
+      cleanup();
+      return;
+    }
+  }
+
+  // The geometry: the panel's own scan rate is not derivable from its size,
+  // and the bit depth is what the picture's planes cost.
+  hub75::Hub75Geometry geo;
+  geo.width = _panelWidth;
+  geo.height = _panelHeight;
+  geo.scanRate = _scanRate;
+  geo.bitDepth = _bitDepth;
+  geo.addressLeadsData = _lead != 0;
+  if (!geo.valid()) {
+    snprintf(_status, sizeof(_status), "%ux%u does not divide into 1/%u scan row pairs",
+             _panelWidth, _panelHeight, _scanRate);
+    cleanup();
+    return;
+  }
+
+  // The peripheral: LCD_CAM has no transfer size cap, so it is the automatic
+  // choice; PARLIO is the fallback, and it caps a single transfer.
+  hub75::Backend backend = hub75::Backend::LcdCam;
+  if (_peripheral == 1) {
+    backend = hub75::Backend::Parlio;
+  } else if (_peripheral == 2) {
+    if (!hub75::backendAvailable(hub75::Backend::LcdCam, geo.frameBytes())) {
+      backend = hub75::Backend::Parlio;
+    }
+  }
+  if (!hub75::backendAvailable(backend, geo.frameBytes())) {
+    snprintf(_status, sizeof(_status), "%s cannot drive a %u byte frame",
+             hub75::backendLabel(backend), (unsigned)geo.frameBytes());
+    cleanup();
+    return;
+  }
+
+  // The lines in the ribbon's order: R1, G1, B1, R2, G2, B2, E, A, B, C, D,
+  // CLK, LAT, OE.  The connector's two grounds are the panel's own.
+  hub75::Pins pins;
+  pins.r1 = _pins[0]; pins.g1 = _pins[1]; pins.b1 = _pins[2];
+  pins.r2 = _pins[3]; pins.g2 = _pins[4]; pins.b2 = _pins[5];
+  pins.e  = _pins[6]; pins.a = _pins[7]; pins.b = _pins[8];
+  pins.c  = _pins[9]; pins.d = _pins[10];
+  pins.clk = _pins[11]; pins.lat = _pins[12]; pins.oe = _pins[13];
+  // The panel's chips sample the clock on the falling edge on some models:
+  // every pixel lands one column over otherwise.  WLED's "reversed" is that
+  // switch.
+  pins.clkFalling = reversed;
+
+  if (!hub75::init(_handle, backend, pins, _panelWidth, _panelHeight, _scanRate, _bitDepth)) {
+    const char* why = hub75::lastError();
+    snprintf(_status, sizeof(_status), "%s", why ? why : "the panel would not start");
+    cleanup();
+    return;
+  }
+  if (!hub75::start(_handle)) {
+    const char* why = hub75::lastError();
+    snprintf(_status, sizeof(_status), "%s", why ? why : "the panel scan would not start");
+    cleanup();
+    return;
+  }
+
+  _len = bc.count;
+  _valid = true;
+  snprintf(_status, sizeof(_status), "%ux%u, 1/%u scan, %u-bit (%s, %s address)",
+           _panelWidth, _panelHeight, _scanRate, _bitDepth, hub75::backendName(_handle),
+           _lead ? "leading" : "lagging");
+  USER_PRINTF("[BusHub75] %s, %u LEDs, %u bytes of picture\n", _status, _len, _rgbLen);
+}
+
+// Fill in the chip's default wiring when the user left the lines unset.
+void BusHub75::applyDefaults(uint8_t* pins) {
+  bool allUnset = true;
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) {
+    if (pins[i] != 255) { allUnset = false; break; }
+  }
+  if (!allUnset) return;
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) pins[i] = kHub75DefaultPins[i];
+}
+
+void BusHub75::setPixelColor(uint32_t pix, uint32_t c) {
+  if (pix >= _len || !_rgb) return;
+  if (_cct >= 1900) c = colorBalanceFromKelvin(_cct, c); // color correction from CCT
+
+  uint8_t* p = &_rgb[pix * 3];
+  uint8_t r = R(c), g = G(c), b = B(c);
+#ifndef WLEDMM_REMAP_AT_OUTPUT
+  // The color order is the panel's own line order: the first byte goes to
+  // the R1 line, the second to G1 and the third to B1.
+  uint8_t co = _colorOrderMap.getPixelColorOrder(pix + _start, _colorOrder);
+  switch (co) {
+    case COL_ORDER_GRB: p[0] = g; p[1] = r; p[2] = b; break;
+    case COL_ORDER_BRG: p[0] = b; p[1] = r; p[2] = g; break;
+    case COL_ORDER_RBG: p[0] = r; p[1] = b; p[2] = g; break;
+    case COL_ORDER_GBR: p[0] = g; p[1] = b; p[2] = r; break;
+    case COL_ORDER_BGR: p[0] = b; p[1] = g; p[2] = r; break;
+    default:           p[0] = r; p[1] = g; p[2] = b; break;
+  }
+#else
+  // The color order is applied at the output, with the LED map.
+  p[0] = r; p[1] = g; p[2] = b;
+#endif
+  _dirty = true;
+}
+
+uint32_t BusHub75::getPixelColor(uint32_t pix) const {
+  if (pix >= _len || !_rgb) return 0;
+  uint8_t r = _rgb[pix * 3 + 0], g = _rgb[pix * 3 + 1], b = _rgb[pix * 3 + 2];
+#ifndef WLEDMM_REMAP_AT_OUTPUT
+  uint8_t co = _colorOrderMap.getPixelColorOrder(pix + _start, _colorOrder);
+  switch (co) {
+    case COL_ORDER_GRB: return RGBW32(g, r, b, 0);
+    case COL_ORDER_BRG: return RGBW32(b, r, g, 0);
+    case COL_ORDER_RBG: return RGBW32(r, b, g, 0);
+    case COL_ORDER_GBR: return RGBW32(g, b, r, 0);
+    case COL_ORDER_BGR: return RGBW32(b, g, r, 0);
+    default:           return RGBW32(r, g, b, 0);
+  }
+#else
+  return RGBW32(r, g, b, 0);
+#endif
+}
+
+uint32_t BusHub75::getPixelColorRestored(uint32_t pix) const {
+  // The picture is held as it was drawn: the brightness is the panel's lit
+  // time, not a scale on the values, so nothing is lost.
+  return getPixelColor(pix);
+}
+
+void BusHub75::setBrightness(uint8_t b, bool immediate) {
+  // The panel's brightness is how long each plane is lit, so it is read by
+  // the encoder on every frame: the picture itself does not change.
+  _bri = b;
+  _dirty = true;
+  (void)immediate;
+}
+
+void BusHub75::show() {
+  if (!_valid || !canShow()) return;
+  if (!_dirty) return;   // the panel is scanning the same frame already
+
+  const uint8_t* src = _rgb;
+  if (_remapAtOutput) {
+    // The LED map is applied here, at the output: the picture is in the
+    // matrix's order and the panel wants it in its own.  The table is
+    // inverted, so it is indexed by the panel's pixel and holds the matrix
+    // position it takes its colour from.
+    uint32_t* map = strip.getCustomMappingTable();
+    uint32_t mapSize = strip.getCustomMappingTableSize();
+    // The color order rides along: the first byte goes to the R1 line.
+    uint8_t rIdx = 0, gIdx = 1, bIdx = 2;
+    switch (_colorOrder) {
+      case COL_ORDER_GRB: rIdx = 1; gIdx = 0; bIdx = 2; break;
+      case COL_ORDER_BRG: rIdx = 1; gIdx = 2; bIdx = 0; break;
+      case COL_ORDER_RBG: rIdx = 0; gIdx = 2; bIdx = 1; break;
+      case COL_ORDER_BGR: rIdx = 2; gIdx = 1; bIdx = 0; break;
+      case COL_ORDER_GBR: rIdx = 1; gIdx = 0; bIdx = 2; break;
+      default: break;  // RGB
+    }
+    for (uint32_t p = 0; p < _len; p++) {
+      uint32_t from = (map && p < mapSize) ? map[p] : p;
+      if (from >= _len) from = p;
+      const uint8_t* s = &_rgb[from * 3];
+      uint8_t* d = &_remapped[p * 3];
+      d[rIdx] = s[0]; d[gIdx] = s[1]; d[bIdx] = s[2];
+    }
+    src = _remapped;
+  }
+
+  hub75::Hub75Geometry geo;
+  geo.width = _panelWidth;
+  geo.height = _panelHeight;
+  geo.scanRate = _scanRate;
+  geo.bitDepth = _bitDepth;
+  geo.addressLeadsData = _lead != 0;
+  geo.brightness = _bri;   // the panel's brightness is the planes' lit time
+  hub75::hub75Encode(src, hub75::buffer(_handle), geo);
+  _dirty = false;
+}
+
+uint8_t BusHub75::getPins(uint8_t* pinArray) const {
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) pinArray[i] = _pins[i];
+  return HUB75_PIN_COUNT;
+}
+
+void BusHub75::cleanup() {
+  hub75::deinit(_handle);
+  for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) {
+    if (_pins[i] == 255) continue;
+    pinManager.deallocatePin(_pins[i], PinOwner::HUB75);
+  }
+  if (_rgb) { free(_rgb); _rgb = nullptr; }
+  if (_remapped) { free(_remapped); _remapped = nullptr; }
+  _rgbLen = 0;
+  _len = 0;
+  _valid = false;
+}
+#endif
+// ***************************************************************************
+
 //utility to get the approx. memory usage of a given BusConfig
 uint32_t BusManager::memUsage(BusConfig &bc) {
   uint8_t type = bc.type;
@@ -1499,6 +1807,21 @@ uint32_t BusManager::memUsage(BusConfig &bc) {
     #endif
   }
   if (type > 31 && type < 48)   return 5;
+#ifdef WLED_ENABLE_HUB75
+  if (type == TYPE_HUB75) {
+    // The picture, the copy of it the remap-at-output path needs, and the
+    // panel's own frame buffer - the bit planes, in internal memory.
+    uint32_t w = bc.hubWidth ? bc.hubWidth : 64;
+    uint8_t scan = bc.hubScan ? bc.hubScan : 16;
+    uint8_t depth = bc.hubDepth ? bc.hubDepth : hub75::kHub75PortMaxBitDepth;
+    uint32_t h = w ? len / w : 0;
+    uint32_t rowsPerScan = scan ? h / scan : 0;
+    uint32_t rowWords = w * (rowsPerScan / 2);
+    uint32_t hold = hub75::hub75HoldWords(rowWords, depth);
+    uint32_t frame = (uint32_t)depth * scan * (rowWords + hold) * hub75::Hub75Geometry::kBytesPerSlot;
+    return len * 6 + frame;
+  }
+#endif
   return len*3; //RGB
 }
 
@@ -1529,6 +1852,15 @@ int BusManager::add(BusConfig &bc) {
     USER_PRINTLN("[BusHub75Matrix] ");
   #else
     USER_PRINTLN("[unsupported! BusHub75Matrix - add flag -D WLED_ENABLE_HUB75MATRIX] ");
+    return -1;
+  #endif
+  } else if (bc.type == TYPE_HUB75) {
+  #ifdef WLED_ENABLE_HUB75
+    DEBUG_PRINTLN("BusManager::add - Adding BusHub75");
+    busses[numBusses] = new BusHub75(bc, colorOrderMap);
+    USER_PRINTLN("[BusHub75] ");
+  #else
+    USER_PRINTLN("[unsupported! BusHub75 - add flag -D WLED_ENABLE_HUB75] ");
     return -1;
   #endif
   } else if (bc.type == TYPE_PARLIO_RGB || bc.type == TYPE_PARLIO_RGBW) {

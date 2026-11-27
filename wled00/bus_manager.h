@@ -13,6 +13,25 @@
 
 #include "const.h"
 
+// WLEDMM the native HUB75 driver: the panel is driven straight from the
+// chip's own pins, over LCD_CAM or PARLIO.  The driver itself lives in
+// hub75/, ported from MoonLight - see hub75/README.md.
+#ifdef WLED_ENABLE_HUB75
+#include "hub75/Hub75Bus.h"
+#include "hub75/Hub75Encode.h"
+#include "hub75/Hub75Panel.h"
+#endif
+
+// A HUB75 panel's fourteen lines, in ribbon order: R1, G1, B1, R2, G2, B2,
+// A, B, C, D, E, CLK, LAT, OE.
+#define HUB75_PIN_COUNT 14
+
+#ifdef WLED_ENABLE_HUB75
+// The chip's default HUB75 wiring, in ribbon order: what the panel uses when
+// the user leaves the lines unset.  The settings page offers it too.
+void getHub75DefaultPins(uint8_t* pins);
+#endif
+
 #if !defined(FASTLED_VERSION) // only pull in FastLED if we don't have it yet
   #define FASTLED_INTERNAL
   #include <FastLED.h>
@@ -30,11 +49,12 @@
 // The widest pin array a bus needs.  The Parallel IO block is the widest -
 // sixteen pins on the ESP32-P4 and the ESP32-S31 - but the chips without
 // one (the ESP32-S3 among them) still need room for the widest bus they
-// have: the network buses take four pins and the PWM ones five.
+// have: the network buses take four pins, the PWM ones five and a HUB75
+// panel fourteen.
 #ifdef SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH
   #define WLED_BUS_MAX_PINS SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH
 #else
-  #define WLED_BUS_MAX_PINS 8
+  #define WLED_BUS_MAX_PINS 14
 #endif
 
 // WLEDMM bitarray utilities
@@ -71,17 +91,31 @@ struct BusConfig {
 
   uint8_t pins[WLED_BUS_MAX_PINS];
   uint16_t frequency;
+  // WLEDMM the native HUB75 panel's own settings: the panel's width in
+  // pixels, its scan rate (1/8, 1/16 or 1/32), its bit depth (2..6) and the
+  // peripheral that clocks it out (0 = LCD_CAM, 1 = PARLIO, 2 = automatic).
+  // The height follows from the LED count and the width.
+  // hubLead is the address timing: 1 = the address leads the data (the
+  // classic timing, right on every panel), 0 = it lags the data by a row
+  // (MoonLight's timing, which a panel with a shared shift register takes).
+  uint16_t hubWidth;
+  uint8_t hubScan;
+  uint8_t hubDepth;
+  uint8_t hubPeriph;
+  uint8_t hubLead;
   BusConfig(uint8_t busType, uint8_t* ppins, uint32_t pstart, uint32_t len = 1, uint8_t pcolorOrder = COL_ORDER_GRB, bool rev = false, uint32_t skip = 0, byte aw=RGBW_MODE_MANUAL_ONLY, uint16_t clock_kHz=0U, uint32_t art_o=1, uint32_t art_l=1, uint8_t art_f=30) {
     refreshReq = (bool) GET_BIT(busType,7);
     type = busType & 0x7F;  // bit 7 may be/is hacked to include refresh info (1=refresh in off state, 0=no refresh)
     count = len; start = pstart; colorOrder = pcolorOrder; reversed = rev; skipAmount = skip; autoWhite = aw; frequency = clock_kHz;
     outputs = art_o; leds_per_output = art_l; fps_limit = art_f;
+    hubWidth = 0; hubScan = 0; hubDepth = 0; hubPeriph = 2; hubLead = 1;
     uint8_t nPins = 1;                                                                 // default = only one pin (clockless LEDs like WS281x)
     if ((type >= TYPE_NET_ARTNET_RGB) && (type <= TYPE_NET_E131_RGBW)) nPins = 4;     // virtual network bus. 4 "pins" store IP address
     if (type == TYPE_PARLIO_RGB || TYPE_PARLIO_RGBW) nPins = WLED_BUS_MAX_PINS;     // Parallel IO needs the widest array - 16 pins on the ESP32-P4
     else if ((type > 47) && (type < 63)) nPins = 2;                                    // (data + clock / SPI) busses - two pins
     else if (IS_PWM(type)) nPins = NUM_PWM_PINS(type);                                 // PWM needs 1..5 pins
     else if (type >= TYPE_HUB75MATRIX && type <= (TYPE_HUB75MATRIX + 10)) nPins = 1;   // HUB75 does not use LED pins, but we need to preserve the "chain length" parameter
+    else if (type == TYPE_HUB75) nPins = HUB75_PIN_COUNT;                             // a HUB75 panel: fourteen lines, in ribbon order
     for (uint8_t i = 0; i < min(unsigned(nPins), sizeof(pins)/sizeof(pins[0])); i++) pins[i] = ppins[i];   //softhack007 fix for potential array out-of-bounds access
   }
 
@@ -164,6 +198,19 @@ class Bus {
     virtual uint8_t  get_fps_limit() const { return 0; }
     virtual uint16_t get_outputs() const { return 0; }
     virtual uint32_t get_leds_per_output() const { return 0; }
+    // WLEDMM the native HUB75 panel's settings: the width in pixels, the scan
+    // rate, the bit depth and the peripheral that clocks the panel out.  Only
+    // the HUB75 bus answers these; the rest return zero.
+    virtual uint16_t getHubWidth() const { return 0; }
+    virtual uint8_t  getHubScan() const { return 0; }
+    virtual uint8_t  getHubDepth() const { return 0; }
+    virtual uint8_t  getHubPeriph() const { return 0; }
+    virtual uint8_t  getHubLead() const { return 0; }
+    // The panel's own readings: the refresh the scan actually reaches, and the
+    // line the bus drew its status on.  A HUB75 bus answers both; the rest
+    // return zero and nothing.
+    virtual uint16_t getHubRefresh() const { return 0; }
+    virtual const char* getHubStatus() const { return nullptr; }
     inline  uint32_t getStart() const { return _start; }
     inline  void     setStart(uint32_t start) { _start = start; }
     inline  uint8_t  getType() const { return _type; }
@@ -173,6 +220,9 @@ class Bus {
     virtual uint32_t getMaxPixels() const { return MAX_LEDS_PER_BUS; }
     virtual byte* getPixelData() { return nullptr; } // TroyHacks
     virtual uint32_t getPixelDataSize() { return 0; } // TroyHacks
+    // The picture in that buffer changed without going through setPixelColor:
+    // a PPA effect draws into it with the accelerator, behind the bus's back.
+    virtual void markPixelDataChanged() {} // TroyHacks
     static constexpr size_t PPA_CACHE_LINE = 64;
     virtual bool hasRGB() const {
       if ((_type >= TYPE_WS2812_1CH && _type <= TYPE_WS2812_WWA) || _type == TYPE_ANALOG_1CH || _type == TYPE_ANALOG_2CH || _type == TYPE_ONOFF) return false;
@@ -537,7 +587,7 @@ class BusHub75Matrix : public Bus {
     unsigned _panelWidth = 0;
     CRGB *_ledBuffer = nullptr;
     byte *_ledsDirty = nullptr;
-    // C++ dirty trick: private static variables are actually _not_ part of the class (however only visibile to class instances). 
+    // C++ dirty trick: private static variables are actually _not_ part of the class (however only visibile to class instances).
     // These variables persist when BusHub75Matrix gets deleted.
     static MatrixPanel_I2S_DMA *activeDisplay;         // active display object
     static VirtualMatrixPanel  *activeFourScanPanel;   // active fourScan object
@@ -545,6 +595,89 @@ class BusHub75Matrix : public Bus {
     static uint8_t activeType;                         // last used type
     static uint8_t instanceCount;                      // active instances - 0 or 1
     static uint8_t last_bri;                           // last used brightness value (persists on driver delete)
+};
+#endif
+
+#ifdef WLED_ENABLE_HUB75
+/// The native HUB75 bus: a panel driven straight from the chip's own pins.
+///
+/// The panel is a matrix, so the LED count is the panel's width times its
+/// height, and the LEDs fill it row by row.  The bus holds the picture in its
+/// own buffer, the way the 2D matrix in WLED's core does, and hands it to the
+/// panel's peripheral as bit planes: a panel lights only while it is clocked,
+/// so the peripheral scans one buffer forever and the bus writes the next
+/// frame into it between scans.
+///
+/// The driver underneath (hub75/) is ported from MoonLight; see
+/// hub75/README.md.
+class BusHub75 : public Bus {
+  public:
+    BusHub75(BusConfig &bc, const ColorOrderMap &com);
+    ~BusHub75() { cleanup(); }
+
+    uint32_t getMaxPixels() const override { return MAX_LEDS; }
+
+    bool hasRGB() const override { return true; }
+    bool hasWhite() const override { return false; }
+
+    void setPixelColor(uint32_t pix, uint32_t c) override;
+    uint32_t getPixelColor(uint32_t pix) const override;
+    uint32_t getPixelColorRestored(uint32_t pix) const override; // lossless: the panel's buffer holds the picture as it was drawn
+
+    // The picture the PPA effects draw into: the same buffer the renderer
+    // writes, so an accelerated effect reaches the panel.  The size is padded
+    // to the cache line, as the accelerator wants the buffer aligned.
+    byte* getPixelData() override { return _rgb; }
+    uint32_t getPixelDataSize() override {
+      const uint32_t rawSize = _len * 3;
+      #if defined(SOC_PPA_SUPPORTED)
+      return (rawSize + PPA_CACHE_LINE - 1) & ~(PPA_CACHE_LINE - 1);
+      #else
+      return rawSize;
+      #endif
+    }
+    void markPixelDataChanged() override { _dirty = true; }
+
+    void show(void) override;
+    void setBrightness(uint8_t b, bool immediate) override;
+
+    uint8_t getColorOrder() const override { return _colorOrder; }
+    void setColorOrder(uint8_t colorOrder) { _colorOrder = colorOrder; }
+
+    uint8_t getPins(uint8_t* pinArray) const override;
+
+    void cleanup(void) override;
+
+    // the panel's settings, for the settings page and the config file
+    uint16_t getHubWidth() const override { return _panelWidth; }
+    uint8_t  getHubScan() const override { return _scanRate; }
+    uint8_t  getHubDepth() const override { return _bitDepth; }
+    uint8_t  getHubPeriph() const override { return _peripheral; }
+    uint8_t  getHubLead() const override { return _lead; }
+
+    // the panel's state, for the log and the console
+    uint16_t getHubRefresh() const override { return _valid ? hub75::refreshHz(_handle) : 0; }
+    const char* getHubStatus() const override { return _status; }
+
+  private:
+    void applyDefaults(uint8_t* pins);
+
+    uint8_t* _rgb = nullptr;          // the picture: three bytes per LED, in the order the panel's lines take them
+    uint8_t* _remapped = nullptr;      // the same picture in the panel's own order, for the remap-at-output path
+    uint32_t _rgbLen = 0;              // the picture's length in bytes
+    uint16_t _panelWidth = 0;
+    uint16_t _panelHeight = 0;
+    uint8_t  _scanRate = 16;
+    uint8_t  _bitDepth = 6;
+    uint8_t  _peripheral = 2;          // 0 = LCD_CAM, 1 = PARLIO, 2 = automatic
+    uint8_t  _lead = 1;                // 1 = the address leads the data, 0 = it lags the data by a row
+    uint8_t  _colorOrder = COL_ORDER_RGB;
+    uint8_t  _pins[HUB75_PIN_COUNT] = { 255 };
+    bool     _remapAtOutput = false;   // the LED map is applied here, at the output, not in the renderer
+    bool     _dirty = true;            // the picture changed since the last encode
+    hub75::Hub75Handle _handle = {};
+    const ColorOrderMap& _colorOrderMap;
+    char _status[64] = { 0 };
 };
 #endif
 

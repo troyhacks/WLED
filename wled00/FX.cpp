@@ -152,6 +152,7 @@ inline bool ppaEffectBegin(PPAEffectContext& ctx) {
 
   ctx.busPixelData = bus->getPixelData();
   ctx.busPixelSize = bus->getPixelDataSize();
+  bus->markPixelDataChanged();   // the accelerator writes the picture itself
 
   if (ctx.busPixelData == nullptr || ctx.busPixelSize == 0) {
     ctx.valid = false;
@@ -12053,6 +12054,7 @@ uint16_t mode_PPA_IMAGEPLAYER() {
     if (!bus->isOk()) return false;
     busPixelData = bus->getPixelData();
     busPixelSize = bus->getPixelDataSize();
+    bus->markPixelDataChanged();   // the accelerator writes the picture itself
     if (busPixelData == NULL || busPixelSize == 0) return 1;
   } else {
     return 1;
@@ -12601,6 +12603,7 @@ uint16_t mode_PRO_LINK() {
     if (!bus->isOk()) return false;
     busPixelData = bus->getPixelData();
     busPixelSize = bus->getPixelDataSize();
+    bus->markPixelDataChanged();   // the accelerator writes the picture itself
     if (!busPixelData || busPixelSize == 0) return 1;
   } else {
     return 1;
@@ -12951,6 +12954,7 @@ uint16_t mode_DJLight_Circles(void) {
     if (!bus->isOk()) return false;
     busPixelData = bus->getPixelData();
     busPixelSize = bus->getPixelDataSize();
+    bus->markPixelDataChanged();   // the accelerator writes the picture itself
     if (!busPixelData || busPixelSize == 0) return FRAMETIME;
   } else {
     return FRAMETIME;
@@ -13230,6 +13234,7 @@ uint16_t IRAM_ATTR mode_AkemiPPA() {
     if (!bus->isOk()) return false;
     busPixelData = bus->getPixelData();
     busPixelSize = bus->getPixelDataSize();
+    bus->markPixelDataChanged();   // the accelerator writes the picture itself
     if (busPixelData == NULL || busPixelSize == 0) return mode_static();
   } else {
     return mode_static();

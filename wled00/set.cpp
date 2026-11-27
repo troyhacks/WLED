@@ -98,11 +98,9 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
 
     uint8_t colorOrder, type, awmode, channelSwap, fps_limit;
     uint32_t length, start, leds_per_output, outputs, skip;
-    #ifdef SOC_PARLIO_SUPPORTED
-    uint8_t nPins = SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH;
-    #else
-    uint8_t nPins = 5;
-    #endif
+    // The widest bus takes the most pins: the Parallel IO block's sixteen on
+    // the P4 and the S31, and a HUB75 panel's fourteen everywhere else.
+    uint8_t nPins = WLED_BUS_MAX_PINS;
     uint8_t pins[nPins];
 
     autoSegments = request->hasArg(F("MS"));
@@ -137,7 +135,15 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       char ao[4] = "AO"; ao[2] = 48+s; ao[3] = 0; //Art-Net outputs
       char al[4] = "AL"; al[2] = 48+s; al[3] = 0; //Art-Net LEDs per output
       char af[4] = "AF"; af[2] = 48+s; af[3] = 0; //Art-Net FPS limit
-      if (!request->hasArg(lp)) {
+      // WLEDMM the native HUB75 panel's own settings
+      char hb[4] = "HB"; hb[2] = 48+s; hb[3] = 0; //HUB75 panel width
+      char hc[4] = "HC"; hc[2] = 48+s; hc[3] = 0; //HUB75 scan rate
+      char hd[4] = "HD"; hd[2] = 48+s; hd[3] = 0; //HUB75 bit depth
+      char he[4] = "HE"; he[2] = 48+s; he[3] = 0; //HUB75 peripheral
+      char hf[4] = "HF"; hf[2] = 48+s; hf[3] = 0; //HUB75 address timing: the address leads the data
+      // WLEDMM the type says whether this bus is there: a HUB75 panel's lines
+      // have their own fields, so the plain pin fields are not the marker.
+      if (!request->hasArg(lt)) {
         USER_PRINT(F("No data for "));
         USER_PRINTLN(s);
         break;
@@ -147,9 +153,13 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       //   if (!request->hasArg(lp)) break;
       //   pins[i] = (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255;
       // }
+      type = request->arg(lt).toInt();
+      // WLEDMM a HUB75 panel names its lines in the ribbon's order and they
+      // have their own fields; the plain pin fields belong to the other buses.
+      const char* pinPrefix = (type == TYPE_HUB75) ? "H" : "L";
       for (uint8_t i = 0; i < nPins; i++) {
         char lp[7];
-        snprintf(lp, sizeof(lp), "L%u%u", i, s);
+        snprintf(lp, sizeof(lp), "%s%u%u", pinPrefix, i, s);
         if (!request->hasArg(lp)) {
           DEBUG_PRINT(F("No data for "));
           DEBUG_PRINTLN(lp);
@@ -158,7 +168,6 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
         DEBUG_PRINTF("Saving pin arg %s to pin[%d] with value %d\n", lp, i, (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255);
         pins[i] = (request->arg(lp).length() > 0) ? request->arg(lp).toInt() : 255;
       }
-      type = request->arg(lt).toInt();
       skip = request->arg(sl).toInt();
       colorOrder = request->arg(co).toInt();
       start = (request->hasArg(ls)) ? request->arg(ls).toInt() : t;
@@ -201,6 +210,14 @@ void handleSettingsSet(AsyncWebServerRequest *request, byte subPage)
       // this may happen even before this loop is finished so we do "doInitBusses" after the loop
       if (busConfigs[s] != nullptr) delete busConfigs[s];
       busConfigs[s] = new BusConfig(type, pins, start, length, colorOrder | (channelSwap<<4), request->hasArg(cv), skip, awmode, freqHz, outputs, leds_per_output, fps_limit);
+      // WLEDMM the native HUB75 panel's own settings
+      busConfigs[s]->hubWidth = request->hasArg(hb) ? request->arg(hb).toInt() : 0;
+      busConfigs[s]->hubScan  = request->hasArg(hc) ? request->arg(hc).toInt() : 0;
+      busConfigs[s]->hubDepth = request->hasArg(hd) ? request->arg(hd).toInt() : 0;
+      busConfigs[s]->hubPeriph= request->hasArg(he) ? request->arg(he).toInt() : 2;
+      // The checkbox is only sent when it is ticked, so a page without it
+      // means the old timing: the address lags the data.
+      busConfigs[s]->hubLead  = request->hasArg(hf) ? 1 : 0;
       busesChanged = true;
     }
     //doInitBusses = busesChanged; // we will do that below to ensure all input data is processed

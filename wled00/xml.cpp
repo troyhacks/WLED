@@ -252,6 +252,24 @@ void appendGPIOinfo() {
   oappend(SET_F("d.artnetMap_enabled=0;"));
   #endif
 
+  #ifdef WLED_ENABLE_HUB75
+  // WLEDMM: the native HUB75 driver is a build flag, so the settings page
+  // only offers its LED type when the firmware has it.
+  oappend(SET_F("d.hub75_native=1;"));
+  // The chip's default panel wiring, so a new panel starts out wired.
+  {
+    uint8_t hubPins[HUB75_PIN_COUNT];
+    getHub75DefaultPins(hubPins);
+    oappend(SET_F("d.hub75_default_pins=["));
+    char s[8];
+    for (uint8_t i = 0; i < HUB75_PIN_COUNT; i++) {
+      snprintf(s, sizeof(s), "%s%u", i ? "," : "", hubPins[i]);
+      oappend(s);
+    }
+    oappend(SET_F("];"));
+  }
+  #endif
+
   #ifdef SOC_PARLIO_SUPPORTED
   oappend(SET_F("d.max_parlio="));
   oappendi(SOC_PARLIO_RX_UNIT_MAX_DATA_WIDTH);
@@ -444,15 +462,16 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
       char al[4] = "AL"; al[2] = 48+s; al[3] = 0; //Art-Net LEDs per output
       char af[4] = "AF"; af[2] = 48+s; af[3] = 0; //Art-Net FPS limit
       oappend(SET_F("addLEDs(1);"));
-      #ifdef SOC_PARLIO_SUPPORTED
-      uint8_t pins[SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH];
-      #else
-      uint8_t pins[5];
-      #endif
+      // The widest bus takes the most pins: the Parallel IO block's sixteen on
+      // the P4 and the S31, and a HUB75 panel's fourteen everywhere else.
+      uint8_t pins[WLED_BUS_MAX_PINS];
       uint8_t nPins = bus->getPins(pins);
+      // WLEDMM a HUB75 panel's lines have their own fields, in the ribbon's
+      // order; the plain pin fields belong to the other buses.
+      const char* pinPrefix = (bus->getType() == TYPE_HUB75) ? "H" : "L";
       for (uint8_t i = 0; i < nPins; i++) {
         char lp[7];
-        snprintf(lp, sizeof(lp), "L%u%u", i, s);
+        snprintf(lp, sizeof(lp), "%s%u%u", pinPrefix, i, s);
         if (pinManager.isPinOk(pins[i]) || bus->getType() >= TYPE_NET_ARTNET_RGB) {
           sappend('v', lp, (pins[i] == 255 ? -1 : pins[i]));
         } else {
@@ -471,6 +490,30 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
       sappend('v',ao,bus->get_outputs());
       sappend('v',al,bus->get_leds_per_output());
       sappend('v',af,bus->get_fps_limit());
+      if (bus->getType() == TYPE_HUB75) {
+        // WLEDMM the native HUB75 panel's own settings
+        char hb[4] = "HB"; hb[2] = 48+s; hb[3] = 0; //HUB75 panel width
+        char hc[4] = "HC"; hc[2] = 48+s; hc[3] = 0; //HUB75 scan rate
+        char hd[4] = "HD"; hd[2] = 48+s; hd[3] = 0; //HUB75 bit depth
+        char he[4] = "HE"; he[2] = 48+s; he[3] = 0; //HUB75 peripheral
+        char hf[4] = "HF"; hf[2] = 48+s; hf[3] = 0; //HUB75 address timing
+        sappend('v',hb,bus->getHubWidth());
+        sappend('v',hc,bus->getHubScan());
+        sappend('v',hd,bus->getHubDepth());
+        sappend('v',he,bus->getHubPeriph());
+        sappend('c',hf,bus->getHubLead());
+        // WLEDMM the panel's own readings: the refresh the scan actually
+        // reaches, and the line the bus drew its status on.  A panel that
+        // flickers is asked for this number; below 100 Hz the picture tears.
+        char hs[16];
+        snprintf(hs, sizeof(hs), "hub75_status_%u", s);
+        char stat[96];
+        snprintf(stat, sizeof(stat), "%s, %u Hz",
+                 bus->getHubStatus() ? bus->getHubStatus() : "no status",
+                 bus->getHubRefresh());
+        oappend(SET_F("d.")); oappend(hs); oappend(SET_F("=\""));
+        oappend(stat); oappend(SET_F("\";"));
+      }
 
       uint16_t speed = bus->getFrequency();
       if (bus->getType() > TYPE_ONOFF && bus->getType() < 48) {
@@ -561,7 +604,7 @@ void getSettingsJS(AsyncWebServerRequest* request, byte subPage, char* dest) //W
     #endif
     #ifndef WLED_ENABLE_HUB75MATRIX
     oappend(SET_F("hideHub75();"));  // WLEDMM hide HUB75 LED types
-    #endif    
+    #endif
 
   }
 

@@ -302,14 +302,15 @@
 
 // WLEDMM additional types
 #define TYPE_HUB75MATRIX         100 // 100 - 110
+#define TYPE_HUB75               111 // WLEDMM the native HUB75 driver: a panel driven straight from the chip's own pins, over LCD_CAM or PARLIO
 // WLEDMM caution - do not use bus types > 127
 
-#define IS_DIGITAL(t) (((t) & 0x10) || ((t)==TYPE_HUB75MATRIX)) //digital are 16-31 and 48-63 // WLEDMM added HUB75
+#define IS_DIGITAL(t) (((t) & 0x10) || ((t)==TYPE_HUB75MATRIX) || ((t)==TYPE_HUB75)) //digital are 16-31 and 48-63 // WLEDMM added HUB75
 #define IS_PWM(t)     ((t) > 40 && (t) < 46)
 #define NUM_PWM_PINS(t) ((t) - 40) //for analog PWM 41-45 only
 #define IS_2PIN(t)      ((t) > 47)
 #define IS_VIRTUAL(t)        ( ((t) <= TYPE_RESERVED) || (((t) >= TYPE_NET_DDP_RGB) && ((t) < (TYPE_NET_DDP_RGB + 16))) ) // WLEDMM 80..95 are network "virtual" busses
-#define EXCLUDE_FROM_ABL(t)  ( IS_VIRTUAL(t) || ( (t) >= (TYPE_HUB75MATRIX) && (t) < (TYPE_HUB75MATRIX + 10)))  // WLEDMM do not apply auto-brightness-limiter on these bus types 
+#define EXCLUDE_FROM_ABL(t)  ( IS_VIRTUAL(t) || ( (t) >= (TYPE_HUB75MATRIX) && (t) < (TYPE_HUB75MATRIX + 10)) || ((t)==TYPE_HUB75))  // WLEDMM do not apply auto-brightness-limiter on these bus types
 
 //Color orders
 #define COL_ORDER_GRB             0           //GRB(w),defaut
