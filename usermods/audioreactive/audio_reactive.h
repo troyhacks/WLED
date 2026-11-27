@@ -843,6 +843,50 @@ constexpr float AR_BIN_SCALE = 1.0f / 16.0f;
 static float* vReal = nullptr;
 static float* vImag = nullptr;
 
+// A watch on the two frame buffers.
+//
+// vReal and vImag are written ONCE - by alocateFrameBuffers(), when the
+// analysis task starts - and nothing else in the firmware writes them.
+// So if they change, something wrote over them, and that something is
+// the bug.
+//
+// It has happened.  The analysis task died in chainProcess()'s memcpy
+// with vImag pointing at 0x33868693 and vReal pointing at the task's
+// own TCB.  The watch says WHERE in the frame the pointers went wrong,
+// so the next crash says where to look: the phase is the one that was
+// current when the watch saw them change.
+//
+// The values are kept in globals so that the coredump carries them.
+// The console drops most of what it is told (see the boot log notes),
+// so a line on the wire is not evidence - a word in the dump is.
+static volatile uint32_t arWatchPhase = 0;   // where in the frame it went wrong
+static volatile uint32_t arWatchFrame = 0;   // the frame it went wrong in
+static volatile uint32_t arWatchReal  = 0;   // what vReal was then
+static volatile uint32_t arWatchImag  = 0;   // what vImag was then
+static float* arWatchRealExpect = nullptr;  // what they should be
+static float* arWatchImagExpect = nullptr;
+
+// The phases of the frame, in the order they happen.
+enum : uint32_t {
+  AR_PHASE_FRAME_START  = 1,
+  AR_PHASE_AFTER_READ   = 2,   // the samples are in
+  AR_PHASE_AFTER_MIC    = 3,   // the microphone filter has run
+  AR_PHASE_BEFORE_CHAIN = 4,   // just before the input chain
+  AR_PHASE_AFTER_CHAIN  = 5,   // the input chain has run
+  AR_PHASE_AFTER_BANKS  = 6,   // the two RTA banks have run
+  AR_PHASE_FRAME_END    = 7
+};
+
+// Look at the buffers.  Two compares, once per phase.
+#define AR_WATCH(phase) do {                                             \
+    if ((vReal != arWatchRealExpect) || (vImag != arWatchImagExpect)) {   \
+      arWatchPhase = (uint32_t)(phase);                                  \
+      arWatchFrame = arFramesTotal;                                      \
+      arWatchReal  = (uint32_t)(uintptr_t)vReal;                        \
+      arWatchImag  = (uint32_t)(uintptr_t)vImag;                        \
+    }                                                                    \
+  } while (0)
+
 constexpr float binWidth = SAMPLE_RATE / (float)scaleWindowSamples; // frequency range of each band
 
 // ---------------------------------------------------------------------------
@@ -4904,6 +4948,10 @@ void arAnalysisTask(void * parameter)
   const uint64_t tInit0 = esp_timer_get_time();
   if ((vReal == nullptr) || (vImag == nullptr)) success = alocateFrameBuffers(); // allocate sample buffers on first run
   if (success == false) { disableSoundProcessing = true; return; }             // no memory -> die
+  // The watch starts here: these are the pointers the frame is entitled to
+  // use.  If they change, the frame is working on someone else's memory.
+  arWatchRealExpect = vReal;
+  arWatchImagExpect = vImag;
 
   // The legacy scale's normalisation constant.
   //
@@ -5235,6 +5283,7 @@ void arAnalysisTask(void * parameter)
     // were carried in a 14 KB buffer for it. The filters - the chain and both
     // banks - keep their own state across frames, so they need each sample
     // exactly once and in order, and they get it.
+    AR_WATCH(AR_PHASE_FRAME_START);
     if (audioSource) audioSource->getSamples(vReal, hopSamples);
 
     // THE LOUDNESS METER.
@@ -5257,6 +5306,7 @@ void arAnalysisTask(void * parameter)
     // meter that measures stale samples is worse than one that measures
     // nothing.
     if (audioSource) arLoudnessProcess(vReal, hopSamples);
+    AR_WATCH(AR_PHASE_AFTER_READ);
 
     // The frame's peak - the raw peak of the fresh samples, before the input
     // filters run - used to be measured here as `rawPeak`, against `maxSample`
@@ -5369,6 +5419,7 @@ void arAnalysisTask(void * parameter)
           // function-local statics, so the calibration cannot run it without
           // refactoring it into a state object first.
           runMicFilter(sampleCount, samplesStart);
+          AR_WATCH(AR_PHASE_AFTER_MIC);
           break;
         default: break;
       }
@@ -5389,7 +5440,9 @@ void arAnalysisTask(void * parameter)
       // frames rather than restarting.
       liveChain.dcOn  = liveChainDcOn();
       liveChain.lpfOn = liveChainLpfOn();
+      AR_WATCH(AR_PHASE_BEFORE_CHAIN);
       chainProcess(&liveChain, samplesStart, sampleCount, vImag);
+      AR_WATCH(AR_PHASE_AFTER_CHAIN);
     }
 
     // The RTA filter bank: the bottom eight bands.
@@ -5432,6 +5485,7 @@ void arAnalysisTask(void * parameter)
       const float rtaUnits = (float)((rRtaUs + 5ULL) / 10ULL);   // TIMING_UNIT_US
       rtaTime = (rtaUnits * 3.0f + rtaTime * 7.0f) / 10.0f;
     }
+    AR_WATCH(AR_PHASE_AFTER_BANKS);
 
     // The broadband level of the FRAME, and with it the noise floor and
     // the gate.
@@ -5688,6 +5742,7 @@ void arAnalysisTask(void * parameter)
     // applied at that moment, so it can be moved live without disturbing
     // the history.
     arLoudnessPublish();
+    AR_WATCH(AR_PHASE_FRAME_END);
 
     probe(dFinal);
 
