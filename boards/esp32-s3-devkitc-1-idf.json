@@ -1,0 +1,37 @@
+{
+  "build": {
+    "core": "esp32",
+    "extra_flags": [
+      "-DBOARD_HAS_PSRAM"
+    ],
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "f_psram": "80000000L",
+    "flash_mode": "qio",
+    "mcu": "esp32s3",
+    "chip_variant": "esp32s3",
+    "variant": "esp32s3",
+    "psram_type": "opi",
+    "partitions": "tools/WLED_ESP32_8MB_1500KB_FS.csv"
+  },
+  "connectivity": [
+    "wifi",
+    "bluetooth"
+  ],
+  "debug": {
+    "openocd_target": "esp32s3.cfg"
+  },
+  "frameworks": [
+    "espidf"
+  ],
+  "name": "Espressif ESP32-S3-DevKitC-1 (WLED, IDF)",
+  "upload": {
+    "flash_size": "16MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 16777216,
+    "require_upload_port": true,
+    "speed": 921600
+  },
+  "url": "https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/index.html",
+  "vendor": "Espressif"
+}

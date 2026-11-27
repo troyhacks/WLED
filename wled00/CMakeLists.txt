@@ -141,6 +141,15 @@ if("${IDF_TARGET}" STREQUAL "esp32p4")
         # The IP101 PHY left the IDF in 6.0 - it is a registry component
         # now (espressif/ip101).
         espressif__ip101
+    )
+endif()
+
+# The USB mass storage host.  It is the P4's SD-card-over-USB path, and
+# the S3's as well - both of them have the USB OTG and a USB host stack
+# that knows their chip.  The component does not know the S31, so the S31
+# does not get it.
+if("${IDF_TARGET}" STREQUAL "esp32p4" OR "${IDF_TARGET}" STREQUAL "esp32s3")
+    list(APPEND WLED_APP_REQUIRES
         espressif__usb_host_msc
     )
 endif()

@@ -94,7 +94,7 @@
   #warning please increase SETTINGS_STACK_BUF_SIZE >= 3904
 #endif
 #if (CONFIG_ASYNC_TCP_TASK_STACK_SIZE - SETTINGS_STACK_BUF_SIZE) < 4352 // at least 4096+256 words of free task stack is needed by async_tcp alone
-  #if !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32S31) /// TroyHacks: Yeah, we got the PSRAM.
+  #if !defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(CONFIG_IDF_TARGET_ESP32S31) && !defined(CONFIG_IDF_TARGET_ESP32S3) /// TroyHacks: Yeah, we got the PSRAM.
     #error remaining async_tcp stack will be too low - please increase CONFIG_ASYNC_TCP_TASK_STACK_SIZE
   #endif
 #endif

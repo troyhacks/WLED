@@ -345,6 +345,82 @@ The Arduino-only options go away: `CONFIG_ARDUINO_RUNNING_CORE`,
 
 
 
+## The ESP32-S3 - the port on an older chip
+
+The S3 is the oldest chip in this tree, and the first one that is not a
+P4-class part: a plain Xtensa dual core at 240 MHz, with a radio of its
+own, a USB OTG, and an **octal** PSRAM on the same SPI bus as the flash.
+It is here to answer a question - does the port work on a chip that was
+not designed for it - and it does: `platformio/idf/esp32s3.ini`,
+`sdkconfig.esp32s3_idf.defaults` and
+`boards/esp32-s3-devkitc-1-idf.json` are all there, and the board comes
+up with the web interface, the Wi-Fi and the LED bus.
+
+What the chip needed:
+
+* **A toolchain of its own.**  The P4 and the S31 are RISC-V and use the
+  `toolchain-riscv32-esp`; the S3 is Xtensa and uses the unified
+  `toolchain-xtensa-esp-elf`.  That package is a 408 MB download, and
+  PlatformIO's downloader gave up on it at 10% while reporting success -
+  so the toolchain was fetched by hand and unpacked the way PlatformIO
+  unpacks it (one directory level stripped).  The `esptoolpy` package
+  broke the same way, and it took the bootloader image step with it:
+  the IDF's build calls `esptool` from the PlatformIO virtualenv, and
+  the module was gone.
+* **A PSRAM speed of its own.**  The shared `sdkconfig.defaults` asks for
+  200 MHz, which the P4 and the S31 have and the S3 does not - the S3's
+  choices are 120, 80 and 40 MHz, and 80 is the right one (the PSRAM
+  shares the SPI bus with the flash).  The speed moved out of the shared
+  file and into the two chips that have it.
+* **A pin count.**  The pin manager's table had the P4's, the S31's and
+  the C5's, and nothing for the S3 - so the S3 joined the P4's, which is
+  the number it had before the P4 changed it.
+* **A bus pin array.**  The widest one is the Parallel IO block's (sixteen
+  pins on the P4 and the S31).  The S3 has no Parallel IO block, so the
+  array is now sized by a WLED-level macro: the Parallel IO width where
+  there is one, and eight where there is not.
+* **The Arduino API the compat layer does not have.**  The S3 has a touch
+  sensor, and the button code asks for `touchRead()` on the chips that
+  are not RISC-V - so the compat layer grew one, over the IDF's own
+  touch driver, with the same defaults the IDF's example uses.  The
+  flash mode is now read from the IDF too (`esp_flash_is_quad_mode`),
+  so `/json/info` reports "QIO" instead of the hardcoded value it had.
+* **A NeoPixelBus patch.**  The library's LCD method is guarded by
+  "`CONFIG_IDF_TARGET_ESP32S3` and nothing else", so the S3 is the only
+  chip that compiles it - and it calls the GDMA driver the way IDF 5.x
+  had it, with one argument instead of two.
+  `pio-scripts/patch_nexpixelbus_s3.py` adds the argument back.
+
+The **AudioReactive** is compiled in but not enabled: the auto-playlist
+usermod reads its numbers, so it has to be there, but the I2S pins are a
+property of the board and almost no S3 board has an audio codec on it.
+The **Ethernet** of an S3 is SPI - a W5500 module - because the boards
+that have one have a W5500 on them, and the chip's own MAC has no PHY
+on any of them.  The S3 build has no W5500 fitted.
+
+### The Arduino core is an IDF component
+
+There is a `espressif/arduino-esp32` component in the registry: **the
+Arduino core itself**, as an IDF component.  Version 4.0.0 covers every
+chip in this tree - the ESP32, the S2, the S3, the C3, the C5, the C6,
+the H2, the P4 and the S31 - and it carries the libraries the Arduino
+core has, `Ethernet` among them.
+
+That is worth knowing, because it is what the compat layer
+(`components/wled_compat`) and the platform layer
+(`components/wled_platform`) stand in for.  The shim exists because
+there was no Arduino core to link against under IDF; with the core as a
+component, the real `ETH` class brings the real PHY drivers (the S31's
+YT8531 among them), the real `touchRead`, and the real peripherals -
+and a few thousand lines of shim could go.
+
+It is not a small change: the core's own CMake, its variants and its
+libraries have their own opinions about the build, and the port's
+platform layer does things the core does not (the filesystem, the IP
+address class, the console).  But the direction is there, and it is
+worth an afternoon of looking at before the shim grows any further.
+
+
 ## The S31's Ethernet
 
 The ESP32-S31-Function-CoreBoard-1 has a **gigabit** PHY on it - a YT8531DC

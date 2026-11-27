@@ -27,6 +27,16 @@
   #define W(c) (byte((c) >> 24))
 #endif
 
+// The widest pin array a bus needs.  The Parallel IO block is the widest -
+// sixteen pins on the ESP32-P4 and the ESP32-S31 - but the chips without
+// one (the ESP32-S3 among them) still need room for the widest bus they
+// have: the network buses take four pins and the PWM ones five.
+#ifdef SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH
+  #define WLED_BUS_MAX_PINS SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH
+#else
+  #define WLED_BUS_MAX_PINS 8
+#endif
+
 // WLEDMM bitarray utilities
 void setBitInArray(uint8_t* byteArray, size_t position, bool value);  // set bit
 bool getBitFromArray(const uint8_t* byteArray, size_t position)  __attribute__((pure)); // get bit value
@@ -59,7 +69,7 @@ struct BusConfig {
   uint8_t fps_limit;
   uint32_t leds_per_output;
 
-  uint8_t pins[SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH];
+  uint8_t pins[WLED_BUS_MAX_PINS];
   uint16_t frequency;
   BusConfig(uint8_t busType, uint8_t* ppins, uint32_t pstart, uint32_t len = 1, uint8_t pcolorOrder = COL_ORDER_GRB, bool rev = false, uint32_t skip = 0, byte aw=RGBW_MODE_MANUAL_ONLY, uint16_t clock_kHz=0U, uint32_t art_o=1, uint32_t art_l=1, uint8_t art_f=30) {
     refreshReq = (bool) GET_BIT(busType,7);
@@ -68,7 +78,7 @@ struct BusConfig {
     outputs = art_o; leds_per_output = art_l; fps_limit = art_f;
     uint8_t nPins = 1;                                                                 // default = only one pin (clockless LEDs like WS281x)
     if ((type >= TYPE_NET_ARTNET_RGB) && (type <= TYPE_NET_E131_RGBW)) nPins = 4;     // virtual network bus. 4 "pins" store IP address
-    if (type == TYPE_PARLIO_RGB || TYPE_PARLIO_RGBW) nPins = SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH;     // Parallel IO needs up to SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH, which is 16 on the ESP32-P4
+    if (type == TYPE_PARLIO_RGB || TYPE_PARLIO_RGBW) nPins = WLED_BUS_MAX_PINS;     // Parallel IO needs the widest array - 16 pins on the ESP32-P4
     else if ((type > 47) && (type < 63)) nPins = 2;                                    // (data + clock / SPI) busses - two pins
     else if (IS_PWM(type)) nPins = NUM_PWM_PINS(type);                                 // PWM needs 1..5 pins
     else if (type >= TYPE_HUB75MATRIX && type <= (TYPE_HUB75MATRIX + 10)) nPins = 1;   // HUB75 does not use LED pins, but we need to preserve the "chain length" parameter
@@ -488,7 +498,7 @@ private:
   uint8_t             _colorOrder = COL_ORDER_RGB;
   uint8_t             _outputs;
   uint16_t            _leds_per_output;
-  uint8_t _pins[SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH] = { 255 };
+  uint8_t _pins[WLED_BUS_MAX_PINS] = { 255 };
   const ColorOrderMap& _colorOrderMap;
 };
 

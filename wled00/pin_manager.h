@@ -86,7 +86,7 @@ class PinManagerClass {
   PinOwner ownerTag[WLED_NUM_PINS] = { PinOwner::None };
   PinOwner ownerConflict[WLED_NUM_PINS] = { PinOwner::None }; // WLEDMM: record pin alloc conflicts
   #else
-  #if defined(CONFIG_IDF_TARGET_ESP32P4)
+  #if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S3)
     #define WLED_NUM_PINS 56 // S3 has 49 gpio, P4 has 55 gpio
   #elif defined(CONFIG_IDF_TARGET_ESP32S31)
     #define WLED_NUM_PINS 62 // the S31 has 62 GPIOs (0 - 61)

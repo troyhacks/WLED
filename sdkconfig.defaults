@@ -53,11 +53,15 @@ CONFIG_LOG_BOOTLOADER_LEVEL_ERROR=y
 CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
 
 # --- PSRAM -----------------------------------------------------------------
-# The mode is the chip's own: the P4's PSRAM is a hex chip, the S31's is an
-# octal one, and the mode is a Kconfig choice - so each chip's file picks
-# its own (the P4's is hex, the S31's is octal).
+# The mode is the chip's own: the P4's PSRAM is a hex chip, the S31's and
+# the S3's are octal ones, and the mode is a Kconfig choice - so each chip's
+# file picks its own (the P4's is hex, the S31's and the S3's are octal).
+#
+# The speed is the chip's own as well, and it is not a shared setting: the
+# P4 and the S31 run their PSRAM at 200 MHz, but the S3 has no 200 MHz
+# option at all (it has 120, 80 and 40), and its PSRAM shares the SPI bus
+# with the flash.  So the speed lives in each chip's own file.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0

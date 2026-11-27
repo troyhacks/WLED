@@ -1,0 +1,35 @@
+# The ESP32-S3 - the chip's own settings.
+#
+# This file is the chip's half of the sdkconfig chain: the settings every
+# chip shares are in sdkconfig.defaults, and pio-scripts/env_sdkconfig.py
+# puts this file after it, so what is here wins.
+#
+# The S3 is the oldest chip in this tree - a plain Xtensa dual core at
+# 240 MHz, with a radio of its own, a USB OTG and an octal PSRAM on the
+# same bus as the flash.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- the CPU ---------------------------------------------------------------
+# The S3's choices are 80, 160 and 240 MHz; 240 MHz is the default the IDF
+# picks for this chip.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# --- PSRAM -----------------------------------------------------------------
+# Octal, like the S31's: the R8 part on these boards is an octal chip, and
+# the mode is a Kconfig choice - so the P4's hex and this are mutually
+# exclusive.
+#
+# The speed is 80 MHz, not the 200 MHz the shared file asks for: the S3 does
+# not have a 200 MHz option at all (it has 120, 80 and 40), and the PSRAM
+# shares the SPI bus with the flash.
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# --- Ethernet --------------------------------------------------------------
+# The S3's Ethernet is SPI: a W5500 module.  The chip does have an internal
+# MAC (the EMAC), but no board has a PHY on it - the boards that have
+# Ethernet have a W5500 on SPI - so the MAC is left off and the SPI driver
+# is what would bring the Ethernet up.  Its driver is the registry
+# component espressif/w5500.
+CONFIG_ETH_USE_SPI_ETHERNET=y

@@ -36,6 +36,7 @@ idf_component_register(
         "src/arduino_tcp.cpp"
         "src/arduino_update.cpp"
         "src/arduino_cpu.cpp"
+        "src/arduino_touch.cpp"
         "src/mbedtls_legacy_hashes.c"
     INCLUDE_DIRS
         "."
@@ -66,4 +67,5 @@ idf_component_register(
         app_update
         mbedtls
         esp_hw_support
+        esp_driver_touch_sens
 )

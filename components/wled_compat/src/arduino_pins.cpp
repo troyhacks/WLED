@@ -65,10 +65,21 @@ uint8_t analogInputToDigitalPin(uint8_t pin)
 
 int8_t digitalPinToTouchChannel(uint8_t pin)
 {
-    // The P4 has no touch sensor peripheral - the touch panel on the EV board
-    // is a separate controller on the I2C bus.
+#if SOC_TOUCH_SENSOR_SUPPORTED && SOC_TOUCH_SENSOR_VERSION <= 2
+    // The ESP32-S2 and the ESP32-S3: a pad's channel is its GPIO's number
+    // (the S3's pads are GPIO 1 to 14, and so are its channels).
+    if (pin >= SOC_TOUCH_MIN_CHAN_ID && pin <= SOC_TOUCH_MAX_CHAN_ID) {
+        return (int8_t)pin;
+    }
+    return -1;
+#else
+    // The P4's touch hardware is a different version, with the channels
+    // offset from the GPIOs - and the touch panel on its EV board is a
+    // separate controller on the I2C bus anyway.  The S31 has no touch
+    // sensor at all.
     (void)pin;
     return -1;
+#endif
 }
 
 uint8_t digitalPinToPort(uint8_t pin)

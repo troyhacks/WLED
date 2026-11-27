@@ -81,6 +81,8 @@ const char *EspClass::getChipModel()
     return "ESP32-P4";
 #elif defined(CONFIG_IDF_TARGET_ESP32S31)
     return "ESP32-S31";
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+    return "ESP32-S3";
 #else
     return "ESP32";
 #endif
@@ -121,8 +123,15 @@ uint32_t EspClass::getFlashChipRealSize()
 
 uint8_t EspClass::getFlashChipMode()
 {
-    // The Arduino core reports the QIO/DIO/QOUT mode the flash is in.
-    return 2; // QIO
+    // The Arduino core reports the QIO/DIO/QOUT mode the flash is in, and
+    // it reads the flash controller's register to find out.  The IDF has
+    // kept the register out of the chip structure, but it does answer the
+    // question that matters: is the flash in quad mode or not.
+    esp_flash_t *chip = esp_flash_default_chip;
+    if (!chip) {
+        return FM_UNKNOWN;
+    }
+    return esp_flash_is_quad_mode(chip) ? FM_QIO : FM_DIO;
 }
 
 uint32_t EspClass::getFlashChipSpeed()

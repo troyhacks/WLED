@@ -280,14 +280,29 @@ uint8_t digitalPinToInterrupt(uint8_t pin);
 const char *digitalPinToPinName(uint8_t pin);
 bool digitalPinHasPWM(uint8_t pin);
 
+// --- the touch sensor ------------------------------------------------------
+// The Arduino core has touchRead() for the chips with a touch sensor (the
+// classic ESP32, the S2, the S3, the C3).  It reads one pad: the number
+// goes DOWN when the pad is touched, so a smaller value means "touched".
+//
+// The touch hardware version 1 and 2 are the ones here - the classic
+// ESP32, the S2 and the S3.  The P4's is a different version (its touch
+// panel is a separate controller on the I2C bus anyway), and the S31 has
+// no touch sensor at all.
+#if SOC_TOUCH_SENSOR_SUPPORTED && SOC_TOUCH_SENSOR_VERSION <= 2
+uint32_t touchRead(uint8_t pin);
+#endif
+
 // UART0's pins are fixed by the bootloader.  The Arduino core has the table
 // for every SoC; here are the P4's and the S31's (the S31's are the ones
-// the core's variants/esp32s31/pins_arduino.h has).
+// the core's variants/esp32s31/pins_arduino.h has) and the S3's.
 #ifndef SOC_RX0
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 #define SOC_RX0 (gpio_num_t)38
 #elif defined(CONFIG_IDF_TARGET_ESP32S31)
 #define SOC_RX0 (gpio_num_t)59
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+#define SOC_RX0 (gpio_num_t)44
 #endif
 #endif
 #ifndef SOC_TX0
@@ -295,6 +310,8 @@ bool digitalPinHasPWM(uint8_t pin);
 #define SOC_TX0 (gpio_num_t)37
 #elif defined(CONFIG_IDF_TARGET_ESP32S31)
 #define SOC_TX0 (gpio_num_t)58
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+#define SOC_TX0 (gpio_num_t)43
 #endif
 #endif
 
@@ -325,6 +342,18 @@ bool psramFound();
 void wledNetworkEventsBegin();
 
 // --- the chip --------------------------------------------------------------
+// The flash mode the Arduino core reports (cores/esp32/Esp.h).  WLED's
+// /json/info prints it next to the flash size.
+typedef enum {
+  FM_QIO = 0x00,
+  FM_QOUT = 0x01,
+  FM_DIO = 0x02,
+  FM_DOUT = 0x03,
+  FM_FAST_READ = 0x04,
+  FM_SLOW_READ = 0x05,
+  FM_UNKNOWN = 0xff
+} FlashMode_t;
+
 // The Arduino core's "ESP" object.  WLED asks it for the heap, the PSRAM, the
 // chip revision and the flash size.
 class EspClass {

@@ -132,9 +132,74 @@ BOOTLOADER_PATCH = (
         bootloader_env[_flags] = _kept''' + BOOTLOADER_MARKER,
 )
 
+# The same leak, one level up.
+#
+# The application's flags are merged into the global environment
+# (env.MergeFlags(project_flags)) and every IDF component is built from
+# it.  So a forced include that belongs to one component - esp_hosted's
+# "eh_host_port_master_config.h", which esp_hosted puts on the
+# application through its interface - lands on every component's compile
+# line.  The components that do not have the header in their include path
+# then stop the build:
+#
+#   <command-line>: fatal error: eh_host_port_master_config.h: No such
+#       file or directory
+#
+# The fix is per component, and it is where the information is: a component
+# keeps the forced include when it can find the header in its own include
+# path, and loses it when it cannot.  The components that want the header
+# (esp_hosted's own) have it in their path; the others do not.
+#
+# The header itself is written for this: it says "auto-included into every
+# host TU" and it is a pure Kconfig-to-macro translator.
+DROP_INCLUDES_PATCH = (
+    "        build_env.AppendUnique(CPPDEFINES=defines, CPPPATH=includes)",
+    '''        build_env.AppendUnique(CPPDEFINES=defines, CPPPATH=includes)
+        # A forced include ("-include <file>") that came in with the
+        # application's flags belongs to one component (esp_hosted's
+        # "eh_host_port_master_config.h"), and the application's flags are
+        # merged into the global environment - so it ends up on every
+        # component's compile line.  The components that do not have the
+        # header in their include path then fail to compile:
+        #
+        #   <command-line>: fatal error: eh_host_port_master_config.h:
+        #       No such file or directory
+        #
+        # The component that has the header in its include path keeps the
+        # include; the others lose it.
+        _forced_include_dirs = list(build_env.get("CPPPATH", []))
+        for _flags in ("CCFLAGS", "CFLAGS", "CXXFLAGS", "ASPPFLAGS"):
+            _kept = []
+            _index = 0
+            _list = list(build_env.get(_flags, []))
+            while _index < len(_list):
+                _flag = _list[_index]
+                if _flag == "-include" and _index + 1 < len(_list):
+                    _header = _list[_index + 1]
+                    if os.path.isabs(_header):
+                        _found = os.path.isfile(_header)
+                    else:
+                        _found = any(
+                            os.path.isfile(os.path.join(_dir, _header))
+                            for _dir in _forced_include_dirs
+                        )
+                    if _found:
+                        _kept.append(_flag)
+                        _kept.append(_header)
+                    _index += 2
+                    continue
+                _kept.append(_flag)
+                _index += 1
+            build_env[_flags] = _kept''',
+)
+
 
 def drop_old_bootloader_block(src):
-    """Take out a bootloader block an earlier version of this patch left."""
+    """Take out a bootloader block an earlier version of this patch left.
+
+    The "bootloader_env = env.Clone()" line stays: it is the anchor the
+    patch below looks for, and without it the block would not come back.
+    """
     start = src.find("    bootloader_env = env.Clone()")
     if start < 0:
         return src
@@ -144,7 +209,8 @@ def drop_old_bootloader_block(src):
     line_end = src.find("\n", end)
     if line_end < 0:
         line_end = len(src)
-    return src[:start] + src[line_end + 1:]
+    return (src[:start] + "    bootloader_env = env.Clone()\n"
+            + src[line_end + 1:])
 
 
 def builder_path():
@@ -166,7 +232,7 @@ else:
         src = f.read()
     src = drop_old_bootloader_block(src)
     n = 0
-    for old, new in PATCHES + SORT_PATCHES + [BOOTLOADER_PATCH]:
+    for old, new in PATCHES + SORT_PATCHES + [DROP_INCLUDES_PATCH, BOOTLOADER_PATCH]:
         if new in src:
             continue
         if old in src:

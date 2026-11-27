@@ -23,6 +23,8 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
 # The PSRAM sits on a bus of its own (the flash has one to itself too), so
 # it does not take bandwidth from the flash.
 CONFIG_SPIRAM_MODE_OCT=y
+# The speed is a choice as well, and the S31's is the fastest one it has.
+CONFIG_SPIRAM_SPEED_200M=y
 
 # --- the radio -------------------------------------------------------------
 # The Wi-Fi is the chip's own, so none of the hosted (esp_hosted) settings

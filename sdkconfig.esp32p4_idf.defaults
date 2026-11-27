@@ -30,6 +30,8 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 # Hex, not octal: the P4's PSRAM is a hex chip.  The mode is a choice, so
 # the other chips in this tree pick their own.
 CONFIG_SPIRAM_MODE_HEX=y
+# The speed is a choice as well, and the P4's is the fastest one it has.
+CONFIG_SPIRAM_SPEED_200M=y
 
 # --- Ethernet --------------------------------------------------------------
 # The P4 has an internal Ethernet MAC (the EMAC), and the board has an
